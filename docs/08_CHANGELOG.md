@@ -89,6 +89,43 @@
 
 ---
 
+### [2025-12-13] Phase 2: 文字起こし実装完了
+
+#### 変更理由
+- Phase 2実装（文字起こし機能）
+
+#### 変更内容
+- **API実装**:
+  - `POST /api/projects/:id/transcribe` エンドポイント追加
+  - OpenAI Whisper API統合 (`whisper-1`モデル使用)
+  - 429エラー自動リトライ機能実装（最大3回、指数バックオフ）
+- **DB操作**:
+  - `transcriptions`テーブルへのデータ保存
+  - `projects.status`遷移: `uploaded → transcribing → transcribed`
+  - エラー時は`projects.status = 'error'`に遷移
+- **R2統合**:
+  - R2から音声ファイル取得して文字起こし
+- **エラーハンドリング**:
+  - 音声未アップロードチェック
+  - ステータス検証
+  - R2取得失敗処理
+  - API呼び出し失敗処理
+
+#### 影響範囲
+- ✅ **API**: 文字起こしエンドポイント追加
+- ✅ **DB**: `transcriptions`テーブル運用開始
+- ✅ **Worker**: OpenAI API統合
+- ✅ **Storage**: R2からの音声ファイル取得
+- ❌ **UI**: 今回は変更なし
+
+#### 関連ドキュメント
+- docs/04_DB_SCHEMA.md（transcriptionsテーブル）
+- docs/05_API_SPEC.md（POST /api/projects/:id/transcribe）
+- docs/07_WORKFLOWS.md（Phase 2ワークフロー）
+- docs/02_ARCHITECTURE.md（OpenAI Whisper API）
+
+---
+
 ## 🔮 予定されている変更
 
 ### Phase 2: 文字起こし実装

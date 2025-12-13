@@ -3,6 +3,7 @@ import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
 import type { Bindings } from './types/bindings'
 import projects from './routes/projects'
+import transcriptions from './routes/transcriptions'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -14,6 +15,7 @@ app.use('/static/*', serveStatic({ root: './public' }))
 
 // API routes
 app.route('/api/projects', projects)
+app.route('/api/projects', transcriptions)
 
 // Root route - serve HTML
 app.get('/', (c) => {
