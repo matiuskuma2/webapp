@@ -222,4 +222,59 @@ projects.get('/:id', async (c) => {
   }
 })
 
+// GET /api/projects/:id/scenes - シーン一覧取得（idx順）
+projects.get('/:id/scenes', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, status
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // シーン一覧取得（idx順）
+    const { results: scenes } = await c.env.DB.prepare(`
+      SELECT id, idx, role, title, dialogue, bullets, image_prompt, created_at, updated_at
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY idx ASC
+    `).bind(projectId).all()
+
+    return c.json({
+      project_id: parseInt(projectId),
+      total_scenes: scenes.length,
+      scenes: scenes.map((scene: any) => ({
+        id: scene.id,
+        idx: scene.idx,
+        role: scene.role,
+        title: scene.title,
+        dialogue: scene.dialogue,
+        bullets: JSON.parse(scene.bullets),
+        image_prompt: scene.image_prompt,
+        created_at: scene.created_at,
+        updated_at: scene.updated_at
+      }))
+    })
+  } catch (error) {
+    console.error('Error fetching scenes:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to fetch scenes'
+      }
+    }, 500)
+  }
+})
+
 export default projects

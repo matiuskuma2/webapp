@@ -126,6 +126,48 @@
 
 ---
 
+### [2025-12-13] Phase 3: 整形・シーン分割実装完了
+
+#### 変更理由
+- Phase 3実装（整形・シーン分割機能）
+
+#### 変更内容
+- **API実装**:
+  - `POST /api/projects/:id/format` エンドポイント追加
+  - `GET /api/projects/:id/scenes` エンドポイント追加（idx順ソート）
+  - OpenAI Chat API統合 (`gpt-4o-mini` + JSON mode)
+- **バリデーション実装**:
+  - RILARCScenarioV1 JSON Schema完全準拠バリデーター作成
+  - 必須項目チェック（version, metadata, scenes）
+  - 制約チェック（scenes数: 3-50, dialogue長: 40-220, bullets数: 2-4）
+  - idx連番チェック（1から開始）
+  - role enumチェック（8種類）
+- **DB操作**:
+  - `scenes`テーブルへの一括挿入（D1 batch API使用）
+  - トランザクション保証（途中失敗時はロールバック）
+  - `projects.status`遷移: `transcribed → formatting → formatted`
+  - エラー時は`projects.status = 'failed'`に遷移
+- **プロンプト設計**:
+  - System Prompt: RILARCルール、role定義、JSON構造を明示
+  - User Prompt: 文字起こしテキスト + プロジェクトタイトル
+  - Temperature: 0.7（創造性とルール準拠のバランス）
+
+#### 影響範囲
+- ✅ **API**: 整形・シーン分割エンドポイント追加、シーン一覧取得追加
+- ✅ **DB**: `scenes`テーブル運用開始
+- ✅ **Worker**: OpenAI Chat API統合、JSONバリデーション
+- ❌ **Storage**: 今回は使用なし
+- ❌ **UI**: 今回は変更なし
+
+#### 関連ドキュメント
+- docs/03_DOMAIN_MODEL.md（RILARCScenarioV1 JSON Schema）
+- docs/04_DB_SCHEMA.md（scenesテーブル）
+- docs/05_API_SPEC.md（POST /api/projects/:id/format）
+- docs/07_WORKFLOWS.md（Phase 3ワークフロー）
+- docs/02_ARCHITECTURE.md（OpenAI Chat API）
+
+---
+
 ## 🔮 予定されている変更
 
 ### Phase 2: 文字起こし実装
