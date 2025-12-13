@@ -210,6 +210,51 @@
 
 ---
 
+### [2025-12-13] Phase 4: Gemini画像生成実装完了
+
+#### 変更理由
+- Phase 4実装（Gemini Nano Banana画像生成機能）
+
+#### 変更内容
+- **API実装**:
+  - `POST /api/scenes/:id/generate-image` エンドポイント追加（単体生成）
+  - `POST /api/projects/:id/generate-all-images` エンドポイント追加（一括生成）
+  - mode指定: `all`（全シーン）、`pending`（未生成）、`failed`（失敗のみ）
+- **Gemini API統合**:
+  - Model: `gemini-3-pro-image-preview` (Nano Banana Pro)
+  - Aspect Ratio: `16:9` (固定)
+  - 429リトライ機能実装（最大3回、指数バックオフ）
+- **プロンプトビルダー実装**:
+  - `buildImagePrompt()`: `scene.image_prompt` + スタイル指定（固定部分）
+  - `docs/12_IMAGE_PROMPT_TEMPLATE.md` 完全準拠
+- **DB操作**:
+  - `image_generations`テーブルへの履歴保存
+  - 再生成時は新レコード作成（履歴保持）
+  - `is_active`切替: 新しい画像をアクティブ化、既存を無効化
+  - エラー時は`status='failed'`, `error_message`保存
+- **R2統合**:
+  - R2への画像保存
+  - パス規約: `images/{project_id}/scene_{idx}/{generation_id}_{timestamp}.png`
+- **プロジェクトステータス遷移**:
+  - `formatted → generating_images` (一括生成開始時)
+  - `generating_images → completed` (全シーン生成成功時)
+  - 部分的失敗時は`generating_images`のまま（failedのみ再実行可能）
+
+#### 影響範囲
+- ✅ **API**: 画像生成エンドポイント追加（単体・一括）
+- ✅ **DB**: `image_generations`テーブル運用開始
+- ✅ **Worker**: Gemini API統合、画像処理
+- ✅ **Storage**: R2への画像保存
+- ❌ **UI**: 今回は変更なし
+
+#### 関連ドキュメント
+- docs/04_DB_SCHEMA.md（image_generationsテーブル）
+- docs/05_API_SPEC.md（POST /api/scenes/:id/generate-image, POST /api/projects/:id/generate-all-images）
+- docs/12_IMAGE_PROMPT_TEMPLATE.md（プロンプトテンプレート）
+- docs/02_ARCHITECTURE.md（Gemini API）
+
+---
+
 ## 🔮 予定されている変更
 
 ### Phase 2: 文字起こし実装

@@ -1,0 +1,434 @@
+import { Hono } from 'hono'
+import type { Bindings } from '../types/bindings'
+import { buildImagePrompt, buildR2Key } from '../utils/image-prompt-builder'
+
+const imageGeneration = new Hono<{ Bindings: Bindings }>()
+
+// POST /api/scenes/:id/generate-image - 単体画像生成
+imageGeneration.post('/scenes/:id/generate-image', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+
+    // 1. シーン情報取得
+    const scene = await c.env.DB.prepare(`
+      SELECT s.id, s.idx, s.image_prompt, s.project_id
+      FROM scenes s
+      WHERE s.id = ?
+    `).bind(sceneId).first()
+
+    if (!scene) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Scene not found'
+        }
+      }, 404)
+    }
+
+    // 2. プロジェクト情報取得
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(scene.project_id).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // 3. プロジェクトステータスチェック（formatted以降のみ許可）
+    const allowedStatuses = ['formatted', 'generating_images', 'completed']
+    if (!allowedStatuses.includes(project.status as string)) {
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot generate image for project with status: ${project.status}`,
+          details: {
+            current_status: project.status,
+            allowed_statuses: allowedStatuses
+          }
+        }
+      }, 400)
+    }
+
+    // 4. 最終プロンプト生成
+    const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+
+    // 5. image_generationsレコード作成（pending状態）
+    const insertResult = await c.env.DB.prepare(`
+      INSERT INTO image_generations (
+        scene_id, prompt, status, provider, model, is_active
+      ) VALUES (?, ?, 'pending', 'gemini', 'gemini-3-pro-image-preview', 0)
+    `).bind(sceneId, finalPrompt).run()
+
+    const generationId = insertResult.meta.last_row_id as number
+
+    // 6. ステータスを 'generating' に更新
+    await c.env.DB.prepare(`
+      UPDATE image_generations SET status = 'generating' WHERE id = ?
+    `).bind(generationId).run()
+
+    // 7. Gemini APIで画像生成（429リトライ付き）
+    const imageResult = await generateImageWithRetry(
+      finalPrompt,
+      c.env.GEMINI_API_KEY,
+      3
+    )
+
+    if (!imageResult.success) {
+      // 生成失敗 → status = 'failed', error_message保存
+      await c.env.DB.prepare(`
+        UPDATE image_generations 
+        SET status = 'failed', error_message = ?
+        WHERE id = ?
+      `).bind(imageResult.error || 'Unknown error', generationId).run()
+
+      return c.json({
+        error: {
+          code: 'GENERATION_FAILED',
+          message: imageResult.error || 'Failed to generate image'
+        }
+      }, 500)
+    }
+
+    // 8. R2に画像保存
+    const r2Key = buildR2Key(
+      scene.project_id as number,
+      scene.idx as number,
+      generationId
+    )
+
+    try {
+      await c.env.R2.put(r2Key, imageResult.imageData!)
+    } catch (r2Error) {
+      console.error('R2 upload failed:', r2Error)
+
+      await c.env.DB.prepare(`
+        UPDATE image_generations 
+        SET status = 'failed', error_message = 'R2 upload failed'
+        WHERE id = ?
+      `).bind(generationId).run()
+
+      return c.json({
+        error: {
+          code: 'STORAGE_FAILED',
+          message: 'Failed to save image to storage'
+        }
+      }, 500)
+    }
+
+    // 9. 既存のアクティブ画像を無効化
+    await c.env.DB.prepare(`
+      UPDATE image_generations 
+      SET is_active = 0 
+      WHERE scene_id = ? AND id != ? AND is_active = 1
+    `).bind(sceneId, generationId).run()
+
+    // 10. 新しい画像をアクティブ化、status = 'completed'
+    await c.env.DB.prepare(`
+      UPDATE image_generations 
+      SET status = 'completed', r2_key = ?, is_active = 1
+      WHERE id = ?
+    `).bind(r2Key, generationId).run()
+
+    // 11. レスポンス返却
+    return c.json({
+      scene_id: parseInt(sceneId),
+      image_generation_id: generationId,
+      status: 'completed',
+      r2_key: r2Key,
+      is_active: true
+    }, 200)
+
+  } catch (error) {
+    console.error('Error in generate-image endpoint:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to generate image'
+      }
+    }, 500)
+  }
+})
+
+// POST /api/projects/:id/generate-all-images - 一括画像生成
+imageGeneration.post('/:id/generate-all-images', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+    const body = await c.req.json().catch(() => ({ mode: 'all' }))
+    const mode = body.mode || 'all' // 'all' | 'pending' | 'failed'
+
+    // 1. プロジェクト情報取得
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // 2. ステータスチェック（formatted以降のみ許可）
+    const allowedStatuses = ['formatted', 'generating_images', 'completed']
+    if (!allowedStatuses.includes(project.status as string)) {
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot generate images for project with status: ${project.status}`
+        }
+      }, 400)
+    }
+
+    // 3. ステータスを 'generating_images' に更新
+    if (project.status === 'formatted') {
+      await c.env.DB.prepare(`
+        UPDATE projects SET status = 'generating_images', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(projectId).run()
+    }
+
+    // 4. 対象シーン取得
+    let targetScenes: any[] = []
+    
+    if (mode === 'all') {
+      // 全シーン
+      const { results } = await c.env.DB.prepare(`
+        SELECT id, idx, image_prompt FROM scenes
+        WHERE project_id = ?
+        ORDER BY idx ASC
+      `).bind(projectId).all()
+      targetScenes = results
+    } else if (mode === 'pending') {
+      // アクティブな画像がないシーン
+      const { results } = await c.env.DB.prepare(`
+        SELECT s.id, s.idx, s.image_prompt
+        FROM scenes s
+        LEFT JOIN image_generations ig ON s.id = ig.scene_id AND ig.is_active = 1
+        WHERE s.project_id = ? AND ig.id IS NULL
+        ORDER BY s.idx ASC
+      `).bind(projectId).all()
+      targetScenes = results
+    } else if (mode === 'failed') {
+      // 最後の生成が失敗したシーン
+      const { results } = await c.env.DB.prepare(`
+        SELECT s.id, s.idx, s.image_prompt
+        FROM scenes s
+        INNER JOIN (
+          SELECT scene_id, MAX(id) as max_id
+          FROM image_generations
+          GROUP BY scene_id
+        ) latest ON s.id = latest.scene_id
+        INNER JOIN image_generations ig ON ig.id = latest.max_id
+        WHERE s.project_id = ? AND ig.status = 'failed'
+        ORDER BY s.idx ASC
+      `).bind(projectId).all()
+      targetScenes = results
+    }
+
+    const totalScenes = targetScenes.length
+
+    if (totalScenes === 0) {
+      return c.json({
+        project_id: parseInt(projectId),
+        total_scenes: 0,
+        target_scenes: 0,
+        mode,
+        status: project.status,
+        message: 'No scenes to generate'
+      }, 200)
+    }
+
+    // 5. 各シーンで画像生成（順次実行）
+    let successCount = 0
+    let failedCount = 0
+
+    for (const scene of targetScenes) {
+      try {
+        const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+
+        // image_generationsレコード作成
+        const insertResult = await c.env.DB.prepare(`
+          INSERT INTO image_generations (
+            scene_id, prompt, status, provider, model, is_active
+          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3-pro-image-preview', 0)
+        `).bind(scene.id, finalPrompt).run()
+
+        const generationId = insertResult.meta.last_row_id as number
+
+        // Gemini APIで画像生成
+        const imageResult = await generateImageWithRetry(
+          finalPrompt,
+          c.env.GEMINI_API_KEY,
+          3
+        )
+
+        if (!imageResult.success) {
+          // 失敗
+          await c.env.DB.prepare(`
+            UPDATE image_generations 
+            SET status = 'failed', error_message = ?
+            WHERE id = ?
+          `).bind(imageResult.error || 'Unknown error', generationId).run()
+          
+          failedCount++
+          continue
+        }
+
+        // R2に保存
+        const r2Key = buildR2Key(parseInt(projectId), scene.idx as number, generationId)
+        await c.env.R2.put(r2Key, imageResult.imageData!)
+
+        // 既存のアクティブ画像を無効化
+        await c.env.DB.prepare(`
+          UPDATE image_generations 
+          SET is_active = 0 
+          WHERE scene_id = ? AND id != ? AND is_active = 1
+        `).bind(scene.id, generationId).run()
+
+        // 新しい画像をアクティブ化
+        await c.env.DB.prepare(`
+          UPDATE image_generations 
+          SET status = 'completed', r2_key = ?, is_active = 1
+          WHERE id = ?
+        `).bind(r2Key, generationId).run()
+
+        successCount++
+
+      } catch (sceneError) {
+        console.error(`Failed to generate image for scene ${scene.id}:`, sceneError)
+        failedCount++
+      }
+    }
+
+    // 6. 全て成功した場合、プロジェクトステータスを 'completed' に更新
+    if (successCount === totalScenes && failedCount === 0) {
+      await c.env.DB.prepare(`
+        UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(projectId).run()
+    }
+
+    // 7. レスポンス返却
+    return c.json({
+      project_id: parseInt(projectId),
+      total_scenes: totalScenes,
+      success_count: successCount,
+      failed_count: failedCount,
+      mode,
+      status: successCount === totalScenes ? 'completed' : 'generating_images'
+    }, 200)
+
+  } catch (error) {
+    console.error('Error in generate-all-images endpoint:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to generate images'
+      }
+    }, 500)
+  }
+})
+
+/**
+ * Gemini APIで画像生成（429リトライ付き）
+ */
+async function generateImageWithRetry(
+  prompt: string,
+  apiKey: string,
+  maxRetries: number = 3
+): Promise<{
+  success: boolean
+  imageData?: ArrayBuffer
+  error?: string
+}> {
+  let lastError: string = ''
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // NOTE: この実装は仮のものです。実際のGemini API仕様に合わせて修正が必要です
+      // Gemini Image Generation APIのエンドポイントとリクエスト形式を確認してください
+      
+      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateImage', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          prompt: prompt,
+          aspect_ratio: '16:9'
+        })
+      })
+
+      // 429エラー時はリトライ
+      if (response.status === 429) {
+        const retryAfter = response.headers.get('Retry-After')
+        const waitTime = retryAfter 
+          ? parseInt(retryAfter) * 1000 
+          : Math.pow(2, attempt) * 1000 // 指数バックオフ: 1s, 2s, 4s
+
+        console.warn(`Rate limited (429). Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
+        
+        if (attempt < maxRetries - 1) {
+          await sleep(waitTime)
+          continue
+        } else {
+          lastError = 'Rate limit exceeded after max retries'
+          break
+        }
+      }
+
+      // その他のエラー
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        lastError = errorData.error?.message || `API error: ${response.status}`
+        console.error('Gemini API error:', lastError)
+        break
+      }
+
+      // 成功
+      const result = await response.json()
+      
+      // レスポンスから画像データを取得（実際のAPI仕様に合わせて調整）
+      if (result.image_data) {
+        const imageBuffer = Buffer.from(result.image_data, 'base64')
+        return {
+          success: true,
+          imageData: imageBuffer
+        }
+      } else {
+        lastError = 'No image data in response'
+        break
+      }
+
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'Unknown error'
+      console.error(`Image generation attempt ${attempt + 1} failed:`, error)
+      
+      // 最後の試行でない場合はリトライ
+      if (attempt < maxRetries - 1) {
+        await sleep(Math.pow(2, attempt) * 1000)
+        continue
+      }
+    }
+  }
+
+  return {
+    success: false,
+    error: lastError
+  }
+}
+
+// Sleep utility
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+export default imageGeneration

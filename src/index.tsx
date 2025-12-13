@@ -5,6 +5,7 @@ import type { Bindings } from './types/bindings'
 import projects from './routes/projects'
 import transcriptions from './routes/transcriptions'
 import formatting from './routes/formatting'
+import imageGeneration from './routes/image-generation'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -18,6 +19,8 @@ app.use('/static/*', serveStatic({ root: './public' }))
 app.route('/api/projects', projects)
 app.route('/api/projects', transcriptions)
 app.route('/api/projects', formatting)
+app.route('/api/projects', imageGeneration)
+app.route('/api', imageGeneration) // For /api/scenes/:id/generate-image
 
 // Root route - serve HTML
 app.get('/', (c) => {
