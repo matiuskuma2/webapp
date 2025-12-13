@@ -418,7 +418,7 @@ async function generateImageWithRetry(
         
         for (const part of parts) {
           if (part.inlineData && part.inlineData.data) {
-            // base64デコードしてバイナリデータに変換
+            // base64デコード: atob (Web標準、Cloudflare Workers対応)
             const base64Data = part.inlineData.data
             const binaryString = atob(base64Data)
             const bytes = new Uint8Array(binaryString.length)
