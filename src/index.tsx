@@ -13,6 +13,18 @@ const app = new Hono<{ Bindings: Bindings }>()
 // Enable CORS for API routes
 app.use('/api/*', cors())
 
+// Enable foreign_keys for SQLite/D1 (堅牢化のため)
+app.use('/api/*', async (c, next) => {
+  try {
+    if (c.env?.DB) {
+      await c.env.DB.prepare('PRAGMA foreign_keys = ON').run()
+    }
+  } catch (error) {
+    console.warn('PRAGMA foreign_keys = ON failed:', error)
+  }
+  await next()
+})
+
 // Serve static files
 app.use('/static/*', serveStatic({ root: './public' }))
 

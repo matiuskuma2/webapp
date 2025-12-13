@@ -277,10 +277,17 @@ projects.get('/:id/scenes', async (c) => {
   }
 })
 
-// DELETE /api/projects/:id - プロジェクト削除
+// DELETE /api/projects/:id - プロジェクト削除（堅牢版：明示的な子テーブル削除）
 projects.delete('/:id', async (c) => {
   try {
     const projectId = c.req.param('id')
+
+    // PRAGMA foreign_keys を有効化（D1では自動有効だが念のため）
+    try {
+      await c.env.DB.prepare('PRAGMA foreign_keys = ON').run()
+    } catch (error) {
+      console.warn('PRAGMA foreign_keys = ON failed (might be auto-enabled):', error)
+    }
 
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
@@ -296,17 +303,19 @@ projects.delete('/:id', async (c) => {
       }, 404)
     }
 
-    // R2から音声ファイル削除（存在する場合）
+    // ===== R2削除（ベストエフォート） =====
+    
+    // R2から音声ファイル削除
     if (project.audio_r2_key) {
       try {
         await c.env.R2.delete(project.audio_r2_key)
+        console.log(`Deleted audio from R2: ${project.audio_r2_key}`)
       } catch (error) {
         console.error('Error deleting audio from R2:', error)
-        // R2削除失敗してもDB削除は続行
       }
     }
 
-    // R2から画像ファイル削除（存在する場合）
+    // R2から画像ファイル削除
     try {
       const { results: imageGenerations } = await c.env.DB.prepare(`
         SELECT DISTINCT r2_key FROM image_generations 
@@ -314,22 +323,49 @@ projects.delete('/:id', async (c) => {
         AND r2_key IS NOT NULL
       `).bind(projectId).all()
 
+      let deletedCount = 0
       for (const img of imageGenerations) {
         try {
           await c.env.R2.delete(img.r2_key)
+          deletedCount++
         } catch (error) {
-          console.error('Error deleting image from R2:', error)
+          console.error(`Error deleting image from R2 (${img.r2_key}):`, error)
         }
       }
+      console.log(`Deleted ${deletedCount}/${imageGenerations.length} images from R2`)
     } catch (error) {
       console.error('Error fetching/deleting images:', error)
     }
 
-    // DB削除（外部キー制約で関連データも自動削除）
-    // image_generations, scenes, transcriptions は ON DELETE CASCADE で自動削除
-    await c.env.DB.prepare(`
-      DELETE FROM projects WHERE id = ?
-    `).bind(projectId).run()
+    // ===== DB削除（明示的 + CASCADE保険） =====
+    
+    try {
+      // 1. image_generations を明示削除（scene_id経由）
+      await c.env.DB.prepare(`
+        DELETE FROM image_generations 
+        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+      `).bind(projectId).run()
+      
+      // 2. scenes を明示削除
+      await c.env.DB.prepare(`
+        DELETE FROM scenes WHERE project_id = ?
+      `).bind(projectId).run()
+      
+      // 3. transcriptions を明示削除
+      await c.env.DB.prepare(`
+        DELETE FROM transcriptions WHERE project_id = ?
+      `).bind(projectId).run()
+      
+      // 4. 最後に projects を削除
+      await c.env.DB.prepare(`
+        DELETE FROM projects WHERE id = ?
+      `).bind(projectId).run()
+      
+      console.log(`Project ${projectId} and all related data deleted successfully`)
+    } catch (dbError) {
+      console.error('Error during DB deletion:', dbError)
+      throw new Error(`Database deletion failed: ${dbError}`)
+    }
 
     return c.json({
       success: true,
@@ -341,7 +377,8 @@ projects.delete('/:id', async (c) => {
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Failed to delete project'
+        message: 'Failed to delete project',
+        details: error instanceof Error ? error.message : String(error)
       }
     }, 500)
   }
