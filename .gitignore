@@ -34,3 +34,4 @@ lerna-debug.log*
 
 # test data
 test_audio.mp3
+core
