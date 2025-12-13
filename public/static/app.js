@@ -45,12 +45,12 @@ async function createProject() {
   try {
     const response = await axios.post(`${API_BASE}/projects`, { title });
     
-    if (response.data.success) {
+    if (response.data.id) {
       showToast('プロジェクトが作成されました', 'success');
       titleInput.value = '';
       loadProjects();
     } else {
-      showToast(response.data.error || 'プロジェクト作成に失敗しました', 'error');
+      showToast(response.data.error?.message || 'プロジェクト作成に失敗しました', 'error');
     }
   } catch (error) {
     console.error('Create project error:', error);
@@ -65,7 +65,7 @@ async function loadProjects() {
   try {
     const response = await axios.get(`${API_BASE}/projects`);
     
-    if (response.data.success && response.data.projects.length > 0) {
+    if (response.data.projects && response.data.projects.length > 0) {
       projectsList.innerHTML = response.data.projects.map(project => `
         <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
           <div class="flex items-center justify-between">
