@@ -95,23 +95,48 @@ async function createProject() {
   }
 }
 
+// Global selection state
+let selectedProjects = new Set();
+
 // Load projects list
 async function loadProjects() {
   const projectsList = document.getElementById('projectsList');
+  selectedProjects.clear();
   
   try {
     const response = await axios.get(`${API_BASE}/projects`);
     
     if (response.data.projects && response.data.projects.length > 0) {
-      projectsList.innerHTML = response.data.projects.map(project => `
-        <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+      // Bulk action toolbar
+      projectsList.innerHTML = `
+        <div id="bulkActions" class="mb-4 p-3 bg-gray-50 rounded-lg border-2 border-gray-200 hidden">
           <div class="flex items-center justify-between">
+            <span class="text-sm font-semibold text-gray-700">
+              <span id="selectedCount">0</span> 件選択中
+            </span>
+            <button 
+              onclick="bulkDeleteProjects()"
+              class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors touch-manipulation"
+            >
+              <i class="fas fa-trash mr-2"></i>一括削除
+            </button>
+          </div>
+        </div>
+      ` + response.data.projects.map(project => `
+        <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
+          <div class="flex items-center gap-3">
+            <input 
+              type="checkbox" 
+              id="select-${project.id}"
+              onchange="toggleProjectSelection(${project.id})"
+              class="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+            />
             <div class="flex-1">
               <h3 class="font-semibold text-gray-800">${escapeHtml(project.title)}</h3>
               <div class="flex items-center gap-4 mt-2 text-sm text-gray-600">
                 <span class="flex items-center">
                   <i class="fas fa-info-circle mr-1"></i>
-                  ステータス: <span class="ml-1 font-medium ${getStatusColor(project.status)}">${getStatusText(project.status)}</span>
+                  <span class="ml-1 font-medium ${getStatusColor(project.status)}">${getStatusText(project.status)}</span>
                 </span>
                 <span class="flex items-center">
                   <i class="fas fa-clock mr-1"></i>
@@ -119,12 +144,21 @@ async function loadProjects() {
                 </span>
               </div>
             </div>
-            <button 
-              onclick="viewProject(${project.id})"
-              class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-            >
-              <i class="fas fa-arrow-right mr-1"></i>詳細
-            </button>
+            <div class="flex gap-2">
+              <button 
+                onclick="deleteProjectDirect(${project.id})"
+                class="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors touch-manipulation"
+                title="削除"
+              >
+                <i class="fas fa-trash"></i>
+              </button>
+              <button 
+                onclick="viewProject(${project.id})"
+                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors touch-manipulation"
+              >
+                <i class="fas fa-arrow-right mr-1"></i>開く
+              </button>
+            </div>
           </div>
         </div>
       `).join('');
@@ -144,6 +178,82 @@ async function loadProjects() {
         プロジェクトの読み込みに失敗しました
       </p>
     `;
+  }
+}
+
+// Toggle project selection
+function toggleProjectSelection(projectId) {
+  const checkbox = document.getElementById(`select-${projectId}`);
+  
+  if (checkbox.checked) {
+    selectedProjects.add(projectId);
+  } else {
+    selectedProjects.delete(projectId);
+  }
+  
+  updateBulkActionsUI();
+}
+
+// Update bulk actions UI
+function updateBulkActionsUI() {
+  const bulkActions = document.getElementById('bulkActions');
+  const selectedCount = document.getElementById('selectedCount');
+  
+  if (selectedProjects.size > 0) {
+    bulkActions.classList.remove('hidden');
+    selectedCount.textContent = selectedProjects.size;
+  } else {
+    bulkActions.classList.add('hidden');
+  }
+}
+
+// Bulk delete projects
+async function bulkDeleteProjects() {
+  if (selectedProjects.size === 0) return;
+  
+  if (!confirm(`選択した ${selectedProjects.size} 件のプロジェクトを削除してもよろしいですか？\n\nこの操作は取り消せません。`)) {
+    return;
+  }
+  
+  const projectIds = Array.from(selectedProjects);
+  let successCount = 0;
+  let failCount = 0;
+  
+  for (const projectId of projectIds) {
+    try {
+      await axios.delete(`${API_BASE}/projects/${projectId}`);
+      successCount++;
+    } catch (error) {
+      console.error(`Failed to delete project ${projectId}:`, error);
+      failCount++;
+    }
+  }
+  
+  if (successCount > 0) {
+    showToast(`${successCount} 件のプロジェクトを削除しました`, 'success');
+  }
+  
+  if (failCount > 0) {
+    showToast(`${failCount} 件の削除に失敗しました`, 'error');
+  }
+  
+  selectedProjects.clear();
+  loadProjects();
+}
+
+// Delete single project directly
+async function deleteProjectDirect(projectId) {
+  if (!confirm('このプロジェクトを削除してもよろしいですか？\n\nこの操作は取り消せません。')) {
+    return;
+  }
+  
+  try {
+    await axios.delete(`${API_BASE}/projects/${projectId}`);
+    showToast('プロジェクトを削除しました', 'success');
+    loadProjects();
+  } catch (error) {
+    console.error('Delete project error:', error);
+    showToast('プロジェクト削除に失敗しました', 'error');
   }
 }
 
