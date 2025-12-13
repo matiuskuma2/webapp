@@ -293,27 +293,60 @@
 
 ---
 
-## 🔮 予定されている変更
+### [2025-12-13] Phase 5: ダウンロード機能実装完了
 
-### Phase 2: 文字起こし実装
-- OpenAI Whisper API統合
-- transcriptions テーブル運用開始
+#### 変更理由
+- Phase 5実装（画像ZIP、セリフCSV、全ファイルZIPダウンロード機能）
 
-### Phase 3: 整形・シーン分割実装
-- OpenAI Chat API統合（JSON mode）
-- scenes テーブル運用開始
-- RILARCシナリオバリデーション実装
+#### 変更内容
+- **API実装**:
+  - `GET /api/projects/:id/download/images` - 画像ZIPダウンロード
+  - `GET /api/projects/:id/download/csv` - セリフCSVダウンロード
+  - `GET /api/projects/:id/download/all` - 全ファイルZIPダウンロード（画像 + CSV + project.json）
+- **ZIP生成**:
+  - ライブラリ: JSZip使用
+  - メモリ上でZIP生成 → ArrayBuffer → Response
+  - ファイル命名規則: `scene_001.png`, `scene_002.png`, ...
+- **CSV生成**:
+  - 形式: `idx,role,title,dialogue,bullets`
+  - エンコーディング: UTF-8 with BOM（Excel文字化け防止）
+  - bullets区切り: `|`（例: `要点1|要点2|要点3`）
+  - CSVエスケープ処理: カンマ、ダブルクォート、改行を含む場合
+- **R2画像取得**:
+  - `image_generations` から `is_active=1` の画像のみ取得
+  - idx順で並べてZIPに追加
+- **制約**:
+  - `projects.status = 'completed'` のみダウンロード可能
+  - ステータスエラー時: `400 INVALID_STATUS` 返却
 
-### Phase 4: 画像生成実装
-- Gemini Image Generation API統合
-- image_generations テーブル運用開始
-- 画像プロンプトテンプレート適用
-- 自動再試行実装
+#### 影響範囲
+- ✅ **API**: ダウンロードエンドポイント3つ追加
+- ✅ **Worker**: JSZip統合、CSV生成、R2読み取り
+- ✅ **Dependencies**: `jszip` パッケージ追加
+- ❌ **DB**: 変更なし（読み取りのみ）
+- ❌ **Storage**: R2読み取りのみ（書き込みなし）
+- ❌ **UI**: 今回は変更なし
 
-### Phase 5: ダウンロード実装
-- ZIP/CSV生成機能
-- 署名付きURL発行
+#### 関連ドキュメント
+- docs/05_API_SPEC.md（Phase 5エンドポイント実装済み）
 
 ---
 
-最終更新: 2025-01-13
+## 🎯 Phase 1-5 完了
+
+### ✅ 実装完了フェーズ
+- ✅ Phase 1: プロジェクト作成・音声アップロード
+- ✅ Phase 2: 文字起こし（OpenAI Whisper）
+- ✅ Phase 3: 整形・シーン分割（OpenAI Chat + RILARCバリデーション）
+- ✅ Phase 4: 画像生成（Gemini Nano Banana）
+- ✅ Phase 5: ダウンロード（ZIP/CSV生成）
+
+### 🔮 今後の拡張（オプション）
+- UI改善（プログレス表示、プレビュー機能）
+- バッチ処理最適化（並列処理、キュー管理）
+- エラーリトライUI（失敗シーンの個別再生成UI）
+- プロジェクト編集機能（シーンの追加・削除・並び替え）
+
+---
+
+最終更新: 2025-12-13

@@ -6,6 +6,7 @@ import projects from './routes/projects'
 import transcriptions from './routes/transcriptions'
 import formatting from './routes/formatting'
 import imageGeneration from './routes/image-generation'
+import downloads from './routes/downloads'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -20,6 +21,7 @@ app.route('/api/projects', projects)
 app.route('/api/projects', transcriptions)
 app.route('/api/projects', formatting)
 app.route('/api/projects', imageGeneration)
+app.route('/api/projects', downloads) // For download endpoints
 app.route('/api', imageGeneration) // For /api/scenes/:id/generate-image
 
 // Root route - serve HTML

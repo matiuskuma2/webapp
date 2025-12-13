@@ -16,7 +16,8 @@
     "test": "curl http://localhost:3000"
   },
   "dependencies": {
-    "hono": "^4.11.0"
+    "hono": "^4.11.0",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "@hono/vite-build": "^1.2.0",
