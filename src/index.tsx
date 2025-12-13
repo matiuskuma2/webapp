@@ -438,10 +438,74 @@ app.get('/projects/:id', (c) => {
                 </div>
             </div>
 
-            <!-- Other Tabs (Placeholder) -->
+            <!-- Scene Split Tab -->
             <div id="contentSceneSplit" class="hidden">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Scene Split</h2>
-                <p class="text-gray-600">Phase 3 で実装予定</p>
+                <h2 class="text-xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-cut mr-2 text-purple-600"></i>
+                    シーン分割・編集
+                </h2>
+                
+                <!-- Guide (no source) -->
+                <div id="sceneSplitGuide" class="p-6 bg-yellow-50 border-l-4 border-yellow-600 rounded-lg hidden">
+                    <div class="flex items-start">
+                        <i class="fas fa-exclamation-triangle text-yellow-600 text-2xl mr-4 mt-1"></i>
+                        <div>
+                            <h3 class="font-semibold text-gray-800 mb-2">入力が必要です</h3>
+                            <p class="text-sm text-gray-700 mb-4">
+                                シーン分割を実行するには、まず音声ファイルをアップロードするか、テキストを入力してください。
+                            </p>
+                            <button 
+                                onclick="switchTab('input')"
+                                class="px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 transition-colors touch-manipulation"
+                            >
+                                <i class="fas fa-arrow-left mr-2"></i>Inputタブへ戻る
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Format Button -->
+                <div id="formatSection" class="mb-6 p-4 bg-purple-50 rounded-lg border-l-4 border-purple-600 hidden">
+                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <div>
+                            <h3 class="font-semibold text-gray-800 mb-1">RILARCシナリオ生成</h3>
+                            <p class="text-sm text-gray-600">OpenAI Chat APIで入力テキストをシーン分割します（30秒-1分）</p>
+                        </div>
+                        <button 
+                            id="formatBtn"
+                            onclick="formatAndSplit()"
+                            class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation"
+                        >
+                            <i class="fas fa-magic mr-2"></i>シーン分割を実行
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Scenes Table -->
+                <div id="scenesSection" class="hidden">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-lg font-semibold text-gray-800">
+                            シーン一覧（<span id="scenesCount">0</span>件）
+                        </h3>
+                        <button 
+                            id="goToBuilderBtn"
+                            onclick="goToBuilder()"
+                            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation hidden"
+                        >
+                            <i class="fas fa-arrow-right mr-2"></i>Builderへ進む
+                        </button>
+                    </div>
+                    
+                    <div id="scenesList" class="space-y-4">
+                        <!-- Scenes will be rendered here -->
+                    </div>
+                </div>
+                
+                <!-- Empty State -->
+                <div id="scenesEmptyState" class="text-center py-12 hidden">
+                    <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+                    <p class="text-gray-600">シーンがありません。上の「シーン分割を実行」ボタンを押してください。</p>
+                </div>
             </div>
 
             <div id="contentBuilder" class="hidden">
