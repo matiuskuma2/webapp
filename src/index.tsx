@@ -58,6 +58,7 @@ app.get('/', (c) => {
                     class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <button 
+                    id="createProjectBtn"
                     onclick="createProject()"
                     class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
                 >
@@ -79,11 +80,26 @@ app.get('/', (c) => {
     </div>
 
     <!-- Toast通知 -->
-    <div id="toast" class="fixed top-4 right-4 hidden">
+    <div id="toast" class="fixed top-4 right-4 hidden z-50">
         <div class="bg-white border-l-4 rounded-lg shadow-lg p-4 max-w-sm">
             <div class="flex items-center">
                 <i id="toastIcon" class="fas fa-check-circle text-2xl mr-3"></i>
                 <p id="toastMessage" class="text-gray-800"></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- プロジェクト詳細モーダル -->
+    <div id="projectModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-40 flex items-center justify-center">
+        <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-screen overflow-y-auto">
+            <div class="p-6">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold text-gray-800">プロジェクト詳細</h2>
+                    <button onclick="closeModal()" class="text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+                <div id="modalContent"></div>
             </div>
         </div>
     </div>
