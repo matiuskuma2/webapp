@@ -191,12 +191,15 @@ projects.get('/:id', async (c) => {
         p.id,
         p.title,
         p.status,
+        p.source_type,
+        p.source_text,
         p.audio_filename,
         p.audio_size_bytes,
         p.audio_duration_seconds,
         p.audio_r2_key,
         p.created_at,
-        p.updated_at
+        p.updated_at,
+        p.source_updated_at
       FROM projects p
       WHERE p.id = ?
     `).bind(projectId).first()
@@ -217,6 +220,70 @@ projects.get('/:id', async (c) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Failed to fetch project'
+      }
+    }, 500)
+  }
+})
+
+// POST /api/projects/:id/source/text - テキスト入力保存
+projects.post('/:id/source/text', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+    const { text } = await c.req.json()
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // バリデーション
+    if (!text || text.trim() === '') {
+      return c.json({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'Text is required',
+          details: {
+            field: 'text',
+            constraint: 'required'
+          }
+        }
+      }, 400)
+    }
+
+    // テキスト保存（uploadedステータスに変更）
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET source_type = 'text',
+          source_text = ?,
+          status = 'uploaded',
+          source_updated_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(text.trim(), projectId).run()
+
+    // 更新後のプロジェクト取得
+    const updatedProject = await c.env.DB.prepare(`
+      SELECT id, title, status, source_type, source_updated_at, updated_at
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    return c.json(updatedProject, 200)
+  } catch (error) {
+    console.error('Error saving source text:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to save source text'
       }
     }, 500)
   }

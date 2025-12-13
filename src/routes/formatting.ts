@@ -11,7 +11,7 @@ formatting.post('/:id/format', async (c) => {
 
     // 1. プロジェクトの存在確認とステータスチェック
     const project = await c.env.DB.prepare(`
-      SELECT id, title, status
+      SELECT id, title, status, source_type, source_text
       FROM projects
       WHERE id = ?
     `).bind(projectId).first()
@@ -25,34 +25,52 @@ formatting.post('/:id/format', async (c) => {
       }, 404)
     }
 
-    // 2. ステータスチェック（transcribedのみ許可）
-    if (project.status !== 'transcribed') {
+    // 2. ステータスチェック（transcribedまたはuploaded（text入力）を許可）
+    const validStatuses = ['transcribed', 'uploaded']
+    if (!validStatuses.includes(project.status as string)) {
       return c.json({
         error: {
           code: 'INVALID_STATUS',
           message: `Cannot format project with status: ${project.status}`,
           details: {
             current_status: project.status,
-            expected_status: 'transcribed'
+            expected_statuses: validStatuses
           }
         }
       }, 400)
     }
 
-    // 3. 文字起こしテキスト取得
-    const transcription = await c.env.DB.prepare(`
-      SELECT id, raw_text, word_count
-      FROM transcriptions
-      WHERE project_id = ?
-    `).bind(projectId).first()
+    // 3. 入力テキスト取得（source_typeで分岐）
+    let inputText: string | null = null
 
-    if (!transcription || !transcription.raw_text) {
-      return c.json({
-        error: {
-          code: 'NO_TRANSCRIPTION',
-          message: 'No transcription found for this project'
-        }
-      }, 400)
+    if (project.source_type === 'text') {
+      // テキスト入力の場合
+      if (!project.source_text) {
+        return c.json({
+          error: {
+            code: 'NO_SOURCE_TEXT',
+            message: 'No source text found for this project'
+          }
+        }, 400)
+      }
+      inputText = project.source_text as string
+    } else {
+      // 音声入力の場合（既存ロジック）
+      const transcription = await c.env.DB.prepare(`
+        SELECT id, raw_text, word_count
+        FROM transcriptions
+        WHERE project_id = ?
+      `).bind(projectId).first()
+
+      if (!transcription || !transcription.raw_text) {
+        return c.json({
+          error: {
+            code: 'NO_TRANSCRIPTION',
+            message: 'No transcription found for this project'
+          }
+        }, 400)
+      }
+      inputText = transcription.raw_text as string
     }
 
     // 4. ステータスを 'formatting' に更新
@@ -64,7 +82,7 @@ formatting.post('/:id/format', async (c) => {
 
     // 5. OpenAI Chat API でRILARCシナリオ生成
     const scenarioResult = await generateRILARCScenario(
-      transcription.raw_text as string,
+      inputText,
       project.title as string,
       c.env.OPENAI_API_KEY
     )
