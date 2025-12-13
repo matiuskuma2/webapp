@@ -4,6 +4,9 @@ const API_BASE = '/api';
 // Global state
 let currentProject = null;
 let isProcessing = false; // ボタン連打防止用フラグ
+let mediaRecorder = null;
+let audioChunks = [];
+let recordingStartTime = 0;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
@@ -188,25 +191,72 @@ function showProjectDetail(project) {
 function getProjectActions(project) {
   const actions = [];
   
-  // Phase 2: Upload Audio
+  // Phase 2: Upload Audio (with Microphone Recording)
   if (project.status === 'created') {
     actions.push(`
       <div class="mb-6 p-4 bg-blue-50 rounded-lg">
         <h3 class="font-semibold text-gray-800 mb-3">
-          <i class="fas fa-upload mr-2 text-blue-600"></i>
-          Step 1: 音声ファイルをアップロード
+          <i class="fas fa-microphone mr-2 text-blue-600"></i>
+          Step 1: 音声を録音またはアップロード
         </h3>
-        <input type="file" id="audioFile" accept="audio/*" class="block w-full text-sm text-gray-600 mb-3
-          file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0
-          file:text-sm file:font-semibold file:bg-blue-600 file:text-white
-          hover:file:bg-blue-700 cursor-pointer"/>
-        <button 
-          id="uploadAudioBtn"
-          onclick="uploadAudio(${project.id})"
-          class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          <i class="fas fa-upload mr-2"></i>アップロード
-        </button>
+        
+        <!-- Microphone Recording (推奨・スマホ向け) -->
+        <div class="mb-4 p-4 bg-white rounded-lg border-2 border-blue-200">
+          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+            <i class="fas fa-microphone-alt mr-2 text-blue-600"></i>
+            マイク録音（推奨）
+          </h4>
+          <div id="recordingStatus" class="mb-3 text-sm text-gray-600 hidden">
+            <div class="flex items-center justify-center mb-2">
+              <div class="w-4 h-4 bg-red-500 rounded-full animate-pulse mr-2"></div>
+              <span class="font-semibold">録音中...</span>
+              <span id="recordingTime" class="ml-2">0:00</span>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+              <div id="recordingProgress" class="bg-blue-600 h-full transition-all duration-300" style="width: 0%"></div>
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button 
+              id="startRecordBtn"
+              onclick="startRecording(${project.id})"
+              class="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-lg font-semibold touch-manipulation"
+            >
+              <i class="fas fa-microphone mr-2"></i>録音開始
+            </button>
+            <button 
+              id="stopRecordBtn"
+              onclick="stopRecording(${project.id})"
+              class="flex-1 px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-lg font-semibold hidden touch-manipulation"
+            >
+              <i class="fas fa-stop mr-2"></i>録音停止
+            </button>
+          </div>
+          <p class="text-xs text-gray-500 mt-2">
+            <i class="fas fa-info-circle mr-1"></i>
+            スマホの場合、ブラウザでマイク許可が必要です
+          </p>
+        </div>
+        
+        <!-- File Upload (既存・PC向け) -->
+        <div class="p-4 bg-white rounded-lg border-2 border-gray-200">
+          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+            <i class="fas fa-upload mr-2 text-gray-600"></i>
+            ファイルアップロード
+          </h4>
+          <input type="file" id="audioFile" accept="audio/*" 
+            class="block w-full text-sm text-gray-600 mb-3
+            file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0
+            file:text-base file:font-semibold file:bg-blue-600 file:text-white
+            hover:file:bg-blue-700 cursor-pointer touch-manipulation"/>
+          <button 
+            id="uploadAudioBtn"
+            onclick="uploadAudio(${project.id})"
+            class="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-lg font-semibold touch-manipulation"
+          >
+            <i class="fas fa-upload mr-2"></i>アップロード
+          </button>
+        </div>
       </div>
     `);
   }
@@ -333,23 +383,86 @@ function closeModal() {
   currentProject = null;
 }
 
-// Upload audio file
-async function uploadAudio(projectId) {
+// Start recording audio
+async function startRecording(projectId) {
   if (isProcessing) {
     showToast('処理中です。しばらくお待ちください', 'warning');
     return;
   }
   
-  const fileInput = document.getElementById('audioFile');
-  const file = fileInput.files[0];
-  
-  if (!file) {
-    showToast('音声ファイルを選択してください', 'error');
-    return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    
+    // Initialize MediaRecorder
+    mediaRecorder = new MediaRecorder(stream);
+    audioChunks = [];
+    recordingStartTime = Date.now();
+    
+    mediaRecorder.ondataavailable = (event) => {
+      audioChunks.push(event.data);
+    };
+    
+    mediaRecorder.onstop = async () => {
+      const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+      const audioFile = new File([audioBlob], `recording_${Date.now()}.webm`, { type: 'audio/webm' });
+      
+      // Stop all tracks
+      stream.getTracks().forEach(track => track.stop());
+      
+      // Auto upload
+      await uploadAudioFile(projectId, audioFile);
+    };
+    
+    mediaRecorder.start();
+    
+    // UI updates
+    document.getElementById('startRecordBtn').classList.add('hidden');
+    document.getElementById('stopRecordBtn').classList.remove('hidden');
+    document.getElementById('recordingStatus').classList.remove('hidden');
+    
+    // Update recording time
+    const timerInterval = setInterval(() => {
+      if (!mediaRecorder || mediaRecorder.state !== 'recording') {
+        clearInterval(timerInterval);
+        return;
+      }
+      
+      const elapsed = Math.floor((Date.now() - recordingStartTime) / 1000);
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      document.getElementById('recordingTime').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+      
+      // Progress bar (max 5 minutes)
+      const progress = Math.min((elapsed / 300) * 100, 100);
+      document.getElementById('recordingProgress').style.width = `${progress}%`;
+    }, 1000);
+    
+    showToast('録音を開始しました', 'info');
+  } catch (error) {
+    console.error('Start recording error:', error);
+    showToast('マイクへのアクセスが拒否されました。ブラウザ設定を確認してください', 'error');
   }
-  
+}
+
+// Stop recording audio
+function stopRecording(projectId) {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    
+    // UI updates
+    document.getElementById('startRecordBtn').classList.remove('hidden');
+    document.getElementById('stopRecordBtn').classList.add('hidden');
+    document.getElementById('recordingStatus').classList.add('hidden');
+    
+    showToast('録音を停止しました。アップロード中...', 'info');
+  }
+}
+
+// Upload audio file (common function for both file upload and recording)
+async function uploadAudioFile(projectId, file) {
   isProcessing = true;
   setButtonLoading('uploadAudioBtn', true);
+  setButtonLoading('startRecordBtn', true);
   
   try {
     const formData = new FormData();
@@ -372,7 +485,26 @@ async function uploadAudio(projectId) {
   } finally {
     isProcessing = false;
     setButtonLoading('uploadAudioBtn', false);
+    setButtonLoading('startRecordBtn', false);
   }
+}
+
+// Upload audio file (from file input)
+async function uploadAudio(projectId) {
+  if (isProcessing) {
+    showToast('処理中です。しばらくお待ちください', 'warning');
+    return;
+  }
+  
+  const fileInput = document.getElementById('audioFile');
+  const file = fileInput.files[0];
+  
+  if (!file) {
+    showToast('音声ファイルを選択してください', 'error');
+    return;
+  }
+  
+  await uploadAudioFile(projectId, file);
 }
 
 // Transcribe audio
