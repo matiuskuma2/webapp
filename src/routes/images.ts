@@ -24,7 +24,7 @@ images.get('/:id/images', async (c) => {
 
     // 画像生成履歴取得（新しい順）
     const { results: imageGenerations } = await c.env.DB.prepare(`
-      SELECT id, r2_key, status, is_active, error_message, created_at
+      SELECT id, prompt, r2_key, r2_url, status, is_active, error_message, created_at
       FROM image_generations
       WHERE scene_id = ?
       ORDER BY created_at DESC
@@ -35,7 +35,9 @@ images.get('/:id/images', async (c) => {
       total_images: imageGenerations.length,
       images: imageGenerations.map((img: any) => ({
         id: img.id,
+        prompt: img.prompt,
         r2_key: img.r2_key,
+        image_url: img.r2_url,
         status: img.status,
         is_active: img.is_active === 1,
         error_message: img.error_message,

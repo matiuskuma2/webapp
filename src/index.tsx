@@ -508,9 +508,75 @@ app.get('/projects/:id', (c) => {
                 </div>
             </div>
 
+            <!-- Builder Tab -->
             <div id="contentBuilder" class="hidden">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Builder</h2>
-                <p class="text-gray-600">Phase 4 で実装予定</p>
+                <h2 class="text-xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-image mr-2 text-blue-600"></i>
+                    制作ボード（Builder）
+                </h2>
+                
+                <!-- Top Action Bar -->
+                <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
+                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <!-- Bulk Generation Buttons -->
+                        <div class="flex flex-wrap gap-2">
+                            <button 
+                                id="generateAllImagesBtn"
+                                onclick="generateBulkImages('all')"
+                                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-magic mr-2"></i>全画像生成
+                            </button>
+                            <button 
+                                id="generatePendingImagesBtn"
+                                onclick="generateBulkImages('pending')"
+                                class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-plus-circle mr-2"></i>未生成のみ
+                            </button>
+                            <button 
+                                id="generateFailedImagesBtn"
+                                onclick="generateBulkImages('failed')"
+                                class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-redo mr-2"></i>失敗のみ
+                            </button>
+                        </div>
+                        
+                        <!-- Download Buttons -->
+                        <div class="flex flex-wrap gap-2">
+                            <button 
+                                onclick="downloadImages()"
+                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-download mr-2"></i>images.zip
+                            </button>
+                            <button 
+                                onclick="downloadCSV()"
+                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-file-csv mr-2"></i>dialogue.csv
+                            </button>
+                            <button 
+                                onclick="downloadAll()"
+                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-archive mr-2"></i>all.zip
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Scene Cards -->
+                <div id="builderScenesList" class="space-y-6">
+                    <!-- Scene cards will be rendered here -->
+                </div>
+                
+                <!-- Empty State -->
+                <div id="builderEmptyState" class="text-center py-12 hidden">
+                    <i class="fas fa-inbox text-6xl text-gray-300 mb-4"></i>
+                    <p class="text-gray-600">シーンがありません。Scene Splitタブでシーンを作成してください。</p>
+                </div>
             </div>
 
             <div id="contentExport" class="hidden">
@@ -524,6 +590,27 @@ app.get('/projects/:id', (c) => {
             <div class="flex items-center">
                 <i id="toastIcon" class="fas fa-check-circle text-2xl mr-3 text-green-500"></i>
                 <span id="toastMessage" class="text-gray-800"></span>
+            </div>
+        </div>
+        
+        <!-- Image History Modal -->
+        <div id="imageHistoryModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+                <div class="flex items-center justify-between p-6 border-b">
+                    <h3 class="text-xl font-bold text-gray-800">
+                        <i class="fas fa-history mr-2 text-blue-600"></i>
+                        画像生成履歴
+                    </h3>
+                    <button 
+                        onclick="closeImageHistory()"
+                        class="text-gray-500 hover:text-gray-700 transition-colors"
+                    >
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+                <div id="imageHistoryContent" class="p-6 overflow-y-auto max-h-[70vh]">
+                    <!-- History will be rendered here -->
+                </div>
             </div>
         </div>
     </div>

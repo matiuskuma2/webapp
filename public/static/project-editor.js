@@ -168,9 +168,11 @@ function switchTab(tabName) {
   document.getElementById(`tab${targetTab}`).classList.remove('tab-inactive');
   document.getElementById(`content${targetTab}`).classList.remove('hidden');
   
-  // If switching to Scene Split tab, check initial state
+  // Initialize tab content based on tab type
   if (tabName === 'sceneSplit') {
     initSceneSplitTab();
+  } else if (tabName === 'builder') {
+    initBuilderTab();
   }
 }
 
@@ -657,6 +659,345 @@ async function reorderScenes(sceneIds) {
 // Go to Builder tab
 function goToBuilder() {
   switchTab('builder');
+}
+
+// ========== Builder Functions ==========
+
+// Initialize Builder tab
+async function initBuilderTab() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+    const scenes = response.data.scenes || [];
+    
+    if (scenes.length === 0) {
+      document.getElementById('builderScenesList').classList.add('hidden');
+      document.getElementById('builderEmptyState').classList.remove('hidden');
+      return;
+    }
+    
+    document.getElementById('builderScenesList').classList.remove('hidden');
+    document.getElementById('builderEmptyState').classList.add('hidden');
+    
+    renderBuilderScenes(scenes);
+  } catch (error) {
+    console.error('Load builder scenes error:', error);
+    showToast('シーンの読み込みに失敗しました', 'error');
+  }
+}
+
+// Render builder scene cards
+function renderBuilderScenes(scenes) {
+  const container = document.getElementById('builderScenesList');
+  
+  container.innerHTML = scenes.map((scene) => {
+    const activeImage = scene.active_image || null;
+    const imageUrl = activeImage ? activeImage.image_url : null;
+    const imageStatus = activeImage ? activeImage.status : 'pending';
+    
+    return `
+      <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}">
+        <!-- Header -->
+        <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="text-white font-bold text-xl">#${scene.idx}</span>
+            <span class="px-3 py-1 bg-white bg-opacity-20 rounded-full text-white text-sm font-semibold">
+              ${getRoleText(scene.role)}
+            </span>
+          </div>
+          <span class="text-white text-sm">
+            ${getImageStatusBadge(imageStatus)}
+          </span>
+        </div>
+        
+        <!-- Content: Left-Right Split (PC) / Top-Bottom (Mobile) -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
+          <!-- Left: Text Content -->
+          <div class="space-y-4">
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">セリフ</label>
+              <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
+${escapeHtml(scene.dialogue)}
+              </div>
+            </div>
+            
+            ${scene.bullets && scene.bullets.length > 0 ? `
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">要点</label>
+              <ul class="list-disc list-inside space-y-1 text-sm text-gray-700">
+                ${scene.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
+              </ul>
+            </div>
+            ` : ''}
+            
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">画像プロンプト</label>
+              <textarea 
+                id="builderPrompt-${scene.id}"
+                rows="3"
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+              >${escapeHtml(scene.image_prompt)}</textarea>
+            </div>
+          </div>
+          
+          <!-- Right: Image Preview & Actions -->
+          <div class="space-y-4">
+            <!-- Image Preview -->
+            <div class="relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
+              ${imageUrl 
+                ? `<img src="${imageUrl}" alt="Scene ${scene.idx}" class="w-full h-full object-cover" id="sceneImage-${scene.id}" />`
+                : `<div class="flex items-center justify-center h-full text-gray-400">
+                     <div class="text-center">
+                       <i class="fas fa-image text-6xl mb-3"></i>
+                       <p class="text-sm">画像未生成</p>
+                     </div>
+                   </div>`
+              }
+              ${imageStatus === 'generating' 
+                ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+                     <div class="text-white text-center">
+                       <i class="fas fa-spinner fa-spin text-4xl mb-2"></i>
+                       <p>生成中...</p>
+                     </div>
+                   </div>`
+                : ''
+              }
+            </div>
+            
+            <!-- Action Buttons -->
+            <div class="flex flex-wrap gap-2">
+              ${!activeImage || imageStatus === 'failed'
+                ? `<button 
+                     id="generateBtn-${scene.id}"
+                     onclick="generateSceneImage(${scene.id})"
+                     class="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold touch-manipulation"
+                   >
+                     <i class="fas fa-magic mr-2"></i>画像生成
+                   </button>`
+                : `<button 
+                     id="regenerateBtn-${scene.id}"
+                     onclick="regenerateSceneImage(${scene.id})"
+                     class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation"
+                   >
+                     <i class="fas fa-redo mr-2"></i>再生成
+                   </button>`
+              }
+              <button 
+                onclick="viewImageHistory(${scene.id})"
+                class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
+                ${!activeImage ? 'disabled' : ''}
+              >
+                <i class="fas fa-history mr-2"></i>履歴
+              </button>
+            </div>
+            
+            ${imageStatus === 'failed' 
+              ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
+                   <i class="fas fa-exclamation-circle mr-2"></i>
+                   画像生成に失敗しました
+                 </div>`
+              : ''
+            }
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Get role text
+function getRoleText(role) {
+  const roleMap = {
+    'hook': 'Hook',
+    'context': 'Context',
+    'main_point': 'Main Point',
+    'evidence': 'Evidence',
+    'timeline': 'Timeline',
+    'analysis': 'Analysis',
+    'summary': 'Summary',
+    'cta': 'CTA'
+  };
+  return roleMap[role] || role;
+}
+
+// Get image status badge
+function getImageStatusBadge(status) {
+  const statusMap = {
+    'pending': '<span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded">未生成</span>',
+    'generating': '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded">生成中</span>',
+    'completed': '<span class="px-2 py-1 bg-green-100 text-green-800 text-xs rounded">生成済み</span>',
+    'failed': '<span class="px-2 py-1 bg-red-100 text-red-800 text-xs rounded">失敗</span>'
+  };
+  return statusMap[status] || statusMap['pending'];
+}
+
+// Generate single scene image
+async function generateSceneImage(sceneId) {
+  if (sceneProcessing[sceneId]) {
+    showToast('このシーンは処理中です', 'warning');
+    return;
+  }
+  
+  sceneProcessing[sceneId] = true;
+  setButtonLoading(`generateBtn-${sceneId}`, true);
+  
+  // Update prompt if edited
+  const prompt = document.getElementById(`builderPrompt-${sceneId}`)?.value.trim();
+  if (prompt) {
+    try {
+      await axios.put(`${API_BASE}/scenes/${sceneId}`, {
+        image_prompt: prompt
+      });
+    } catch (error) {
+      console.error('Update prompt error:', error);
+    }
+  }
+  
+  try {
+    const response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-image`);
+    
+    if (response.data.id) {
+      showToast('画像生成を開始しました', 'success');
+      // Refresh builder to show generating status
+      await initBuilderTab();
+    } else {
+      showToast('画像生成に失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Generate image error:', error);
+    showToast('画像生成中にエラーが発生しました', 'error');
+  } finally {
+    sceneProcessing[sceneId] = false;
+    setButtonLoading(`generateBtn-${sceneId}`, false);
+  }
+}
+
+// Regenerate scene image
+async function regenerateSceneImage(sceneId) {
+  await generateSceneImage(sceneId);
+}
+
+// Bulk image generation
+async function generateBulkImages(mode) {
+  if (isProcessing) {
+    showToast('処理中です。しばらくお待ちください', 'warning');
+    return;
+  }
+  
+  isProcessing = true;
+  const buttonId = mode === 'all' ? 'generateAllImagesBtn' 
+                 : mode === 'pending' ? 'generatePendingImagesBtn'
+                 : 'generateFailedImagesBtn';
+  setButtonLoading(buttonId, true);
+  
+  try {
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, {
+      mode
+    });
+    
+    if (response.data.success) {
+      const modeText = mode === 'all' ? '全シーン' 
+                     : mode === 'pending' ? '未生成シーン'
+                     : '失敗シーン';
+      showToast(`${modeText}の画像生成を開始しました`, 'success');
+      await initBuilderTab();
+    } else {
+      showToast('画像生成に失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Bulk generate error:', error);
+    showToast('画像生成中にエラーが発生しました', 'error');
+  } finally {
+    isProcessing = false;
+    setButtonLoading(buttonId, false);
+  }
+}
+
+// View image history
+async function viewImageHistory(sceneId) {
+  try {
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/images`);
+    const images = response.data.images || [];
+    
+    const modal = document.getElementById('imageHistoryModal');
+    const content = document.getElementById('imageHistoryContent');
+    
+    if (images.length === 0) {
+      content.innerHTML = `
+        <div class="text-center py-8 text-gray-500">
+          <i class="fas fa-image text-6xl mb-4"></i>
+          <p>画像生成履歴がありません</p>
+        </div>
+      `;
+    } else {
+      content.innerHTML = `
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          ${images.map(img => `
+            <div class="border-2 ${img.is_active ? 'border-blue-600' : 'border-gray-200'} rounded-lg overflow-hidden">
+              <div class="aspect-video bg-gray-100">
+                <img src="${img.image_url}" alt="Generated image" class="w-full h-full object-cover" />
+              </div>
+              <div class="p-3 space-y-2">
+                <p class="text-xs text-gray-600 line-clamp-2">${escapeHtml(img.prompt)}</p>
+                <div class="flex items-center justify-between text-xs text-gray-500">
+                  <span>${new Date(img.created_at).toLocaleString('ja-JP')}</span>
+                  ${img.is_active 
+                    ? '<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded">現在使用中</span>'
+                    : `<button 
+                         onclick="activateImage(${img.id}, ${sceneId})"
+                         class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
+                       >
+                         この画像を採用
+                       </button>`
+                  }
+                </div>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+    
+    modal.classList.remove('hidden');
+  } catch (error) {
+    console.error('Load image history error:', error);
+    showToast('画像履歴の読み込みに失敗しました', 'error');
+  }
+}
+
+// Close image history modal
+function closeImageHistory() {
+  document.getElementById('imageHistoryModal').classList.add('hidden');
+}
+
+// Activate image
+async function activateImage(imageId, sceneId) {
+  try {
+    const response = await axios.post(`${API_BASE}/images/${imageId}/activate`);
+    
+    if (response.data.success) {
+      showToast('画像を採用しました', 'success');
+      closeImageHistory();
+      await initBuilderTab(); // Refresh to show new active image
+    } else {
+      showToast('画像の採用に失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Activate image error:', error);
+    showToast('画像採用中にエラーが発生しました', 'error');
+  }
+}
+
+// Download functions
+async function downloadImages() {
+  window.open(`${API_BASE}/projects/${PROJECT_ID}/download/images`, '_blank');
+}
+
+async function downloadCSV() {
+  window.open(`${API_BASE}/projects/${PROJECT_ID}/download/csv`, '_blank');
+}
+
+async function downloadAll() {
+  window.open(`${API_BASE}/projects/${PROJECT_ID}/download/all`, '_blank');
 }
 
 // Escape HTML

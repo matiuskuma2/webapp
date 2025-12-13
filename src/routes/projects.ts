@@ -318,20 +318,36 @@ projects.get('/:id/scenes', async (c) => {
       ORDER BY idx ASC
     `).bind(projectId).all()
 
+    // 各シーンのアクティブ画像を取得
+    const scenesWithImages = await Promise.all(
+      scenes.map(async (scene: any) => {
+        const activeImage = await c.env.DB.prepare(`
+          SELECT id, prompt, r2_url as image_url, status, created_at
+          FROM image_generations
+          WHERE scene_id = ? AND is_active = 1
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).bind(scene.id).first()
+
+        return {
+          id: scene.id,
+          idx: scene.idx,
+          role: scene.role,
+          title: scene.title,
+          dialogue: scene.dialogue,
+          bullets: JSON.parse(scene.bullets),
+          image_prompt: scene.image_prompt,
+          created_at: scene.created_at,
+          updated_at: scene.updated_at,
+          active_image: activeImage || null
+        }
+      })
+    )
+
     return c.json({
       project_id: parseInt(projectId),
       total_scenes: scenes.length,
-      scenes: scenes.map((scene: any) => ({
-        id: scene.id,
-        idx: scene.idx,
-        role: scene.role,
-        title: scene.title,
-        dialogue: scene.dialogue,
-        bullets: JSON.parse(scene.bullets),
-        image_prompt: scene.image_prompt,
-        created_at: scene.created_at,
-        updated_at: scene.updated_at
-      }))
+      scenes: scenesWithImages
     })
   } catch (error) {
     console.error('Error fetching scenes:', error)
