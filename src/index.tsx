@@ -579,9 +579,118 @@ app.get('/projects/:id', (c) => {
                 </div>
             </div>
 
+            <!-- Export Tab -->
             <div id="contentExport" class="hidden">
-                <h2 class="text-xl font-bold text-gray-800 mb-4">Export</h2>
-                <p class="text-gray-600">Phase 5 で実装予定</p>
+                <h2 class="text-xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-download mr-2 text-green-600"></i>
+                    書き出し（Export）
+                </h2>
+                
+                <!-- Project Summary -->
+                <div class="mb-6 p-6 bg-gradient-to-r from-blue-50 to-purple-50 rounded-lg border-2 border-blue-200">
+                    <h3 class="text-lg font-bold text-gray-800 mb-3 flex items-center">
+                        <i class="fas fa-film mr-2 text-blue-600"></i>
+                        このプロジェクトの書き出し
+                    </h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+                        <div>
+                            <span class="text-gray-600">プロジェクト名:</span>
+                            <p class="font-semibold text-gray-800" id="exportProjectTitle">-</p>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">作成日:</span>
+                            <p class="font-semibold text-gray-800" id="exportCreatedAt">-</p>
+                        </div>
+                        <div>
+                            <span class="text-gray-600">シーン数:</span>
+                            <p class="font-semibold text-gray-800" id="exportSceneCount">-</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Export Options -->
+                <div class="space-y-4">
+                    <!-- Images ZIP -->
+                    <div class="bg-white rounded-lg border-2 border-gray-200 p-6 hover:border-blue-400 transition-colors">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1">
+                                <h3 class="text-lg font-bold text-gray-800 mb-2 flex items-center">
+                                    <i class="fas fa-images mr-2 text-blue-600"></i>
+                                    画像素材
+                                </h3>
+                                <p class="text-sm font-semibold text-blue-700 mb-1">YouTube動画用 画像素材（全シーン）</p>
+                                <p class="text-sm text-gray-600">サムネ・動画編集にそのまま使えます</p>
+                            </div>
+                            <button 
+                                onclick="downloadImages()"
+                                class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold whitespace-nowrap touch-manipulation flex items-center gap-2"
+                            >
+                                <i class="fas fa-download"></i>
+                                images.zip
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Dialogue CSV -->
+                    <div class="bg-white rounded-lg border-2 border-gray-200 p-6 hover:border-green-400 transition-colors">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1">
+                                <h3 class="text-lg font-bold text-gray-800 mb-2 flex items-center">
+                                    <i class="fas fa-file-csv mr-2 text-green-600"></i>
+                                    シナリオ
+                                </h3>
+                                <p class="text-sm font-semibold text-green-700 mb-1">ナレーション・字幕用 シナリオ</p>
+                                <p class="text-sm text-gray-600">VOICEVOX / 台本 / 外注共有用</p>
+                            </div>
+                            <button 
+                                onclick="downloadCSV()"
+                                class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold whitespace-nowrap touch-manipulation flex items-center gap-2"
+                            >
+                                <i class="fas fa-download"></i>
+                                dialogue.csv
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- All ZIP -->
+                    <div class="bg-white rounded-lg border-2 border-purple-200 p-6 hover:border-purple-400 transition-colors">
+                        <div class="flex items-start justify-between gap-4">
+                            <div class="flex-1">
+                                <h3 class="text-lg font-bold text-gray-800 mb-2 flex items-center">
+                                    <i class="fas fa-archive mr-2 text-purple-600"></i>
+                                    全素材パック
+                                </h3>
+                                <p class="text-sm font-semibold text-purple-700 mb-1">動画制作フルパック</p>
+                                <p class="text-sm text-gray-600">編集者・外注にそのまま渡せます</p>
+                                <div class="mt-2 text-xs text-gray-500">
+                                    <span class="inline-block mr-2">📁 画像素材（全シーン）</span>
+                                    <span class="inline-block mr-2">📄 dialogue.csv</span>
+                                    <span class="inline-block">📋 project.json</span>
+                                </div>
+                            </div>
+                            <button 
+                                onclick="downloadAll()"
+                                class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation flex items-center gap-2"
+                            >
+                                <i class="fas fa-download"></i>
+                                all.zip
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Usage Tips -->
+                <div class="mt-6 p-4 bg-blue-50 border-l-4 border-blue-600 rounded">
+                    <h4 class="font-semibold text-gray-800 mb-2 flex items-center">
+                        <i class="fas fa-lightbulb mr-2 text-yellow-500"></i>
+                        使い方のヒント
+                    </h4>
+                    <ul class="text-sm text-gray-700 space-y-1">
+                        <li>• <strong>images.zip</strong>: Premiere Pro / DaVinci Resolve 等の動画編集ソフトで直接使用</li>
+                        <li>• <strong>dialogue.csv</strong>: VOICEVOX でナレーション生成、または外注ナレーターへの台本として活用</li>
+                        <li>• <strong>all.zip</strong>: 動画編集を外注する際にこのファイル1つを渡すだけでOK</li>
+                    </ul>
+                </div>
             </div>
         </div>
 

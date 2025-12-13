@@ -173,6 +173,8 @@ function switchTab(tabName) {
     initSceneSplitTab();
   } else if (tabName === 'builder') {
     initBuilderTab();
+  } else if (tabName === 'export') {
+    initExportTab();
   }
 }
 
@@ -987,17 +989,43 @@ async function activateImage(imageId, sceneId) {
   }
 }
 
+// ========== Export Functions ==========
+
+// Initialize Export tab
+async function initExportTab() {
+  try {
+    // Get project details
+    const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
+    const project = projectResponse.data;
+    
+    // Get scenes count
+    const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+    const scenes = scenesResponse.data.scenes || [];
+    
+    // Update UI
+    document.getElementById('exportProjectTitle').textContent = project.title;
+    document.getElementById('exportCreatedAt').textContent = new Date(project.created_at).toLocaleDateString('ja-JP');
+    document.getElementById('exportSceneCount').textContent = `${scenes.length} シーン`;
+  } catch (error) {
+    console.error('Load export info error:', error);
+    showToast('プロジェクト情報の読み込みに失敗しました', 'error');
+  }
+}
+
 // Download functions
 async function downloadImages() {
   window.open(`${API_BASE}/projects/${PROJECT_ID}/download/images`, '_blank');
+  showToast('images.zip のダウンロードを開始しました', 'success');
 }
 
 async function downloadCSV() {
   window.open(`${API_BASE}/projects/${PROJECT_ID}/download/csv`, '_blank');
+  showToast('dialogue.csv のダウンロードを開始しました', 'success');
 }
 
 async function downloadAll() {
   window.open(`${API_BASE}/projects/${PROJECT_ID}/download/all`, '_blank');
+  showToast('all.zip のダウンロードを開始しました', 'success');
 }
 
 // Escape HTML
