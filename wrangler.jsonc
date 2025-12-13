@@ -10,7 +10,7 @@
     {
       "binding": "DB",
       "database_name": "webapp-production",
-      "database_id": "local-db-placeholder"
+      "database_id": "51860cd3-bfa8-4eab-8a11-aa230adee686"
     }
   ],
   "r2_buckets": [
