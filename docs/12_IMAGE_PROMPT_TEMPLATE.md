@@ -5,13 +5,18 @@
 ### スタイル固定
 すべての画像は**ニュース風インフォグラフィック**スタイルで統一する。
 
+### 言語
+- **シーン固有の内容部分（`scene.image_prompt`）**: 英語推奨だが日本語も可
+- **スタイル指定（固定部分）**: 英語固定
+- Gemini (Nano Banana) は日本語プロンプトもサポートしているため、柔軟に対応
+
 ---
 
 ## 📐 プロンプトテンプレート
 
 ### 基本構造
 ```
-[シーン固有の内容] + [スタイル指定（固定部分）]
+[シーン固有の内容: scene.image_prompt] + [スタイル指定（固定部分）]
 ```
 
 ### スタイル指定（固定部分）
@@ -80,6 +85,24 @@ Key points summary infographic, bullet point visualization, recap of main ideas,
 ```
 Call to action visual, person taking first step, upward arrow indicating growth, motivational scene, next steps illustration, actionable pathway, clean infographic style, news broadcast quality, professional layout, modern design, data visualization elements, blue and white color scheme, high contrast, readable text hierarchy, minimalist composition, corporate aesthetic, 16:9 aspect ratio
 ```
+
+---
+
+## 🌐 日本語プロンプト例
+
+日本語コンテンツの場合、`scene.image_prompt`に日本語を使用することも可能です。
+
+### 例: hook（導入・フック）- 日本語
+```
+未来のオフィス、ホログラムAIインターフェース、ロボットと協働する労働者、近未来的な職場、技術革新, clean infographic style, news broadcast quality, professional layout, modern design, data visualization elements, blue and white color scheme, high contrast, readable text hierarchy, minimalist composition, corporate aesthetic, 16:9 aspect ratio
+```
+
+### 例: evidence（証拠・根拠）- 日本語
+```
+ビジネスデータのインフォグラフィック、40%の生産性向上を示す棒グラフ、統計グラフ、調査の可視化、マッキンゼー研究の表現、数字とパーセンテージ, clean infographic style, news broadcast quality, professional layout, modern design, data visualization elements, blue and white color scheme, high contrast, readable text hierarchy, minimalist composition, corporate aesthetic, 16:9 aspect ratio
+```
+
+**推奨**: 英語プロンプトの方がGeminiの画像生成精度が高い傾向がありますが、日本語でも十分な品質が得られます。
 
 ---
 

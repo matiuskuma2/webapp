@@ -168,6 +168,48 @@
 
 ---
 
+### [2025-12-13] Phase 4開始前Fix: 仕様統一（矛盾防止）
+
+#### 変更理由
+- Phase 4（画像生成）開始前の仕様統一
+- RILARCScenario `version`の整合確認
+- `image_prompt`の言語縛り緩和（Nano Banana対応）
+
+#### 変更内容
+
+**Fix 1: RILARCScenario version統一**
+- 確認結果: 既に統一されていることを確認
+  - `docs/03_DOMAIN_MODEL.md`: `version: "1.0"` (固定)
+  - `src/routes/formatting.ts`: `version は "1.0" 固定`
+  - `src/utils/rilarc-validator.ts`: `data.version !== '1.0'` で検証
+- 対応: 変更不要（既に統一済み） ✅
+
+**Fix 2: image_prompt言語縛り緩和**
+- 変更前: 「image_promptは英語で記述」（英語固定）
+- 変更後: 「image_promptは英語推奨だが日本語も可」（柔軟化）
+- 理由:
+  - Gemini (Nano Banana) は日本語プロンプトもサポート
+  - Phase 4で`buildImagePrompt()`を使用し、スタイル指定を追加する方式
+  - `scene.image_prompt`はシーン固有の内容記述として扱う
+  - 日本語コンテンツの場合、日本語プロンプトの方が精度が高い可能性
+- 更新ファイル:
+  - `src/routes/formatting.ts`: system prompt修正
+  - `docs/03_DOMAIN_MODEL.md`: descriptionを「英語推奨だが日本語も可」に変更
+  - `docs/12_IMAGE_PROMPT_TEMPLATE.md`: 言語説明追加、日本語プロンプト例追加
+
+#### 影響範囲
+- ✅ **Docs**: `docs/03_DOMAIN_MODEL.md`、`docs/12_IMAGE_PROMPT_TEMPLATE.md`更新
+- ✅ **Worker**: `src/routes/formatting.ts` system prompt修正
+- ❌ **API**: 挙動変更なし（内部仕様の柔軟化のみ）
+- ❌ **DB**: 変更なし
+
+#### Phase 4への準備
+- `scene.image_prompt`: シーン固有の内容記述（英語/日本語どちらも可）
+- Phase 4実装: `buildImagePrompt(scene.image_prompt)`でスタイル指定を追加
+- 最終プロンプト: `[scene.image_prompt] + [スタイル指定（固定部分）]`
+
+---
+
 ## 🔮 予定されている変更
 
 ### Phase 2: 文字起こし実装

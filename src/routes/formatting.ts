@@ -226,7 +226,7 @@ async function generateRILARCScenario(
 4. 各シーンの bullets は 2〜4 個、各 6〜26 文字
 5. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
 6. idx は 1 から連番（欠番なし）
-7. image_prompt は英語で記述（20〜500文字）
+7. image_prompt は画像生成用のシーン描写（20〜500文字、英語推奨だが日本語も可）
 8. metadata.total_scenes は scenes.length と一致させること
 
 【role の使い方】

@@ -96,7 +96,7 @@
             "type": "string",
             "minLength": 20,
             "maxLength": 500,
-            "description": "画像生成プロンプト（英語推奨）"
+            "description": "画像生成プロンプト（シーン固有の内容記述、英語推奨だが日本語も可）"
           }
         }
       }
@@ -129,7 +129,7 @@
 | title | string | ✅ | 1〜50文字 | シーンのタイトル |
 | dialogue | string | ✅ | 40〜220文字 | 読み上げセリフ（10〜30秒目安） |
 | bullets | string[] | ✅ | 2〜4個、各6〜26文字 | 要点（箇条書き） |
-| image_prompt | string | ✅ | 20〜500文字 | 画像生成プロンプト |
+| image_prompt | string | ✅ | 20〜500文字 | 画像生成プロンプト（シーン固有の内容、英語推奨だが日本語も可） |
 
 ### role（enum値）
 | 値 | 説明 | 使用例 |
