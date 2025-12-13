@@ -56,14 +56,40 @@
 
 ---
 
-## 🔮 予定されている変更
+### [2025-12-13] Phase 1 完了 + Cleanup
 
-### Phase 1: DB/アップロード基盤実装（次回）
-- D1マイグレーション作成・実行
-- R2バケット作成
-- プロジェクト作成API実装
-- 音声アップロードAPI実装
-- 基本UI実装
+#### 変更理由
+- Phase 1実装完了（DB/アップロード基盤）
+- 環境変数名の統一（`GEMINI_API_KEY`に正式化）
+- テスト資産のGit管理除外
+
+#### 変更内容
+- **Phase 1実装**:
+  - D1マイグレーション作成・適用 (`migrations/0001_initial_schema.sql`)
+  - R2バケット設定 (`wrangler.jsonc`)
+  - API実装: プロジェクト作成、音声アップロード、一覧取得、詳細取得
+  - 基本UI実装（プロジェクト作成・一覧表示）
+  - PM2による開発サーバー構築
+- **Cleanup**:
+  - 環境変数名統一: `GOOGLE_API_KEY` → `GEMINI_API_KEY`（正式名称）
+  - テスト資産除外: `test_audio.mp3`をGit追跡から除外・削除
+
+#### 影響範囲
+- ✅ **DB**: D1マイグレーション適用、`projects`テーブル作成
+- ✅ **Storage**: R2バケット設定完了（ローカル）
+- ✅ **API**: プロジェクトCRUD・アップロードAPI実装
+- ✅ **UI**: 基本的なプロジェクト管理UI実装
+- ✅ **Worker**: Hono実装完了
+- ✅ **Env**: `.dev.vars`キー名統一（`GEMINI_API_KEY`）
+
+#### 関連ドキュメント
+- docs/04_DB_SCHEMA.md（実装済み）
+- docs/05_API_SPEC.md（Phase 1部分実装済み）
+- docs/02_ARCHITECTURE.md（環境変数表記確認済み）
+
+---
+
+## 🔮 予定されている変更
 
 ### Phase 2: 文字起こし実装
 - OpenAI Whisper API統合
