@@ -255,6 +255,44 @@
 
 ---
 
+### [2025-12-13] Phase 4修正: Gemini API呼び出しを公式仕様に修正
+
+#### 変更理由
+- Phase 4のGemini API呼び出しが仮実装で404エラーが発生
+- 公式仕様（`generateContent`）に合わせて実装修正
+
+#### 変更内容
+- **Gemini API呼び出し修正**:
+  - エンドポイント: `:generateImage` → `:generateContent`（公式仕様）
+  - URL: `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent`
+  - 認証: `Authorization: Bearer` → `x-goog-api-key`ヘッダ
+  - リクエスト形式:
+    ```json
+    {
+      "contents": [{"parts": [{"text": "<PROMPT>"}]}],
+      "generationConfig": {
+        "responseModalities": ["Image"],
+        "imageConfig": {"aspectRatio": "16:9", "imageSize": "2K"}
+      }
+    }
+    ```
+  - レスポンス処理: `candidates[0].content.parts[].inlineData.data`（base64）からPNGバイナリを生成
+- **429リトライ**: 既存ロジック維持（最大3回、指数バックオフ）
+- **エラーハンドリング**: 既存ロジック維持
+
+#### 影響範囲
+- ✅ **Worker**: `src/routes/image-generation.ts`のGemini API呼び出し部分のみ修正
+- ✅ **Docs**: `docs/08_CHANGELOG.md`に実装修正記録
+- ❌ **API**: インターフェース変更なし
+- ❌ **DB**: 変更なし
+
+#### 期待される動作
+- APIキー設定後、`POST /api/scenes/:id/generate-image`が成功しR2にPNG保存
+- `image_generations.status = 'completed'`, `is_active = 1`が正しく設定される
+- `POST /api/projects/:id/generate-all-images`で`success_count`が増加
+
+---
+
 ## 🔮 予定されている変更
 
 ### Phase 2: 文字起こし実装

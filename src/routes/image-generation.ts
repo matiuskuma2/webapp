@@ -338,6 +338,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
 /**
  * Gemini APIで画像生成（429リトライ付き）
+ * 公式仕様: generateContent エンドポイント
  */
 async function generateImageWithRetry(
   prompt: string,
@@ -352,20 +353,35 @@ async function generateImageWithRetry(
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      // NOTE: この実装は仮のものです。実際のGemini API仕様に合わせて修正が必要です
-      // Gemini Image Generation APIのエンドポイントとリクエスト形式を確認してください
-      
-      const response = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateImage', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          prompt: prompt,
-          aspect_ratio: '16:9'
-        })
-      })
+      // Gemini API公式仕様: generateContent
+      const response = await fetch(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
+        {
+          method: 'POST',
+          headers: {
+            'x-goog-api-key': apiKey,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: prompt
+                  }
+                ]
+              }
+            ],
+            generationConfig: {
+              responseModalities: ['Image'],
+              imageConfig: {
+                aspectRatio: '16:9',
+                imageSize: '2K'
+              }
+            }
+          })
+        }
+      )
 
       // 429エラー時はリトライ
       if (response.status === 429) {
@@ -393,18 +409,35 @@ async function generateImageWithRetry(
         break
       }
 
-      // 成功
+      // 成功: レスポンスから画像データを取得
       const result = await response.json()
       
-      // レスポンスから画像データを取得（実際のAPI仕様に合わせて調整）
-      if (result.image_data) {
-        const imageBuffer = Buffer.from(result.image_data, 'base64')
-        return {
-          success: true,
-          imageData: imageBuffer
+      // candidates[0].content.parts から inlineData.data を取得
+      if (result.candidates && result.candidates.length > 0) {
+        const parts = result.candidates[0].content?.parts || []
+        
+        for (const part of parts) {
+          if (part.inlineData && part.inlineData.data) {
+            // base64デコードしてバイナリデータに変換
+            const base64Data = part.inlineData.data
+            const binaryString = atob(base64Data)
+            const bytes = new Uint8Array(binaryString.length)
+            
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i)
+            }
+            
+            return {
+              success: true,
+              imageData: bytes.buffer
+            }
+          }
         }
+        
+        lastError = 'No inline data in response parts'
+        break
       } else {
-        lastError = 'No image data in response'
+        lastError = 'No candidates in response'
         break
       }
 
