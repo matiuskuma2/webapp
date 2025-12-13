@@ -179,4 +179,299 @@ app.get('/', (c) => {
   `)
 })
 
+// Project Editor route
+app.get('/projects/:id', (c) => {
+  const projectId = c.req.param('id')
+  
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>Project Editor - RILARC</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link href="/static/styles.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        /* Mobile-First Optimizations */
+        * {
+            -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+        }
+        
+        body {
+            overscroll-behavior: none;
+            touch-action: pan-y;
+        }
+        
+        .touch-manipulation {
+            touch-action: manipulation;
+        }
+        
+        /* Large touch targets for mobile */
+        @media (max-width: 768px) {
+            button, a, input[type="file"] {
+                min-height: 48px;
+                font-size: 16px;
+            }
+            
+            .container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+            
+            /* Prevent zoom on input focus */
+            input, select, textarea {
+                font-size: 16px;
+            }
+        }
+        
+        /* Recording animation */
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        .animate-pulse {
+            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        /* Tab styles */
+        .tab-active {
+            border-bottom: 3px solid #2563eb;
+            color: #2563eb;
+        }
+        
+        .tab-inactive {
+            color: #6b7280;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <div class="flex items-center gap-4">
+                    <a href="/" class="text-gray-600 hover:text-gray-800">
+                        <i class="fas fa-arrow-left text-xl"></i>
+                    </a>
+                    <div>
+                        <h1 id="projectTitle" class="text-2xl font-bold text-gray-800">読み込み中...</h1>
+                        <span id="projectStatus" class="inline-block mt-2 px-3 py-1 rounded-full text-sm font-semibold">
+                            <i class="fas fa-circle mr-1"></i>
+                            <span id="statusText">-</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="flex gap-2">
+                    <button 
+                        id="deleteBtn"
+                        onclick="confirmDeleteProject()"
+                        class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors touch-manipulation"
+                    >
+                        <i class="fas fa-trash mr-1"></i>削除
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Tabs -->
+        <div class="bg-white rounded-lg shadow-md mb-6 overflow-x-auto">
+            <div class="flex border-b">
+                <button 
+                    class="px-6 py-4 font-semibold transition-colors tab-active touch-manipulation"
+                    id="tabInput"
+                    onclick="switchTab('input')"
+                >
+                    <i class="fas fa-upload mr-2"></i>Input
+                </button>
+                <button 
+                    class="px-6 py-4 font-semibold transition-colors tab-inactive touch-manipulation"
+                    id="tabSceneSplit"
+                    onclick="switchTab('sceneSplit')"
+                    disabled
+                >
+                    <i class="fas fa-cut mr-2"></i>Scene Split
+                </button>
+                <button 
+                    class="px-6 py-4 font-semibold transition-colors tab-inactive touch-manipulation"
+                    id="tabBuilder"
+                    onclick="switchTab('builder')"
+                    disabled
+                >
+                    <i class="fas fa-image mr-2"></i>Builder
+                </button>
+                <button 
+                    class="px-6 py-4 font-semibold transition-colors tab-inactive touch-manipulation"
+                    id="tabExport"
+                    onclick="switchTab('export')"
+                    disabled
+                >
+                    <i class="fas fa-download mr-2"></i>Export
+                </button>
+            </div>
+        </div>
+
+        <!-- Tab Contents -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <!-- Input Tab -->
+            <div id="contentInput">
+                <h2 class="text-xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-upload mr-2 text-blue-600"></i>
+                    音声またはテキストを入力
+                </h2>
+                
+                <!-- 3 Input Methods -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <!-- A) Microphone Recording -->
+                    <div class="p-6 bg-blue-50 rounded-lg border-2 border-blue-200">
+                        <h3 class="font-semibold text-gray-800 mb-4 flex items-center">
+                            <i class="fas fa-microphone-alt mr-2 text-blue-600"></i>
+                            マイク録音
+                            <span class="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">スマホ推奨</span>
+                        </h3>
+                        <div id="recordingStatus" class="mb-4 text-sm text-gray-600 hidden">
+                            <div class="flex items-center justify-center mb-2">
+                                <div class="w-4 h-4 bg-red-500 rounded-full animate-pulse mr-2"></div>
+                                <span class="font-semibold">録音中...</span>
+                                <span id="recordingTime" class="ml-2">0:00</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                <div id="recordingProgress" class="bg-blue-600 h-full transition-all duration-300" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="flex flex-col gap-2">
+                            <button 
+                                id="startRecordBtn"
+                                onclick="startRecording()"
+                                class="w-full px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-semibold touch-manipulation"
+                            >
+                                <i class="fas fa-microphone mr-2"></i>録音開始
+                            </button>
+                            <button 
+                                id="stopRecordBtn"
+                                onclick="stopRecording()"
+                                class="w-full px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold hidden touch-manipulation"
+                            >
+                                <i class="fas fa-stop mr-2"></i>録音停止
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-3">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            ブラウザでマイク許可が必要です
+                        </p>
+                    </div>
+                    
+                    <!-- B) File Upload -->
+                    <div class="p-6 bg-gray-50 rounded-lg border-2 border-gray-200">
+                        <h3 class="font-semibold text-gray-800 mb-4 flex items-center">
+                            <i class="fas fa-upload mr-2 text-gray-600"></i>
+                            ファイルアップロード
+                            <span class="ml-2 text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded">PC推奨</span>
+                        </h3>
+                        <input 
+                            type="file" 
+                            id="audioFile" 
+                            accept="audio/*,audio/webm,audio/mp3,audio/wav,audio/m4a,audio/ogg" 
+                            class="block w-full text-sm text-gray-600 mb-4
+                            file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0
+                            file:font-semibold file:bg-blue-600 file:text-white
+                            hover:file:bg-blue-700 cursor-pointer touch-manipulation"
+                        />
+                        <button 
+                            id="uploadAudioBtn"
+                            onclick="uploadAudio()"
+                            class="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation"
+                        >
+                            <i class="fas fa-upload mr-2"></i>アップロード
+                        </button>
+                        <p class="text-xs text-gray-500 mt-3">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            対応形式: MP3, WAV, M4A, OGG, WebM
+                        </p>
+                    </div>
+                    
+                    <!-- C) Text Paste -->
+                    <div class="p-6 bg-green-50 rounded-lg border-2 border-green-200">
+                        <h3 class="font-semibold text-gray-800 mb-4 flex items-center">
+                            <i class="fas fa-keyboard mr-2 text-green-600"></i>
+                            テキスト貼り付け
+                            <span class="ml-2 text-xs bg-green-100 text-green-800 px-2 py-1 rounded">音声不要</span>
+                        </h3>
+                        <textarea 
+                            id="sourceText"
+                            placeholder="シナリオテキストを貼り付けてください..."
+                            rows="6"
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+                        ></textarea>
+                        <div class="text-xs text-gray-500 mb-3">
+                            <span id="textCharCount">0</span> 文字
+                        </div>
+                        <button 
+                            id="saveTextBtn"
+                            onclick="saveSourceText()"
+                            class="w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
+                        >
+                            <i class="fas fa-save mr-2"></i>保存
+                        </button>
+                        <p class="text-xs text-gray-500 mt-3">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            保存後、Scene Splitへ進めます
+                        </p>
+                    </div>
+                </div>
+                
+                <!-- Next Step Guidance -->
+                <div id="nextStepGuide" class="mt-6 p-4 bg-blue-50 border-l-4 border-blue-600 rounded hidden">
+                    <p class="text-sm text-gray-700">
+                        <i class="fas fa-check-circle text-green-600 mr-2"></i>
+                        入力が完了しました。次は<strong>Scene Split</strong>タブでシーン分割を実行してください。
+                    </p>
+                </div>
+            </div>
+
+            <!-- Other Tabs (Placeholder) -->
+            <div id="contentSceneSplit" class="hidden">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Scene Split</h2>
+                <p class="text-gray-600">Phase 3 で実装予定</p>
+            </div>
+
+            <div id="contentBuilder" class="hidden">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Builder</h2>
+                <p class="text-gray-600">Phase 4 で実装予定</p>
+            </div>
+
+            <div id="contentExport" class="hidden">
+                <h2 class="text-xl font-bold text-gray-800 mb-4">Export</h2>
+                <p class="text-gray-600">Phase 5 で実装予定</p>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div id="toast" class="fixed top-4 right-4 bg-white shadow-lg rounded-lg p-4 hidden z-50 max-w-md">
+            <div class="flex items-center">
+                <i id="toastIcon" class="fas fa-check-circle text-2xl mr-3 text-green-500"></i>
+                <span id="toastMessage" class="text-gray-800"></span>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+        const PROJECT_ID = ${projectId};
+    </script>
+    <script src="/static/project-editor.js"></script>
+</body>
+</html>
+  `)
+})
+
 export default app
