@@ -405,10 +405,99 @@ async function formatAndSplit() {
     }
   } catch (error) {
     console.error('Format error:', error);
-    showToast('シーン分割中にエラーが発生しました', 'error');
+    
+    // INVALID_STATUS (failed) の場合、復帰導線を表示
+    if (error.response?.status === 400 && 
+        error.response?.data?.error?.code === 'INVALID_STATUS' &&
+        error.response?.data?.error?.details?.current_status === 'failed') {
+      showFailedProjectRecoveryUI();
+    } else {
+      showToast('シーン分割中にエラーが発生しました', 'error');
+    }
   } finally {
     isProcessing = false;
     setButtonLoading('formatBtn', false);
+  }
+}
+
+// Show recovery UI for failed projects
+function showFailedProjectRecoveryUI() {
+  const formatSection = document.getElementById('formatSection');
+  
+  formatSection.innerHTML = `
+    <div class="p-6 bg-red-50 border-l-4 border-red-600 rounded-lg">
+      <div class="flex items-start">
+        <i class="fas fa-exclamation-triangle text-red-600 text-3xl mr-4 mt-1"></i>
+        <div class="flex-1">
+          <h3 class="font-bold text-gray-800 mb-2 text-lg">このプロジェクトは失敗状態です</h3>
+          <p class="text-sm text-gray-700 mb-4">
+            前回のシーン分割実行時にエラーが発生しました。<br>
+            プロジェクトをリセットして再実行するか、新しいプロジェクトを作成してください。
+          </p>
+          <div class="flex flex-wrap gap-3">
+            <button 
+              onclick="resetProject()"
+              class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation"
+            >
+              <i class="fas fa-redo mr-2"></i>リセットして再実行
+            </button>
+            <button 
+              onclick="window.location.href='/'"
+              class="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
+            >
+              <i class="fas fa-plus mr-2"></i>新規プロジェクト作成
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  formatSection.classList.remove('hidden');
+}
+
+// Reset project from failed state
+async function resetProject() {
+  if (isProcessing) {
+    showToast('処理中です。しばらくお待ちください', 'warning');
+    return;
+  }
+  
+  isProcessing = true;
+  
+  try {
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/reset`);
+    
+    if (response.data.success) {
+      showToast(`プロジェクトをリセットしました（${response.data.reset_to}）`, 'success');
+      await loadProject(); // Reload project
+      
+      // Format section を元に戻す
+      const formatSection = document.getElementById('formatSection');
+      formatSection.innerHTML = `
+        <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div>
+            <h3 class="font-semibold text-gray-800 mb-1">RILARCシナリオ生成</h3>
+            <p class="text-sm text-gray-600">OpenAI Chat APIで入力テキストをシーン分割します（30秒-1分）</p>
+          </div>
+          <button 
+            id="formatBtn"
+            onclick="formatAndSplit()"
+            class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation"
+          >
+            <i class="fas fa-magic mr-2"></i>シーン分割を実行
+          </button>
+        </div>
+      `;
+      formatSection.classList.remove('hidden');
+    } else {
+      showToast(response.data.error?.message || 'リセットに失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Reset project error:', error);
+    showToast('リセット中にエラーが発生しました', 'error');
+  } finally {
+    isProcessing = false;
   }
 }
 

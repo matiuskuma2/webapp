@@ -467,4 +467,85 @@ projects.delete('/:id', async (c) => {
   }
 })
 
+// POST /api/projects/:id/reset - プロジェクトを失敗状態からリセット
+projects.post('/:id/reset', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, status, source_type, source_text, audio_r2_key
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // リセット可能な状態チェック（failedのみ）
+    if (project.status !== 'failed') {
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: 'Can only reset failed projects',
+          details: {
+            current_status: project.status
+          }
+        }
+      }, 400)
+    }
+
+    // リセット先のステータスを決定
+    let resetStatus = 'created'
+    
+    if (project.source_type === 'text' && project.source_text) {
+      // テキスト入力済み → uploaded
+      resetStatus = 'uploaded'
+    } else if (project.source_type === 'audio' && project.audio_r2_key) {
+      // 音声アップロード済み → uploaded
+      resetStatus = 'uploaded'
+    } else {
+      // 入力なし → created
+      resetStatus = 'created'
+    }
+
+    // ステータスをリセット
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET status = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(resetStatus, projectId).run()
+
+    // 更新後のプロジェクト取得
+    const updatedProject = await c.env.DB.prepare(`
+      SELECT id, title, status, source_type, created_at, updated_at
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    return c.json({
+      success: true,
+      message: 'Project reset successfully',
+      project: updatedProject,
+      reset_from: 'failed',
+      reset_to: resetStatus
+    }, 200)
+  } catch (error) {
+    console.error('Error resetting project:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to reset project'
+      }
+    }, 500)
+  }
+})
+
 export default projects
