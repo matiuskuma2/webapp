@@ -81,7 +81,7 @@ projects.post('/:id/upload', async (c) => {
     }
 
     // ファイル形式チェック
-    const allowedExtensions = ['.mp3', '.wav', '.m4a', '.ogg']
+    const allowedExtensions = ['.mp3', '.wav', '.m4a', '.ogg', '.webm']
     const fileName = audioFile.name.toLowerCase()
     const isValidFormat = allowedExtensions.some(ext => fileName.endsWith(ext))
 
@@ -89,7 +89,7 @@ projects.post('/:id/upload', async (c) => {
       return c.json({
         error: {
           code: 'VALIDATION_ERROR',
-          message: 'Invalid file format. Supported formats: MP3, WAV, M4A, OGG',
+          message: 'Invalid file format. Supported formats: MP3, WAV, M4A, OGG, WebM',
           details: {
             field: 'audio',
             constraint: 'format',
@@ -272,6 +272,76 @@ projects.get('/:id/scenes', async (c) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Failed to fetch scenes'
+      }
+    }, 500)
+  }
+})
+
+// DELETE /api/projects/:id - プロジェクト削除
+projects.delete('/:id', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, audio_r2_key FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // R2から音声ファイル削除（存在する場合）
+    if (project.audio_r2_key) {
+      try {
+        await c.env.R2.delete(project.audio_r2_key)
+      } catch (error) {
+        console.error('Error deleting audio from R2:', error)
+        // R2削除失敗してもDB削除は続行
+      }
+    }
+
+    // R2から画像ファイル削除（存在する場合）
+    try {
+      const { results: imageGenerations } = await c.env.DB.prepare(`
+        SELECT DISTINCT r2_key FROM image_generations 
+        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+        AND r2_key IS NOT NULL
+      `).bind(projectId).all()
+
+      for (const img of imageGenerations) {
+        try {
+          await c.env.R2.delete(img.r2_key)
+        } catch (error) {
+          console.error('Error deleting image from R2:', error)
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching/deleting images:', error)
+    }
+
+    // DB削除（外部キー制約で関連データも自動削除）
+    // image_generations, scenes, transcriptions は ON DELETE CASCADE で自動削除
+    await c.env.DB.prepare(`
+      DELETE FROM projects WHERE id = ?
+    `).bind(projectId).run()
+
+    return c.json({
+      success: true,
+      message: 'Project deleted successfully',
+      deleted_project_id: parseInt(projectId)
+    })
+  } catch (error) {
+    console.error('Error deleting project:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to delete project'
       }
     }, 500)
   }

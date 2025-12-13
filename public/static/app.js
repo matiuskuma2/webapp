@@ -168,7 +168,15 @@ function showProjectDetail(project) {
   
   modalContent.innerHTML = `
     <div class="mb-6">
-      <h2 class="text-2xl font-bold text-gray-800 mb-2">${escapeHtml(project.title)}</h2>
+      <div class="flex items-start justify-between mb-2">
+        <h2 class="text-2xl font-bold text-gray-800">${escapeHtml(project.title)}</h2>
+        <button 
+          onclick="confirmDeleteProject(${project.id})"
+          class="px-3 py-1 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm"
+        >
+          <i class="fas fa-trash mr-1"></i>削除
+        </button>
+      </div>
       <div class="flex items-center gap-4 text-sm text-gray-600">
         <span class="flex items-center">
           <i class="fas fa-info-circle mr-1"></i>
@@ -200,62 +208,71 @@ function getProjectActions(project) {
           Step 1: 音声を録音またはアップロード
         </h3>
         
-        <!-- Microphone Recording (推奨・スマホ向け) -->
-        <div class="mb-4 p-4 bg-white rounded-lg border-2 border-blue-200">
-          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
-            <i class="fas fa-microphone-alt mr-2 text-blue-600"></i>
-            マイク録音（推奨）
-          </h4>
-          <div id="recordingStatus" class="mb-3 text-sm text-gray-600 hidden">
-            <div class="flex items-center justify-center mb-2">
-              <div class="w-4 h-4 bg-red-500 rounded-full animate-pulse mr-2"></div>
-              <span class="font-semibold">録音中...</span>
-              <span id="recordingTime" class="ml-2">0:00</span>
+        <!-- Grid layout for PC, Stack for mobile -->
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Microphone Recording -->
+          <div class="p-4 bg-white rounded-lg border-2 border-blue-200">
+            <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+              <i class="fas fa-microphone-alt mr-2 text-blue-600"></i>
+              マイク録音
+              <span class="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded">スマホ推奨</span>
+            </h4>
+            <div id="recordingStatus" class="mb-3 text-sm text-gray-600 hidden">
+              <div class="flex items-center justify-center mb-2">
+                <div class="w-4 h-4 bg-red-500 rounded-full animate-pulse mr-2"></div>
+                <span class="font-semibold">録音中...</span>
+                <span id="recordingTime" class="ml-2">0:00</span>
+              </div>
+              <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div id="recordingProgress" class="bg-blue-600 h-full transition-all duration-300" style="width: 0%"></div>
+              </div>
             </div>
-            <div class="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
-              <div id="recordingProgress" class="bg-blue-600 h-full transition-all duration-300" style="width: 0%"></div>
+            <div class="flex flex-col gap-2">
+              <button 
+                id="startRecordBtn"
+                onclick="startRecording(${project.id})"
+                class="w-full px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-base font-semibold touch-manipulation"
+              >
+                <i class="fas fa-microphone mr-2"></i>録音開始
+              </button>
+              <button 
+                id="stopRecordBtn"
+                onclick="stopRecording(${project.id})"
+                class="w-full px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-base font-semibold hidden touch-manipulation"
+              >
+                <i class="fas fa-stop mr-2"></i>録音停止
+              </button>
             </div>
+            <p class="text-xs text-gray-500 mt-3">
+              <i class="fas fa-info-circle mr-1"></i>
+              ブラウザでマイク許可が必要です
+            </p>
           </div>
-          <div class="flex gap-2">
+          
+          <!-- File Upload -->
+          <div class="p-4 bg-white rounded-lg border-2 border-gray-200">
+            <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
+              <i class="fas fa-upload mr-2 text-gray-600"></i>
+              ファイルアップロード
+              <span class="ml-2 text-xs bg-gray-100 text-gray-800 px-2 py-1 rounded">PC推奨</span>
+            </h4>
+            <input type="file" id="audioFile" accept="audio/*,audio/webm,audio/mp3,audio/wav,audio/m4a,audio/ogg" 
+              class="block w-full text-sm text-gray-600 mb-3
+              file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0
+              file:text-base file:font-semibold file:bg-blue-600 file:text-white
+              hover:file:bg-blue-700 cursor-pointer touch-manipulation"/>
             <button 
-              id="startRecordBtn"
-              onclick="startRecording(${project.id})"
-              class="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-lg font-semibold touch-manipulation"
+              id="uploadAudioBtn"
+              onclick="uploadAudio(${project.id})"
+              class="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-base font-semibold touch-manipulation"
             >
-              <i class="fas fa-microphone mr-2"></i>録音開始
+              <i class="fas fa-upload mr-2"></i>アップロード
             </button>
-            <button 
-              id="stopRecordBtn"
-              onclick="stopRecording(${project.id})"
-              class="flex-1 px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors text-lg font-semibold hidden touch-manipulation"
-            >
-              <i class="fas fa-stop mr-2"></i>録音停止
-            </button>
+            <p class="text-xs text-gray-500 mt-3">
+              <i class="fas fa-info-circle mr-1"></i>
+              対応形式: MP3, WAV, M4A, OGG, WebM
+            </p>
           </div>
-          <p class="text-xs text-gray-500 mt-2">
-            <i class="fas fa-info-circle mr-1"></i>
-            スマホの場合、ブラウザでマイク許可が必要です
-          </p>
-        </div>
-        
-        <!-- File Upload (既存・PC向け) -->
-        <div class="p-4 bg-white rounded-lg border-2 border-gray-200">
-          <h4 class="font-semibold text-gray-700 mb-3 flex items-center">
-            <i class="fas fa-upload mr-2 text-gray-600"></i>
-            ファイルアップロード
-          </h4>
-          <input type="file" id="audioFile" accept="audio/*" 
-            class="block w-full text-sm text-gray-600 mb-3
-            file:mr-4 file:py-3 file:px-6 file:rounded-lg file:border-0
-            file:text-base file:font-semibold file:bg-blue-600 file:text-white
-            hover:file:bg-blue-700 cursor-pointer touch-manipulation"/>
-          <button 
-            id="uploadAudioBtn"
-            onclick="uploadAudio(${project.id})"
-            class="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-lg font-semibold touch-manipulation"
-          >
-            <i class="fas fa-upload mr-2"></i>アップロード
-          </button>
         </div>
       </div>
     `);
@@ -381,6 +398,40 @@ function closeModal() {
   const modal = document.getElementById('projectModal');
   modal.classList.add('hidden');
   currentProject = null;
+}
+
+// Confirm delete project
+function confirmDeleteProject(projectId) {
+  if (confirm('このプロジェクトを削除してもよろしいですか？\n\n関連するすべてのデータ（音声、シーン、画像）が削除されます。この操作は取り消せません。')) {
+    deleteProject(projectId);
+  }
+}
+
+// Delete project
+async function deleteProject(projectId) {
+  if (isProcessing) {
+    showToast('処理中です。しばらくお待ちください', 'warning');
+    return;
+  }
+  
+  isProcessing = true;
+  
+  try {
+    const response = await axios.delete(`${API_BASE}/projects/${projectId}`);
+    
+    if (response.data.success) {
+      showToast('プロジェクトを削除しました', 'success');
+      closeModal();
+      loadProjects();
+    } else {
+      showToast(response.data.error?.message || 'プロジェクト削除に失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Delete project error:', error);
+    showToast('プロジェクト削除中にエラーが発生しました', 'error');
+  } finally {
+    isProcessing = false;
+  }
 }
 
 // Start recording audio
