@@ -321,13 +321,23 @@ projects.get('/:id/scenes', async (c) => {
     // 各シーンのアクティブ画像を取得
     const scenesWithImages = await Promise.all(
       scenes.map(async (scene: any) => {
-        const activeImage = await c.env.DB.prepare(`
-          SELECT id, prompt, r2_url as image_url, status, created_at
+        const imageRecord = await c.env.DB.prepare(`
+          SELECT id, prompt, r2_key, status, created_at
           FROM image_generations
           WHERE scene_id = ? AND is_active = 1
           ORDER BY created_at DESC
           LIMIT 1
         `).bind(scene.id).first()
+
+        // r2_key から正規化された image_url を生成（唯一の真実）
+        // r2_key は既に "images/12/scene_1/21_xxx.png" 形式なので、先頭に "/" のみ追加
+        const activeImage = imageRecord ? {
+          id: imageRecord.id,
+          prompt: imageRecord.prompt,
+          image_url: `/${imageRecord.r2_key}`, // r2_key には既に "images/" が含まれる
+          status: imageRecord.status,
+          created_at: imageRecord.created_at
+        } : null
 
         return {
           id: scene.id,
@@ -339,7 +349,7 @@ projects.get('/:id/scenes', async (c) => {
           image_prompt: scene.image_prompt,
           created_at: scene.created_at,
           updated_at: scene.updated_at,
-          active_image: activeImage || null
+          active_image: activeImage
         }
       })
     )
