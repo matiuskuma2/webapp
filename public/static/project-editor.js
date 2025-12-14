@@ -168,10 +168,15 @@ function switchTab(tabName) {
   document.getElementById(`tab${targetTab}`).classList.remove('tab-inactive');
   document.getElementById(`content${targetTab}`).classList.remove('hidden');
   
-  // Initialize tab content based on tab type
+  // Initialize tab content based on tab type (遅延実行 + キャッシュ確認)
   if (tabName === 'sceneSplit') {
-    initSceneSplitTab();
+    // キャッシュがあればスキップ（高速表示）
+    if (!window.sceneSplitInitialized) {
+      initSceneSplitTab();
+      window.sceneSplitInitialized = true;
+    }
   } else if (tabName === 'builder') {
+    // Builderは常に最新データが必要なので毎回初期化
     initBuilderTab();
   } else if (tabName === 'export') {
     initExportTab();
@@ -198,9 +203,23 @@ async function initSceneSplitTab() {
   
   document.getElementById('sceneSplitGuide').classList.add('hidden');
   
+  // ローディング表示（初回のみ）
+  const scenesList = document.getElementById('scenesList');
+  if (!window.sceneSplitLoaded) {
+    scenesList.innerHTML = `
+      <div class="flex items-center justify-center py-8">
+        <div class="text-center">
+          <i class="fas fa-spinner fa-spin text-3xl text-purple-600 mb-3"></i>
+          <p class="text-gray-600 text-sm">シーンを確認中...</p>
+        </div>
+      </div>
+    `;
+  }
+  
   // Check if scenes already exist
   const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
   const scenes = scenesResponse.data.scenes || [];
+  window.sceneSplitLoaded = true;
   
   if (scenes.length === 0) {
     // Show format button
@@ -898,6 +917,18 @@ function goToBuilder() {
 
 // Initialize Builder tab
 async function initBuilderTab() {
+  const container = document.getElementById('builderScenesList');
+  
+  // ローディング表示
+  container.innerHTML = `
+    <div class="flex items-center justify-center py-12">
+      <div class="text-center">
+        <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
+        <p class="text-gray-600">シーンを読み込み中...</p>
+      </div>
+    </div>
+  `;
+  
   try {
     const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
     const scenes = response.data.scenes || [];
@@ -919,6 +950,14 @@ async function initBuilderTab() {
   } catch (error) {
     console.error('Load builder scenes error:', error);
     showToast('シーンの読み込みに失敗しました', 'error');
+    container.innerHTML = `
+      <div class="flex items-center justify-center py-12">
+        <div class="text-center">
+          <i class="fas fa-exclamation-circle text-4xl text-red-600 mb-4"></i>
+          <p class="text-gray-600">シーンの読み込みに失敗しました</p>
+        </div>
+      </div>
+    `;
   }
 }
 
