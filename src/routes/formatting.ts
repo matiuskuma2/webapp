@@ -209,6 +209,10 @@ async function processTextChunks(c: any, projectId: string, project: any) {
       const validationResult = validateRILARCScenario(scenarioResult.scenario)
 
       if (!validationResult.valid) {
+        // エラー詳細を含める（最大2000文字まで）
+        const errorDetail = `Schema validation failed: ${validationResult.errors.slice(0, 10).join('; ')}`
+        const truncatedError = errorDetail.length > 2000 ? errorDetail.substring(0, 1997) + '...' : errorDetail
+
         await c.env.DB.prepare(`
           UPDATE text_chunks 
           SET status = 'failed',
@@ -217,7 +221,7 @@ async function processTextChunks(c: any, projectId: string, project: any) {
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).bind(
-          'Generated scenario does not conform to schema',
+          truncatedError,
           chunk.id
         ).run()
 
@@ -485,7 +489,7 @@ async function getChunkStats(db: any, projectId: string) {
 }
 
 /**
- * OpenAI Chat API を使ってRILARCシナリオを生成
+ * OpenAI Chat API を使ってRILARCシナリオを生成（2段階リトライ対応、JSON Schema strict:true）
  */
 async function generateRILARCScenario(
   rawText: string,
@@ -496,6 +500,49 @@ async function generateRILARCScenario(
   scenario?: any
   error?: string
 }> {
+  // 第1回目の生成試行
+  const firstAttempt = await generateWithSchema(rawText, projectTitle, apiKey, 0.7)
+  if (firstAttempt.success) {
+    return firstAttempt
+  }
+
+  console.warn('First attempt failed, retrying with lower temperature...', firstAttempt.error)
+
+  // 第2回目の生成試行（temperature 下げ）
+  const secondAttempt = await generateWithSchema(rawText, projectTitle, apiKey, 0.3)
+  if (secondAttempt.success) {
+    return secondAttempt
+  }
+
+  console.warn('Second attempt failed, trying repair call...', secondAttempt.error)
+
+  // 第3回目：Repair call（フォーマット修正のみ、temperature 0.1）
+  const repairAttempt = await repairScenarioFormat(firstAttempt.rawContent || '', apiKey)
+  if (repairAttempt.success) {
+    return repairAttempt
+  }
+
+  // すべて失敗
+  return {
+    success: false,
+    error: `All generation attempts failed. Last error: ${repairAttempt.error}`
+  }
+}
+
+/**
+ * JSON Schema (strict:true) を使った生成
+ */
+async function generateWithSchema(
+  rawText: string,
+  projectTitle: string,
+  apiKey: string,
+  temperature: number
+): Promise<{
+  success: boolean
+  scenario?: any
+  error?: string
+  rawContent?: string
+}> {
   try {
     const systemPrompt = `あなたは動画シナリオ作成の専門家です。
 提供された文字起こしテキストを、RILARCシナリオ形式（JSON）に変換してください。
@@ -503,12 +550,13 @@ async function generateRILARCScenario(
 【厳守ルール】
 1. version は "1.0" 固定
 2. シーン数は 3〜50 個
-3. 各シーンの dialogue は 40〜220 文字（10〜30秒の読み上げ目安）
-4. 各シーンの bullets は 2〜4 個、各 6〜26 文字
-5. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
-6. idx は 1 から連番（欠番なし）
-7. image_prompt は画像生成用のシーン描写（20〜500文字、英語推奨だが日本語も可）
-8. metadata.total_scenes は scenes.length と一致させること
+3. 各シーンの dialogue は **60〜140 文字**（簡潔かつ明瞭に）
+4. 各シーンの bullets は **2〜3 個**、各 8〜24 文字
+5. 各シーンの title は **10〜40 文字**
+6. 各シーンの image_prompt は **30〜400 文字**（英語推奨、具体的に描写）
+7. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
+8. idx は 1 から連番（欠番なし）
+9. metadata.total_scenes は scenes.length と一致させること
 
 【role の使い方】
 - hook: 視聴者の興味を引くオープニング
@@ -518,29 +566,7 @@ async function generateRILARCScenario(
 - timeline: 経緯、歴史的流れ
 - analysis: 深掘り、解釈、意味づけ
 - summary: 重要ポイントの振り返り
-- cta: 視聴者への呼びかけ、次のアクション
-
-【JSON構造】
-{
-  "version": "1.0",
-  "metadata": {
-    "title": "...",
-    "total_scenes": 5,
-    "estimated_duration_seconds": 90
-  },
-  "scenes": [
-    {
-      "idx": 1,
-      "role": "hook",
-      "title": "...",
-      "dialogue": "...",
-      "bullets": ["...", "..."],
-      "image_prompt": "..."
-    }
-  ]
-}
-
-必ず有効なJSONのみを返してください。`
+- cta: 視聴者への呼びかけ、次のアクション`
 
     const userPrompt = `以下の文字起こしテキストをRILARCシナリオに変換してください。
 
@@ -552,6 +578,55 @@ ${rawText}
 
 上記のテキストを元に、視聴者にとって魅力的で分かりやすいニュース風インフォグラフィック動画のシナリオを作成してください。`
 
+    // JSON Schema (strict:true)
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        version: {
+          type: 'string',
+          enum: ['1.0']
+        },
+        metadata: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 100 },
+            total_scenes: { type: 'integer', minimum: 3, maximum: 50 },
+            estimated_duration_seconds: { type: 'integer', minimum: 30 }
+          },
+          required: ['title', 'total_scenes', 'estimated_duration_seconds'],
+          additionalProperties: false
+        },
+        scenes: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 50,
+          items: {
+            type: 'object',
+            properties: {
+              idx: { type: 'integer', minimum: 1 },
+              role: {
+                type: 'string',
+                enum: ['hook', 'context', 'main_point', 'evidence', 'timeline', 'analysis', 'summary', 'cta']
+              },
+              title: { type: 'string', minLength: 1, maxLength: 50 },
+              dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              bullets: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 3,
+                items: { type: 'string', minLength: 8, maxLength: 24 }
+              },
+              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+            },
+            required: ['idx', 'role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['version', 'metadata', 'scenes'],
+      additionalProperties: false
+    }
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -559,13 +634,20 @@ ${rawText}
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model: 'gpt-4o-2024-08-06',
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt }
         ],
-        response_format: { type: 'json_object' },
-        temperature: 0.7
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'rilarc_scenario_v1',
+            strict: true,
+            schema: jsonSchema
+          }
+        },
+        temperature
       })
     })
 
@@ -594,13 +676,15 @@ ${rawText}
       const scenario = JSON.parse(content)
       return {
         success: true,
-        scenario
+        scenario,
+        rawContent: content
       }
     } catch (parseError) {
       console.error('Failed to parse JSON:', parseError)
       return {
         success: false,
-        error: 'Generated content is not valid JSON'
+        error: 'Generated content is not valid JSON',
+        rawContent: content
       }
     }
 
@@ -609,6 +693,147 @@ ${rawText}
     return {
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+/**
+ * Repair call: 既存のJSON（フォーマット不備）を修正する
+ */
+async function repairScenarioFormat(
+  brokenJson: string,
+  apiKey: string
+): Promise<{
+  success: boolean
+  scenario?: any
+  error?: string
+}> {
+  if (!brokenJson) {
+    return {
+      success: false,
+      error: 'No content to repair'
+    }
+  }
+
+  try {
+    const systemPrompt = `あなたはJSON修復の専門家です。
+与えられたRILARCシナリオJSONを、スキーマに厳密に適合するよう修正してください。
+
+【修正ルール】
+- dialogue は 60〜140 文字（短すぎる場合は補完、長すぎる場合は短縮）
+- bullets は 2〜3 個、各 8〜24 文字
+- title は 10〜40 文字
+- image_prompt は 30〜400 文字
+- 全フィールド必須
+- idx は連番
+- metadata.total_scenes は scenes.length と一致
+
+内容を変えず、フォーマットのみ修正してください。`
+
+    const userPrompt = `以下のJSONを修正してください：
+
+${brokenJson}`
+
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        version: { type: 'string', enum: ['1.0'] },
+        metadata: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 100 },
+            total_scenes: { type: 'integer', minimum: 3, maximum: 50 },
+            estimated_duration_seconds: { type: 'integer', minimum: 30 }
+          },
+          required: ['title', 'total_scenes', 'estimated_duration_seconds'],
+          additionalProperties: false
+        },
+        scenes: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 50,
+          items: {
+            type: 'object',
+            properties: {
+              idx: { type: 'integer', minimum: 1 },
+              role: {
+                type: 'string',
+                enum: ['hook', 'context', 'main_point', 'evidence', 'timeline', 'analysis', 'summary', 'cta']
+              },
+              title: { type: 'string', minLength: 1, maxLength: 50 },
+              dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              bullets: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 3,
+                items: { type: 'string', minLength: 8, maxLength: 24 }
+              },
+              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+            },
+            required: ['idx', 'role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['version', 'metadata', 'scenes'],
+      additionalProperties: false
+    }
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-2024-08-06',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'rilarc_scenario_v1_repaired',
+            strict: true,
+            schema: jsonSchema
+          }
+        },
+        temperature: 0.1
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      const errorMessage = errorData.error?.message || `Repair API error: ${response.status}`
+      console.error('OpenAI Repair API error:', errorMessage)
+      return {
+        success: false,
+        error: errorMessage
+      }
+    }
+
+    const result = await response.json()
+    const content = result.choices?.[0]?.message?.content
+
+    if (!content) {
+      return {
+        success: false,
+        error: 'No content in repair API response'
+      }
+    }
+
+    const scenario = JSON.parse(content)
+    return {
+      success: true,
+      scenario
+    }
+
+  } catch (error) {
+    console.error('Error repairing RILARC scenario:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown repair error'
     }
   }
 }

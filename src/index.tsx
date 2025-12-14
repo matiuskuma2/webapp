@@ -10,6 +10,7 @@ import imageGeneration from './routes/image-generation'
 import downloads from './routes/downloads'
 import scenes from './routes/scenes'
 import images from './routes/images'
+import debug from './routes/debug'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -43,6 +44,7 @@ app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate
 app.route('/api', imageGeneration) // For /api/scenes/:id/generate-image
+app.route('/api/debug', debug) // For /api/debug/env (temporary)
 
 // Root route - serve HTML
 app.get('/', (c) => {
