@@ -51,6 +51,152 @@ formatting.get('/:id/format/status', async (c) => {
   }
 })
 
+// POST /api/projects/:id/merge - Scene merge & idx正規化
+formatting.post('/:id/merge', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // 1. プロジェクトの存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, status, source_type
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // 2. text入力のみ対応
+    if (project.source_type !== 'text') {
+      return c.json({
+        error: {
+          code: 'INVALID_SOURCE_TYPE',
+          message: 'Merge is only supported for text input projects'
+        }
+      }, 400)
+    }
+
+    // 3. ステータスチェック（formatting のみ許可）
+    if (project.status !== 'formatting') {
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot merge project with status: ${project.status}`,
+          details: {
+            current_status: project.status,
+            expected_status: 'formatting'
+          }
+        }
+      }, 400)
+    }
+
+    // 4. chunk進捗確認（pending=0 & processing=0）
+    const stats = await getChunkStats(c.env.DB, projectId)
+    if (stats.pending > 0 || stats.processing > 0) {
+      return c.json({
+        error: {
+          code: 'CHUNKS_NOT_READY',
+          message: 'Cannot merge: some chunks are still pending or processing',
+          details: {
+            pending: stats.pending,
+            processing: stats.processing,
+            processed: stats.processed,
+            failed: stats.failed
+          }
+        }
+      }, 400)
+    }
+
+    // 5. scenes取得（tempIdx順）
+    const { results: scenes } = await c.env.DB.prepare(`
+      SELECT id, idx, role, chunk_id
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY idx ASC
+    `).bind(projectId).all()
+
+    if (scenes.length === 0) {
+      return c.json({
+        error: {
+          code: 'NO_SCENES',
+          message: 'No scenes to merge'
+        }
+      }, 400)
+    }
+
+    // 6. idx正規化 & role最小整形（transaction）
+    const updateStatements = []
+
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i]
+      const newIdx = i + 1
+      let newRole = scene.role
+
+      // 先頭scene → hook
+      if (i === 0 && scene.role !== 'hook') {
+        newRole = 'hook'
+      }
+
+      // 末尾scene → summary or cta（既存がsummary/ctaならそのまま）
+      if (i === scenes.length - 1) {
+        if (scene.role !== 'summary' && scene.role !== 'cta') {
+          newRole = 'summary'
+        }
+      }
+
+      updateStatements.push(
+        c.env.DB.prepare(`
+          UPDATE scenes
+          SET idx = ?, role = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(newIdx, newRole, scene.id)
+      )
+    }
+
+    // Batch実行（transaction的動作）
+    await c.env.DB.batch(updateStatements)
+
+    // 7. projects.status更新
+    const finalStatus = stats.failed > 0 ? 'formatted' : 'formatted'
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET status = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(finalStatus, projectId).run()
+
+    // 8. 結果返却
+    return c.json({
+      project_id: parseInt(projectId),
+      status: finalStatus,
+      total_scenes: scenes.length,
+      renormalized: true,
+      chunk_stats: {
+        total: stats.total_chunks,
+        processed: stats.processed,
+        failed: stats.failed
+      },
+      message: stats.failed > 0
+        ? `Merge completed with ${stats.failed} failed chunks`
+        : 'Merge completed successfully'
+    }, 200)
+
+  } catch (error) {
+    console.error('Error in merge endpoint:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to merge scenes'
+      }
+    }, 500)
+  }
+})
+
 // POST /api/projects/:id/format - 整形・シーン分割実行（chunk単位処理）
 formatting.post('/:id/format', async (c) => {
   try {
@@ -149,22 +295,21 @@ async function processTextChunks(c: any, projectId: string, project: any) {
   `).bind(projectId, BATCH_SIZE).all()
 
   if (pendingChunks.length === 0) {
-    // すべてのチャンクが処理済み → ステータスを 'formatted' に
-    await c.env.DB.prepare(`
-      UPDATE projects 
-      SET status = 'formatted', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(projectId).run()
-
-    // 統計を取得
+    // すべてのチャンクが処理済み → 統計を取得
     const stats = await getChunkStats(c.env.DB, projectId)
 
-    return c.json({
-      project_id: parseInt(projectId),
-      status: 'formatted',
-      ...stats,
-      message: 'All chunks processed'
-    }, 200)
+    // processing中のchunkがある場合は継続
+    if (stats.processing > 0) {
+      return c.json({
+        project_id: parseInt(projectId),
+        status: 'formatting',
+        ...stats,
+        message: 'Some chunks are still processing'
+      }, 200)
+    }
+
+    // pending=0 & processing=0 → 自動的にmerge実行して 'formatted' へ
+    return await autoMergeScenes(c, projectId, stats)
   }
 
   // 各 chunk を処理
@@ -482,6 +627,108 @@ async function getChunkStats(db: any, projectId: string) {
     failed: failed,
     processing: processing,
     pending: total - done - failed - processing
+  }
+}
+
+/**
+ * 自動merge実行（全chunk完了時）
+ */
+async function autoMergeScenes(c: any, projectId: string, stats: any) {
+  try {
+    // 1. scenes取得（tempIdx順）
+    const { results: scenes } = await c.env.DB.prepare(`
+      SELECT id, idx, role, chunk_id
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY idx ASC
+    `).bind(projectId).all()
+
+    if (scenes.length === 0) {
+      // scene無し → formatted_with_errors
+      await c.env.DB.prepare(`
+        UPDATE projects
+        SET status = 'formatted', error_message = 'No scenes generated',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(projectId).run()
+
+      return c.json({
+        project_id: parseInt(projectId),
+        status: 'formatted',
+        total_scenes: 0,
+        chunk_stats: stats,
+        message: 'All chunks processed but no scenes generated'
+      }, 200)
+    }
+
+    // 2. idx正規化 & role最小整形
+    const updateStatements = []
+
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i]
+      const newIdx = i + 1
+      let newRole = scene.role
+
+      // 先頭scene → hook
+      if (i === 0 && scene.role !== 'hook') {
+        newRole = 'hook'
+      }
+
+      // 末尾scene → summary or cta
+      if (i === scenes.length - 1) {
+        if (scene.role !== 'summary' && scene.role !== 'cta') {
+          newRole = 'summary'
+        }
+      }
+
+      updateStatements.push(
+        c.env.DB.prepare(`
+          UPDATE scenes
+          SET idx = ?, role = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(newIdx, newRole, scene.id)
+      )
+    }
+
+    // Batch実行
+    await c.env.DB.batch(updateStatements)
+
+    // 3. projects.status更新
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET status = 'formatted', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(projectId).run()
+
+    // 4. 結果返却
+    return c.json({
+      project_id: parseInt(projectId),
+      status: 'formatted',
+      total_scenes: scenes.length,
+      merged: true,
+      chunk_stats: stats,
+      message: stats.failed > 0
+        ? `All chunks processed (${stats.failed} failed), ${scenes.length} scenes merged`
+        : `All chunks processed successfully, ${scenes.length} scenes merged`
+    }, 200)
+
+  } catch (error) {
+    console.error('Auto merge failed:', error)
+
+    // merge失敗でもformattingは継続
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET error_message = 'Auto merge failed',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(projectId).run()
+
+    return c.json({
+      error: {
+        code: 'MERGE_FAILED',
+        message: 'Failed to merge scenes automatically'
+      }
+    }, 500)
   }
 }
 
