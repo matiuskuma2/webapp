@@ -111,9 +111,17 @@ async function loadProjects() {
       projectsList.innerHTML = `
         <div id="bulkActions" class="mb-4 p-3 bg-gray-50 rounded-lg border-2 border-gray-200 hidden">
           <div class="flex items-center justify-between">
-            <span class="text-sm font-semibold text-gray-700">
-              <span id="selectedCount">0</span> 件選択中
-            </span>
+            <div class="flex items-center gap-3">
+              <input 
+                type="checkbox" 
+                id="selectAll"
+                onchange="toggleSelectAll()"
+                class="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
+              />
+              <label for="selectAll" class="text-sm font-semibold text-gray-700 cursor-pointer">
+                すべて選択 (<span id="selectedCount">0</span> / <span id="totalCount">0</span>)
+              </label>
+            </div>
             <button 
               onclick="bulkDeleteProjects()"
               class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors touch-manipulation"
@@ -181,6 +189,29 @@ async function loadProjects() {
   }
 }
 
+// Toggle select all
+function toggleSelectAll() {
+  const selectAllCheckbox = document.getElementById('selectAll');
+  const allCheckboxes = document.querySelectorAll('[id^="select-"]:not(#selectAll)');
+  
+  if (selectAllCheckbox.checked) {
+    // Select all
+    allCheckboxes.forEach(checkbox => {
+      checkbox.checked = true;
+      const projectId = parseInt(checkbox.id.replace('select-', ''));
+      selectedProjects.add(projectId);
+    });
+  } else {
+    // Deselect all
+    allCheckboxes.forEach(checkbox => {
+      checkbox.checked = false;
+    });
+    selectedProjects.clear();
+  }
+  
+  updateBulkActionsUI();
+}
+
 // Toggle project selection
 function toggleProjectSelection(projectId) {
   const checkbox = document.getElementById(`select-${projectId}`);
@@ -191,6 +222,14 @@ function toggleProjectSelection(projectId) {
     selectedProjects.delete(projectId);
   }
   
+  // Update select all checkbox state
+  const allCheckboxes = document.querySelectorAll('[id^="select-"]:not(#selectAll)');
+  const selectAllCheckbox = document.getElementById('selectAll');
+  if (selectAllCheckbox) {
+    const allChecked = Array.from(allCheckboxes).every(cb => cb.checked);
+    selectAllCheckbox.checked = allChecked;
+  }
+  
   updateBulkActionsUI();
 }
 
@@ -198,13 +237,12 @@ function toggleProjectSelection(projectId) {
 function updateBulkActionsUI() {
   const bulkActions = document.getElementById('bulkActions');
   const selectedCount = document.getElementById('selectedCount');
+  const totalCount = document.getElementById('totalCount');
+  const allCheckboxes = document.querySelectorAll('[id^="select-"]:not(#selectAll)');
   
-  if (selectedProjects.size > 0) {
-    bulkActions.classList.remove('hidden');
-    selectedCount.textContent = selectedProjects.size;
-  } else {
-    bulkActions.classList.add('hidden');
-  }
+  bulkActions.classList.remove('hidden'); // Always show toolbar when projects exist
+  selectedCount.textContent = selectedProjects.size;
+  totalCount.textContent = allCheckboxes.length;
 }
 
 // Bulk delete projects
