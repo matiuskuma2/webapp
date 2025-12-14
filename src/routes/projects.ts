@@ -318,10 +318,11 @@ projects.get('/:id/scenes', async (c) => {
       ORDER BY idx ASC
     `).bind(projectId).all()
 
-    // 各シーンのアクティブ画像を取得
+    // 各シーンの画像情報を取得（active_image + latest_image）
     const scenesWithImages = await Promise.all(
       scenes.map(async (scene: any) => {
-        const imageRecord = await c.env.DB.prepare(`
+        // 1) アクティブな画像（表示用）
+        const activeRecord = await c.env.DB.prepare(`
           SELECT id, prompt, r2_key, status, created_at
           FROM image_generations
           WHERE scene_id = ? AND is_active = 1
@@ -329,14 +330,28 @@ projects.get('/:id/scenes', async (c) => {
           LIMIT 1
         `).bind(scene.id).first()
 
-        // r2_key から正規化された image_url を生成（唯一の真実）
-        // r2_key は既に "images/12/scene_1/21_xxx.png" 形式なので、先頭に "/" のみ追加
-        const activeImage = imageRecord ? {
-          id: imageRecord.id,
-          prompt: imageRecord.prompt,
-          image_url: `/${imageRecord.r2_key}`, // r2_key には既に "images/" が含まれる
-          status: imageRecord.status,
-          created_at: imageRecord.created_at
+        const activeImage = activeRecord ? {
+          id: activeRecord.id,
+          prompt: activeRecord.prompt,
+          image_url: `/${activeRecord.r2_key}`, // SSOT: "/" + r2_key
+          status: activeRecord.status,
+          created_at: activeRecord.created_at
+        } : null
+
+        // 2) 最新の画像生成レコード（ステータス表示用、is_active無関係）
+        const latestRecord = await c.env.DB.prepare(`
+          SELECT id, status, error_message, created_at
+          FROM image_generations
+          WHERE scene_id = ?
+          ORDER BY created_at DESC
+          LIMIT 1
+        `).bind(scene.id).first()
+
+        const latestImage = latestRecord ? {
+          id: latestRecord.id,
+          status: latestRecord.status,
+          error_message: latestRecord.error_message,
+          created_at: latestRecord.created_at
         } : null
 
         return {
@@ -349,7 +364,8 @@ projects.get('/:id/scenes', async (c) => {
           image_prompt: scene.image_prompt,
           created_at: scene.created_at,
           updated_at: scene.updated_at,
-          active_image: activeImage
+          active_image: activeImage,
+          latest_image: latestImage // ステータスバッジ用
         }
       })
     )

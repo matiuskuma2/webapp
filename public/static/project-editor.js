@@ -911,6 +911,10 @@ async function initBuilderTab() {
     document.getElementById('builderScenesList').classList.remove('hidden');
     document.getElementById('builderEmptyState').classList.add('hidden');
     
+    // ステータスバー更新
+    updateBuilderStatusBar(scenes);
+    
+    // SceneCard描画
     renderBuilderScenes(scenes);
   } catch (error) {
     console.error('Load builder scenes error:', error);
@@ -918,17 +922,103 @@ async function initBuilderTab() {
   }
 }
 
+// Builderステータスバー更新
+function updateBuilderStatusBar(scenes) {
+  const stats = getSceneStats(scenes);
+  const total = scenes.length;
+  
+  // Top Action Barの前に挿入（存在しない場合は作成）
+  let statusBar = document.getElementById('builderStatusBar');
+  if (!statusBar) {
+    const container = document.getElementById('contentBuilder');
+    const actionBar = container.querySelector('.mb-6.p-4.bg-gray-50');
+    statusBar = document.createElement('div');
+    statusBar.id = 'builderStatusBar';
+    statusBar.className = 'mb-4 p-4 bg-white rounded-lg border-2 border-gray-200';
+    container.insertBefore(statusBar, actionBar);
+  }
+  
+  statusBar.innerHTML = `
+    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+      <!-- 集計表示 -->
+      <div class="flex items-center gap-4 text-sm font-semibold">
+        <span class="text-gray-700">進捗:</span>
+        <span class="text-green-600"><i class="fas fa-check mr-1"></i>完了 ${stats.completed}/${total}</span>
+        ${stats.generating > 0 ? `<span class="text-yellow-600"><i class="fas fa-spinner fa-spin mr-1"></i>生成中 ${stats.generating}</span>` : ''}
+        ${stats.failed > 0 ? `<span class="text-red-600"><i class="fas fa-times mr-1"></i>失敗 ${stats.failed}</span>` : ''}
+        <span class="text-gray-600">未生成 ${stats.pending}</span>
+      </div>
+      
+      <!-- フィルタボタン -->
+      <div class="flex flex-wrap gap-2">
+        <button onclick="setSceneFilter('all')" class="filter-btn ${(!window.currentFilter || window.currentFilter === 'all') ? 'active' : ''}" data-filter="all">
+          全て (${total})
+        </button>
+        <button onclick="setSceneFilter('pending')" class="filter-btn ${window.currentFilter === 'pending' ? 'active' : ''}" data-filter="pending">
+          未生成 (${stats.pending})
+        </button>
+        <button onclick="setSceneFilter('generating')" class="filter-btn ${window.currentFilter === 'generating' ? 'active' : ''}" data-filter="generating">
+          生成中 (${stats.generating})
+        </button>
+        <button onclick="setSceneFilter('completed')" class="filter-btn ${window.currentFilter === 'completed' ? 'active' : ''}" data-filter="completed">
+          完了 (${stats.completed})
+        </button>
+        ${stats.failed > 0 ? `
+        <button onclick="setSceneFilter('failed')" class="filter-btn ${window.currentFilter === 'failed' ? 'active' : ''}" data-filter="failed">
+          失敗 (${stats.failed})
+        </button>
+        ` : ''}
+      </div>
+    </div>
+    
+    ${stats.failed > 0 ? `
+    <div class="mt-3 pt-3 border-t border-gray-200">
+      <button 
+        onclick="generateBulkImages('failed')"
+        class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors font-semibold"
+      >
+        <i class="fas fa-redo mr-2"></i>失敗シーンのみ再試行
+      </button>
+    </div>
+    ` : ''}
+  `;
+}
+
+// フィルタ設定
+function setSceneFilter(filter) {
+  window.currentFilter = filter;
+  
+  // ボタン状態更新
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    if (btn.dataset.filter === filter) {
+      btn.classList.add('active');
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  
+  // 再描画
+  initBuilderTab();
+}
+
 // Render builder scene cards
 function renderBuilderScenes(scenes) {
   const container = document.getElementById('builderScenesList');
   
-  container.innerHTML = scenes.map((scene) => {
+  // フィルタリング適用（グローバル変数 currentFilter）
+  const filteredScenes = filterScenes(scenes, window.currentFilter || 'all');
+  
+  container.innerHTML = filteredScenes.map((scene) => {
     const activeImage = scene.active_image || null;
+    const latestImage = scene.latest_image || null;
     const imageUrl = activeImage ? activeImage.image_url : null;
-    const imageStatus = activeImage ? activeImage.status : 'pending';
+    
+    // ステータスは latest_image を優先（SSOT）
+    const imageStatus = latestImage ? latestImage.status : 'pending';
+    const errorMessage = latestImage?.error_message || null;
     
     return `
-      <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}">
+      <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}" data-status="${imageStatus}">
         <!-- Header -->
         <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 flex items-center justify-between">
           <div class="flex items-center gap-3">
@@ -937,9 +1027,7 @@ function renderBuilderScenes(scenes) {
               ${getRoleText(scene.role)}
             </span>
           </div>
-          <span class="text-white text-sm">
-            ${getImageStatusBadge(imageStatus)}
-          </span>
+          ${getSceneStatusBadge(imageStatus)}
         </div>
         
         <!-- Content: Left-Right Split (PC) / Top-Bottom (Mobile) -->
@@ -1023,12 +1111,18 @@ ${escapeHtml(scene.dialogue)}
               </button>
             </div>
             
-            ${imageStatus === 'failed' 
+            ${imageStatus === 'failed' && errorMessage
               ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
                    <i class="fas fa-exclamation-circle mr-2"></i>
-                   画像生成に失敗しました
+                   <strong>失敗理由:</strong><br/>
+                   ${escapeHtml(errorMessage.substring(0, 80))}${errorMessage.length > 80 ? '...' : ''}
                  </div>`
-              : ''
+              : imageStatus === 'failed' 
+                ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
+                     <i class="fas fa-exclamation-circle mr-2"></i>
+                     画像生成に失敗しました
+                   </div>`
+                : ''
             }
           </div>
         </div>
@@ -1061,6 +1155,36 @@ function getImageStatusBadge(status) {
     'failed': '<span class="px-2 py-1 bg-red-100 text-red-800 text-xs rounded">失敗</span>'
   };
   return statusMap[status] || statusMap['pending'];
+}
+
+// SceneCard用ステータスバッジ（右上、スピナー付き）
+function getSceneStatusBadge(status) {
+  const statusMap = {
+    'pending': '<span class="px-3 py-1 bg-gray-100 text-gray-800 text-sm rounded-full font-semibold">未生成</span>',
+    'generating': '<span class="px-3 py-1 bg-yellow-100 text-yellow-800 text-sm rounded-full font-semibold"><i class="fas fa-spinner fa-spin mr-1"></i>生成中</span>',
+    'completed': '<span class="px-3 py-1 bg-green-100 text-green-800 text-sm rounded-full font-semibold"><i class="fas fa-check mr-1"></i>生成済み</span>',
+    'failed': '<span class="px-3 py-1 bg-red-100 text-red-800 text-sm rounded-full font-semibold"><i class="fas fa-times mr-1"></i>失敗</span>'
+  };
+  return statusMap[status] || statusMap['pending'];
+}
+
+// フィルタリング関数
+function filterScenes(scenes, filter) {
+  if (filter === 'all') return scenes;
+  return scenes.filter(scene => {
+    const status = scene.latest_image?.status || 'pending';
+    return status === filter;
+  });
+}
+
+// ステータス集計
+function getSceneStats(scenes) {
+  const stats = { completed: 0, generating: 0, failed: 0, pending: 0 };
+  scenes.forEach(scene => {
+    const status = scene.latest_image?.status || 'pending';
+    stats[status] = (stats[status] || 0) + 1;
+  });
+  return stats;
 }
 
 // Generate single scene image

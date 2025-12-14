@@ -257,6 +257,29 @@ app.get('/projects/:id', (c) => {
         .tab-inactive {
             color: #6b7280;
         }
+        
+        /* Filter button styles */
+        .filter-btn {
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 600;
+            transition: all 0.2s;
+            border: 2px solid #e5e7eb;
+            background-color: white;
+            color: #6b7280;
+        }
+        
+        .filter-btn:hover {
+            border-color: #3b82f6;
+            background-color: #eff6ff;
+        }
+        
+        .filter-btn.active {
+            border-color: #3b82f6;
+            background-color: #3b82f6;
+            color: white;
+        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
