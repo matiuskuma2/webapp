@@ -4,7 +4,54 @@ import { validateRILARCScenario, type RILARCScenarioV1 } from '../utils/rilarc-v
 
 const formatting = new Hono<{ Bindings: Bindings }>()
 
-// POST /api/projects/:id/format - 整形・シーン分割実行
+// GET /api/projects/:id/format/status - フォーマット進捗取得
+formatting.get('/:id/format/status', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+
+    // text_chunks の進捗を取得
+    const { results: chunks } = await c.env.DB.prepare(`
+      SELECT status, COUNT(*) as count
+      FROM text_chunks
+      WHERE project_id = ?
+      GROUP BY status
+    `).bind(projectId).all()
+
+    const statusMap = new Map(chunks.map((c: any) => [c.status, c.count]))
+    const total = Array.from(statusMap.values()).reduce((sum, count) => sum + count, 0)
+    const done = statusMap.get('done') || 0
+    const failed = statusMap.get('failed') || 0
+    const processing = statusMap.get('processing') || 0
+
+    return c.json({
+      project_id: parseInt(projectId),
+      status: project.status,
+      total_chunks: total,
+      processed: done,
+      failed: failed,
+      processing: processing,
+      pending: total - done - failed - processing
+    })
+
+  } catch (error) {
+    console.error('Error getting format status:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to get format status' }
+    }, 500)
+  }
+})
+
+// POST /api/projects/:id/format - 整形・シーン分割実行（chunk単位処理）
 formatting.post('/:id/format', async (c) => {
   try {
     const projectId = c.req.param('id')
@@ -25,191 +72,33 @@ formatting.post('/:id/format', async (c) => {
       }, 404)
     }
 
-    // 2. ステータスチェック（transcribedまたはuploaded（text入力）を許可）
-    const validStatuses = ['transcribed', 'uploaded']
-    if (!validStatuses.includes(project.status as string)) {
-      return c.json({
-        error: {
-          code: 'INVALID_STATUS',
-          message: `Cannot format project with status: ${project.status}`,
-          details: {
-            current_status: project.status,
-            expected_statuses: validStatuses
-          }
-        }
-      }, 400)
-    }
-
-    // 3. 入力テキスト取得（source_typeで分岐）
-    let inputText: string | null = null
-
+    // 2. source_type に応じた処理分岐
     if (project.source_type === 'text') {
-      // テキスト入力の場合
-      if (!project.source_text) {
-        return c.json({
-          error: {
-            code: 'NO_SOURCE_TEXT',
-            message: 'No source text found for this project'
-          }
-        }, 400)
-      }
-      inputText = project.source_text as string
+      // テキスト入力の場合：chunk単位処理
+      return await processTextChunks(c, projectId, project)
     } else {
-      // 音声入力の場合（既存ロジック）
-      const transcription = await c.env.DB.prepare(`
-        SELECT id, raw_text, word_count
-        FROM transcriptions
-        WHERE project_id = ?
-      `).bind(projectId).first()
-
-      if (!transcription || !transcription.raw_text) {
-        return c.json({
-          error: {
-            code: 'NO_TRANSCRIPTION',
-            message: 'No transcription found for this project'
-          }
-        }, 400)
-      }
-      inputText = transcription.raw_text as string
+      // 音声入力の場合：従来のフロー（全文を1回で処理）
+      return await processAudioTranscription(c, projectId, project)
     }
-
-    // 4. ステータスを 'formatting' に更新
-    await c.env.DB.prepare(`
-      UPDATE projects 
-      SET status = 'formatting', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(projectId).run()
-
-    // 5. OpenAI Chat API でRILARCシナリオ生成
-    const scenarioResult = await generateRILARCScenario(
-      inputText,
-      project.title as string,
-      c.env.OPENAI_API_KEY
-    )
-
-    if (!scenarioResult.success) {
-      // 生成失敗 → status を 'failed' に
-      await c.env.DB.prepare(`
-        UPDATE projects 
-        SET status = 'failed', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(projectId).run()
-
-      return c.json({
-        error: {
-          code: 'GENERATION_FAILED',
-          message: scenarioResult.error || 'Failed to generate RILARC scenario'
-        }
-      }, 500)
-    }
-
-    // 6. JSONバリデーション
-    const validationResult = validateRILARCScenario(scenarioResult.scenario)
-
-    if (!validationResult.valid) {
-      // バリデーション失敗 → status を 'failed' に
-      await c.env.DB.prepare(`
-        UPDATE projects 
-        SET status = 'failed', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(projectId).run()
-
-      return c.json({
-        error: {
-          code: 'VALIDATION_FAILED',
-          message: 'Generated scenario does not conform to RILARCScenarioV1 schema',
-          details: {
-            errors: validationResult.errors
-          }
-        }
-      }, 500)
-    }
-
-    const scenario = scenarioResult.scenario as RILARCScenarioV1
-
-    // 7. scenesテーブルへ一括挿入（トランザクション）
-    try {
-      // D1 batch APIを使用して一括挿入
-      const insertStatements = scenario.scenes.map(scene => {
-        return c.env.DB.prepare(`
-          INSERT INTO scenes (
-            project_id, idx, role, title, dialogue, bullets, image_prompt
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-          projectId,
-          scene.idx,
-          scene.role,
-          scene.title,
-          scene.dialogue,
-          JSON.stringify(scene.bullets), // JSON配列として保存
-          scene.image_prompt
-        )
-      })
-
-      await c.env.DB.batch(insertStatements)
-
-    } catch (dbError) {
-      console.error('Failed to insert scenes:', dbError)
-
-      // DB挿入失敗 → status を 'failed' に
-      await c.env.DB.prepare(`
-        UPDATE projects 
-        SET status = 'failed', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(projectId).run()
-
-      return c.json({
-        error: {
-          code: 'DB_INSERT_FAILED',
-          message: 'Failed to save scenes to database'
-        }
-      }, 500)
-    }
-
-    // 8. ステータスを 'formatted' に更新
-    await c.env.DB.prepare(`
-      UPDATE projects 
-      SET status = 'formatted', updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(projectId).run()
-
-    // 9. 保存されたシーンを取得
-    const { results: savedScenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, bullets, image_prompt
-      FROM scenes
-      WHERE project_id = ?
-      ORDER BY idx ASC
-    `).bind(projectId).all()
-
-    // 10. レスポンス返却
-    return c.json({
-      project_id: parseInt(projectId),
-      total_scenes: savedScenes.length,
-      status: 'formatted',
-      scenes: savedScenes.map((scene: any) => ({
-        id: scene.id,
-        idx: scene.idx,
-        role: scene.role,
-        title: scene.title,
-        dialogue: scene.dialogue,
-        bullets: JSON.parse(scene.bullets),
-        image_prompt: scene.image_prompt
-      }))
-    }, 200)
 
   } catch (error) {
     console.error('Error in format endpoint:', error)
 
-    // エラー時は status を 'failed' に更新
+    // エラー時は error_message を記録（status は変更しない）
     try {
       const projectId = c.req.param('id')
       await c.env.DB.prepare(`
         UPDATE projects 
-        SET status = 'failed', updated_at = CURRENT_TIMESTAMP
+        SET error_message = ?,
+            last_error = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).bind(projectId).run()
+      `).bind(
+        error instanceof Error ? error.message : 'Unknown error',
+        projectId
+      ).run()
     } catch (updateError) {
-      console.error('Failed to update project status to failed:', updateError)
+      console.error('Failed to update error message:', updateError)
     }
 
     return c.json({
@@ -220,6 +109,380 @@ formatting.post('/:id/format', async (c) => {
     }, 500)
   }
 })
+
+/**
+ * テキスト入力の chunk 単位処理
+ */
+async function processTextChunks(c: any, projectId: string, project: any) {
+  // ステータスチェック（parsed または formatting を許可）
+  const validStatuses = ['parsed', 'formatting']
+  if (!validStatuses.includes(project.status)) {
+    return c.json({
+      error: {
+        code: 'INVALID_STATUS',
+        message: `Cannot format project with status: ${project.status}`,
+        details: {
+          current_status: project.status,
+          expected_statuses: validStatuses
+        }
+      }
+    }, 400)
+  }
+
+  // ステータスを 'formatting' に更新（初回のみ）
+  if (project.status === 'parsed') {
+    await c.env.DB.prepare(`
+      UPDATE projects 
+      SET status = 'formatting', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(projectId).run()
+  }
+
+  // 未処理の chunk を取得（最大3件まで）
+  const BATCH_SIZE = 3
+  const { results: pendingChunks } = await c.env.DB.prepare(`
+    SELECT id, idx, text
+    FROM text_chunks
+    WHERE project_id = ? AND status = 'pending'
+    ORDER BY idx ASC
+    LIMIT ?
+  `).bind(projectId, BATCH_SIZE).all()
+
+  if (pendingChunks.length === 0) {
+    // すべてのチャンクが処理済み → ステータスを 'formatted' に
+    await c.env.DB.prepare(`
+      UPDATE projects 
+      SET status = 'formatted', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(projectId).run()
+
+    // 統計を取得
+    const stats = await getChunkStats(c.env.DB, projectId)
+
+    return c.json({
+      project_id: parseInt(projectId),
+      status: 'formatted',
+      ...stats,
+      message: 'All chunks processed'
+    }, 200)
+  }
+
+  // 各 chunk を処理
+  let successCount = 0
+  let failedCount = 0
+
+  for (const chunk of pendingChunks) {
+    try {
+      // chunk のステータスを 'processing' に
+      await c.env.DB.prepare(`
+        UPDATE text_chunks 
+        SET status = 'processing', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(chunk.id).run()
+
+      // OpenAI API でシーン生成
+      const scenarioResult = await generateRILARCScenario(
+        chunk.text as string,
+        `${project.title} - Part ${chunk.idx}`,
+        c.env.OPENAI_API_KEY
+      )
+
+      if (!scenarioResult.success) {
+        // 生成失敗 → chunk を 'failed' に
+        await c.env.DB.prepare(`
+          UPDATE text_chunks 
+          SET status = 'failed',
+              error_message = ?,
+              processed_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(
+          scenarioResult.error || 'Failed to generate scenario',
+          chunk.id
+        ).run()
+
+        failedCount++
+        continue
+      }
+
+      // バリデーション
+      const validationResult = validateRILARCScenario(scenarioResult.scenario)
+
+      if (!validationResult.valid) {
+        await c.env.DB.prepare(`
+          UPDATE text_chunks 
+          SET status = 'failed',
+              error_message = ?,
+              processed_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(
+          'Generated scenario does not conform to schema',
+          chunk.id
+        ).run()
+
+        failedCount++
+        continue
+      }
+
+      const scenario = scenarioResult.scenario as RILARCScenarioV1
+
+      // scenes に挿入
+      const insertStatements = scenario.scenes.map(scene => {
+        return c.env.DB.prepare(`
+          INSERT INTO scenes (
+            project_id, idx, role, title, dialogue, bullets, image_prompt, chunk_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          projectId,
+          scene.idx,
+          scene.role,
+          scene.title,
+          scene.dialogue,
+          JSON.stringify(scene.bullets),
+          scene.image_prompt,
+          chunk.id
+        )
+      })
+
+      await c.env.DB.batch(insertStatements)
+
+      // chunk を 'done' に
+      await c.env.DB.prepare(`
+        UPDATE text_chunks 
+        SET status = 'done',
+            scene_count = ?,
+            processed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(scenario.scenes.length, chunk.id).run()
+
+      successCount++
+
+    } catch (chunkError) {
+      console.error(`Failed to process chunk ${chunk.id}:`, chunkError)
+
+      // chunk を 'failed' に
+      await c.env.DB.prepare(`
+        UPDATE text_chunks 
+        SET status = 'failed',
+            error_message = ?,
+            processed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(
+        chunkError instanceof Error ? chunkError.message : 'Unknown error',
+        chunk.id
+      ).run()
+
+      failedCount++
+    }
+  }
+
+  // 統計を取得
+  const stats = await getChunkStats(c.env.DB, projectId)
+
+  return c.json({
+    project_id: parseInt(projectId),
+    status: 'formatting',
+    batch_processed: successCount,
+    batch_failed: failedCount,
+    ...stats
+  }, 200)
+}
+
+/**
+ * 音声入力の従来フロー（全文を1回で処理）
+ */
+async function processAudioTranscription(c: any, projectId: string, project: any) {
+  // ステータスチェック
+  if (project.status !== 'transcribed') {
+    return c.json({
+      error: {
+        code: 'INVALID_STATUS',
+        message: `Cannot format project with status: ${project.status}`,
+        details: {
+          current_status: project.status,
+          expected_status: 'transcribed'
+        }
+      }
+    }, 400)
+  }
+
+  // transcription 取得
+  const transcription = await c.env.DB.prepare(`
+    SELECT id, raw_text, word_count
+    FROM transcriptions
+    WHERE project_id = ?
+  `).bind(projectId).first()
+
+  if (!transcription || !transcription.raw_text) {
+    return c.json({
+      error: {
+        code: 'NO_TRANSCRIPTION',
+        message: 'No transcription found for this project'
+      }
+    }, 400)
+  }
+
+  // ステータスを 'formatting' に
+  await c.env.DB.prepare(`
+    UPDATE projects 
+    SET status = 'formatting', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(projectId).run()
+
+  // OpenAI API でシーン生成
+  const scenarioResult = await generateRILARCScenario(
+    transcription.raw_text as string,
+    project.title as string,
+    c.env.OPENAI_API_KEY
+  )
+
+  if (!scenarioResult.success) {
+    // 生成失敗 → status を 'failed' に
+    await c.env.DB.prepare(`
+      UPDATE projects 
+      SET status = 'failed',
+          error_message = ?,
+          last_error = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      scenarioResult.error || 'Failed to generate scenario',
+      projectId
+    ).run()
+
+    return c.json({
+      error: {
+        code: 'GENERATION_FAILED',
+        message: scenarioResult.error || 'Failed to generate RILARC scenario'
+      }
+    }, 500)
+  }
+
+  // バリデーション
+  const validationResult = validateRILARCScenario(scenarioResult.scenario)
+
+  if (!validationResult.valid) {
+    await c.env.DB.prepare(`
+      UPDATE projects 
+      SET status = 'failed',
+          error_message = 'Validation failed',
+          last_error = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(projectId).run()
+
+    return c.json({
+      error: {
+        code: 'VALIDATION_FAILED',
+        message: 'Generated scenario does not conform to RILARCScenarioV1 schema',
+        details: {
+          errors: validationResult.errors
+        }
+      }
+    }, 500)
+  }
+
+  const scenario = scenarioResult.scenario as RILARCScenarioV1
+
+  // scenes に挿入
+  try {
+    const insertStatements = scenario.scenes.map(scene => {
+      return c.env.DB.prepare(`
+        INSERT INTO scenes (
+          project_id, idx, role, title, dialogue, bullets, image_prompt, chunk_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+      `).bind(
+        projectId,
+        scene.idx,
+        scene.role,
+        scene.title,
+        scene.dialogue,
+        JSON.stringify(scene.bullets),
+        scene.image_prompt
+      )
+    })
+
+    await c.env.DB.batch(insertStatements)
+
+  } catch (dbError) {
+    console.error('Failed to insert scenes:', dbError)
+
+    await c.env.DB.prepare(`
+      UPDATE projects 
+      SET status = 'failed',
+          error_message = 'Failed to save scenes',
+          last_error = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(projectId).run()
+
+    return c.json({
+      error: {
+        code: 'DB_INSERT_FAILED',
+        message: 'Failed to save scenes to database'
+      }
+    }, 500)
+  }
+
+  // ステータスを 'formatted' に
+  await c.env.DB.prepare(`
+    UPDATE projects 
+    SET status = 'formatted', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(projectId).run()
+
+  // 保存されたシーンを取得
+  const { results: savedScenes } = await c.env.DB.prepare(`
+    SELECT id, idx, role, title, dialogue, bullets, image_prompt
+    FROM scenes
+    WHERE project_id = ?
+    ORDER BY idx ASC
+  `).bind(projectId).all()
+
+  return c.json({
+    project_id: parseInt(projectId),
+    total_scenes: savedScenes.length,
+    status: 'formatted',
+    scenes: savedScenes.map((scene: any) => ({
+      id: scene.id,
+      idx: scene.idx,
+      role: scene.role,
+      title: scene.title,
+      dialogue: scene.dialogue,
+      bullets: JSON.parse(scene.bullets),
+      image_prompt: scene.image_prompt
+    }))
+  }, 200)
+}
+
+/**
+ * chunk統計を取得
+ */
+async function getChunkStats(db: any, projectId: string) {
+  const { results: chunks } = await db.prepare(`
+    SELECT status, COUNT(*) as count
+    FROM text_chunks
+    WHERE project_id = ?
+    GROUP BY status
+  `).bind(projectId).all()
+
+  const statusMap = new Map(chunks.map((c: any) => [c.status, c.count]))
+  const total = Array.from(statusMap.values()).reduce((sum, count) => sum + count, 0)
+  const done = statusMap.get('done') || 0
+  const failed = statusMap.get('failed') || 0
+  const processing = statusMap.get('processing') || 0
+
+  return {
+    total_chunks: total,
+    processed: done,
+    failed: failed,
+    processing: processing,
+    pending: total - done - failed - processing
+  }
+}
 
 /**
  * OpenAI Chat API を使ってRILARCシナリオを生成
