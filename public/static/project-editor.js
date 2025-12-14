@@ -381,7 +381,10 @@ async function saveSourceText() {
 
 // ========== Scene Split Functions ==========
 
-// Format and split scenes
+// Global polling state
+let formatPollingInterval = null;
+
+// Format and split scenes with progress monitoring
 async function formatAndSplit() {
   if (isProcessing) {
     showToast('処理中です。しばらくお待ちください', 'warning');
@@ -391,18 +394,30 @@ async function formatAndSplit() {
   isProcessing = true;
   setButtonLoading('formatBtn', true);
   
+  // Show progress UI
+  showFormatProgressUI();
+  
   try {
+    // Initial format call
     const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
     
-    if (response.data.project_id) {
-      showToast('シーン分割が完了しました', 'success');
-      await loadProject(); // Reload project to update status
-      await loadScenes(); // Load scenes
-      document.getElementById('formatSection').classList.add('hidden');
-      document.getElementById('scenesSection').classList.remove('hidden');
-    } else {
-      showToast(response.data.error?.message || 'シーン分割に失敗しました', 'error');
+    if (response.data.error) {
+      // INVALID_STATUS (failed) の場合、復帰導線を表示
+      if (response.data.error.code === 'INVALID_STATUS' &&
+          response.data.error.details?.current_status === 'failed') {
+        showFailedProjectRecoveryUI();
+      } else {
+        showToast(response.data.error.message || 'シーン分割に失敗しました', 'error');
+        document.getElementById('formatSection').classList.remove('hidden');
+      }
+      isProcessing = false;
+      setButtonLoading('formatBtn', false);
+      return;
     }
+    
+    // Start polling for progress
+    startFormatPolling();
+    
   } catch (error) {
     console.error('Format error:', error);
     
@@ -413,11 +428,138 @@ async function formatAndSplit() {
       showFailedProjectRecoveryUI();
     } else {
       showToast('シーン分割中にエラーが発生しました', 'error');
+      document.getElementById('formatSection').classList.remove('hidden');
     }
-  } finally {
+    
     isProcessing = false;
     setButtonLoading('formatBtn', false);
   }
+}
+
+// Show format progress UI
+function showFormatProgressUI() {
+  const formatSection = document.getElementById('formatSection');
+  
+  formatSection.innerHTML = `
+    <div class="p-6 bg-blue-50 border-l-4 border-blue-600 rounded-lg">
+      <div class="flex items-start">
+        <i class="fas fa-spinner fa-spin text-blue-600 text-3xl mr-4 mt-1"></i>
+        <div class="flex-1">
+          <h3 class="font-bold text-gray-800 mb-2 text-lg">シーン化中...</h3>
+          <p id="formatProgressText" class="text-sm text-gray-700 mb-4">
+            解析中...
+          </p>
+          <div class="w-full bg-gray-200 rounded-full h-4 mb-2">
+            <div id="formatProgressBar" class="bg-blue-600 h-4 rounded-full transition-all duration-500" style="width: 0%"></div>
+          </div>
+          <p id="formatProgressDetails" class="text-xs text-gray-600">
+            進捗を確認中...
+          </p>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  formatSection.classList.remove('hidden');
+}
+
+// Start polling for format progress
+function startFormatPolling() {
+  // Clear any existing interval
+  if (formatPollingInterval) {
+    clearInterval(formatPollingInterval);
+  }
+  
+  // Poll every 5 seconds
+  formatPollingInterval = setInterval(async () => {
+    try {
+      const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/format/status`);
+      const data = response.data;
+      
+      updateFormatProgress(data);
+      
+      // Check if completed
+      if (data.status === 'formatted') {
+        clearInterval(formatPollingInterval);
+        formatPollingInterval = null;
+        await onFormatComplete(data);
+      } else if (data.status === 'formatting') {
+        // Continue polling, check if all chunks are done
+        if (data.pending === 0 && data.processing === 0) {
+          // All chunks done, trigger one more format call to merge
+          try {
+            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
+          } catch (error) {
+            console.error('Final format call error:', error);
+          }
+        }
+      }
+      
+    } catch (error) {
+      console.error('Polling error:', error);
+      clearInterval(formatPollingInterval);
+      formatPollingInterval = null;
+      showToast('進捗確認中にエラーが発生しました', 'error');
+      isProcessing = false;
+    }
+  }, 5000);
+}
+
+// Update format progress UI
+function updateFormatProgress(data) {
+  const progressText = document.getElementById('formatProgressText');
+  const progressBar = document.getElementById('formatProgressBar');
+  const progressDetails = document.getElementById('formatProgressDetails');
+  
+  if (!progressText || !progressBar || !progressDetails) return;
+  
+  const { status, total_chunks, processed, failed, processing, pending } = data;
+  
+  // Calculate progress percentage
+  const percentage = total_chunks > 0 ? Math.round((processed / total_chunks) * 100) : 0;
+  progressBar.style.width = `${percentage}%`;
+  
+  // Update text
+  if (status === 'parsed') {
+    progressText.textContent = '解析中...';
+    progressDetails.textContent = '準備中...';
+  } else if (status === 'formatting') {
+    progressText.textContent = `シーン化中…（${processed} / ${total_chunks}）`;
+    
+    if (failed > 0) {
+      progressDetails.innerHTML = `<span class="text-yellow-600"><i class="fas fa-exclamation-triangle mr-1"></i>一部のチャンクで失敗しました（続行できます）</span>`;
+    } else if (pending === 0 && processing === 0) {
+      progressDetails.textContent = '最終処理中...';
+    } else {
+      progressDetails.textContent = `処理済み: ${processed}, 処理中: ${processing}, 待機中: ${pending}, 失敗: ${failed}`;
+    }
+  }
+}
+
+// On format complete
+async function onFormatComplete(data) {
+  const { total_scenes, chunk_stats } = data;
+  
+  // Show completion message
+  if (chunk_stats.failed > 0) {
+    showToast(`完了！${total_scenes}シーンを生成しました（一部チャンク失敗: ${chunk_stats.failed}件）`, 'warning');
+  } else {
+    showToast(`完了！${total_scenes}シーンを生成しました`, 'success');
+  }
+  
+  // Reload project and scenes
+  await loadProject();
+  await loadScenes();
+  
+  // Hide format section
+  document.getElementById('formatSection').classList.add('hidden');
+  document.getElementById('scenesSection').classList.remove('hidden');
+  
+  isProcessing = false;
+  setButtonLoading('formatBtn', false);
+  
+  // Auto-navigate to Builder tab (optional)
+  // window.location.href = `/builder.html?id=${PROJECT_ID}`;
 }
 
 // Show recovery UI for failed projects
