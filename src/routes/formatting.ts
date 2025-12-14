@@ -180,24 +180,26 @@ async function processTextChunks(c: any, projectId: string, project: any) {
         WHERE id = ?
       `).bind(chunk.id).run()
 
-      // OpenAI API でシーン生成
-      const scenarioResult = await generateRILARCScenario(
+      // OpenAI API で MiniScene 生成（1-3シーン）
+      const miniScenesResult = await generateMiniScenes(
         chunk.text as string,
-        `${project.title} - Part ${chunk.idx}`,
+        project.title as string,
+        chunk.idx as number,
         c.env.OPENAI_API_KEY
       )
 
-      if (!scenarioResult.success) {
-        // 生成失敗 → chunk を 'failed' に
+      if (!miniScenesResult.success) {
+        // 生成失敗 → chunk を 'failed' に（scene_count = 0）
         await c.env.DB.prepare(`
           UPDATE text_chunks 
           SET status = 'failed',
+              scene_count = 0,
               error_message = ?,
               processed_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
         `).bind(
-          scenarioResult.error || 'Failed to generate scenario',
+          miniScenesResult.error || 'Failed to generate mini scenes',
           chunk.id
         ).run()
 
@@ -205,46 +207,41 @@ async function processTextChunks(c: any, projectId: string, project: any) {
         continue
       }
 
-      // バリデーション
-      const validationResult = validateRILARCScenario(scenarioResult.scenario)
+      const miniScenes = miniScenesResult.scenes || []
 
-      if (!validationResult.valid) {
-        // エラー詳細を含める（最大2000文字まで）
-        const errorDetail = `Schema validation failed: ${validationResult.errors.slice(0, 10).join('; ')}`
-        const truncatedError = errorDetail.length > 2000 ? errorDetail.substring(0, 1997) + '...' : errorDetail
-
+      if (miniScenes.length === 0) {
+        // シーンが生成されなかった → failed扱い
         await c.env.DB.prepare(`
           UPDATE text_chunks 
           SET status = 'failed',
-              error_message = ?,
+              scene_count = 0,
+              error_message = 'No scenes generated',
               processed_at = CURRENT_TIMESTAMP,
               updated_at = CURRENT_TIMESTAMP
           WHERE id = ?
-        `).bind(
-          truncatedError,
-          chunk.id
-        ).run()
+        `).bind(chunk.id).run()
 
         failedCount++
         continue
       }
 
-      const scenario = scenarioResult.scenario as RILARCScenarioV1
+      // scenes に挿入（idx は後で振り直すため、暫定値を使用）
+      const insertStatements = miniScenes.map((scene, localIdx) => {
+        // 暫定idx: chunk.idx * 100 + localIdx（後でmerge時に振り直す）
+        const tempIdx = (chunk.idx as number) * 100 + localIdx
 
-      // scenes に挿入
-      const insertStatements = scenario.scenes.map(scene => {
         return c.env.DB.prepare(`
           INSERT INTO scenes (
             project_id, idx, role, title, dialogue, bullets, image_prompt, chunk_id
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           projectId,
-          scene.idx,
-          scene.role,
-          scene.title,
-          scene.dialogue,
-          JSON.stringify(scene.bullets),
-          scene.image_prompt,
+          tempIdx,
+          scene.role || 'context',
+          scene.title || '',
+          scene.dialogue || '',
+          JSON.stringify(scene.bullets || []),
+          scene.image_prompt || '',
           chunk.id
         )
       })
@@ -259,7 +256,7 @@ async function processTextChunks(c: any, projectId: string, project: any) {
             processed_at = CURRENT_TIMESTAMP,
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
-      `).bind(scenario.scenes.length, chunk.id).run()
+      `).bind(miniScenes.length, chunk.id).run()
 
       successCount++
 
@@ -489,7 +486,49 @@ async function getChunkStats(db: any, projectId: string) {
 }
 
 /**
- * OpenAI Chat API を使ってRILARCシナリオを生成（2段階リトライ対応、JSON Schema strict:true）
+ * OpenAI Chat API を使って MiniScene（1-3シーン）を生成（chunk単位、2段階リトライ対応）
+ */
+async function generateMiniScenes(
+  chunkText: string,
+  projectTitle: string,
+  chunkIdx: number,
+  apiKey: string
+): Promise<{
+  success: boolean
+  scenes?: any[]
+  error?: string
+}> {
+  // 第1回目の生成試行
+  const firstAttempt = await generateMiniScenesWithSchema(chunkText, projectTitle, chunkIdx, apiKey, 0.7)
+  if (firstAttempt.success) {
+    return firstAttempt
+  }
+
+  console.warn('First attempt failed, retrying with lower temperature...', firstAttempt.error)
+
+  // 第2回目の生成試行（temperature 下げ）
+  const secondAttempt = await generateMiniScenesWithSchema(chunkText, projectTitle, chunkIdx, apiKey, 0.3)
+  if (secondAttempt.success) {
+    return secondAttempt
+  }
+
+  console.warn('Second attempt failed, trying repair call...', secondAttempt.error)
+
+  // 第3回目：Repair call（フォーマット修正のみ）
+  const repairAttempt = await repairMiniScenes(firstAttempt.rawContent || '', apiKey)
+  if (repairAttempt.success) {
+    return repairAttempt
+  }
+
+  // すべて失敗
+  return {
+    success: false,
+    error: `All generation attempts failed. Last error: ${repairAttempt.error}`
+  }
+}
+
+/**
+ * OpenAI Chat API を使ってRILARCシナリオを生成（音声入力用・従来フロー）
  */
 async function generateRILARCScenario(
   rawText: string,
@@ -530,7 +569,288 @@ async function generateRILARCScenario(
 }
 
 /**
- * JSON Schema (strict:true) を使った生成
+ * MiniScene生成（JSON Schema strict:true）
+ */
+async function generateMiniScenesWithSchema(
+  chunkText: string,
+  projectTitle: string,
+  chunkIdx: number,
+  apiKey: string,
+  temperature: number
+): Promise<{
+  success: boolean
+  scenes?: any[]
+  error?: string
+  rawContent?: string
+}> {
+  try {
+    const systemPrompt = `あなたは動画シナリオ作成の専門家です。
+提供された文章断片から、1-3個のシーンを生成してください。
+
+【厳守ルール】
+1. シーン数は **1〜3 個**（文章の長さに応じて調整）
+2. 各シーンの dialogue は **60〜140 文字**（簡潔かつ明瞭に）
+3. 各シーンの bullets は **2〜3 個**、各 8〜24 文字
+4. 各シーンの title は **10〜40 文字**
+5. 各シーンの image_prompt は **30〜400 文字**（英語推奨、具体的に描写）
+6. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
+
+【role の使い方】
+- hook: 視聴者の興味を引くオープニング
+- context: 背景情報、前提知識
+- main_point: 最も重要な論点・主張
+- evidence: データ、事実、引用
+- timeline: 経緯、歴史的流れ
+- analysis: 深掘り、解釈、意味づけ
+- summary: 重要ポイントの振り返り
+- cta: 視聴者への呼びかけ、次のアクション
+
+注意：idx、metadata は不要。シーン配列のみを返してください。`
+
+    const userPrompt = `以下の文章断片から1-3個のシーンを生成してください。
+
+【プロジェクトタイトル】
+${projectTitle}
+
+【文章断片 (Part ${chunkIdx})】
+${chunkText}
+
+上記の文章を元に、視聴者にとって魅力的で分かりやすいニュース風インフォグラフィック動画のシーンを作成してください。`
+
+    // JSON Schema for MiniScenes (1-3 scenes, no idx/metadata)
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        scenes: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 3,
+          items: {
+            type: 'object',
+            properties: {
+              role: {
+                type: 'string',
+                enum: ['hook', 'context', 'main_point', 'evidence', 'timeline', 'analysis', 'summary', 'cta']
+              },
+              title: { type: 'string', minLength: 10, maxLength: 40 },
+              dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              bullets: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 3,
+                items: { type: 'string', minLength: 8, maxLength: 24 }
+              },
+              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+            },
+            required: ['role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['scenes'],
+      additionalProperties: false
+    }
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-2024-08-06',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'mini_scenes',
+            strict: true,
+            schema: jsonSchema
+          }
+        },
+        temperature
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      const errorMessage = errorData.error?.message || `API error: ${response.status}`
+      console.error('OpenAI API error:', errorMessage)
+      return {
+        success: false,
+        error: errorMessage
+      }
+    }
+
+    const result = await response.json()
+    const content = result.choices?.[0]?.message?.content
+
+    if (!content) {
+      return {
+        success: false,
+        error: 'No content in API response'
+      }
+    }
+
+    // JSONパース
+    try {
+      const data = JSON.parse(content)
+      return {
+        success: true,
+        scenes: data.scenes || [],
+        rawContent: content
+      }
+    } catch (parseError) {
+      console.error('Failed to parse JSON:', parseError)
+      return {
+        success: false,
+        error: 'Generated content is not valid JSON',
+        rawContent: content
+      }
+    }
+
+  } catch (error) {
+    console.error('Error generating mini scenes:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    }
+  }
+}
+
+/**
+ * MiniScene Repair call
+ */
+async function repairMiniScenes(
+  brokenJson: string,
+  apiKey: string
+): Promise<{
+  success: boolean
+  scenes?: any[]
+  error?: string
+}> {
+  if (!brokenJson) {
+    return {
+      success: false,
+      error: 'No content to repair'
+    }
+  }
+
+  try {
+    const systemPrompt = `あなたはJSON修復の専門家です。
+与えられたシーンJSONを、スキーマに厳密に適合するよう修正してください。
+
+【修正ルール】
+- シーン数は 1-3 個
+- dialogue は 60〜140 文字
+- bullets は 2〜3 個、各 8〜24 文字
+- title は 10〜40 文字
+- image_prompt は 30〜400 文字
+- 全フィールド必須
+
+内容を変えず、フォーマットのみ修正してください。`
+
+    const userPrompt = `以下のJSONを修正してください：
+
+${brokenJson}`
+
+    const jsonSchema = {
+      type: 'object',
+      properties: {
+        scenes: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 3,
+          items: {
+            type: 'object',
+            properties: {
+              role: {
+                type: 'string',
+                enum: ['hook', 'context', 'main_point', 'evidence', 'timeline', 'analysis', 'summary', 'cta']
+              },
+              title: { type: 'string', minLength: 10, maxLength: 40 },
+              dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              bullets: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 3,
+                items: { type: 'string', minLength: 8, maxLength: 24 }
+              },
+              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+            },
+            required: ['role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            additionalProperties: false
+          }
+        }
+      },
+      required: ['scenes'],
+      additionalProperties: false
+    }
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-2024-08-06',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'mini_scenes_repaired',
+            strict: true,
+            schema: jsonSchema
+          }
+        },
+        temperature: 0.1
+      })
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      const errorMessage = errorData.error?.message || `Repair API error: ${response.status}`
+      console.error('OpenAI Repair API error:', errorMessage)
+      return {
+        success: false,
+        error: errorMessage
+      }
+    }
+
+    const result = await response.json()
+    const content = result.choices?.[0]?.message?.content
+
+    if (!content) {
+      return {
+        success: false,
+        error: 'No content in repair API response'
+      }
+    }
+
+    const data = JSON.parse(content)
+    return {
+      success: true,
+      scenes: data.scenes || []
+    }
+
+  } catch (error) {
+    console.error('Error repairing mini scenes:', error)
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown repair error'
+    }
+  }
+}
+
+/**
+ * JSON Schema (strict:true) を使った生成（音声入力用・全文一括）
  */
 async function generateWithSchema(
   rawText: string,
