@@ -47,6 +47,16 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
       `).bind(projectId).run()
     }
 
+    // 3.5. スタックした 'generating' レコードをタイムアウト処理（5分以上）
+    await c.env.DB.prepare(`
+      UPDATE image_generations
+      SET status = 'failed', 
+          error_message = 'Generation timeout (stuck for >5 minutes)'
+      WHERE status = 'generating' 
+        AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+        AND datetime(created_at, '+5 minutes') < datetime('now')
+    `).bind(projectId).run()
+
     // 4. pending の scenes を取得（最大1件: Gemini APIが遅いため）
     const BATCH_SIZE = 1
     const { results: pendingScenes } = await c.env.DB.prepare(`

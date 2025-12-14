@@ -1122,20 +1122,58 @@ async function generateBulkImages(mode) {
                  : 'generateFailedImagesBtn';
   setButtonLoading(buttonId, true);
   
+  const modeText = mode === 'all' ? '全シーン' 
+                 : mode === 'pending' ? '未生成シーン'
+                 : '失敗シーン';
+  
   try {
-    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, {
-      mode
-    });
+    showToast(`${modeText}の画像生成を開始します...`, 'info');
     
-    if (response.data.success) {
-      const modeText = mode === 'all' ? '全シーン' 
-                     : mode === 'pending' ? '未生成シーン'
-                     : '失敗シーン';
-      showToast(`${modeText}の画像生成を開始しました`, 'success');
-      await initBuilderTab();
-    } else {
-      showToast('画像生成に失敗しました', 'error');
+    // 5秒ごとにステータスポーリング & 自動再実行
+    let pollCount = 0;
+    const maxPolls = 300; // 最大25分（5秒 x 300回）
+    
+    while (pollCount < maxPolls) {
+      // 1) 現在のステータス取得
+      const statusRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/generate-images/status`);
+      const { processed, pending, failed, generating, status } = statusRes.data;
+      
+      // UI更新（進捗表示）
+      const progressText = `画像生成中... (${processed}/${processed + pending + failed})`;
+      const btn = document.getElementById(buttonId);
+      if (btn) {
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${progressText}`;
+      }
+      
+      // 2) 完了判定
+      if (pending === 0 && generating === 0) {
+        const finalMessage = failed > 0 
+          ? `画像生成完了！ (成功: ${processed}件, 失敗: ${failed}件)` 
+          : `画像生成完了！ (${processed}件)`;
+        showToast(finalMessage, failed > 0 ? 'warning' : 'success');
+        await initBuilderTab();
+        break;
+      }
+      
+      // 3) 次のバッチ実行（pending > 0 の場合）
+      if (pending > 0 && generating === 0) {
+        try {
+          await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
+        } catch (batchError) {
+          console.warn('Batch generation error:', batchError);
+          // エラーでも次のポーリングで retry
+        }
+      }
+      
+      // 4) 5秒待機
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      pollCount++;
     }
+    
+    if (pollCount >= maxPolls) {
+      showToast('画像生成がタイムアウトしました。再度お試しください。', 'error');
+    }
+    
   } catch (error) {
     console.error('Bulk generate error:', error);
     showToast('画像生成中にエラーが発生しました', 'error');
