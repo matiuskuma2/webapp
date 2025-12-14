@@ -4,6 +4,66 @@ import { validateRILARCScenario, type RILARCScenarioV1 } from '../utils/rilarc-v
 
 const formatting = new Hono<{ Bindings: Bindings }>()
 
+// POST /api/text_chunks/:id/retry - Failed chunk retry
+formatting.post('/text_chunks/:id/retry', async (c) => {
+  try {
+    const chunkId = c.req.param('id')
+
+    // 1. Chunk取得
+    const chunk = await c.env.DB.prepare(`
+      SELECT id, project_id, status FROM text_chunks WHERE id = ?
+    `).bind(chunkId).first()
+
+    if (!chunk) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Chunk not found'
+        }
+      }, 404)
+    }
+
+    // 2. statusを pending にリセット
+    await c.env.DB.prepare(`
+      UPDATE text_chunks
+      SET status = 'pending',
+          error_message = NULL,
+          processed_at = NULL,
+          scene_count = 0,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(chunkId).run()
+
+    // 3. このchunkに紐づくscenesを削除
+    await c.env.DB.prepare(`
+      DELETE FROM scenes WHERE chunk_id = ?
+    `).bind(chunkId).run()
+
+    // 4. projects.statusを formatting に戻す（再実行可能にする）
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET status = 'formatting',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(chunk.project_id).run()
+
+    return c.json({
+      chunk_id: parseInt(chunkId),
+      status: 'pending',
+      message: 'Chunk reset to pending. Call /format to retry.'
+    }, 200)
+
+  } catch (error) {
+    console.error('Retry chunk error:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to retry chunk'
+      }
+    }, 500)
+  }
+})
+
 // GET /api/projects/:id/format/status - フォーマット進捗取得
 formatting.get('/:id/format/status', async (c) => {
   try {
