@@ -4,6 +4,7 @@ import { serveStatic } from 'hono/cloudflare-workers'
 import type { Bindings } from './types/bindings'
 import projects from './routes/projects'
 import transcriptions from './routes/transcriptions'
+import parsing from './routes/parsing'
 import formatting from './routes/formatting'
 import imageGeneration from './routes/image-generation'
 import downloads from './routes/downloads'
@@ -33,6 +34,7 @@ app.use('/static/*', serveStatic({ root: './public' }))
 // API routes
 app.route('/api/projects', projects)
 app.route('/api/projects', transcriptions)
+app.route('/api/projects', parsing) // For /api/projects/:id/parse
 app.route('/api/projects', formatting)
 app.route('/api/projects', imageGeneration)
 app.route('/api/projects', downloads) // For download endpoints
