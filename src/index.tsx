@@ -45,6 +45,7 @@ app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate
 app.route('/api', imageGeneration) // For /api/scenes/:id/generate-image
 app.route('/api/debug', debug) // For /api/debug/env (temporary)
+app.route('/images', images) // For direct R2 image access
 
 // Root route - serve HTML
 app.get('/', (c) => {

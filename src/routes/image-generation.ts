@@ -122,7 +122,8 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
         await c.env.R2.put(r2Key, imageResult.imageData)
 
-        const r2Url = `https://your-r2-domain.com/${r2Key}`
+        // R2 URL: Pages Functions経由で配信 (/images/* → images.ts)
+        const r2Url = `/images/${r2Key}`
 
         // 成功 → status = 'completed', r2_key, r2_url保存
         await c.env.DB.prepare(`

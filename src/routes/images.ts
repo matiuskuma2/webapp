@@ -3,6 +3,36 @@ import type { Bindings } from '../types/bindings'
 
 const images = new Hono<{ Bindings: Bindings }>()
 
+// GET /images/* - R2バケットから画像直接配信
+images.get('/*', async (c) => {
+  try {
+    // Request path: /images/12/scene_1/21_xxx.png
+    // R2 key: images/12/scene_1/21_xxx.png
+    const fullPath = c.req.path // e.g., "/images/12/scene_1/21_xxx.png"
+    const r2Key = fullPath.substring(1) // Remove leading "/" → "images/12/scene_1/21_xxx.png"
+    
+    if (!r2Key || r2Key === 'images') {
+      return c.json({ error: 'Invalid image path' }, 400)
+    }
+
+    const object = await c.env.R2.get(r2Key)
+    
+    if (!object) {
+      return c.notFound()
+    }
+
+    const headers = new Headers()
+    headers.set('Content-Type', object.httpMetadata?.contentType || 'image/png')
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable')
+    headers.set('Access-Control-Allow-Origin', '*')
+
+    return new Response(object.body, { headers })
+  } catch (error) {
+    console.error('Error fetching image from R2:', error)
+    return c.json({ error: 'Failed to fetch image' }, 500)
+  }
+})
+
 // GET /api/scenes/:id/images - シーンの画像生成履歴取得
 images.get('/:id/images', async (c) => {
   try {
