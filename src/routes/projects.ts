@@ -290,9 +290,11 @@ projects.post('/:id/source/text', async (c) => {
 })
 
 // GET /api/projects/:id/scenes - シーン一覧取得（idx順）
+// Query params: ?view=edit (軽量版、画像情報なし), ?view=board (Builder用、最小画像情報)
 projects.get('/:id/scenes', async (c) => {
   try {
     const projectId = c.req.param('id')
+    const view = c.req.query('view') || 'full' // デフォルトは完全版（後方互換）
 
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
@@ -312,13 +314,75 @@ projects.get('/:id/scenes', async (c) => {
 
     // シーン一覧取得（idx順）
     const { results: scenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, bullets, image_prompt, created_at, updated_at
+      SELECT id, idx, role, title, dialogue, bullets, image_prompt, chunk_id, created_at, updated_at
       FROM scenes
       WHERE project_id = ?
       ORDER BY idx ASC
     `).bind(projectId).all()
 
-    // 各シーンの画像情報を取得（active_image + latest_image）
+    // view=edit: 画像情報なし（Scene Split用、超軽量）
+    if (view === 'edit') {
+      return c.json({
+        project_id: parseInt(projectId),
+        total_scenes: scenes.length,
+        scenes: scenes.map((scene: any) => ({
+          id: scene.id,
+          idx: scene.idx,
+          role: scene.role,
+          title: scene.title,
+          dialogue: scene.dialogue,
+          bullets: JSON.parse(scene.bullets),
+          image_prompt: scene.image_prompt,
+          chunk_id: scene.chunk_id
+        }))
+      })
+    }
+
+    // view=board: 最小画像情報のみ（Builder用、軽量）
+    if (view === 'board') {
+      const scenesWithMinimalImages = await Promise.all(
+        scenes.map(async (scene: any) => {
+          // アクティブ画像のURLのみ
+          const activeRecord = await c.env.DB.prepare(`
+            SELECT r2_key FROM image_generations
+            WHERE scene_id = ? AND is_active = 1
+            LIMIT 1
+          `).bind(scene.id).first()
+
+          // 最新ステータス＋エラーメッセージ（先頭80文字）
+          const latestRecord = await c.env.DB.prepare(`
+            SELECT status, substr(error_message, 1, 80) as error_message
+            FROM image_generations
+            WHERE scene_id = ?
+            ORDER BY created_at DESC
+            LIMIT 1
+          `).bind(scene.id).first()
+
+          return {
+            id: scene.id,
+            idx: scene.idx,
+            role: scene.role,
+            title: scene.title,
+            dialogue: scene.dialogue.substring(0, 100), // 最初の100文字のみ
+            bullets: JSON.parse(scene.bullets),
+            image_prompt: scene.image_prompt.substring(0, 100), // 最初の100文字のみ
+            active_image: activeRecord ? { image_url: `/${activeRecord.r2_key}` } : null,
+            latest_image: latestRecord ? {
+              status: latestRecord.status,
+              error_message: latestRecord.error_message
+            } : null
+          }
+        })
+      )
+
+      return c.json({
+        project_id: parseInt(projectId),
+        total_scenes: scenes.length,
+        scenes: scenesWithMinimalImages
+      })
+    }
+
+    // デフォルト（full）: 完全版（既存の動作、後方互換）
     const scenesWithImages = await Promise.all(
       scenes.map(async (scene: any) => {
         // 1) アクティブな画像（表示用）

@@ -216,8 +216,8 @@ async function initSceneSplitTab() {
     `;
   }
   
-  // Check if scenes already exist
-  const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+  // Check if scenes already exist（軽量版API使用）
+  const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=edit`);
   const scenes = scenesResponse.data.scenes || [];
   window.sceneSplitLoaded = true;
   
@@ -566,6 +566,9 @@ async function onFormatComplete(data) {
     showToast(`完了！${total_scenes}シーンを生成しました`, 'success');
   }
   
+  // キャッシュクリア（新しいシーンが生成された）
+  window.sceneSplitInitialized = false;
+  
   // Reload project and scenes
   await loadProject();
   await loadScenes();
@@ -803,6 +806,8 @@ async function saveScene(sceneId) {
     
     if (response.data.id) {
       showToast('シーンを保存しました', 'success');
+      // キャッシュクリア（編集内容を反映）
+      window.sceneSplitInitialized = false;
     } else {
       showToast('シーンの保存に失敗しました', 'error');
     }
@@ -835,6 +840,8 @@ async function deleteScene(sceneId) {
     
     if (response.data.success) {
       showToast('シーンを削除しました', 'success');
+      // キャッシュクリア（削除を反映）
+      window.sceneSplitInitialized = false;
       await loadScenes(); // Reload scenes (idx will be re-numbered)
     } else {
       showToast('シーンの削除に失敗しました', 'error');
@@ -896,6 +903,8 @@ async function reorderScenes(sceneIds) {
     
     if (response.data.success) {
       showToast('並び順を変更しました', 'success');
+      // キャッシュクリア（並び替えを反映）
+      window.sceneSplitInitialized = false;
       await loadScenes(); // Reload to reflect new order
     } else {
       showToast('並び替えに失敗しました', 'error');
@@ -930,7 +939,8 @@ async function initBuilderTab() {
   `;
   
   try {
-    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+    // Builder用軽量版API（画像URL + ステータスのみ）
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
     const scenes = response.data.scenes || [];
     
     if (scenes.length === 0) {
