@@ -4,6 +4,226 @@ import { buildImagePrompt, buildR2Key } from '../utils/image-prompt-builder'
 
 const imageGeneration = new Hono<{ Bindings: Bindings }>()
 
+// POST /api/projects/:id/generate-images - バッチ画像生成
+imageGeneration.post('/projects/:id/generate-images', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // 1. プロジェクト情報取得
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // 2. ステータスチェック（formatted, generating_images, completed を許可）
+    const allowedStatuses = ['formatted', 'generating_images', 'completed']
+    if (!allowedStatuses.includes(project.status as string)) {
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot generate images for project with status: ${project.status}`,
+          details: {
+            current_status: project.status,
+            allowed_statuses: allowedStatuses
+          }
+        }
+      }, 400)
+    }
+
+    // 3. プロジェクトステータスを 'generating_images' に（初回のみ）
+    if (project.status === 'formatted') {
+      await c.env.DB.prepare(`
+        UPDATE projects 
+        SET status = 'generating_images', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(projectId).run()
+    }
+
+    // 4. pending の scenes を取得（最大1件: Gemini APIが遅いため）
+    const BATCH_SIZE = 1
+    const { results: pendingScenes } = await c.env.DB.prepare(`
+      SELECT s.id, s.idx, s.image_prompt
+      FROM scenes s
+      LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+      WHERE s.project_id = ? AND ig.id IS NULL
+      ORDER BY s.idx ASC
+      LIMIT ?
+    `).bind(projectId, BATCH_SIZE).all()
+
+    if (pendingScenes.length === 0) {
+      // 全scenes処理済み → status を 'completed' に
+      await c.env.DB.prepare(`
+        UPDATE projects 
+        SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(projectId).run()
+
+      const stats = await getImageGenerationStats(c.env.DB, projectId)
+
+      return c.json({
+        project_id: parseInt(projectId),
+        status: 'completed',
+        ...stats,
+        message: 'All images generated'
+      }, 200)
+    }
+
+    // 5. 各sceneの画像生成
+    let successCount = 0
+    let failedCount = 0
+
+    for (const scene of pendingScenes) {
+      try {
+        // 最終プロンプト生成
+        const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+
+        // image_generationsレコード作成（generating状態）
+        const insertResult = await c.env.DB.prepare(`
+          INSERT INTO image_generations (
+            scene_id, prompt, status, provider, model, is_active
+          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3-pro-image-preview', 1)
+        `).bind(scene.id, finalPrompt).run()
+
+        const generationId = insertResult.meta.last_row_id as number
+
+        // Gemini APIで画像生成（429リトライ付き）
+        const imageResult = await generateImageWithRetry(
+          finalPrompt,
+          c.env.GEMINI_API_KEY,
+          3
+        )
+
+        if (!imageResult.success) {
+          // 生成失敗 → status = 'failed', error_message保存
+          await c.env.DB.prepare(`
+            UPDATE image_generations 
+            SET status = 'failed', error_message = ?
+            WHERE id = ?
+          `).bind(imageResult.error || 'Unknown error', generationId).run()
+
+          failedCount++
+          continue
+        }
+
+        // R2に画像保存
+        const r2Key = buildR2Key(
+          parseInt(projectId),
+          scene.idx as number,
+          generationId
+        )
+
+        await c.env.R2.put(r2Key, imageResult.imageData)
+
+        const r2Url = `https://your-r2-domain.com/${r2Key}`
+
+        // 成功 → status = 'completed', r2_key, r2_url保存
+        await c.env.DB.prepare(`
+          UPDATE image_generations 
+          SET status = 'completed', r2_key = ?, r2_url = ?
+          WHERE id = ?
+        `).bind(r2Key, r2Url, generationId).run()
+
+        successCount++
+
+      } catch (sceneError) {
+        console.error(`Failed to generate image for scene ${scene.id}:`, sceneError)
+        failedCount++
+      }
+    }
+
+    // 6. 統計を取得
+    const stats = await getImageGenerationStats(c.env.DB, projectId)
+
+    return c.json({
+      project_id: parseInt(projectId),
+      status: 'generating_images',
+      batch_processed: successCount,
+      batch_failed: failedCount,
+      ...stats
+    }, 200)
+
+  } catch (error) {
+    console.error('Batch image generation error:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to generate images'
+      }
+    }, 500)
+  }
+})
+
+// GET /api/projects/:id/generate-images/status - 画像生成進捗取得
+imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+
+    const stats = await getImageGenerationStats(c.env.DB, projectId)
+
+    return c.json({
+      project_id: parseInt(projectId),
+      status: project.status,
+      ...stats
+    })
+
+  } catch (error) {
+    console.error('Error getting image generation status:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to get status' }
+    }, 500)
+  }
+})
+
+// 画像生成統計を取得
+async function getImageGenerationStats(db: any, projectId: string) {
+  // Total scenes count
+  const { results: scenesCount } = await db.prepare(`
+    SELECT COUNT(*) as total FROM scenes WHERE project_id = ?
+  `).bind(projectId).all()
+
+  const totalScenes = scenesCount[0]?.total || 0
+
+  // Image generation stats
+  const { results: imageStats } = await db.prepare(`
+    SELECT ig.status, COUNT(*) as count
+    FROM image_generations ig
+    JOIN scenes s ON ig.scene_id = s.id
+    WHERE s.project_id = ? AND ig.is_active = 1
+    GROUP BY ig.status
+  `).bind(projectId).all()
+
+  const statusMap = new Map(imageStats.map((s: any) => [s.status, s.count]))
+  const completed = statusMap.get('completed') || 0
+  const failed = statusMap.get('failed') || 0
+  const generating = statusMap.get('generating') || 0
+
+  return {
+    total_scenes: totalScenes,
+    processed: completed,
+    failed: failed,
+    generating: generating,
+    pending: totalScenes - completed - failed - generating
+  }
+}
+
 // POST /api/scenes/:id/generate-image - 単体画像生成
 imageGeneration.post('/scenes/:id/generate-image', async (c) => {
   try {
