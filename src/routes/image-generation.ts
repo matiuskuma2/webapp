@@ -635,8 +635,24 @@ async function generateImageWithRetry(
       // その他のエラー
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        lastError = errorData.error?.message || `API error: ${response.status}`
-        console.error('Gemini API error:', lastError)
+        
+        // 詳細なエラー情報を構築
+        const errorDetails = {
+          status: response.status,
+          message: errorData.error?.message || `API error: ${response.status}`,
+          code: errorData.error?.code || 'UNKNOWN',
+          details: errorData.error?.details || null
+        }
+        
+        // JSON形式でエラーを保存（省略なし）
+        lastError = JSON.stringify(errorDetails)
+        console.error('Gemini API error (full details):', {
+          httpStatus: response.status,
+          errorCode: errorDetails.code,
+          errorMessage: errorDetails.message,
+          errorDetails: errorDetails.details,
+          prompt: prompt.substring(0, 100) + '...'
+        })
         break
       }
 
@@ -658,6 +674,15 @@ async function generateImageWithRetry(
               bytes[i] = binaryString.charCodeAt(i)
             }
             
+            console.log('Image generation success:', {
+              model: 'gemini-3-pro-image-preview',
+              endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
+              promptLength: prompt.length,
+              imageSize: '2K',
+              aspectRatio: '16:9',
+              dataSizeBytes: bytes.buffer.byteLength
+            })
+            
             return {
               success: true,
               imageData: bytes.buffer
@@ -673,8 +698,22 @@ async function generateImageWithRetry(
       }
 
     } catch (error) {
-      lastError = error instanceof Error ? error.message : 'Unknown error'
-      console.error(`Image generation attempt ${attempt + 1} failed:`, error)
+      const errorDetails = {
+        type: 'NETWORK_ERROR',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        stack: error instanceof Error ? error.stack : null,
+        attempt: attempt + 1,
+        maxRetries
+      }
+      
+      lastError = JSON.stringify(errorDetails)
+      console.error(`Image generation attempt ${attempt + 1} failed (full details):`, {
+        errorType: errorDetails.type,
+        errorMessage: errorDetails.message,
+        attempt: errorDetails.attempt,
+        maxRetries: errorDetails.maxRetries,
+        promptLength: prompt.length
+      })
       
       // 最後の試行でない場合はリトライ
       if (attempt < maxRetries - 1) {
