@@ -24,15 +24,16 @@ parsing.post('/:id/parse', async (c) => {
       }, 404)
     }
 
-    // 2. ステータスチェック（uploaded のみ許可）
-    if (project.status !== 'uploaded') {
+    // 2. ステータスチェック（uploaded または transcribed を許可）
+    const allowedStatuses = ['uploaded', 'transcribed']
+    if (!allowedStatuses.includes(project.status as string)) {
       return c.json({
         error: {
           code: 'INVALID_STATUS',
           message: `Cannot parse project with status: ${project.status}`,
           details: {
             current_status: project.status,
-            expected_status: 'uploaded'
+            allowed_statuses: allowedStatuses
           }
         }
       }, 400)

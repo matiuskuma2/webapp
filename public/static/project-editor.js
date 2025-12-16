@@ -417,6 +417,23 @@ async function formatAndSplit() {
   showFormatProgressUI();
   
   try {
+    // For audio projects (status='transcribed' or 'uploaded'), call parse first
+    if (currentProject.source_type === 'audio' && 
+        (currentProject.status === 'uploaded' || currentProject.status === 'transcribed')) {
+      const parseResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/parse`);
+      
+      if (parseResponse.data.error) {
+        showToast(parseResponse.data.error.message || 'テキスト分割に失敗しました', 'error');
+        document.getElementById('formatSection').classList.remove('hidden');
+        isProcessing = false;
+        setButtonLoading('formatBtn', false);
+        return;
+      }
+      
+      // Wait a bit for parse to complete
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    
     // Initial format call
     const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
     
