@@ -279,12 +279,30 @@ formatting.post('/:id/format', async (c) => {
     }
 
     // 2. source_type に応じた処理分岐
-    if (project.source_type === 'text') {
+    // Note: Parse API実行済み（status='parsed'）の場合は chunk単位処理を使用
+    if (project.status === 'parsed' || project.status === 'formatting') {
+      // Parse API実行済み → chunk単位処理（テキスト・音声共通）
+      return await processTextChunks(c, projectId, project)
+    } else if (project.source_type === 'audio' && project.status === 'transcribed') {
+      // 音声入力 + Parse未実行の場合：従来のフロー（全文を1回で処理）
+      // ※このケースは Parse をスキップした場合のみ
+      return await processAudioTranscription(c, projectId, project)
+    } else if (project.source_type === 'text') {
       // テキスト入力の場合：chunk単位処理
       return await processTextChunks(c, projectId, project)
     } else {
-      // 音声入力の場合：従来のフロー（全文を1回で処理）
-      return await processAudioTranscription(c, projectId, project)
+      // 想定外のステータス
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot format project with status: ${project.status}`,
+          details: {
+            current_status: project.status,
+            source_type: project.source_type,
+            hint: 'Run /parse first for audio projects'
+          }
+        }
+      }, 400)
     }
 
   } catch (error) {
