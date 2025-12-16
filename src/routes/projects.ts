@@ -26,13 +26,26 @@ projects.post('/', async (c) => {
       VALUES (?, 'created')
     `).bind(title.trim()).run()
 
+    const projectId = result.meta.last_row_id as number
+
+    // Phase B-2: Auto-create Run #1 for new project
+    const runResult = await c.env.DB.prepare(`
+      INSERT INTO runs (project_id, run_no, state, title, source_type)
+      VALUES (?, 1, 'draft', 'Run #1', 'text')
+    `).bind(projectId).run()
+
+    const runId = runResult.meta.last_row_id as number
+
     const project = await c.env.DB.prepare(`
       SELECT id, title, status, created_at
       FROM projects
       WHERE id = ?
-    `).bind(result.meta.last_row_id).first()
+    `).bind(projectId).first()
 
-    return c.json(project, 201)
+    return c.json({
+      ...project,
+      run_id: runId
+    }, 201)
   } catch (error) {
     console.error('Error creating project:', error)
     return c.json({

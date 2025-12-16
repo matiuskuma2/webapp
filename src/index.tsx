@@ -11,6 +11,8 @@ import downloads from './routes/downloads'
 import scenes from './routes/scenes'
 import images from './routes/images'
 import debug from './routes/debug'
+import runs from './routes/runs'
+import runsV2 from './routes/runs-v2'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -46,6 +48,12 @@ app.route('/api/images', images) // For /api/images/:id/activate
 app.route('/api', imageGeneration) // For /api/scenes/:id/generate-image
 app.route('/api/debug', debug) // For /api/debug/env (temporary)
 app.route('/images', images) // For direct R2 image access
+
+// Run management routes (Phase B-0 & B-1)
+app.route('/api', runs) // For /api/projects/:projectId/runs, /api/runs/:runId
+
+// Run v2 API routes (Phase B-2)
+app.route('/api/runs', runsV2) // For /api/runs/:runId/parse, format, generate-images, scenes
 
 // Root route - serve HTML
 app.get('/', (c) => {
