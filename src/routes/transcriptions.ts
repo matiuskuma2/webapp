@@ -114,12 +114,15 @@ transcriptions.post('/:id/transcribe', async (c) => {
       wordCount
     ).run()
 
-    // 7. ステータスを 'transcribed' に更新
+    // 7. ステータスを 'transcribed' に更新し、source_text に保存（重要！）
     await c.env.DB.prepare(`
       UPDATE projects 
-      SET status = 'transcribed', updated_at = CURRENT_TIMESTAMP
+      SET status = 'transcribed', 
+          source_text = ?,
+          source_type = 'audio',
+          updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).bind(projectId).run()
+    `).bind(transcriptionResult.text, projectId).run()
 
     // 8. レスポンス返却
     return c.json({
