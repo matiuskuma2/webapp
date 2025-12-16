@@ -1164,7 +1164,21 @@ ${escapeHtml(scene.dialogue)}
               ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
                    <i class="fas fa-exclamation-circle mr-2"></i>
                    <strong>失敗理由:</strong><br/>
-                   ${escapeHtml(errorMessage.substring(0, 80))}${errorMessage.length > 80 ? '...' : ''}
+                   <div class="mt-2 font-mono text-xs bg-red-100 p-2 rounded overflow-x-auto">
+                     ${escapeHtml(errorMessage)}
+                   </div>
+                   ${(() => {
+                     try {
+                       const parsed = JSON.parse(errorMessage);
+                       return `<div class="mt-2 space-y-1">
+                         ${parsed.status ? `<div><strong>HTTP Status:</strong> ${parsed.status}</div>` : ''}
+                         ${parsed.code ? `<div><strong>Error Code:</strong> ${parsed.code}</div>` : ''}
+                         ${parsed.message ? `<div><strong>Message:</strong> ${escapeHtml(parsed.message)}</div>` : ''}
+                       </div>`;
+                     } catch(e) {
+                       return '';
+                     }
+                   })()}
                  </div>`
               : imageStatus === 'failed' 
                 ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
