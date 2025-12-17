@@ -417,21 +417,57 @@ async function formatAndSplit() {
   showFormatProgressUI();
   
   try {
-    // For audio projects (status='transcribed' or 'uploaded'), call parse first
-    if (currentProject.source_type === 'audio' && 
-        (currentProject.status === 'uploaded' || currentProject.status === 'transcribed')) {
-      const parseResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/parse`);
-      
-      if (parseResponse.data.error) {
-        showToast(parseResponse.data.error.message || 'テキスト分割に失敗しました', 'error');
-        document.getElementById('formatSection').classList.remove('hidden');
-        isProcessing = false;
-        setButtonLoading('formatBtn', false);
-        return;
+    // For audio projects, ensure transcribe → parse → format flow
+    if (currentProject.source_type === 'audio') {
+      // Step 1: Transcribe if status='uploaded' (not transcribed yet)
+      if (currentProject.status === 'uploaded') {
+        try {
+          const transcribeResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/transcribe`);
+          
+          if (transcribeResponse.data.error) {
+            showToast(transcribeResponse.data.error.message || '文字起こしに失敗しました', 'error');
+            document.getElementById('formatSection').classList.remove('hidden');
+            isProcessing = false;
+            setButtonLoading('formatBtn', false);
+            return;
+          }
+          
+          // Wait for transcribe to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error('Transcribe error:', error);
+          showToast('文字起こし中にエラーが発生しました', 'error');
+          document.getElementById('formatSection').classList.remove('hidden');
+          isProcessing = false;
+          setButtonLoading('formatBtn', false);
+          return;
+        }
       }
       
-      // Wait a bit for parse to complete
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      // Step 2: Parse (for both 'uploaded' and 'transcribed' status)
+      if (currentProject.status === 'uploaded' || currentProject.status === 'transcribed') {
+        try {
+          const parseResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/parse`);
+          
+          if (parseResponse.data.error) {
+            showToast(parseResponse.data.error.message || 'テキスト分割に失敗しました', 'error');
+            document.getElementById('formatSection').classList.remove('hidden');
+            isProcessing = false;
+            setButtonLoading('formatBtn', false);
+            return;
+          }
+          
+          // Wait for parse to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error('Parse error:', error);
+          showToast('テキスト分割中にエラーが発生しました', 'error');
+          document.getElementById('formatSection').classList.remove('hidden');
+          isProcessing = false;
+          setButtonLoading('formatBtn', false);
+          return;
+        }
+      }
     }
     
     // Initial format call
@@ -457,6 +493,12 @@ async function formatAndSplit() {
   } catch (error) {
     console.error('Format error:', error);
     
+    // Log detailed error information for debugging
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+    }
+    
     // Stop any running polling
     if (formatPollingInterval) {
       clearInterval(formatPollingInterval);
@@ -475,7 +517,11 @@ async function formatAndSplit() {
     } else {
       // Show detailed error message
       const errorMsg = error.response?.data?.error?.message || error.message || 'シーン分割中にエラーが発生しました';
-      showToast(errorMsg, 'error');
+      const errorCode = error.response?.data?.error?.code;
+      
+      // Show both error code and message
+      const displayMsg = errorCode ? `[${errorCode}] ${errorMsg}` : errorMsg;
+      showToast(displayMsg, 'error');
     }
     
     isProcessing = false;
