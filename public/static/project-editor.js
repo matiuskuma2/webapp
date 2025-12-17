@@ -457,14 +457,25 @@ async function formatAndSplit() {
   } catch (error) {
     console.error('Format error:', error);
     
+    // Stop any running polling
+    if (formatPollingInterval) {
+      clearInterval(formatPollingInterval);
+      formatPollingInterval = null;
+    }
+    
+    // Hide progress UI and show format section
+    document.getElementById('formatProgressUI')?.classList.add('hidden');
+    document.getElementById('formatSection')?.classList.remove('hidden');
+    
     // INVALID_STATUS (failed) の場合、復帰導線を表示
     if (error.response?.status === 400 && 
         error.response?.data?.error?.code === 'INVALID_STATUS' &&
         error.response?.data?.error?.details?.current_status === 'failed') {
       showFailedProjectRecoveryUI();
     } else {
-      showToast('シーン分割中にエラーが発生しました', 'error');
-      document.getElementById('formatSection').classList.remove('hidden');
+      // Show detailed error message
+      const errorMsg = error.response?.data?.error?.message || error.message || 'シーン分割中にエラーが発生しました';
+      showToast(errorMsg, 'error');
     }
     
     isProcessing = false;
@@ -1516,6 +1527,7 @@ function escapeHtml(text) {
 
 // ========== Delete Project ==========
 function confirmDeleteProject() {
+  console.log('Delete button clicked, isProcessing:', isProcessing);
   if (confirm('このプロジェクトを削除してもよろしいですか？\n\n関連するすべてのデータ（音声、シーン、画像）が削除されます。この操作は取り消せません。')) {
     deleteProject();
   }
