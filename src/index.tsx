@@ -357,6 +357,13 @@ app.get('/projects/:id', (c) => {
                 >
                     <i class="fas fa-download mr-2"></i>Export
                 </button>
+                <button 
+                    class="px-6 py-4 font-semibold transition-colors tab-inactive touch-manipulation"
+                    id="tabStyles"
+                    onclick="switchTab('styles')"
+                >
+                    <i class="fas fa-palette mr-2"></i>Styles
+                </button>
             </div>
         </div>
 
@@ -732,6 +739,67 @@ app.get('/projects/:id', (c) => {
                     </ul>
                 </div>
             </div>
+
+            <!-- Styles Tab -->
+            <div id="contentStyles" class="hidden">
+                <h2 class="text-xl font-bold text-gray-800 mb-6">
+                    <i class="fas fa-palette mr-2 text-purple-600"></i>
+                    スタイル設定
+                </h2>
+                
+                <!-- Project Default Style -->
+                <div class="mb-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border-2 border-purple-200">
+                    <h3 class="text-lg font-bold text-gray-800 mb-3 flex items-center">
+                        <i class="fas fa-cog mr-2 text-purple-600"></i>
+                        プロジェクトデフォルトスタイル
+                    </h3>
+                    <p class="text-sm text-gray-600 mb-4">画像生成時に適用されるデフォルトスタイルを選択してください</p>
+                    <div class="flex items-center gap-4">
+                        <select 
+                            id="projectDefaultStyle"
+                            class="flex-1 px-4 py-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 transition-all"
+                        >
+                            <option value="">未設定（オリジナルプロンプト）</option>
+                        </select>
+                        <button 
+                            onclick="saveProjectDefaultStyle()"
+                            class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap"
+                        >
+                            <i class="fas fa-save mr-2"></i>保存
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Style Presets List -->
+                <div class="mb-4 flex items-center justify-between">
+                    <h3 class="text-lg font-bold text-gray-800">
+                        <i class="fas fa-list mr-2 text-gray-600"></i>
+                        スタイルプリセット
+                    </h3>
+                    <button 
+                        onclick="showStyleEditor()"
+                        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                    >
+                        <i class="fas fa-plus mr-2"></i>新規作成
+                    </button>
+                </div>
+                
+                <div id="stylePresetsList" class="space-y-3">
+                    <!-- Styles will be rendered here -->
+                </div>
+                
+                <!-- Empty State -->
+                <div id="stylesEmptyState" class="text-center py-12 hidden">
+                    <i class="fas fa-palette text-6xl text-gray-300 mb-4"></i>
+                    <p class="text-gray-600 mb-4">スタイルプリセットがありません</p>
+                    <button 
+                        onclick="showStyleEditor()"
+                        class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                    >
+                        <i class="fas fa-plus mr-2"></i>最初のスタイルを作成
+                    </button>
+                </div>
+            </div>
         </div>
 
         <!-- Toast Notification -->
@@ -759,6 +827,122 @@ app.get('/projects/:id', (c) => {
                 </div>
                 <div id="imageHistoryContent" class="p-6 overflow-y-auto max-h-[70vh]">
                     <!-- History will be rendered here -->
+                </div>
+            </div>
+        </div>
+        
+        <!-- Style Editor Modal -->
+        <div id="styleEditorModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden">
+                <div class="flex items-center justify-between p-6 border-b">
+                    <h3 class="text-xl font-bold text-gray-800">
+                        <i class="fas fa-palette mr-2 text-purple-600"></i>
+                        <span id="styleEditorTitle">スタイル編集</span>
+                    </h3>
+                    <button 
+                        onclick="closeStyleEditor()"
+                        class="text-gray-500 hover:text-gray-700 transition-colors"
+                    >
+                        <i class="fas fa-times text-2xl"></i>
+                    </button>
+                </div>
+                <div class="p-6 overflow-y-auto max-h-[70vh]">
+                    <form id="styleEditorForm" class="space-y-4">
+                        <input type="hidden" id="editingStyleId" value="">
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                スタイル名 <span class="text-red-500">*</span>
+                            </label>
+                            <input 
+                                type="text" 
+                                id="styleName"
+                                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200"
+                                placeholder="例: 日本アニメ風"
+                                required
+                            >
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                説明
+                            </label>
+                            <textarea 
+                                id="styleDescription"
+                                rows="2"
+                                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200"
+                                placeholder="このスタイルの説明を入力"
+                            ></textarea>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                プロンプト接頭辞（Prefix）
+                            </label>
+                            <textarea 
+                                id="stylePromptPrefix"
+                                rows="3"
+                                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 font-mono text-sm"
+                                placeholder="例: Japanese anime style, vibrant colors,"
+                            ></textarea>
+                            <p class="text-xs text-gray-500 mt-1">画像プロンプトの前に追加されます</p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                プロンプト接尾辞（Suffix）
+                            </label>
+                            <textarea 
+                                id="stylePromptSuffix"
+                                rows="3"
+                                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 font-mono text-sm"
+                                placeholder="例: , high quality, detailed"
+                            ></textarea>
+                            <p class="text-xs text-gray-500 mt-1">画像プロンプトの後に追加されます</p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                ネガティブプロンプト
+                            </label>
+                            <textarea 
+                                id="styleNegativePrompt"
+                                rows="2"
+                                class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 font-mono text-sm"
+                                placeholder="例: blur, low quality, distorted"
+                            ></textarea>
+                            <p class="text-xs text-gray-500 mt-1">画像生成時に除外する要素</p>
+                        </div>
+                        
+                        <div class="flex items-center">
+                            <input 
+                                type="checkbox" 
+                                id="styleIsActive"
+                                class="w-5 h-5 text-purple-600 border-gray-300 rounded focus:ring-purple-500"
+                                checked
+                            >
+                            <label for="styleIsActive" class="ml-2 text-sm font-semibold text-gray-700">
+                                有効化
+                            </label>
+                        </div>
+                        
+                        <div class="flex gap-3 pt-4">
+                            <button 
+                                type="button"
+                                onclick="saveStylePreset()"
+                                class="flex-1 px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold"
+                            >
+                                <i class="fas fa-save mr-2"></i>保存
+                            </button>
+                            <button 
+                                type="button"
+                                onclick="closeStyleEditor()"
+                                class="px-6 py-3 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+                            >
+                                キャンセル
+                            </button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </div>

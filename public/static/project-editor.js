@@ -155,7 +155,7 @@ function setButtonLoading(buttonId, isLoading) {
 // ========== Tab Switching ==========
 function switchTab(tabName) {
   // Remove active class from all tabs
-  const tabs = ['Input', 'SceneSplit', 'Builder', 'Export'];
+  const tabs = ['Input', 'SceneSplit', 'Builder', 'Export', 'Styles'];
   tabs.forEach(tab => {
     document.getElementById(`tab${tab}`).classList.remove('tab-active');
     document.getElementById(`tab${tab}`).classList.add('tab-inactive');
@@ -180,6 +180,8 @@ function switchTab(tabName) {
     initBuilderTab();
   } else if (tabName === 'export') {
     initExportTab();
+  } else if (tabName === 'styles') {
+    initStylesTab();
   }
 }
 
@@ -1634,4 +1636,242 @@ async function deleteProject() {
     isProcessing = false;
     setButtonLoading('deleteBtn', false);
   }
+}
+
+// ========== Style Presets Functions ==========
+
+// Initialize Styles tab
+async function initStylesTab() {
+  try {
+    // Load style presets
+    await loadStylePresets();
+    
+    // Load project default style
+    await loadProjectDefaultStyle();
+  } catch (error) {
+    console.error('Init styles tab error:', error);
+    showToast('スタイル設定の読み込みに失敗しました', 'error');
+  }
+}
+
+// Load all style presets
+async function loadStylePresets() {
+  try {
+    const response = await axios.get(`${API_BASE}/style-presets`);
+    const styles = response.data.style_presets || [];
+    
+    const container = document.getElementById('stylePresetsList');
+    const emptyState = document.getElementById('stylesEmptyState');
+    const select = document.getElementById('projectDefaultStyle');
+    
+    if (styles.length === 0) {
+      container.innerHTML = '';
+      emptyState.classList.remove('hidden');
+      return;
+    }
+    
+    emptyState.classList.add('hidden');
+    
+    // Render styles list
+    container.innerHTML = styles.map(style => `
+      <div class="bg-white rounded-lg border-2 ${style.is_active ? 'border-purple-200' : 'border-gray-200'} p-4">
+        <div class="flex items-start justify-between gap-4">
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-2">
+              <h4 class="font-bold text-gray-800">${escapeHtml(style.name)}</h4>
+              ${style.is_active 
+                ? '<span class="text-xs bg-green-100 text-green-800 px-2 py-1 rounded">有効</span>' 
+                : '<span class="text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded">無効</span>'}
+            </div>
+            ${style.description ? `<p class="text-sm text-gray-600 mb-2">${escapeHtml(style.description)}</p>` : ''}
+            <div class="text-xs text-gray-500 space-y-1 font-mono">
+              ${style.prompt_prefix ? `<div>Prefix: ${escapeHtml(style.prompt_prefix.substring(0, 50))}${style.prompt_prefix.length > 50 ? '...' : ''}</div>` : ''}
+              ${style.prompt_suffix ? `<div>Suffix: ${escapeHtml(style.prompt_suffix.substring(0, 50))}${style.prompt_suffix.length > 50 ? '...' : ''}</div>` : ''}
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button 
+              onclick="editStylePreset(${style.id})"
+              class="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors text-sm"
+              title="編集"
+            >
+              <i class="fas fa-edit"></i>
+            </button>
+            <button 
+              onclick="deleteStylePreset(${style.id}, '${escapeHtml(style.name)}')"
+              class="px-3 py-2 bg-red-600 text-white rounded hover:bg-red-700 transition-colors text-sm"
+              title="削除"
+            >
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+    `).join('');
+    
+    // Update dropdown options
+    select.innerHTML = '<option value="">未設定（オリジナルプロンプト）</option>' +
+      styles.filter(s => s.is_active).map(s => 
+        `<option value="${s.id}">${escapeHtml(s.name)}</option>`
+      ).join('');
+      
+  } catch (error) {
+    console.error('Load style presets error:', error);
+    showToast('スタイルプリセットの読み込みに失敗しました', 'error');
+  }
+}
+
+// Load project default style
+async function loadProjectDefaultStyle() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/style-settings`);
+    const defaultStyleId = response.data.default_style_preset_id;
+    
+    const select = document.getElementById('projectDefaultStyle');
+    if (defaultStyleId) {
+      select.value = defaultStyleId;
+    } else {
+      select.value = '';
+    }
+  } catch (error) {
+    console.error('Load project default style error:', error);
+  }
+}
+
+// Save project default style
+async function saveProjectDefaultStyle() {
+  try {
+    const select = document.getElementById('projectDefaultStyle');
+    const styleId = select.value ? parseInt(select.value) : null;
+    
+    await axios.put(`${API_BASE}/projects/${PROJECT_ID}/style-settings`, {
+      default_style_preset_id: styleId
+    });
+    
+    showToast('デフォルトスタイルを保存しました', 'success');
+  } catch (error) {
+    console.error('Save project default style error:', error);
+    showToast('デフォルトスタイルの保存に失敗しました', 'error');
+  }
+}
+
+// Show style editor modal
+function showStyleEditor(styleId = null) {
+  const modal = document.getElementById('styleEditorModal');
+  const title = document.getElementById('styleEditorTitle');
+  const form = document.getElementById('styleEditorForm');
+  
+  // Reset form
+  form.reset();
+  document.getElementById('editingStyleId').value = '';
+  document.getElementById('styleIsActive').checked = true;
+  
+  if (styleId) {
+    // Edit mode
+    title.textContent = 'スタイル編集';
+    loadStyleForEdit(styleId);
+  } else {
+    // Create mode
+    title.textContent = 'スタイル新規作成';
+  }
+  
+  modal.classList.remove('hidden');
+}
+
+// Load style for editing
+async function loadStyleForEdit(styleId) {
+  try {
+    const response = await axios.get(`${API_BASE}/style-presets/${styleId}`);
+    const style = response.data;
+    
+    document.getElementById('editingStyleId').value = style.id;
+    document.getElementById('styleName').value = style.name || '';
+    document.getElementById('styleDescription').value = style.description || '';
+    document.getElementById('stylePromptPrefix').value = style.prompt_prefix || '';
+    document.getElementById('stylePromptSuffix').value = style.prompt_suffix || '';
+    document.getElementById('styleNegativePrompt').value = style.negative_prompt || '';
+    document.getElementById('styleIsActive').checked = style.is_active === 1;
+  } catch (error) {
+    console.error('Load style for edit error:', error);
+    showToast('スタイルの読み込みに失敗しました', 'error');
+  }
+}
+
+// Save style preset
+async function saveStylePreset() {
+  try {
+    const styleId = document.getElementById('editingStyleId').value;
+    const name = document.getElementById('styleName').value.trim();
+    const description = document.getElementById('styleDescription').value.trim();
+    const promptPrefix = document.getElementById('stylePromptPrefix').value.trim();
+    const promptSuffix = document.getElementById('stylePromptSuffix').value.trim();
+    const negativePrompt = document.getElementById('styleNegativePrompt').value.trim();
+    const isActive = document.getElementById('styleIsActive').checked ? 1 : 0;
+    
+    if (!name) {
+      showToast('スタイル名を入力してください', 'error');
+      return;
+    }
+    
+    const data = {
+      name,
+      description: description || null,
+      prompt_prefix: promptPrefix || null,
+      prompt_suffix: promptSuffix || null,
+      negative_prompt: negativePrompt || null,
+      is_active: isActive
+    };
+    
+    if (styleId) {
+      // Update
+      await axios.put(`${API_BASE}/style-presets/${styleId}`, data);
+      showToast('スタイルを更新しました', 'success');
+    } else {
+      // Create
+      await axios.post(`${API_BASE}/style-presets`, data);
+      showToast('スタイルを作成しました', 'success');
+    }
+    
+    closeStyleEditor();
+    await loadStylePresets();
+    await loadProjectDefaultStyle();
+    
+  } catch (error) {
+    console.error('Save style preset error:', error);
+    showToast('スタイルの保存に失敗しました', 'error');
+  }
+}
+
+// Edit style preset
+function editStylePreset(styleId) {
+  showStyleEditor(styleId);
+}
+
+// Delete style preset
+async function deleteStylePreset(styleId, styleName) {
+  if (!confirm(`スタイル「${styleName}」を削除しますか？`)) {
+    return;
+  }
+  
+  try {
+    await axios.delete(`${API_BASE}/style-presets/${styleId}`);
+    showToast('スタイルを削除しました', 'success');
+    await loadStylePresets();
+    await loadProjectDefaultStyle();
+  } catch (error) {
+    console.error('Delete style preset error:', error);
+    showToast('スタイルの削除に失敗しました', 'error');
+  }
+}
+
+// Close style editor modal
+function closeStyleEditor() {
+  document.getElementById('styleEditorModal').classList.add('hidden');
+}
+
+// HTML escape utility
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
