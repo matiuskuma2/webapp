@@ -1043,9 +1043,16 @@ async function initBuilderTab() {
   `;
   
   try {
-    // Builder用軽量版API（画像URL + ステータスのみ）
-    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
-    const scenes = response.data.scenes || [];
+    // Load style presets and scenes in parallel
+    const [scenesResponse, stylesResponse, projectStyleResponse] = await Promise.all([
+      axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`),
+      axios.get(`${API_BASE}/style-presets`),
+      axios.get(`${API_BASE}/projects/${PROJECT_ID}/style-settings`)
+    ]);
+    
+    const scenes = scenesResponse.data.scenes || [];
+    window.builderStylePresets = stylesResponse.data.style_presets || [];
+    window.builderProjectDefaultStyle = projectStyleResponse.data.default_style_preset_id || null;
     
     if (scenes.length === 0) {
       document.getElementById('builderScenesList').classList.add('hidden');
@@ -1210,6 +1217,39 @@ ${escapeHtml(scene.dialogue)}
                 rows="3"
                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
               >${escapeHtml(scene.image_prompt)}</textarea>
+            </div>
+            
+            <!-- Style Selector -->
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">
+                <i class="fas fa-palette mr-1 text-purple-600"></i>スタイル
+              </label>
+              <div class="flex gap-2">
+                <select 
+                  id="sceneStyle-${scene.id}"
+                  class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+                  onchange="setSceneStyle(${scene.id})"
+                >
+                  ${renderStyleOptions(scene.style_preset_id)}
+                </select>
+                ${scene.style_preset_id 
+                  ? `<button 
+                       onclick="clearSceneStyle(${scene.id})"
+                       class="px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors text-sm whitespace-nowrap"
+                       title="デフォルトに戻す"
+                     >
+                       <i class="fas fa-times"></i>
+                     </button>`
+                  : ''
+                }
+              </div>
+              <p class="text-xs text-gray-500 mt-1">
+                ${scene.style_preset_id 
+                  ? 'シーン専用スタイル設定中' 
+                  : window.builderProjectDefaultStyle 
+                    ? 'プロジェクトデフォルトを使用' 
+                    : '未設定（オリジナルプロンプト）'}
+              </p>
             </div>
           </div>
           
@@ -1874,4 +1914,58 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+// ========== Builder Style Functions ==========
+
+// Render style options for scene
+function renderStyleOptions(currentStyleId) {
+  const presets = window.builderStylePresets || [];
+  const activePresets = presets.filter(p => p.is_active);
+  
+  let options = '<option value="">未設定（プロジェクトデフォルト）</option>';
+  
+  activePresets.forEach(preset => {
+    const selected = currentStyleId === preset.id ? 'selected' : '';
+    options += `<option value="${preset.id}" ${selected}>${escapeHtml(preset.name)}</option>`;
+  });
+  
+  return options;
+}
+
+// Set scene style (called when dropdown changes)
+async function setSceneStyle(sceneId) {
+  const select = document.getElementById(`sceneStyle-${sceneId}`);
+  const styleId = select.value ? parseInt(select.value) : null;
+  
+  try {
+    await axios.put(`${API_BASE}/scenes/${sceneId}/style`, {
+      style_preset_id: styleId
+    });
+    
+    showToast('スタイルを設定しました', 'success');
+    
+    // Reload builder to reflect changes
+    await initBuilderTab();
+  } catch (error) {
+    console.error('Set scene style error:', error);
+    showToast('スタイル設定に失敗しました', 'error');
+  }
+}
+
+// Clear scene style (revert to project default)
+async function clearSceneStyle(sceneId) {
+  try {
+    await axios.put(`${API_BASE}/scenes/${sceneId}/style`, {
+      style_preset_id: null
+    });
+    
+    showToast('デフォルトに戻しました', 'success');
+    
+    // Reload builder to reflect changes
+    await initBuilderTab();
+  } catch (error) {
+    console.error('Clear scene style error:', error);
+    showToast('スタイルのクリアに失敗しました', 'error');
+  }
 }
