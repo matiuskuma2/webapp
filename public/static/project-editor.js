@@ -472,6 +472,34 @@ async function formatAndSplit() {
       }
     }
     
+    // For text projects, ensure parse → format flow
+    if (currentProject.source_type === 'text') {
+      // Parse if status='uploaded' (text saved but not parsed yet)
+      if (currentProject.status === 'uploaded') {
+        try {
+          const parseResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/parse`);
+          
+          if (parseResponse.data.error) {
+            showToast(parseResponse.data.error.message || 'テキスト分割に失敗しました', 'error');
+            document.getElementById('formatSection').classList.remove('hidden');
+            isProcessing = false;
+            setButtonLoading('formatBtn', false);
+            return;
+          }
+          
+          // Wait for parse to complete
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+          console.error('Parse error:', error);
+          showToast('テキスト分割中にエラーが発生しました', 'error');
+          document.getElementById('formatSection').classList.remove('hidden');
+          isProcessing = false;
+          setButtonLoading('formatBtn', false);
+          return;
+        }
+      }
+    }
+    
     // Initial format call
     const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
     
