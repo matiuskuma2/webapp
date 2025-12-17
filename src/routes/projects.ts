@@ -143,12 +143,13 @@ projects.post('/:id/upload', async (c) => {
       }
     })
 
-    // DB更新
+    // DB更新 (CRITICAL: source_type='audio' must be set for proper flow detection)
     await c.env.DB.prepare(`
       UPDATE projects
       SET audio_r2_key = ?,
           audio_filename = ?,
           audio_size_bytes = ?,
+          source_type = 'audio',
           status = 'uploaded',
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
