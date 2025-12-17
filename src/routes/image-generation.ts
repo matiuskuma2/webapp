@@ -92,8 +92,13 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
     for (const scene of pendingScenes) {
       try {
-        // 最終プロンプト生成
-        const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+        // 最終プロンプト生成（スタイルプリセット適用）
+        const finalPrompt = await composeStyledPrompt(
+          c.env.DB,
+          parseInt(projectId),
+          scene.id as number,
+          scene.image_prompt as string
+        )
 
         // image_generationsレコード作成（generating状態）
         const insertResult = await c.env.DB.prepare(`
@@ -285,10 +290,23 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 400)
     }
 
-    // 4. 最終プロンプト生成
-    const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+    // 4. スタイル設定取得（優先順位: シーン個別 > プロジェクトデフォルト > 未設定）
+    const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer')
+    
+    const styleSettings = await fetchSceneStyleSettings(
+      c.env.DB,
+      parseInt(sceneId),
+      scene.project_id as number
+    )
+    
+    const effectiveStyleId = getEffectiveStylePresetId(styleSettings)
+    const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
+    
+    // 5. 最終プロンプト生成（スタイル適用）
+    const basePrompt = buildImagePrompt(scene.image_prompt as string)
+    const finalPrompt = composeFinalPrompt(basePrompt, stylePreset)
 
-    // 5. image_generationsレコード作成（pending状態）
+    // 6. image_generationsレコード作成（pending状態）
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO image_generations (
         scene_id, prompt, status, provider, model, is_active
@@ -297,12 +315,12 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
     const generationId = insertResult.meta.last_row_id as number
 
-    // 6. ステータスを 'generating' に更新
+    // 7. ステータスを 'generating' に更新
     await c.env.DB.prepare(`
       UPDATE image_generations SET status = 'generating' WHERE id = ?
     `).bind(generationId).run()
 
-    // 7. Gemini APIで画像生成（429リトライ付き）
+    // 8. Gemini APIで画像生成（429リトライ付き）
     const imageResult = await generateImageWithRetry(
       finalPrompt,
       c.env.GEMINI_API_KEY,
@@ -325,7 +343,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 500)
     }
 
-    // 8. R2に画像保存
+    // 9. R2に画像保存
     const r2Key = buildR2Key(
       scene.project_id as number,
       scene.idx as number,
