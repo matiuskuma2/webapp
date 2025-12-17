@@ -1456,6 +1456,9 @@ async function generateSceneImage(sceneId) {
       showToast('画像生成を開始しました', 'success');
       // Refresh builder to show generating status
       await initBuilderTab();
+      
+      // Start polling for completion
+      pollSceneImageGeneration(sceneId);
     } else {
       showToast('画像生成に失敗しました', 'error');
     }
@@ -2014,4 +2017,51 @@ async function clearSceneStyle(sceneId) {
     console.error('Clear scene style error:', error);
     showToast('スタイルのクリアに失敗しました', 'error');
   }
+}
+
+// ========== Image Generation Polling ==========
+
+// Poll for single scene image generation completion
+function pollSceneImageGeneration(sceneId) {
+  const maxAttempts = 60; // 5 minutes (5s interval)
+  let attempts = 0;
+  
+  const pollInterval = setInterval(async () => {
+    attempts++;
+    
+    try {
+      // Get scene details
+      const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
+      const scene = response.data.scenes?.find(s => s.id === sceneId);
+      
+      if (!scene) {
+        console.error('Scene not found:', sceneId);
+        clearInterval(pollInterval);
+        return;
+      }
+      
+      const imageStatus = scene.latest_image?.status;
+      
+      console.log(`Scene ${sceneId} image status:`, imageStatus);
+      
+      if (imageStatus === 'completed') {
+        clearInterval(pollInterval);
+        showToast('画像生成が完了しました', 'success');
+        await initBuilderTab();
+      } else if (imageStatus === 'failed') {
+        clearInterval(pollInterval);
+        const errorMsg = scene.latest_image?.error_message || '画像生成に失敗しました';
+        showToast(errorMsg, 'error');
+        await initBuilderTab();
+      } else if (attempts >= maxAttempts) {
+        clearInterval(pollInterval);
+        showToast('画像生成がタイムアウトしました。ページを再読み込みしてください。', 'warning');
+        await initBuilderTab();
+      }
+      
+    } catch (error) {
+      console.error('Poll scene image error:', error);
+      clearInterval(pollInterval);
+    }
+  }, 5000); // Poll every 5 seconds
 }
