@@ -564,6 +564,28 @@ app.get('/projects/:id', (c) => {
                 
                 <!-- Top Action Bar -->
                 <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
+                    <!-- Bulk Style Selection -->
+                    <div class="mb-4 pb-4 border-b border-gray-300">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-palette mr-1 text-purple-600"></i>一括スタイル設定
+                        </label>
+                        <div class="flex gap-2">
+                            <select 
+                                id="bulkStyleSelector"
+                                class="flex-1 px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-sm"
+                            >
+                                <option value="">未設定（プロジェクトデフォルト）</option>
+                            </select>
+                            <button 
+                                onclick="applyBulkStyle()"
+                                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap"
+                            >
+                                <i class="fas fa-check mr-2"></i>全シーンに適用
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">すべてのシーンに同じスタイルを一括設定できます</p>
+                    </div>
+                    
                     <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                         <!-- Bulk Generation Buttons -->
                         <div class="flex flex-wrap gap-2">
@@ -868,40 +890,43 @@ app.get('/projects/:id', (c) => {
                         <div>
                             <label class="block text-sm font-semibold text-gray-700 mb-2">
                                 プロンプト接頭辞（Prefix）
+                                <span class="ml-2 text-xs font-normal text-blue-600">日本語OK</span>
                             </label>
                             <textarea 
                                 id="stylePromptPrefix"
                                 rows="3"
                                 class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 font-mono text-sm"
-                                placeholder="例: Japanese anime style, vibrant colors,"
+                                placeholder="例: 日本のアニメ風、鮮やかな色彩"
                             ></textarea>
-                            <p class="text-xs text-gray-500 mt-1">画像プロンプトの前に追加されます</p>
+                            <p class="text-xs text-gray-500 mt-1">画像プロンプトの<strong>前</strong>に追加されます（スタイルや雰囲気の指定に使用）</p>
                         </div>
                         
                         <div>
                             <label class="block text-sm font-semibold text-gray-700 mb-2">
                                 プロンプト接尾辞（Suffix）
+                                <span class="ml-2 text-xs font-normal text-blue-600">日本語OK</span>
                             </label>
                             <textarea 
                                 id="stylePromptSuffix"
                                 rows="3"
                                 class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 font-mono text-sm"
-                                placeholder="例: , high quality, detailed"
+                                placeholder="例: 高品質、詳細、4K解像度"
                             ></textarea>
-                            <p class="text-xs text-gray-500 mt-1">画像プロンプトの後に追加されます</p>
+                            <p class="text-xs text-gray-500 mt-1">画像プロンプトの<strong>後</strong>に追加されます（品質やカメラアングルの指定に使用）</p>
                         </div>
                         
                         <div>
                             <label class="block text-sm font-semibold text-gray-700 mb-2">
                                 ネガティブプロンプト
+                                <span class="ml-2 text-xs font-normal text-blue-600">日本語OK</span>
                             </label>
                             <textarea 
                                 id="styleNegativePrompt"
                                 rows="2"
                                 class="w-full px-4 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 font-mono text-sm"
-                                placeholder="例: blur, low quality, distorted"
+                                placeholder="例: ぼやけ、低品質、歪み"
                             ></textarea>
-                            <p class="text-xs text-gray-500 mt-1">画像生成時に除外する要素</p>
+                            <p class="text-xs text-gray-500 mt-1">画像生成時に除外する要素（現在Geminiでは未対応）</p>
                         </div>
                         
                         <div class="flex items-center">

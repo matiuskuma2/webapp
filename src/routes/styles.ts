@@ -13,7 +13,7 @@ styles.get('/style-presets', async (c) => {
       ORDER BY created_at ASC
     `).all()
 
-    return c.json({ presets })
+    return c.json({ style_presets: presets })
   } catch (error) {
     console.error('Error fetching style presets:', error)
     return c.json({

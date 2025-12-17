@@ -1087,6 +1087,15 @@ async function initBuilderTab() {
     window.builderStylePresets = stylesResponse.data.style_presets || [];
     window.builderProjectDefaultStyle = projectStyleResponse.data.default_style_preset_id || null;
     
+    // Update bulk style selector
+    const bulkStyleSelector = document.getElementById('bulkStyleSelector');
+    if (bulkStyleSelector) {
+      bulkStyleSelector.innerHTML = '<option value="">未設定（プロジェクトデフォルト）</option>' +
+        window.builderStylePresets.filter(s => s.is_active).map(s => 
+          `<option value="${s.id}">${escapeHtml(s.name)}</option>`
+        ).join('');
+    }
+    
     if (scenes.length === 0) {
       document.getElementById('builderScenesList').classList.add('hidden');
       document.getElementById('builderEmptyState').classList.remove('hidden');
@@ -2020,6 +2029,51 @@ async function clearSceneStyle(sceneId) {
 }
 
 // ========== Image Generation Polling ==========
+
+// Apply bulk style to all scenes
+async function applyBulkStyle() {
+  const select = document.getElementById('bulkStyleSelector');
+  const styleId = select.value ? parseInt(select.value) : null;
+  
+  if (!confirm(`すべてのシーンに同じスタイルを適用しますか？\n\n選択したスタイル: ${select.options[select.selectedIndex].text}`)) {
+    return;
+  }
+  
+  try {
+    // Get all scenes
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+    const scenes = response.data.scenes || [];
+    
+    if (scenes.length === 0) {
+      showToast('シーンがありません', 'warning');
+      return;
+    }
+    
+    showToast(`${scenes.length}シーンにスタイルを適用中...`, 'info');
+    
+    // Apply style to each scene
+    let successCount = 0;
+    for (const scene of scenes) {
+      try {
+        await axios.put(`${API_BASE}/scenes/${scene.id}/style`, {
+          style_preset_id: styleId
+        });
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to apply style to scene ${scene.id}:`, error);
+      }
+    }
+    
+    showToast(`${successCount}/${scenes.length}シーンにスタイルを適用しました`, 'success');
+    
+    // Reload builder
+    await initBuilderTab();
+    
+  } catch (error) {
+    console.error('Apply bulk style error:', error);
+    showToast('一括スタイル適用に失敗しました', 'error');
+  }
+}
 
 // Poll for single scene image generation completion
 function pollSceneImageGeneration(sceneId) {
