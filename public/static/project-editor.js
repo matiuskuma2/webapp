@@ -575,7 +575,32 @@ function startFormatPolling() {
       if (data.status === 'formatted') {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
-        await onFormatComplete(data);
+        
+        // Get actual scene count from scenes API
+        try {
+          const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+          const sceneCount = scenesResponse.data.scenes?.length || 0;
+          
+          await onFormatComplete({
+            total_scenes: sceneCount,
+            chunk_stats: {
+              total: data.total_chunks,
+              processed: data.processed,
+              failed: data.failed
+            }
+          });
+        } catch (error) {
+          console.error('Failed to get scenes count:', error);
+          // Fallback: estimate from chunks
+          await onFormatComplete({
+            total_scenes: data.processed * 2, // Rough estimate: 2 scenes per chunk
+            chunk_stats: {
+              total: data.total_chunks,
+              processed: data.processed,
+              failed: data.failed
+            }
+          });
+        }
       } else if (data.status === 'formatting') {
         // Continue polling, check if all chunks are done
         if (data.pending === 0 && data.processing === 0) {
@@ -631,13 +656,16 @@ function updateFormatProgress(data) {
 
 // On format complete
 async function onFormatComplete(data) {
-  const { total_scenes, chunk_stats } = data;
+  const { total_scenes, chunk_stats, failed } = data;
+  
+  // Calculate failed count from either chunk_stats or direct failed field
+  const failedCount = chunk_stats?.failed ?? failed ?? 0;
   
   // Show completion message
-  if (chunk_stats.failed > 0) {
-    showToast(`完了！${total_scenes}シーンを生成しました（一部チャンク失敗: ${chunk_stats.failed}件）`, 'warning');
+  if (failedCount > 0) {
+    showToast(`完了！${total_scenes || 0}シーンを生成しました（一部チャンク失敗: ${failedCount}件）`, 'warning');
   } else {
-    showToast(`完了！${total_scenes}シーンを生成しました`, 'success');
+    showToast(`完了！${total_scenes || 0}シーンを生成しました`, 'success');
   }
   
   // キャッシュクリア（新しいシーンが生成された）
