@@ -590,25 +590,15 @@ app.get('/projects/:id', (c) => {
                             </button>
                         </div>
                         
-                        <!-- Download Buttons -->
-                        <div class="flex flex-wrap gap-2">
+                        <!-- Export Navigation -->
+                        <div class="flex items-center gap-3">
+                            <span class="text-sm text-gray-600">書き出しは →</span>
                             <button 
-                                onclick="downloadImages()"
-                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
+                                onclick="switchTab('export')"
+                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation flex items-center gap-2"
                             >
-                                <i class="fas fa-download mr-2"></i>images.zip
-                            </button>
-                            <button 
-                                onclick="downloadCSV()"
-                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
-                            >
-                                <i class="fas fa-file-csv mr-2"></i>dialogue.csv
-                            </button>
-                            <button 
-                                onclick="downloadAll()"
-                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
-                            >
-                                <i class="fas fa-archive mr-2"></i>all.zip
+                                <i class="fas fa-download"></i>
+                                Exportタブへ
                             </button>
                         </div>
                     </div>
