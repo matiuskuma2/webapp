@@ -13,6 +13,7 @@ import images from './routes/images'
 import debug from './routes/debug'
 import runs from './routes/runs'
 import runsV2 from './routes/runs-v2'
+import styles from './routes/styles'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -48,6 +49,9 @@ app.route('/api/images', images) // For /api/images/:id/activate
 app.route('/api', imageGeneration) // For /api/scenes/:id/generate-image
 app.route('/api/debug', debug) // For /api/debug/env (temporary)
 app.route('/images', images) // For direct R2 image access
+
+// Style presets routes
+app.route('/api', styles) // For /api/style-presets, /api/projects/:id/style-settings, /api/scenes/:id/style
 
 // Run management routes (Phase B-0 & B-1)
 app.route('/api', runs) // For /api/projects/:projectId/runs, /api/runs/:runId
