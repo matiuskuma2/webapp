@@ -601,8 +601,11 @@ function startFormatPolling() {
       
       updateFormatProgress(data);
       
+      console.log('Format polling status:', data.status, 'processed:', data.processed, 'pending:', data.pending);
+      
       // Check if completed
       if (data.status === 'formatted') {
+        console.log('Format completed, stopping polling');
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         
@@ -610,6 +613,8 @@ function startFormatPolling() {
         try {
           const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
           const sceneCount = scenesResponse.data.scenes?.length || 0;
+          
+          console.log('Scene count:', sceneCount);
           
           await onFormatComplete({
             total_scenes: sceneCount,
@@ -1456,7 +1461,18 @@ async function generateSceneImage(sceneId) {
     }
   } catch (error) {
     console.error('Generate image error:', error);
-    showToast('画像生成中にエラーが発生しました', 'error');
+    
+    // Log detailed error information
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      
+      // Show detailed error message
+      const errorMsg = error.response.data?.error?.message || error.message || '画像生成中にエラーが発生しました';
+      showToast(errorMsg, 'error');
+    } else {
+      showToast('画像生成中にエラーが発生しました', 'error');
+    }
   } finally {
     sceneProcessing[sceneId] = false;
     setButtonLoading(`generateBtn-${sceneId}`, false);
@@ -1777,11 +1793,13 @@ async function loadStylePresets() {
       </div>
     `).join('');
     
-    // Update dropdown options
-    select.innerHTML = '<option value="">未設定（オリジナルプロンプト）</option>' +
-      styles.filter(s => s.is_active).map(s => 
-        `<option value="${s.id}">${escapeHtml(s.name)}</option>`
-      ).join('');
+    // Update dropdown options (check if element exists)
+    if (select) {
+      select.innerHTML = '<option value="">未設定（オリジナルプロンプト）</option>' +
+        styles.filter(s => s.is_active).map(s => 
+          `<option value="${s.id}">${escapeHtml(s.name)}</option>`
+        ).join('');
+    }
       
   } catch (error) {
     console.error('Load style presets error:', error);
