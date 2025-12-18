@@ -326,12 +326,16 @@ projects.get('/:id/scenes', async (c) => {
       }, 404)
     }
 
-    // シーン一覧取得（idx順）
+    // シーン一覧取得（idx順、スタイル設定含む）
     const { results: scenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, bullets, image_prompt, chunk_id, created_at, updated_at
-      FROM scenes
-      WHERE project_id = ?
-      ORDER BY idx ASC
+      SELECT 
+        s.id, s.idx, s.role, s.title, s.dialogue, s.bullets, s.image_prompt, 
+        s.chunk_id, s.created_at, s.updated_at,
+        sss.style_preset_id
+      FROM scenes s
+      LEFT JOIN scene_style_settings sss ON s.id = sss.scene_id
+      WHERE s.project_id = ?
+      ORDER BY s.idx ASC
     `).bind(projectId).all()
 
     // view=edit: 画像情報なし（Scene Split用、超軽量）
@@ -380,6 +384,7 @@ projects.get('/:id/scenes', async (c) => {
             dialogue: scene.dialogue.substring(0, 100), // 最初の100文字のみ
             bullets: JSON.parse(scene.bullets),
             image_prompt: scene.image_prompt.substring(0, 100), // 最初の100文字のみ
+            style_preset_id: scene.style_preset_id || null,
             active_image: activeRecord ? { image_url: `/${activeRecord.r2_key}` } : null,
             latest_image: latestRecord ? {
               status: latestRecord.status,

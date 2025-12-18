@@ -1094,6 +1094,11 @@ async function initBuilderTab() {
         window.builderStylePresets.filter(s => s.is_active).map(s => 
           `<option value="${s.id}">${escapeHtml(s.name)}</option>`
         ).join('');
+      
+      // Set project default style as selected
+      if (window.builderProjectDefaultStyle) {
+        bulkStyleSelector.value = window.builderProjectDefaultStyle;
+      }
     }
     
     if (scenes.length === 0) {
@@ -1897,7 +1902,15 @@ async function loadStyleForEdit(styleId) {
 
 // Save style preset
 async function saveStylePreset() {
+  // Prevent double submission
+  if (window.styleSaving) {
+    showToast('保存中です。しばらくお待ちください', 'warning');
+    return;
+  }
+  
   try {
+    window.styleSaving = true;
+    
     const styleId = document.getElementById('editingStyleId').value;
     const name = document.getElementById('styleName').value.trim();
     const description = document.getElementById('styleDescription').value.trim();
@@ -1908,6 +1921,7 @@ async function saveStylePreset() {
     
     if (!name) {
       showToast('スタイル名を入力してください', 'error');
+      window.styleSaving = false;
       return;
     }
     
@@ -1937,6 +1951,8 @@ async function saveStylePreset() {
   } catch (error) {
     console.error('Save style preset error:', error);
     showToast('スタイルの保存に失敗しました', 'error');
+  } finally {
+    window.styleSaving = false;
   }
 }
 
