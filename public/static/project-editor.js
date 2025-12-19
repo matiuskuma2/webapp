@@ -205,6 +205,16 @@ async function initSceneSplitTab() {
   
   document.getElementById('sceneSplitGuide').classList.add('hidden');
   
+  // ===== AUTO-RESUME: If status is 'formatting', resume polling =====
+  if (currentProject.status === 'formatting') {
+    console.log('Detected formatting status, auto-resuming polling...');
+    document.getElementById('formatSection').classList.add('hidden');
+    document.getElementById('scenesSection').classList.add('hidden');
+    showFormatProgressUI();
+    startFormatPolling();
+    return;
+  }
+  
   // ローディング表示（初回のみ）
   const scenesList = document.getElementById('scenesList');
   if (!window.sceneSplitLoaded) {
@@ -637,10 +647,19 @@ function startFormatPolling() {
           });
         }
       } else if (data.status === 'formatting') {
-        // Continue polling, check if all chunks are done
-        if (data.pending === 0 && data.processing === 0) {
+        // Continue polling and trigger next batch if pending > 0
+        if (data.pending > 0 && data.processing === 0) {
+          // Still have pending chunks, trigger next batch
+          try {
+            console.log('Triggering next batch: pending =', data.pending);
+            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
+          } catch (error) {
+            console.error('Next batch format call error:', error);
+          }
+        } else if (data.pending === 0 && data.processing === 0) {
           // All chunks done, trigger one more format call to merge
           try {
+            console.log('All chunks done, triggering final merge');
             await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
           } catch (error) {
             console.error('Final format call error:', error);

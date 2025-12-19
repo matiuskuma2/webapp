@@ -36,6 +36,7 @@ parsing (テキスト分割中)
 parsed (テキスト分割完了)
    ↓
 formatting (シナリオ生成中、chunk単位処理)
+   │  ※ ページリロード時は自動的にポーリング再開 ✅
    ↓
 formatted (シナリオ生成完了)
    ↓
@@ -55,6 +56,7 @@ parsing (テキスト分割中)
 parsed (テキスト分割完了)
    ↓
 formatting (シナリオ生成中、chunk単位処理)
+   │  ※ ページリロード時は自動的にポーリング再開 ✅
    ↓
 formatted (シナリオ生成完了)
    ↓
@@ -606,6 +608,60 @@ await db.prepare(`
   WHERE id = ?
 `).bind(projectId).run()
 ```
+
+---
+
+## 🚀 【2025-01-19 追加】ページリロード時の自動再開機能
+
+### 問題
+ユーザーがシーン分割処理中（`status='formatting'`）にページをリロードした場合、JavaScriptのポーリングが停止し、処理が途中で止まったように見える問題が発生していました。
+
+**症状:**
+- UI: 「シーン化中… (3 / 16)」で停止
+- 実際のDB状態: `processed=3, pending=13, processing=0`
+- リロード後、再生成ボタンを押しても反応なし
+
+### 根本原因
+- クライアント側のポーリングはJavaScript実行中のみ有効
+- ページリロードでJavaScript実行がリセット
+- サーバーサイドは自動再開メカニズムを持たない（API呼び出し待ち）
+
+### 解決策
+`initSceneSplitTab()`関数に自動再開ロジックを追加：
+
+```javascript
+async function initSceneSplitTab() {
+  // ... 既存のコード ...
+
+  // ===== AUTO-RESUME: If status is 'formatting', resume polling =====
+  if (currentProject.status === 'formatting') {
+    console.log('Detected formatting status, auto-resuming polling...');
+    document.getElementById('formatSection').classList.add('hidden');
+    document.getElementById('scenesSection').classList.add('hidden');
+    showFormatProgressUI();
+    startFormatPolling();
+    return;
+  }
+
+  // ... 既存のコード ...
+}
+```
+
+### 効果
+✅ **ページリロード時に自動的にポーリングを再開**
+- `status='formatting'`を検出した場合、進捗UIを表示
+- `startFormatPolling()`を自動実行し、処理を継続
+- `pending > 0 && processing === 0`の場合、Format APIを自動呼び出し
+
+✅ **ユーザー体験の向上**
+- リロードしても処理が継続される
+- 進捗表示が正確に反映される
+- 「途中で止まった」と誤解されない
+
+### 検証結果（Project 26）
+- **開始時**: processed=3, pending=13
+- **手動トリガー**: 全16チャンクを処理完了
+- **最終結果**: 48シーン生成、status='formatted'
 
 ---
 
