@@ -18,6 +18,7 @@
 ### 3. 詳細仕様
 - **06_UI_SPECS.md** - UI/UX仕様
 - **07_WORKFLOWS.md** - ワークフロー・状態遷移
+- **10_INPUT_PROCESSING.md** - インプット処理フロー詳細
 - **12_IMAGE_PROMPT_TEMPLATE.md** - 画像プロンプトテンプレート
 
 ### 4. 変更履歴
@@ -58,9 +59,10 @@
 | 07_WORKFLOWS.md | ワークフロー・状態遷移 |
 | 08_CHANGELOG.md | 変更履歴 |
 | 09_AI_DEV_RULES.md | AI開発ルール |
+| 10_INPUT_PROCESSING.md | インプット処理フロー詳細 |
 | 11_GENS_PARK_DEV_BRIEF.md | GensPark開発環境ブリーフ |
 | 12_IMAGE_PROMPT_TEMPLATE.md | 画像プロンプトテンプレート |
 
 ---
 
-最終更新: 2025-01-13
+最終更新: 2025-01-19
