@@ -6,7 +6,8 @@
 - **プロジェクト名**: webapp
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://152567a4.webapp-c7n.pages.dev
-- **GitHub**: https://github.com/your-org/webapp
+- **GitHub**: https://github.com/matiuskuma2/webapp
+- **最新デプロイ待ち**: commit 3491812（一括スタイル適用UI修正）
 
 ---
 
