@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types/bindings'
-import { buildImagePrompt, buildR2Key } from '../utils/image-prompt-builder'
+import { buildImagePrompt, buildR2Key, composeStyledPrompt } from '../utils/image-prompt-builder'
 
 const imageGeneration = new Hono<{ Bindings: Bindings }>()
 
