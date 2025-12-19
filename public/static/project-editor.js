@@ -1096,10 +1096,12 @@ async function initBuilderTab() {
   
   try {
     // Load style presets and scenes in parallel
+    // Add cache buster to force fresh data
+    const cacheBuster = Date.now();
     const [scenesResponse, stylesResponse, projectStyleResponse] = await Promise.all([
-      axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`),
-      axios.get(`${API_BASE}/style-presets`),
-      axios.get(`${API_BASE}/projects/${PROJECT_ID}/style-settings`)
+      axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board&_t=${cacheBuster}`),
+      axios.get(`${API_BASE}/style-presets?_t=${cacheBuster}`),
+      axios.get(`${API_BASE}/projects/${PROJECT_ID}/style-settings?_t=${cacheBuster}`)
     ]);
     
     const scenes = scenesResponse.data.scenes || [];
@@ -1233,6 +1235,11 @@ function renderBuilderScenes(scenes) {
   
   // フィルタリング適用（グローバル変数 currentFilter）
   const filteredScenes = filterScenes(scenes, window.currentFilter || 'all');
+  
+  // Debug: Log first scene's style_preset_id
+  if (filteredScenes.length > 0) {
+    console.log(`[Builder] Rendering ${filteredScenes.length} scenes. First scene style_preset_id:`, filteredScenes[0].style_preset_id);
+  }
   
   container.innerHTML = filteredScenes.map((scene) => {
     const activeImage = scene.active_image || null;
@@ -2021,6 +2028,11 @@ function renderStyleOptions(currentStyleId) {
   activePresets.forEach(preset => {
     const selected = currentStyleId === preset.id ? 'selected' : '';
     options += `<option value="${preset.id}" ${selected}>${escapeHtml(preset.name)}</option>`;
+    
+    // Debug log when a style is selected
+    if (currentStyleId === preset.id) {
+      console.log(`[Style] Selected preset for currentStyleId=${currentStyleId}: ${preset.name} (id=${preset.id})`);
+    }
   });
   
   return options;
@@ -2099,6 +2111,7 @@ async function applyBulkStyle() {
       }
     }
     
+    console.log(`[BulkStyle] Applied style ${styleId} to ${successCount}/${scenes.length} scenes. Reloading builder...`);
     showToast(`${successCount}/${scenes.length}シーンにスタイルを適用しました`, 'success');
     
     // Reload builder
