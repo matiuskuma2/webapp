@@ -28,6 +28,21 @@ projects.post('/', async (c) => {
 
     const projectId = result.meta.last_row_id as number
 
+    // Set default style preset to "インフォグラフィック" (ID=9)
+    // Query to find "インフォグラフィック" style preset
+    const defaultStyle = await c.env.DB.prepare(`
+      SELECT id FROM style_presets 
+      WHERE name = 'インフォグラフィック' AND is_active = 1
+      LIMIT 1
+    `).first()
+
+    if (defaultStyle) {
+      await c.env.DB.prepare(`
+        INSERT INTO project_style_settings (project_id, default_style_preset_id)
+        VALUES (?, ?)
+      `).bind(projectId, defaultStyle.id).run()
+    }
+
     // Phase B-2: Auto-create Run #1 for new project
     const runResult = await c.env.DB.prepare(`
       INSERT INTO runs (project_id, run_no, state, title, source_type)
