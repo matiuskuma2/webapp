@@ -4,6 +4,7 @@ const API_BASE = '/api';
 // Global state
 let currentProject = null;
 let isProcessing = false; // ボタン連打防止用フラグ（グローバル処理用）
+let isBulkImageGenerating = false; // 一括画像生成中フラグ
 let sceneProcessing = {}; // 行単位ロック用 { sceneId: boolean }
 let mediaRecorder = null;
 let audioChunks = [];
@@ -1356,16 +1357,18 @@ ${escapeHtml(scene.dialogue)}
                 ? `<button 
                      id="generateBtn-${scene.id}"
                      onclick="generateSceneImage(${scene.id})"
-                     class="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold touch-manipulation"
+                     class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
+                     ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
                    >
-                     <i class="fas fa-magic mr-2"></i>画像生成
+                     <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-magic'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '画像生成'}
                    </button>`
                 : `<button 
                      id="regenerateBtn-${scene.id}"
                      onclick="regenerateSceneImage(${scene.id})"
-                     class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation"
+                     class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
+                     ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
                    >
-                     <i class="fas fa-redo mr-2"></i>再生成
+                     <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-redo'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '再生成'}
                    </button>`
               }
               <button 
@@ -1469,6 +1472,12 @@ function getSceneStats(scenes) {
 
 // Generate single scene image
 async function generateSceneImage(sceneId) {
+  // Check if bulk generation is in progress
+  if (isBulkImageGenerating) {
+    showToast('一括画像生成中です。完了後に個別生成をお試しください', 'warning');
+    return;
+  }
+  
   if (sceneProcessing[sceneId]) {
     showToast('このシーンは処理中です', 'warning');
     return;
@@ -1535,6 +1544,7 @@ async function generateBulkImages(mode) {
   }
   
   isProcessing = true;
+  isBulkImageGenerating = true;  // Set bulk generation flag
   const buttonId = mode === 'all' ? 'generateAllImagesBtn' 
                  : mode === 'pending' ? 'generatePendingImagesBtn'
                  : 'generateFailedImagesBtn';
@@ -1597,6 +1607,7 @@ async function generateBulkImages(mode) {
     showToast('画像生成中にエラーが発生しました', 'error');
   } finally {
     isProcessing = false;
+    isBulkImageGenerating = false;  // Reset bulk generation flag
     setButtonLoading(buttonId, false);
   }
 }

@@ -290,7 +290,25 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 400)
     }
 
-    // 4. スタイル設定取得（優先順位: シーン個別 > プロジェクトデフォルト > 未設定）
+    // 4. 競合チェック: 既に生成中のレコードがないか確認
+    const existingGenerating = await c.env.DB.prepare(`
+      SELECT id FROM image_generations
+      WHERE scene_id = ? AND status = 'generating'
+    `).bind(sceneId).first()
+
+    if (existingGenerating) {
+      return c.json({
+        error: {
+          code: 'ALREADY_GENERATING',
+          message: 'Image is already being generated for this scene. Please wait for completion.',
+          details: {
+            generation_id: existingGenerating.id
+          }
+        }
+      }, 409)
+    }
+
+    // 5. スタイル設定取得（優先順位: シーン個別 > プロジェクトデフォルト > 未設定）
     const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer')
     
     const styleSettings = await fetchSceneStyleSettings(
@@ -302,11 +320,11 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     const effectiveStyleId = getEffectiveStylePresetId(styleSettings)
     const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
     
-    // 5. 最終プロンプト生成（スタイル適用）
+    // 6. 最終プロンプト生成（スタイル適用）
     const basePrompt = buildImagePrompt(scene.image_prompt as string)
     const finalPrompt = composeFinalPrompt(basePrompt, stylePreset)
 
-    // 6. image_generationsレコード作成（pending状態）
+    // 7. image_generationsレコード作成（pending状態）
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO image_generations (
         scene_id, prompt, status, provider, model, is_active
@@ -315,12 +333,12 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
     const generationId = insertResult.meta.last_row_id as number
 
-    // 7. ステータスを 'generating' に更新
+    // 8. ステータスを 'generating' に更新
     await c.env.DB.prepare(`
       UPDATE image_generations SET status = 'generating' WHERE id = ?
     `).bind(generationId).run()
 
-    // 8. Gemini APIで画像生成（429リトライ付き）
+    // 9. Gemini APIで画像生成（429リトライ付き）
     const imageResult = await generateImageWithRetry(
       finalPrompt,
       c.env.GEMINI_API_KEY,
@@ -343,7 +361,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 500)
     }
 
-    // 9. R2に画像保存
+    // 10. R2に画像保存
     const r2Key = buildR2Key(
       scene.project_id as number,
       scene.idx as number,
@@ -369,21 +387,21 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 500)
     }
 
-    // 9. 既存のアクティブ画像を無効化
+    // 11. 既存のアクティブ画像を無効化
     await c.env.DB.prepare(`
       UPDATE image_generations 
       SET is_active = 0 
       WHERE scene_id = ? AND id != ? AND is_active = 1
     `).bind(sceneId, generationId).run()
 
-    // 10. 新しい画像をアクティブ化、status = 'completed'
+    // 12. 新しい画像をアクティブ化、status = 'completed'
     await c.env.DB.prepare(`
       UPDATE image_generations 
       SET status = 'completed', r2_key = ?, is_active = 1
       WHERE id = ?
     `).bind(r2Key, generationId).run()
 
-    // 11. レスポンス返却
+    // 13. レスポンス返却
     return c.json({
       scene_id: parseInt(sceneId),
       image_generation_id: generationId,
