@@ -1484,7 +1484,21 @@ async function generateSceneImage(sceneId) {
   }
   
   sceneProcessing[sceneId] = true;
-  setButtonLoading(`generateBtn-${sceneId}`, true);
+  
+  // Disable both generate and regenerate buttons
+  const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
+  const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
+  
+  if (generateBtn) {
+    generateBtn.disabled = true;
+    generateBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>生成中...';
+  }
+  if (regenerateBtn) {
+    regenerateBtn.disabled = true;
+    regenerateBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    regenerateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>再生成中...';
+  }
   
   // Update prompt if edited
   const prompt = document.getElementById(`builderPrompt-${sceneId}`)?.value.trim();
@@ -1510,6 +1524,8 @@ async function generateSceneImage(sceneId) {
       pollSceneImageGeneration(sceneId);
     } else {
       showToast('画像生成に失敗しました', 'error');
+      sceneProcessing[sceneId] = false;
+      await initBuilderTab();
     }
   } catch (error) {
     console.error('Generate image error:', error);
@@ -1525,9 +1541,9 @@ async function generateSceneImage(sceneId) {
     } else {
       showToast('画像生成中にエラーが発生しました', 'error');
     }
-  } finally {
+    
     sceneProcessing[sceneId] = false;
-    setButtonLoading(`generateBtn-${sceneId}`, false);
+    await initBuilderTab();
   }
 }
 
@@ -2157,24 +2173,40 @@ function pollSceneImageGeneration(sceneId) {
       if (!scene) {
         console.error('Scene not found:', sceneId);
         clearInterval(pollInterval);
+        sceneProcessing[sceneId] = false;
         return;
       }
       
       const imageStatus = scene.latest_image?.status;
       
-      console.log(`Scene ${sceneId} image status:`, imageStatus);
+      console.log(`Scene ${sceneId} image status: ${imageStatus}, attempt: ${attempts}/${maxAttempts}`);
+      
+      // Update button progress
+      const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
+      const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
+      const progress = Math.round((attempts / maxAttempts) * 100);
+      
+      if (regenerateBtn) {
+        regenerateBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>再生成中... ${progress}%`;
+      }
+      if (generateBtn) {
+        generateBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>生成中... ${progress}%`;
+      }
       
       if (imageStatus === 'completed') {
         clearInterval(pollInterval);
+        sceneProcessing[sceneId] = false;
         showToast('画像生成が完了しました', 'success');
         await initBuilderTab();
       } else if (imageStatus === 'failed') {
         clearInterval(pollInterval);
+        sceneProcessing[sceneId] = false;
         const errorMsg = scene.latest_image?.error_message || '画像生成に失敗しました';
         showToast(errorMsg, 'error');
         await initBuilderTab();
       } else if (attempts >= maxAttempts) {
         clearInterval(pollInterval);
+        sceneProcessing[sceneId] = false;
         showToast('画像生成がタイムアウトしました。ページを再読み込みしてください。', 'warning');
         await initBuilderTab();
       }
@@ -2182,6 +2214,8 @@ function pollSceneImageGeneration(sceneId) {
     } catch (error) {
       console.error('Poll scene image error:', error);
       clearInterval(pollInterval);
+      sceneProcessing[sceneId] = false;
+      await initBuilderTab();
     }
   }, 5000); // Poll every 5 seconds
 }
