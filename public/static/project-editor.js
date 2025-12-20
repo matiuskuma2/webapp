@@ -1575,6 +1575,13 @@ async function generateBulkImages(mode) {
       
       // 2) 完了判定
       if (pending === 0 && generating === 0) {
+        // 最後のAPI呼び出しでプロジェクトステータスを 'completed' に更新
+        try {
+          await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
+        } catch (finalCallError) {
+          console.warn('Final API call error:', finalCallError);
+        }
+        
         const finalMessage = failed > 0 
           ? `画像生成完了！ (成功: ${processed}件, 失敗: ${failed}件)` 
           : `画像生成完了！ (${processed}件)`;
