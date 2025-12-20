@@ -1517,15 +1517,22 @@ async function generateSceneImage(sceneId) {
     
     if (response.data.id) {
       showToast('画像生成を開始しました', 'success');
-      // Refresh builder to show generating status
-      await initBuilderTab();
+      
+      // Update only this scene's status badge to "generating" (no full reload)
+      const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
+      if (sceneCard) {
+        const statusBadge = sceneCard.querySelector('.bg-gradient-to-r > div:last-child');
+        if (statusBadge) {
+          statusBadge.innerHTML = getSceneStatusBadge('generating');
+        }
+      }
       
       // Start polling for completion
       pollSceneImageGeneration(sceneId);
     } else {
       showToast('画像生成に失敗しました', 'error');
       sceneProcessing[sceneId] = false;
-      await initBuilderTab();
+      await updateSingleSceneCard(sceneId);
     }
   } catch (error) {
     console.error('Generate image error:', error);
@@ -1543,7 +1550,7 @@ async function generateSceneImage(sceneId) {
     }
     
     sceneProcessing[sceneId] = false;
-    await initBuilderTab();
+    await updateSingleSceneCard(sceneId);
   }
 }
 
@@ -2157,6 +2164,160 @@ async function applyBulkStyle() {
   }
 }
 
+// Update single scene card without full page reload
+async function updateSingleSceneCard(sceneId) {
+  try {
+    console.log(`[UpdateScene] Updating scene ${sceneId} only (no full reload)`);
+    
+    // Get scene details
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
+    const scene = response.data.scenes?.find(s => s.id === sceneId);
+    
+    if (!scene) {
+      console.error('Scene not found:', sceneId);
+      return;
+    }
+    
+    // Find the scene card element
+    const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
+    if (!sceneCard) {
+      console.error('Scene card element not found:', sceneId);
+      return;
+    }
+    
+    // Save scroll position
+    const scrollY = window.scrollY;
+    
+    // Extract scene data
+    const activeImage = scene.active_image || null;
+    const latestImage = scene.latest_image || null;
+    const imageUrl = activeImage ? activeImage.image_url : null;
+    const imageStatus = latestImage ? latestImage.status : 'pending';
+    const errorMessage = latestImage?.error_message || null;
+    
+    // Update image preview area
+    const imagePreview = sceneCard.querySelector('.aspect-video');
+    if (imagePreview) {
+      if (imageUrl) {
+        // Add cache buster to force reload
+        const cacheBuster = `?t=${Date.now()}`;
+        imagePreview.innerHTML = `
+          <img src="${imageUrl}${cacheBuster}" 
+               alt="Scene ${scene.idx}" 
+               class="w-full h-full object-cover" 
+               onerror="this.src='/placeholder-image.png'" />
+        `;
+      } else {
+        imagePreview.innerHTML = `
+          <div class="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400">
+            <div class="text-center">
+              <i class="fas fa-image text-6xl mb-2"></i>
+              <p>画像未生成</p>
+            </div>
+          </div>
+        `;
+      }
+      
+      // Update generating overlay
+      const existingOverlay = imagePreview.parentElement.querySelector('.absolute.inset-0');
+      if (existingOverlay) {
+        existingOverlay.remove();
+      }
+      
+      if (imageStatus === 'generating') {
+        const overlay = document.createElement('div');
+        overlay.className = 'absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center';
+        overlay.innerHTML = `
+          <div class="text-white text-center">
+            <i class="fas fa-spinner fa-spin text-4xl mb-2"></i>
+            <p>生成中...</p>
+          </div>
+        `;
+        imagePreview.parentElement.appendChild(overlay);
+      }
+    }
+    
+    // Update status badge in header
+    const statusBadge = sceneCard.querySelector('.bg-gradient-to-r > div:last-child');
+    if (statusBadge) {
+      statusBadge.innerHTML = getSceneStatusBadge(imageStatus);
+    }
+    
+    // Update action buttons
+    const buttonContainer = sceneCard.querySelector('.flex.flex-wrap.gap-2');
+    if (buttonContainer) {
+      const hasActiveImage = !!activeImage;
+      const isFailed = imageStatus === 'failed';
+      
+      buttonContainer.innerHTML = `
+        ${!hasActiveImage || isFailed
+          ? `<button 
+               id="generateBtn-${scene.id}"
+               onclick="generateSceneImage(${scene.id})"
+               class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
+               ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
+             >
+               <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-magic'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '画像生成'}
+             </button>`
+          : `<button 
+               id="regenerateBtn-${scene.id}"
+               onclick="regenerateSceneImage(${scene.id})"
+               class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
+               ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
+             >
+               <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-redo'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '再生成'}
+             </button>`
+        }
+        <button 
+          onclick="viewImageHistory(${scene.id})"
+          class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
+          ${!hasActiveImage ? 'disabled' : ''}
+        >
+          <i class="fas fa-history mr-2"></i>履歴
+        </button>
+      `;
+    }
+    
+    // Update error message display
+    const errorDisplay = sceneCard.querySelector('.p-3.bg-red-50');
+    if (errorDisplay) {
+      errorDisplay.remove();
+    }
+    
+    if (imageStatus === 'failed' && errorMessage) {
+      const errorDiv = document.createElement('div');
+      errorDiv.className = 'p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800';
+      errorDiv.innerHTML = `
+        <i class="fas fa-exclamation-circle mr-2"></i>
+        <strong>失敗理由:</strong><br/>
+        <div class="mt-2 font-mono text-xs bg-red-100 p-2 rounded overflow-x-auto">
+          ${escapeHtml(errorMessage)}
+        </div>
+      `;
+      buttonContainer.parentElement.appendChild(errorDiv);
+    }
+    
+    // Restore scroll position
+    window.scrollTo(0, scrollY);
+    
+    console.log(`[UpdateScene] Scene ${sceneId} updated successfully (scroll preserved)`);
+    
+  } catch (error) {
+    console.error('Update single scene error:', error);
+  }
+}
+
+// Get scene status badge HTML
+function getSceneStatusBadge(status) {
+  const statusMap = {
+    'pending': '<span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded">未生成</span>',
+    'generating': '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded">生成中</span>',
+    'completed': '<span class="px-2 py-1 bg-green-100 text-green-800 text-xs rounded">生成済み</span>',
+    'failed': '<span class="px-2 py-1 bg-red-100 text-red-800 text-xs rounded">失敗</span>'
+  };
+  return statusMap[status] || statusMap['pending'];
+}
+
 // Poll for single scene image generation completion
 function pollSceneImageGeneration(sceneId) {
   const maxAttempts = 60; // 5 minutes (5s interval)
@@ -2197,25 +2358,29 @@ function pollSceneImageGeneration(sceneId) {
         clearInterval(pollInterval);
         sceneProcessing[sceneId] = false;
         showToast('画像生成が完了しました', 'success');
-        await initBuilderTab();
+        // Update only this scene card (no full reload)
+        await updateSingleSceneCard(sceneId);
       } else if (imageStatus === 'failed') {
         clearInterval(pollInterval);
         sceneProcessing[sceneId] = false;
         const errorMsg = scene.latest_image?.error_message || '画像生成に失敗しました';
         showToast(errorMsg, 'error');
-        await initBuilderTab();
+        // Update only this scene card (no full reload)
+        await updateSingleSceneCard(sceneId);
       } else if (attempts >= maxAttempts) {
         clearInterval(pollInterval);
         sceneProcessing[sceneId] = false;
         showToast('画像生成がタイムアウトしました。ページを再読み込みしてください。', 'warning');
-        await initBuilderTab();
+        // Update only this scene card (no full reload)
+        await updateSingleSceneCard(sceneId);
       }
       
     } catch (error) {
       console.error('Poll scene image error:', error);
       clearInterval(pollInterval);
       sceneProcessing[sceneId] = false;
-      await initBuilderTab();
+      // Update only this scene card (no full reload)
+      await updateSingleSceneCard(sceneId);
     }
   }, 5000); // Poll every 5 seconds
 }
