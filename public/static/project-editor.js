@@ -48,6 +48,9 @@ async function loadProject() {
     
     // Enable/disable tabs based on status
     updateTabsAvailability();
+    
+    // Also update tab states for Export button
+    updateTabStates(currentProject.status);
   } catch (error) {
     console.error('Load project error:', error);
     showToast('プロジェクトの読み込みに失敗しました', 'error');
@@ -1137,6 +1140,10 @@ async function initBuilderTab() {
     
     // SceneCard描画
     renderBuilderScenes(scenes);
+    
+    // Update tab states based on current project status
+    const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
+    updateTabStates(projectResponse.data.status);
   } catch (error) {
     console.error('Load builder scenes error:', error);
     showToast('シーンの読み込みに失敗しました', 'error');
@@ -2307,6 +2314,72 @@ async function updateSingleSceneCard(sceneId) {
   }
 }
 
+// Check if all images are completed and update project status
+async function checkAndUpdateProjectStatus() {
+  try {
+    const statusRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/generate-images/status`);
+    const { pending, generating, status } = statusRes.data;
+    
+    console.log(`[ProjectStatus] Current status: ${status}, pending: ${pending}, generating: ${generating}`);
+    
+    // If all images are completed but project status is still "generating_images"
+    if (pending === 0 && generating === 0 && status === 'generating_images') {
+      console.log('[ProjectStatus] All images completed, calling final API to update project status');
+      
+      // Call the batch API one more time to trigger status update to "completed"
+      try {
+        await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
+        console.log('[ProjectStatus] Project status updated to completed');
+        
+        // Update tab states
+        updateTabStates('completed');
+      } catch (error) {
+        console.warn('[ProjectStatus] Failed to update project status:', error);
+      }
+    }
+  } catch (error) {
+    console.error('[ProjectStatus] Failed to check project status:', error);
+  }
+}
+
+// Update tab states based on project status
+function updateTabStates(projectStatus) {
+  console.log(`[TabStates] Updating tab states for status: ${projectStatus}`);
+  
+  const tabs = [
+    { id: 'sceneTab', minStatus: 'transcribed' },
+    { id: 'builderTab', minStatus: 'formatted' },
+    { id: 'exportTab', minStatus: 'completed' }
+  ];
+  
+  const statusOrder = [
+    'created', 'uploaded', 'transcribing', 'transcribed',
+    'parsing', 'parsed', 'formatting', 'formatted',
+    'generating_images', 'completed', 'failed'
+  ];
+  
+  const currentIndex = statusOrder.indexOf(projectStatus);
+  
+  tabs.forEach(tab => {
+    const button = document.querySelector(`button[onclick="switchTab('${tab.id.replace('Tab', '')}')"]`);
+    if (button) {
+      const minIndex = statusOrder.indexOf(tab.minStatus);
+      
+      if (currentIndex >= minIndex) {
+        // Enable tab
+        button.disabled = false;
+        button.classList.remove('opacity-50', 'cursor-not-allowed');
+        button.classList.add('hover:bg-blue-700');
+      } else {
+        // Disable tab
+        button.disabled = true;
+        button.classList.add('opacity-50', 'cursor-not-allowed');
+        button.classList.remove('hover:bg-blue-700');
+      }
+    }
+  });
+}
+
 // Get scene status badge HTML
 function getSceneStatusBadge(status) {
   const statusMap = {
@@ -2360,6 +2433,9 @@ function pollSceneImageGeneration(sceneId) {
         showToast('画像生成が完了しました', 'success');
         // Update only this scene card (no full reload)
         await updateSingleSceneCard(sceneId);
+        
+        // Check if all images are completed and update project status
+        await checkAndUpdateProjectStatus();
       } else if (imageStatus === 'failed') {
         clearInterval(pollInterval);
         sceneProcessing[sceneId] = false;
