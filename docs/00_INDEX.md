@@ -24,6 +24,13 @@
 ### 4. 変更履歴
 - **08_CHANGELOG.md** - 変更履歴（仕様変更は必ずここから更新）
 
+### 5. 検証レポート（2025-12-20追加）
+- **FINAL_VERIFICATION_REPORT.md** - 🔍 **最終検証レポート**: 全体の依存関係・DB設計・API設計の完全性チェック
+- **SYSTEM_COMPREHENSIVE_SPEC.md** - システム全体の技術仕様（DB・API・FE/BE連携）
+- **SCALABILITY_REVIEW.md** - スケーラビリティレビュー（SSOT検証、100/1000人負荷分析）
+- **VERIFICATION_SUMMARY.md** - 検証結果サマリー
+- **11_PROGRESS_AND_RECOVERY_REVIEW.md** - 進捗管理・復旧機能の詳細レビュー
+
 ---
 
 ## 🎯 AI開発者向けクイックリファレンス
@@ -62,7 +69,11 @@
 | 10_INPUT_PROCESSING.md | インプット処理フロー詳細 |
 | 11_GENS_PARK_DEV_BRIEF.md | GensPark開発環境ブリーフ |
 | 12_IMAGE_PROMPT_TEMPLATE.md | 画像プロンプトテンプレート |
+| **FINAL_VERIFICATION_REPORT.md** | 🔍 **最終検証レポート**（2025-12-20） |
+| SYSTEM_COMPREHENSIVE_SPEC.md | システム全体技術仕様 |
+| SCALABILITY_REVIEW.md | スケーラビリティレビュー |
+| VERIFICATION_SUMMARY.md | 検証結果サマリー |
 
 ---
 
-最終更新: 2025-01-19
+最終更新: 2025-12-20
