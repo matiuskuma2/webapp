@@ -355,6 +355,27 @@ async function processTextChunks(c: any, projectId: string, project: any) {
 
   // ステータスを 'formatting' に更新（初回のみ）
   if (project.status === 'parsed') {
+    // ✅ 既存image_generationsを削除（整合性確保）
+    // Note: scenes削除前に実行する必要がある
+    const { results: existingScenes } = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE project_id = ?
+    `).bind(projectId).all()
+    
+    if (existingScenes.length > 0) {
+      const sceneIds = existingScenes.map((s: any) => s.id)
+      // D1はIN句に制限があるため、batch処理
+      for (const sceneId of sceneIds) {
+        await c.env.DB.prepare(`
+          DELETE FROM image_generations WHERE scene_id = ?
+        `).bind(sceneId).run()
+      }
+    }
+    
+    // ✅ 既存シーンを削除（UNIQUE制約エラー防止）
+    await c.env.DB.prepare(`
+      DELETE FROM scenes WHERE project_id = ?
+    `).bind(projectId).run()
+    
     await c.env.DB.prepare(`
       UPDATE projects 
       SET status = 'formatting', updated_at = CURRENT_TIMESTAMP
