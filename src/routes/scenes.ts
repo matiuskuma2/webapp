@@ -3,6 +3,118 @@ import type { Bindings } from '../types/bindings'
 
 const scenes = new Hono<{ Bindings: Bindings }>()
 
+// GET /api/scenes/:id - 単一シーン取得
+scenes.get('/:id', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+    const view = c.req.query('view') // 'board' 指定時のみ画像情報含む
+
+    // 基本シーン情報取得
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, created_at, updated_at
+      FROM scenes
+      WHERE id = ?
+    `).bind(sceneId).first()
+
+    if (!scene) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Scene not found'
+        }
+      }, 404)
+    }
+
+    // Parse bullets JSON
+    const sceneData = {
+      ...scene,
+      bullets: scene.bullets ? JSON.parse(scene.bullets as string) : []
+    }
+
+    // view=board の場合、画像情報とスタイル情報を含める
+    if (view === 'board') {
+      // 最新画像情報取得（SSOT）
+      const latestImage = await c.env.DB.prepare(`
+        SELECT 
+          id,
+          scene_id,
+          r2_key,
+          r2_url,
+          status,
+          error_message,
+          provider,
+          model,
+          created_at
+        FROM image_generations
+        WHERE scene_id = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `).bind(sceneId).first()
+
+      // アクティブ画像取得
+      const activeImage = await c.env.DB.prepare(`
+        SELECT 
+          id,
+          scene_id,
+          r2_key,
+          r2_url,
+          status,
+          created_at
+        FROM image_generations
+        WHERE scene_id = ? AND is_active = 1
+        LIMIT 1
+      `).bind(sceneId).first()
+
+      // スタイルプリセット取得
+      const stylePreset = await c.env.DB.prepare(`
+        SELECT sp.id, sp.name, sp.description, sp.prompt_prefix, sp.prompt_suffix
+        FROM scene_style_settings sss
+        JOIN style_presets sp ON sss.style_preset_id = sp.id
+        WHERE sss.scene_id = ?
+      `).bind(sceneId).first()
+
+      return c.json({
+        ...sceneData,
+        latest_image: latestImage ? {
+          id: latestImage.id,
+          scene_id: latestImage.scene_id,
+          r2_key: latestImage.r2_key,
+          r2_url: latestImage.r2_url,
+          image_url: latestImage.r2_url, // Alias for compatibility
+          status: latestImage.status,
+          error_message: latestImage.error_message,
+          provider: latestImage.provider,
+          model: latestImage.model,
+          created_at: latestImage.created_at
+        } : null,
+        active_image: activeImage ? {
+          id: activeImage.id,
+          scene_id: activeImage.scene_id,
+          r2_key: activeImage.r2_key,
+          r2_url: activeImage.r2_url,
+          image_url: activeImage.r2_url, // Alias for compatibility
+          status: activeImage.status,
+          created_at: activeImage.created_at
+        } : null,
+        style_preset: stylePreset || null,
+        style_preset_id: stylePreset?.id || null
+      })
+    }
+
+    // デフォルト: 基本情報のみ
+    return c.json(sceneData)
+
+  } catch (error) {
+    console.error('Error fetching scene:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to fetch scene'
+      }
+    }, 500)
+  }
+})
+
 // PUT /api/scenes/:id - シーン編集
 scenes.put('/:id', async (c) => {
   try {

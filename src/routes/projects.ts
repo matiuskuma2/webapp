@@ -672,4 +672,66 @@ projects.post('/:id/reset', async (c) => {
   }
 })
 
+// GET /api/projects/:id/chunks - チャンク一覧取得（失敗チャンク確認用）
+projects.get('/:id/chunks', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // チャンク一覧取得
+    const { results: chunks } = await c.env.DB.prepare(`
+      SELECT 
+        id,
+        project_id,
+        idx,
+        text,
+        status,
+        error_message,
+        scene_count,
+        processed_at,
+        created_at,
+        updated_at
+      FROM text_chunks
+      WHERE project_id = ?
+      ORDER BY idx ASC
+    `).bind(projectId).all()
+
+    // 統計情報
+    const stats = {
+      total: chunks.length,
+      pending: chunks.filter((c: any) => c.status === 'pending').length,
+      processing: chunks.filter((c: any) => c.status === 'processing').length,
+      done: chunks.filter((c: any) => c.status === 'done').length,
+      failed: chunks.filter((c: any) => c.status === 'failed').length
+    }
+
+    return c.json({
+      chunks,
+      stats
+    })
+
+  } catch (error) {
+    console.error('Error fetching chunks:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to fetch chunks'
+      }
+    }, 500)
+  }
+})
+
 export default projects

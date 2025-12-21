@@ -682,7 +682,7 @@ function startFormatPolling() {
 }
 
 // Update format progress UI
-function updateFormatProgress(data) {
+async function updateFormatProgress(data) {
   const progressText = document.getElementById('formatProgressText');
   const progressBar = document.getElementById('formatProgressBar');
   const progressDetails = document.getElementById('formatProgressDetails');
@@ -703,12 +703,142 @@ function updateFormatProgress(data) {
     progressText.textContent = `シーン化中…（${processed} / ${total_chunks}）`;
     
     if (failed > 0) {
-      progressDetails.innerHTML = `<span class="text-yellow-600"><i class="fas fa-exclamation-triangle mr-1"></i>一部のチャンクで失敗しました（続行できます）</span>`;
+      // 失敗チャンク詳細表示
+      let failedChunksHTML = `<span class="text-yellow-600"><i class="fas fa-exclamation-triangle mr-1"></i>一部のチャンクで失敗しました（続行できます）</span>`;
+      
+      // Show failed chunk details button
+      failedChunksHTML += ` <button onclick="showFailedChunks()" class="ml-2 text-sm text-blue-600 hover:underline">詳細を表示</button>`;
+      
+      progressDetails.innerHTML = failedChunksHTML;
     } else if (pending === 0 && processing === 0) {
       progressDetails.textContent = '最終処理中...';
+    } else if (pending > 0 && processing === 0) {
+      // ⚠️ 停止状態（再開が必要）
+      progressDetails.innerHTML = `
+        <span class="text-orange-600"><i class="fas fa-pause-circle mr-1"></i>処理が停止しています</span>
+        <button 
+          onclick="resumeFormatting()" 
+          class="ml-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
+        >
+          <i class="fas fa-play mr-1"></i>処理を再開
+        </button>
+      `;
     } else {
       progressDetails.textContent = `処理済み: ${processed}, 処理中: ${processing}, 待機中: ${pending}, 失敗: ${failed}`;
     }
+  }
+}
+
+// 失敗チャンク詳細表示
+async function showFailedChunks() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/chunks`);
+    const { chunks, stats } = response.data;
+    
+    const failedChunks = chunks.filter(c => c.status === 'failed');
+    
+    if (failedChunks.length === 0) {
+      showToast('失敗したチャンクはありません', 'info');
+      return;
+    }
+    
+    // モーダル表示
+    const modal = document.createElement('div');
+    modal.className = 'fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+        <div class="p-6 border-b border-gray-200">
+          <h3 class="text-xl font-bold text-gray-800">
+            <i class="fas fa-exclamation-triangle text-yellow-600 mr-2"></i>
+            失敗したチャンク一覧（${failedChunks.length}件）
+          </h3>
+        </div>
+        <div class="p-6">
+          ${failedChunks.map(chunk => `
+            <div class="mb-4 p-4 bg-red-50 border border-red-200 rounded">
+              <div class="flex items-start justify-between mb-2">
+                <div class="font-semibold text-red-800">チャンク #${chunk.idx}</div>
+                <button 
+                  onclick="retryChunk(${chunk.id})" 
+                  class="px-3 py-1 bg-blue-600 text-white text-sm rounded hover:bg-blue-700"
+                >
+                  <i class="fas fa-redo mr-1"></i>再試行
+                </button>
+              </div>
+              <div class="text-sm text-gray-700 mb-2">
+                <strong>エラー:</strong> ${escapeHtml(chunk.error_message || '不明なエラー')}
+              </div>
+              <div class="text-xs text-gray-500 max-h-20 overflow-y-auto">
+                ${escapeHtml(chunk.text.substring(0, 200))}${chunk.text.length > 200 ? '...' : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div class="p-6 border-t border-gray-200 flex justify-end">
+          <button 
+            onclick="this.closest('.fixed').remove()" 
+            class="px-6 py-2 bg-gray-600 text-white rounded hover:bg-gray-700"
+          >
+            閉じる
+          </button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // クリックで閉じる
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.remove();
+      }
+    });
+    
+  } catch (error) {
+    console.error('Failed to load chunks:', error);
+    showToast('チャンク情報の取得に失敗しました', 'error');
+  }
+}
+
+// チャンク再試行
+async function retryChunk(chunkId) {
+  if (!confirm('このチャンクを再試行しますか？')) {
+    return;
+  }
+  
+  try {
+    await axios.post(`${API_BASE}/text_chunks/${chunkId}/retry`);
+    showToast('チャンクを再試行キューに追加しました', 'success');
+    
+    // モーダルを閉じる
+    const modal = document.querySelector('.fixed.inset-0');
+    if (modal) modal.remove();
+    
+    // 処理を再開
+    await resumeFormatting();
+    
+  } catch (error) {
+    console.error('Retry chunk error:', error);
+    showToast('再試行に失敗しました', 'error');
+  }
+}
+
+// フォーマット処理を再開
+async function resumeFormatting() {
+  try {
+    showToast('処理を再開します...', 'info');
+    
+    // 次のバッチを呼び出し
+    await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
+    
+    // ポーリングは継続中のはず（念のため確認）
+    if (!formatPollingInterval) {
+      startFormatPolling();
+    }
+    
+  } catch (error) {
+    console.error('Resume formatting error:', error);
+    showToast('再開に失敗しました', 'error');
   }
 }
 
@@ -2176,12 +2306,12 @@ async function updateSingleSceneCard(sceneId) {
   try {
     console.log(`[UpdateScene] Updating scene ${sceneId} only (no full reload)`);
     
-    // Get scene details
-    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
-    const scene = response.data.scenes?.find(s => s.id === sceneId);
+    // ✅ 単一シーンのみ取得（新規API使用）
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board&_t=${Date.now()}`);
+    const scene = response.data;
     
-    if (!scene) {
-      console.error('Scene not found:', sceneId);
+    if (scene.error) {
+      console.error('Scene fetch error:', scene.error);
       return;
     }
     
@@ -2192,7 +2322,7 @@ async function updateSingleSceneCard(sceneId) {
       return;
     }
     
-    // Save scroll position
+    // ✅ スクロール位置を保存
     const scrollY = window.scrollY;
     
     // Extract scene data
@@ -2202,62 +2332,131 @@ async function updateSingleSceneCard(sceneId) {
     const imageStatus = latestImage ? latestImage.status : 'pending';
     const errorMessage = latestImage?.error_message || null;
     
-    // Update image preview area
-    const imagePreview = sceneCard.querySelector('.aspect-video');
-    if (imagePreview) {
-      if (imageUrl) {
-        // Add cache buster to force reload
-        const cacheBuster = `?t=${Date.now()}`;
-        imagePreview.innerHTML = `
-          <img src="${imageUrl}${cacheBuster}" 
-               alt="Scene ${scene.idx}" 
-               class="w-full h-full object-cover" 
-               onerror="this.src='/placeholder-image.png'" />
+    // 一括生成中かどうか
+    const isBulkActive = window.isBulkImageGenerating || false;
+    const isProcessing = window.sceneProcessing?.[sceneId] || false;
+    
+    console.log(`[UpdateScene] Scene ${sceneId} status: ${imageStatus}, bulkActive: ${isBulkActive}, processing: ${isProcessing}`);
+    
+    // ===== 1. 画像表示を更新 =====
+    const imgContainer = sceneCard.querySelector('.scene-image-container');
+    if (imgContainer) {
+      if (imageUrl && (imageStatus === 'completed' || activeImage)) {
+        imgContainer.innerHTML = `
+          <img src="${imageUrl}?t=${Date.now()}" 
+               class="w-full h-full object-cover"
+               loading="lazy"
+               alt="Scene ${scene.idx}">
         `;
       } else {
-        imagePreview.innerHTML = `
-          <div class="w-full h-full flex items-center justify-center bg-gray-100 text-gray-400">
-            <div class="text-center">
-              <i class="fas fa-image text-6xl mb-2"></i>
-              <p>画像未生成</p>
-            </div>
+        imgContainer.innerHTML = `
+          <div class="w-full h-full flex items-center justify-center bg-gray-200">
+            <i class="fas fa-image text-gray-400 text-4xl"></i>
           </div>
         `;
       }
-      
-      // Update generating overlay
-      const existingOverlay = imagePreview.parentElement.querySelector('.absolute.inset-0');
-      if (existingOverlay) {
-        existingOverlay.remove();
-      }
-      
-      if (imageStatus === 'generating') {
-        const overlay = document.createElement('div');
-        overlay.className = 'absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center';
-        overlay.innerHTML = `
-          <div class="text-white text-center">
-            <i class="fas fa-spinner fa-spin text-4xl mb-2"></i>
-            <p>生成中...</p>
-          </div>
-        `;
-        imagePreview.parentElement.appendChild(overlay);
-      }
     }
     
-    // Update status badge in header
-    const statusBadge = sceneCard.querySelector('.bg-gradient-to-r > div:last-child');
-    if (statusBadge) {
-      statusBadge.innerHTML = getSceneStatusBadge(imageStatus);
+    // ===== 2. ステータスバッジを更新 =====
+    const badgeContainer = sceneCard.querySelector('.scene-status-badge-container');
+    if (badgeContainer) {
+      badgeContainer.innerHTML = getImageStatusBadge(imageStatus);
     }
     
-    // Update action buttons
-    const buttonContainer = sceneCard.querySelector('.flex.flex-wrap.gap-2');
-    if (buttonContainer) {
-      const hasActiveImage = !!activeImage;
+    // ===== 3. アクションボタンを更新 =====
+    const actionBtnContainer = sceneCard.querySelector('.scene-action-buttons');
+    if (actionBtnContainer) {
+      const hasImage = latestImage && imageStatus === 'completed';
+      const isGenerating = imageStatus === 'generating';
       const isFailed = imageStatus === 'failed';
       
-      buttonContainer.innerHTML = `
-        ${!hasActiveImage || isFailed
+      if (isGenerating || isProcessing) {
+        // 生成中
+        actionBtnContainer.innerHTML = `
+          <button disabled class="px-4 py-2 bg-blue-500 text-white rounded opacity-50 cursor-not-allowed">
+            <i class="fas fa-spinner fa-spin mr-2"></i>
+            再生成中...
+          </button>
+        `;
+      } else if (isBulkActive) {
+        // 一括処理中（ロック）
+        actionBtnContainer.innerHTML = `
+          <button disabled class="px-4 py-2 bg-gray-400 text-white rounded opacity-50 cursor-not-allowed"
+                  title="一括画像生成中">
+            <i class="fas fa-lock mr-2"></i>
+            一括処理中
+          </button>
+        `;
+      } else if (hasImage) {
+        // 再生成ボタン
+        actionBtnContainer.innerHTML = `
+          <button onclick="regenerateSceneImage(${sceneId})" 
+                  class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition">
+            <i class="fas fa-sync-alt mr-2"></i>
+            再生成
+          </button>
+        `;
+      } else {
+        // 初回生成ボタン
+        actionBtnContainer.innerHTML = `
+          <button onclick="generateSceneImage(${sceneId})"
+                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition">
+            <i class="fas fa-magic mr-2"></i>
+            画像生成
+          </button>
+        `;
+      }
+    }
+    
+    // ===== 4. エラーメッセージ表示/非表示 =====
+    let errorContainer = sceneCard.querySelector('.scene-error-message');
+    if (isFailed && errorMessage) {
+      if (!errorContainer) {
+        errorContainer = document.createElement('div');
+        errorContainer.className = 'scene-error-message mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm';
+        const contentDiv = sceneCard.querySelector('.p-4');
+        if (contentDiv) {
+          contentDiv.appendChild(errorContainer);
+        }
+      }
+      
+      // エラーメッセージをパース
+      let errorText = errorMessage;
+      try {
+        const errorObj = JSON.parse(errorText);
+        errorText = `[${errorObj.status || 'ERROR'}] ${errorObj.message || errorText}`;
+      } catch (e) {
+        // JSONでない場合はそのまま表示
+      }
+      
+      errorContainer.innerHTML = `
+        <div class="flex items-start gap-2">
+          <i class="fas fa-exclamation-triangle text-red-600 mt-0.5"></i>
+          <div class="flex-1">
+            <div class="font-semibold text-red-800 mb-1">失敗理由</div>
+            <div class="text-red-700">${escapeHtml(errorText)}</div>
+          </div>
+        </div>
+      `;
+    } else if (errorContainer) {
+      errorContainer.remove();
+    }
+    
+    // ===== 5. data-status 属性を更新 =====
+    sceneCard.setAttribute('data-status', imageStatus);
+    
+    // ✅ スクロール位置を復元
+    window.scrollTo(0, scrollY);
+    
+    console.log(`✅ Scene ${sceneId} card updated successfully`);
+    
+  } catch (error) {
+    console.error(`Failed to update scene ${sceneId}:`, error);
+    showToast(`シーン${sceneId}の更新に失敗しました`, 'error');
+  }
+}
+
+// Poll scene image generation progress
           ? `<button 
                id="generateBtn-${scene.id}"
                onclick="generateSceneImage(${scene.id})"
@@ -2400,14 +2599,14 @@ function pollSceneImageGeneration(sceneId) {
     attempts++;
     
     try {
-      // Get scene details
-      const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
-      const scene = response.data.scenes?.find(s => s.id === sceneId);
+      // ✅ 単一シーンのみ取得（新API使用）
+      const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board&_t=${Date.now()}`);
+      const scene = response.data;
       
-      if (!scene) {
-        console.error('Scene not found:', sceneId);
+      if (scene.error) {
+        console.error('Scene fetch error:', scene.error);
         clearInterval(pollInterval);
-        sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
         return;
       }
       
@@ -2416,46 +2615,52 @@ function pollSceneImageGeneration(sceneId) {
       console.log(`Scene ${sceneId} image status: ${imageStatus}, attempt: ${attempts}/${maxAttempts}`);
       
       // Update button progress
-      const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
-      const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
-      const progress = Math.round((attempts / maxAttempts) * 100);
-      
-      if (regenerateBtn) {
-        regenerateBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>再生成中... ${progress}%`;
-      }
-      if (generateBtn) {
-        generateBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>生成中... ${progress}%`;
+      const cardElement = document.getElementById(`builder-scene-${sceneId}`);
+      if (cardElement) {
+        const actionBtn = cardElement.querySelector('.scene-action-buttons button');
+        const progress = Math.min(Math.round((attempts / maxAttempts) * 100), 99);
+        
+        if (actionBtn && imageStatus === 'generating') {
+          actionBtn.innerHTML = `
+            <i class="fas fa-spinner fa-spin mr-2"></i>
+            再生成中... ${progress}%
+          `;
+        }
       }
       
       if (imageStatus === 'completed') {
         clearInterval(pollInterval);
-        sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
         showToast('画像生成が完了しました', 'success');
-        // Update only this scene card (no full reload)
+        
+        // ✅ カード更新のみ（全体リロードなし）
         await updateSingleSceneCard(sceneId);
         
-        // Check if all images are completed and update project status
+        // ✅ 全体ステータス確認（全シーン完了なら projects.status を completed に）
         await checkAndUpdateProjectStatus();
+        
       } else if (imageStatus === 'failed') {
         clearInterval(pollInterval);
-        sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        
         const errorMsg = scene.latest_image?.error_message || '画像生成に失敗しました';
-        showToast(errorMsg, 'error');
-        // Update only this scene card (no full reload)
+        showToast(`画像生成失敗: ${errorMsg}`, 'error');
+        
+        // ✅ カード更新（エラー表示含む）
         await updateSingleSceneCard(sceneId);
+        
       } else if (attempts >= maxAttempts) {
         clearInterval(pollInterval);
-        sceneProcessing[sceneId] = false;
-        showToast('画像生成がタイムアウトしました。ページを再読み込みしてください。', 'warning');
-        // Update only this scene card (no full reload)
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        
+        showToast('画像生成がタイムアウトしました', 'warning');
         await updateSingleSceneCard(sceneId);
       }
       
     } catch (error) {
       console.error('Poll scene image error:', error);
       clearInterval(pollInterval);
-      sceneProcessing[sceneId] = false;
-      // Update only this scene card (no full reload)
+      if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
       await updateSingleSceneCard(sceneId);
     }
   }, 5000); // Poll every 5 seconds
