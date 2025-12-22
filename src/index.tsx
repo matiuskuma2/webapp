@@ -967,7 +967,7 @@ app.get('/projects/:id', (c) => {
     <script>
         const PROJECT_ID = ${projectId};
     </script>
-    <script src="/static/project-editor.js"></script>
+    <script src="/static/project-editor.js?v=${Date.now()}"></script>
 </body>
 </html>
   `)
