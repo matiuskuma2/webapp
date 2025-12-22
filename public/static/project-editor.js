@@ -2456,63 +2456,6 @@ async function updateSingleSceneCard(sceneId) {
   }
 }
 
-// Poll scene image generation progress
-          ? `<button 
-               id="generateBtn-${scene.id}"
-               onclick="generateSceneImage(${scene.id})"
-               class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
-               ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
-             >
-               <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-magic'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '画像生成'}
-             </button>`
-          : `<button 
-               id="regenerateBtn-${scene.id}"
-               onclick="regenerateSceneImage(${scene.id})"
-               class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
-               ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
-             >
-               <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-redo'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '再生成'}
-             </button>`
-        }
-        <button 
-          onclick="viewImageHistory(${scene.id})"
-          class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
-          ${!hasActiveImage ? 'disabled' : ''}
-        >
-          <i class="fas fa-history mr-2"></i>履歴
-        </button>
-      `;
-    }
-    
-    // Update error message display
-    const errorDisplay = sceneCard.querySelector('.p-3.bg-red-50');
-    if (errorDisplay) {
-      errorDisplay.remove();
-    }
-    
-    if (imageStatus === 'failed' && errorMessage) {
-      const errorDiv = document.createElement('div');
-      errorDiv.className = 'p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800';
-      errorDiv.innerHTML = `
-        <i class="fas fa-exclamation-circle mr-2"></i>
-        <strong>失敗理由:</strong><br/>
-        <div class="mt-2 font-mono text-xs bg-red-100 p-2 rounded overflow-x-auto">
-          ${escapeHtml(errorMessage)}
-        </div>
-      `;
-      buttonContainer.parentElement.appendChild(errorDiv);
-    }
-    
-    // Restore scroll position
-    window.scrollTo(0, scrollY);
-    
-    console.log(`[UpdateScene] Scene ${sceneId} updated successfully (scroll preserved)`);
-    
-  } catch (error) {
-    console.error('Update single scene error:', error);
-  }
-}
-
 // Check if all images are completed and update project status
 async function checkAndUpdateProjectStatus() {
   try {
