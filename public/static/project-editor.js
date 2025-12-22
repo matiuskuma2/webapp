@@ -4,7 +4,7 @@ const API_BASE = '/api';
 // Global state
 let currentProject = null;
 let isProcessing = false; // ボタン連打防止用フラグ（グローバル処理用）
-let isBulkImageGenerating = false; // 一括画像生成中フラグ
+window.isBulkImageGenerating = false; // Global flag for bulk image generation (window scope for template access)
 let sceneProcessing = {}; // 行単位ロック用 { sceneId: boolean }
 let mediaRecorder = null;
 let audioChunks = [];
@@ -576,6 +576,9 @@ async function formatAndSplit() {
 // Show format progress UI
 function showFormatProgressUI() {
   const formatSection = document.getElementById('formatSection');
+  
+  // Remove default purple border styling to prevent double border
+  formatSection.className = 'mb-6';
   
   formatSection.innerHTML = `
     <div class="p-6 bg-blue-50 border-l-4 border-blue-600 rounded-lg">
@@ -1369,6 +1372,9 @@ function setSceneFilter(filter) {
 
 // Render builder scene cards
 function renderBuilderScenes(scenes) {
+  // Cache scenes for re-rendering during bulk generation
+  window.lastLoadedScenes = scenes;
+  
   const container = document.getElementById('builderScenesList');
   
   // フィルタリング適用（グローバル変数 currentFilter）
@@ -1610,7 +1616,7 @@ function getSceneStats(scenes) {
 // Generate single scene image
 async function generateSceneImage(sceneId) {
   // Check if bulk generation is in progress
-  if (isBulkImageGenerating) {
+  if (window.isBulkImageGenerating) {
     showToast('一括画像生成中です。完了後に個別生成をお試しください', 'warning');
     return;
   }
@@ -1704,7 +1710,14 @@ async function generateBulkImages(mode) {
   }
   
   isProcessing = true;
-  isBulkImageGenerating = true;  // Set bulk generation flag
+  window.isBulkImageGenerating = true;  // Set global bulk generation flag
+  
+  // Re-render Builder UI to disable individual buttons
+  const currentScenes = window.lastLoadedScenes || [];
+  if (currentScenes.length > 0) {
+    renderBuilderScenes(currentScenes);
+  }
+  
   const buttonId = mode === 'all' ? 'generateAllImagesBtn' 
                  : mode === 'pending' ? 'generatePendingImagesBtn'
                  : 'generateFailedImagesBtn';
@@ -1774,8 +1787,14 @@ async function generateBulkImages(mode) {
     showToast('画像生成中にエラーが発生しました', 'error');
   } finally {
     isProcessing = false;
-    isBulkImageGenerating = false;  // Reset bulk generation flag
+    window.isBulkImageGenerating = false;  // Reset global bulk generation flag
     setButtonLoading(buttonId, false);
+    
+    // Re-render Builder UI to enable individual buttons
+    const currentScenes = window.lastLoadedScenes || [];
+    if (currentScenes.length > 0) {
+      renderBuilderScenes(currentScenes);
+    }
   }
 }
 
