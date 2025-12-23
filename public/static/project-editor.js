@@ -1388,7 +1388,9 @@ function renderBuilderScenes(scenes) {
   container.innerHTML = filteredScenes.map((scene) => {
     const activeImage = scene.active_image || null;
     const latestImage = scene.latest_image || null;
-    const imageUrl = activeImage ? activeImage.image_url : null;
+    
+    // ✅ r2_url が null の場合は画像なしとして扱う
+    const imageUrl = activeImage?.image_url || activeImage?.r2_url || null;
     
     // ステータスは latest_image を優先（SSOT）
     const imageStatus = latestImage ? latestImage.status : 'pending';
@@ -2347,7 +2349,9 @@ async function updateSingleSceneCard(sceneId) {
     // Extract scene data
     const activeImage = scene.active_image || null;
     const latestImage = scene.latest_image || null;
-    const imageUrl = activeImage ? activeImage.image_url : null;
+    
+    // ✅ r2_url が null の場合は画像なしとして扱う
+    const imageUrl = activeImage?.image_url || activeImage?.r2_url || null;
     const imageStatus = latestImage ? latestImage.status : 'pending';
     const errorMessage = latestImage?.error_message || null;
     
@@ -2429,7 +2433,7 @@ async function updateSingleSceneCard(sceneId) {
     
     // ===== 4. エラーメッセージ表示/非表示 =====
     let errorContainer = sceneCard.querySelector('.scene-error-message');
-    if (isFailed && errorMessage) {
+    if (imageStatus === 'failed' && errorMessage) {
       if (!errorContainer) {
         errorContainer = document.createElement('div');
         errorContainer.className = 'scene-error-message mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm';
