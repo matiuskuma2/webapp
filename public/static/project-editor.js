@@ -6,6 +6,7 @@ let currentProject = null;
 let isProcessing = false; // ボタン連打防止用フラグ（グローバル処理用）
 window.isBulkImageGenerating = false; // Global flag for bulk image generation (window scope for template access)
 window.sceneProcessing = {}; // Global flag for individual scene processing (window scope)
+window.generatingSceneWatch = window.generatingSceneWatch || {}; // { [sceneId]: { startedAt:number, attempts:number, timerId:number } }
 let mediaRecorder = null;
 let audioChunks = [];
 let recordingStartTime = 0;
@@ -22,6 +23,12 @@ document.addEventListener('DOMContentLoaded', () => {
       const charCount = sourceText.value.length;
       document.getElementById('textCharCount').textContent = charCount;
     });
+  }
+  
+  // Restore last active tab from localStorage
+  const lastTab = localStorage.getItem('lastActiveTab');
+  if (lastTab && ['input', 'sceneTab', 'builder', 'export'].includes(lastTab)) {
+    switchTab(lastTab);
   }
 });
 
@@ -187,6 +194,9 @@ function switchTab(tabName) {
   } else if (tabName === 'styles') {
     initStylesTab();
   }
+  
+  // ✅ Save last active tab to localStorage (for auto-restore on reload)
+  localStorage.setItem('lastActiveTab', tabName);
 }
 
 // Initialize Scene Split tab
@@ -1273,6 +1283,9 @@ async function initBuilderTab() {
     
     // SceneCard描画
     renderBuilderScenes(scenes);
+    
+    // ✅ AUTO-RESUME: Detect generating scenes and restart polling
+    autoResumeGeneratingScenes(scenes);
     
     // Update tab states based on current project status
     const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
@@ -2557,77 +2570,155 @@ function getSceneStatusBadge(status) {
 }
 
 // Poll for single scene image generation completion
-function pollSceneImageGeneration(sceneId) {
-  const maxAttempts = 60; // 5 minutes (5s interval)
-  let attempts = 0;
+// ========== Robust Polling with Progress Indicator ==========
+
+// Start watching a scene for image generation
+function startGenerationWatch(sceneId) {
+  if (!window.generatingSceneWatch[sceneId]) {
+    window.generatingSceneWatch[sceneId] = { 
+      startedAt: Date.now(), 
+      attempts: 0,
+      timerId: null
+    };
+    console.log(`✅ Started watching scene ${sceneId}`);
+  }
+}
+
+// Stop watching a scene
+function stopGenerationWatch(sceneId) {
+  const watch = window.generatingSceneWatch[sceneId];
+  if (watch) {
+    if (watch.timerId) {
+      clearInterval(watch.timerId);
+    }
+    delete window.generatingSceneWatch[sceneId];
+    console.log(`✅ Stopped watching scene ${sceneId}`);
+  }
+}
+
+// Update button UI with progress percentage
+function updateGeneratingButtonUI(sceneId, percent) {
+  const cardElement = document.getElementById(`builder-scene-${sceneId}`);
+  if (!cardElement) return;
   
-  const pollInterval = setInterval(async () => {
-    attempts++;
-    
+  const actionBtn = cardElement.querySelector('.scene-action-buttons button');
+  if (actionBtn) {
+    actionBtn.disabled = true;
+    actionBtn.className = 'px-4 py-2 bg-yellow-500 text-white rounded opacity-75 cursor-not-allowed';
+    actionBtn.innerHTML = `
+      <i class="fas fa-spinner fa-spin mr-2"></i>
+      生成中... ${percent}%
+    `;
+  }
+}
+
+// Robust polling function with network error resilience
+function pollSceneImageGeneration(sceneId) {
+  const maxAttempts = 120; // 10 minutes (5s × 120)
+  const intervalMs = 5000;
+  
+  // Start watching if not already
+  startGenerationWatch(sceneId);
+  
+  const timerId = setInterval(async () => {
     try {
-      // ✅ 単一シーンのみ取得（新API使用）
-      const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board&_t=${Date.now()}`);
-      const scene = response.data;
-      
-      if (scene.error) {
-        console.error('Scene fetch error:', scene.error);
-        clearInterval(pollInterval);
-        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
+      const watch = window.generatingSceneWatch[sceneId];
+      if (!watch) {
+        clearInterval(timerId);
         return;
       }
       
-      const imageStatus = scene.latest_image?.status;
+      watch.attempts++;
       
-      console.log(`Scene ${sceneId} image status: ${imageStatus}, attempt: ${attempts}/${maxAttempts}`);
-      
-      // Update button progress
-      const cardElement = document.getElementById(`builder-scene-${sceneId}`);
-      if (cardElement) {
-        const actionBtn = cardElement.querySelector('.scene-action-buttons button');
-        const progress = Math.min(Math.round((attempts / maxAttempts) * 100), 99);
-        
-        if (actionBtn && imageStatus === 'generating') {
-          actionBtn.innerHTML = `
-            <i class="fas fa-spinner fa-spin mr-2"></i>
-            再生成中... ${progress}%
-          `;
-        }
+      // ✅ Calculate pseudo-progress based on elapsed time
+      const elapsedSec = (Date.now() - watch.startedAt) / 1000;
+      let percent;
+      if (elapsedSec < 45) {
+        percent = Math.round((elapsedSec / 45) * 80); // 0-45s → 0-80%
+      } else if (elapsedSec < 90) {
+        percent = 80 + Math.round(((elapsedSec - 45) / 45) * 15); // 45-90s → 80-95%
+      } else {
+        percent = 95; // 90s+ → stuck at 95%
       }
       
+      updateGeneratingButtonUI(sceneId, percent);
+      
+      // ✅ Fetch single scene status (lightweight)
+      const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board&_t=${Date.now()}`);
+      const scene = response.data;
+      const imageStatus = scene?.latest_image?.status || 'pending';
+      
+      console.log(`[Poll] Scene ${sceneId} status: ${imageStatus}, elapsed: ${Math.round(elapsedSec)}s, attempt: ${watch.attempts}/${maxAttempts}`);
+      
+      // ===== STATUS: COMPLETED =====
       if (imageStatus === 'completed') {
-        clearInterval(pollInterval);
-        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
+        clearInterval(timerId);
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        
         showToast('画像生成が完了しました', 'success');
         
-        // ✅ カード更新のみ（全体リロードなし）
+        // ✅ Update only this scene card (no full reload)
         await updateSingleSceneCard(sceneId);
         
-        // ✅ 全体ステータス確認（全シーン完了なら projects.status を completed に）
+        // ✅ Check if all images are done → update project status to 'completed'
         await checkAndUpdateProjectStatus();
-        
-      } else if (imageStatus === 'failed') {
-        clearInterval(pollInterval);
-        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
+        return;
+      }
+      
+      // ===== STATUS: FAILED =====
+      if (imageStatus === 'failed') {
+        clearInterval(timerId);
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
         
         const errorMsg = scene.latest_image?.error_message || '画像生成に失敗しました';
         showToast(`画像生成失敗: ${errorMsg}`, 'error');
         
-        // ✅ カード更新（エラー表示含む）
+        // ✅ Update card to show error + regenerate button
         await updateSingleSceneCard(sceneId);
+        return;
+      }
+      
+      // ===== TIMEOUT =====
+      if (watch.attempts >= maxAttempts) {
+        clearInterval(timerId);
+        // ⚠️ DON'T stop watch (allow manual resume)
         
-      } else if (attempts >= maxAttempts) {
-        clearInterval(pollInterval);
-        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
+        showToast(`画像生成に時間がかかっています（シーン${sceneId}）。通信状況を確認してください`, 'warning');
+        console.warn(`[Poll] Scene ${sceneId} timeout after ${maxAttempts} attempts. Watch NOT removed (can resume).`);
         
-        showToast('画像生成がタイムアウトしました', 'warning');
-        await updateSingleSceneCard(sceneId);
+        // Reset attempts to allow continuation
+        watch.attempts = 0;
+        watch.startedAt = Date.now();
+        return;
       }
       
     } catch (error) {
-      console.error('Poll scene image error:', error);
-      clearInterval(pollInterval);
-      if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
-      await updateSingleSceneCard(sceneId);
+      // ✅ CRITICAL: Network errors should NOT stop polling
+      console.warn(`[Poll] Transient error for scene ${sceneId}:`, error?.message || error);
+      // Continue to next tick (do NOT clear interval, do NOT stop watch)
     }
-  }, 5000); // Poll every 5 seconds
+  }, intervalMs);
+  
+  // Store timer ID for cleanup
+  const watch = window.generatingSceneWatch[sceneId];
+  if (watch) {
+    watch.timerId = timerId;
+  }
+}
+
+// Auto-resume generating scenes (called from initBuilderTab)
+function autoResumeGeneratingScenes(scenes) {
+  scenes.forEach(scene => {
+    const imageStatus = scene.latest_image?.status;
+    if (imageStatus === 'generating') {
+      // Check if already watching
+      if (!window.generatingSceneWatch[scene.id]) {
+        console.log(`[AutoResume] Resuming polling for scene ${scene.id}`);
+        startGenerationWatch(scene.id);
+        pollSceneImageGeneration(scene.id);
+      }
+    }
+  });
 }
