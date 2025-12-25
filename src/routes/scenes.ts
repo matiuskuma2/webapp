@@ -25,10 +25,22 @@ scenes.get('/:id', async (c) => {
       }, 404)
     }
 
-    // Parse bullets JSON
+    // Parse bullets JSON (safe parsing)
+    const rawBullets = scene.bullets;
+    let bulletsArr: any[] = [];
+    try {
+      if (rawBullets) {
+        const parsed = JSON.parse(String(rawBullets));
+        bulletsArr = Array.isArray(parsed) ? parsed : [];
+      }
+    } catch (err) {
+      console.warn(`Failed to parse bullets for scene ${sceneId}:`, err);
+      bulletsArr = [];
+    }
+
     const sceneData = {
       ...scene,
-      bullets: scene.bullets ? JSON.parse(scene.bullets as string) : []
+      bullets: bulletsArr
     }
 
     // view=board の場合、画像情報とスタイル情報を含める
@@ -105,7 +117,7 @@ scenes.get('/:id', async (c) => {
     return c.json(sceneData)
 
   } catch (error) {
-    console.error('Error fetching scene:', error)
+    console.error(`[GET /api/scenes/:id] Error fetching scene ${c.req.param('id')}, view=${c.req.query('view')}:`, error)
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
@@ -327,6 +339,58 @@ scenes.post('/:id/scenes/reorder', async (c) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Failed to reorder scenes'
+      }
+    }, 500)
+  }
+})
+
+// GET /api/scenes/:id/images - シーンの画像生成履歴取得
+scenes.get('/:id/images', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE id = ?
+    `).bind(sceneId).first()
+
+    if (!scene) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Scene not found'
+        }
+      }, 404)
+    }
+
+    // 画像生成履歴取得（新しい順）
+    const { results: imageGenerations } = await c.env.DB.prepare(`
+      SELECT id, prompt, r2_key, r2_url, status, is_active, error_message, created_at
+      FROM image_generations
+      WHERE scene_id = ?
+      ORDER BY created_at DESC
+    `).bind(sceneId).all()
+
+    return c.json({
+      scene_id: parseInt(sceneId),
+      total_images: imageGenerations.length,
+      images: imageGenerations.map((img: any) => ({
+        id: img.id,
+        prompt: img.prompt,
+        r2_key: img.r2_key,
+        image_url: img.r2_url,
+        status: img.status,
+        is_active: img.is_active === 1,
+        error_message: img.error_message,
+        created_at: img.created_at
+      }))
+    })
+  } catch (error) {
+    console.error(`[GET /api/scenes/:id/images] Error for scene ${c.req.param('id')}:`, error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to fetch scene images'
       }
     }, 500)
   }

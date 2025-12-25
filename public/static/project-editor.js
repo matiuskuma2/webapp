@@ -1419,7 +1419,9 @@ function renderBuilderScenes(scenes) {
               ${getRoleText(scene.role)}
             </span>
           </div>
-          ${getSceneStatusBadge(imageStatus)}
+          <div class="scene-status-badge-container">
+            ${getSceneStatusBadge(imageStatus)}
+          </div>
         </div>
         
         <!-- Content: Left-Right Split (PC) / Top-Bottom (Mobile) -->
@@ -1488,7 +1490,7 @@ ${escapeHtml(scene.dialogue)}
           <!-- Right: Image Preview & Actions -->
           <div class="space-y-4">
             <!-- Image Preview -->
-            <div class="relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
+            <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
               ${imageUrl 
                 ? `<img src="${imageUrl}" alt="Scene ${scene.idx}" class="w-full h-full object-cover" id="sceneImage-${scene.id}" />`
                 : `<div class="flex items-center justify-center h-full text-gray-400">
@@ -1510,7 +1512,7 @@ ${escapeHtml(scene.dialogue)}
             </div>
             
             <!-- Action Buttons -->
-            <div class="flex flex-wrap gap-2">
+            <div class="scene-action-buttons flex flex-wrap gap-2">
               ${!activeImage || imageStatus === 'failed'
                 ? `<button 
                      id="generateBtn-${scene.id}"
@@ -1673,6 +1675,8 @@ async function generateSceneImage(sceneId) {
   try {
     const response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-image`);
     
+    console.log('🔍 Generate image API response:', response.data);
+    
     if (response.data.id) {
       showToast('画像生成を開始しました', 'success');
       
@@ -1690,6 +1694,7 @@ async function generateSceneImage(sceneId) {
       startGenerationWatch(sceneId);
       pollSceneImageGeneration(sceneId);
     } else {
+      console.error('❌ API response does not contain id:', response.data);
       showToast('画像生成に失敗しました', 'error');
       window.sceneProcessing[sceneId] = false;
       await updateSingleSceneCard(sceneId);
