@@ -2486,11 +2486,22 @@ async function updateSingleSceneCard(sceneId) {
       const isFailed = imageStatus === 'failed';
       
       if (isGenerating || isProcessing) {
-        // 生成中
+        // 生成中 - ✅ IDを付けて進捗更新を可能にする
         actionBtnContainer.innerHTML = `
-          <button disabled class="px-4 py-2 bg-blue-500 text-white rounded opacity-50 cursor-not-allowed">
+          <button
+            id="regenerateBtn-${sceneId}"
+            disabled
+            class="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg opacity-75 cursor-not-allowed font-semibold touch-manipulation"
+          >
             <i class="fas fa-spinner fa-spin mr-2"></i>
-            再生成中...
+            生成中... 0%
+          </button>
+          <button
+            onclick="viewImageHistory(${sceneId})"
+            class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
+            ${!activeImage ? 'disabled' : ''}
+          >
+            <i class="fas fa-history mr-2"></i>履歴
           </button>
         `;
       } else if (isBulkActive) {
@@ -2686,7 +2697,10 @@ function updateGeneratingButtonUI(sceneId, percent) {
   // Find the specific generate/regenerate button (not the history button)
   const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
   const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
-  const actionBtn = generateBtn || regenerateBtn;
+  const actionBtn = 
+    generateBtn || 
+    regenerateBtn || 
+    cardElement.querySelector('.scene-action-buttons button'); // Fallback: any button in action container
   
   if (actionBtn) {
     // Preserve original classes and just update innerHTML
