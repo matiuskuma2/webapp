@@ -1636,12 +1636,12 @@ async function generateSceneImage(sceneId) {
     return;
   }
   
-  if (window.window.sceneProcessing[sceneId]) {
+  if (window.sceneProcessing[sceneId]) {
     showToast('このシーンは処理中です', 'warning');
     return;
   }
   
-  window.window.sceneProcessing[sceneId] = true;
+  window.sceneProcessing[sceneId] = true;
   
   // Disable both generate and regenerate buttons
   const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
@@ -1685,11 +1685,13 @@ async function generateSceneImage(sceneId) {
         }
       }
       
-      // Start polling for completion
+      // ✅ Start watching and polling for completion
+      console.log(`✅ Starting generation watch for scene ${sceneId}`);
+      startGenerationWatch(sceneId);
       pollSceneImageGeneration(sceneId);
     } else {
       showToast('画像生成に失敗しました', 'error');
-      window.window.sceneProcessing[sceneId] = false;
+      window.sceneProcessing[sceneId] = false;
       await updateSingleSceneCard(sceneId);
     }
   } catch (error) {
@@ -1707,7 +1709,7 @@ async function generateSceneImage(sceneId) {
       showToast('画像生成中にエラーが発生しました', 'error');
     }
     
-    window.window.sceneProcessing[sceneId] = false;
+    window.sceneProcessing[sceneId] = false;
     await updateSingleSceneCard(sceneId);
   }
 }
