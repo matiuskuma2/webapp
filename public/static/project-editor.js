@@ -1645,19 +1645,17 @@ async function generateSceneImage(sceneId) {
   
   window.sceneProcessing[sceneId] = true;
   
-  // Disable both generate and regenerate buttons
+  // Disable both generate and regenerate buttons (progress will be shown by polling)
   const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
   const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
   
   if (generateBtn) {
     generateBtn.disabled = true;
     generateBtn.classList.add('opacity-50', 'cursor-not-allowed');
-    generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>生成中...';
   }
   if (regenerateBtn) {
     regenerateBtn.disabled = true;
     regenerateBtn.classList.add('opacity-50', 'cursor-not-allowed');
-    regenerateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>再生成中...';
   }
   
   // Update prompt if edited
@@ -1692,6 +1690,7 @@ async function generateSceneImage(sceneId) {
       // ✅ Start watching and polling for completion
       console.log(`✅ Starting generation watch for scene ${sceneId}`);
       startGenerationWatch(sceneId);
+      updateGeneratingButtonUI(sceneId, 0); // Show 0% immediately
       pollSceneImageGeneration(sceneId);
     } else {
       console.error('❌ API response does not contain id:', response.data);
@@ -2606,16 +2605,26 @@ function stopGenerationWatch(sceneId) {
 // Update button UI with progress percentage
 function updateGeneratingButtonUI(sceneId, percent) {
   const cardElement = document.getElementById(`builder-scene-${sceneId}`);
-  if (!cardElement) return;
+  if (!cardElement) {
+    console.warn(`[updateGeneratingButtonUI] Card not found for scene ${sceneId}`);
+    return;
+  }
   
-  const actionBtn = cardElement.querySelector('.scene-action-buttons button');
+  // Find the specific generate/regenerate button (not the history button)
+  const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
+  const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
+  const actionBtn = generateBtn || regenerateBtn;
+  
   if (actionBtn) {
     actionBtn.disabled = true;
-    actionBtn.className = 'px-4 py-2 bg-yellow-500 text-white rounded opacity-75 cursor-not-allowed';
+    actionBtn.className = 'flex-1 px-4 py-2 bg-yellow-500 text-white rounded opacity-75 cursor-not-allowed';
     actionBtn.innerHTML = `
       <i class="fas fa-spinner fa-spin mr-2"></i>
       生成中... ${percent}%
     `;
+    console.log(`[Progress] Scene ${sceneId}: ${percent}%`);
+  } else {
+    console.warn(`[updateGeneratingButtonUI] Button not found for scene ${sceneId}`);
   }
 }
 
