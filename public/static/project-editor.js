@@ -2689,8 +2689,20 @@ function updateGeneratingButtonUI(sceneId, percent) {
   const actionBtn = generateBtn || regenerateBtn;
   
   if (actionBtn) {
+    // Preserve original classes and just update innerHTML
     actionBtn.disabled = true;
-    actionBtn.className = 'flex-1 px-4 py-2 bg-yellow-500 text-white rounded opacity-75 cursor-not-allowed';
+    
+    // Add generating state classes without removing original layout classes
+    if (!actionBtn.classList.contains('generating-state')) {
+      actionBtn.classList.add('generating-state');
+      actionBtn.classList.remove('hover:bg-purple-700', 'hover:bg-blue-700', 'hover:bg-green-700');
+      actionBtn.classList.add('opacity-75', 'cursor-not-allowed');
+      
+      // Change background to yellow for generating state
+      actionBtn.classList.remove('bg-purple-600', 'bg-blue-600', 'bg-green-600');
+      actionBtn.classList.add('bg-yellow-500');
+    }
+    
     actionBtn.innerHTML = `
       <i class="fas fa-spinner fa-spin mr-2"></i>
       生成中... ${percent}%
