@@ -375,16 +375,16 @@ projects.get('/:id/scenes', async (c) => {
     if (view === 'board') {
       const scenesWithMinimalImages = await Promise.all(
         scenes.map(async (scene: any) => {
-          // アクティブ画像のURLのみ
+          // アクティブ画像（r2_key, r2_url含む）
           const activeRecord = await c.env.DB.prepare(`
-            SELECT r2_key FROM image_generations
+            SELECT r2_key, r2_url FROM image_generations
             WHERE scene_id = ? AND is_active = 1
             LIMIT 1
           `).bind(scene.id).first()
 
-          // 最新ステータス＋エラーメッセージ（先頭80文字）
+          // 最新ステータス＋エラーメッセージ＋r2情報
           const latestRecord = await c.env.DB.prepare(`
-            SELECT status, substr(error_message, 1, 80) as error_message
+            SELECT status, r2_key, r2_url, substr(error_message, 1, 80) as error_message
             FROM image_generations
             WHERE scene_id = ?
             ORDER BY created_at DESC
@@ -400,9 +400,16 @@ projects.get('/:id/scenes', async (c) => {
             bullets: JSON.parse(scene.bullets),
             image_prompt: scene.image_prompt.substring(0, 100), // 最初の100文字のみ
             style_preset_id: scene.style_preset_id || null,
-            active_image: activeRecord ? { image_url: `/${activeRecord.r2_key}` } : null,
+            active_image: activeRecord ? { 
+              r2_key: activeRecord.r2_key,
+              r2_url: activeRecord.r2_url,
+              image_url: activeRecord.r2_url || `/${activeRecord.r2_key}` 
+            } : null,
             latest_image: latestRecord ? {
               status: latestRecord.status,
+              r2_key: latestRecord.r2_key,
+              r2_url: latestRecord.r2_url,
+              image_url: latestRecord.r2_url || (latestRecord.r2_key ? `/${latestRecord.r2_key}` : null),
               error_message: latestRecord.error_message
             } : null
           }
