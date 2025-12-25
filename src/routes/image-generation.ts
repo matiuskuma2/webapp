@@ -141,11 +141,33 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
         const r2Url = `/images/${r2Key}`
 
         // 成功 → status = 'completed', r2_key, r2_url保存
-        await c.env.DB.prepare(`
+        const updateResult = await c.env.DB.prepare(`
           UPDATE image_generations 
           SET status = 'completed', r2_key = ?, r2_url = ?
           WHERE id = ?
         `).bind(r2Key, r2Url, generationId).run()
+
+        // ✅ DB更新失敗時の検証
+        if (!updateResult.success) {
+          console.error(`DB update failed for generation ${generationId}:`, updateResult)
+          throw new Error('Failed to update image generation record')
+        }
+
+        // ✅ r2_url が null でないことを確認（念のため）
+        const verifyResult = await c.env.DB.prepare(`
+          SELECT r2_url FROM image_generations WHERE id = ?
+        `).bind(generationId).first()
+
+        if (!verifyResult || !verifyResult.r2_url) {
+          console.error(`r2_url is null after update for generation ${generationId}`)
+          // r2_url が null の場合、failed に戻す
+          await c.env.DB.prepare(`
+            UPDATE image_generations 
+            SET status = 'failed', error_message = 'R2 URL update failed'
+            WHERE id = ?
+          `).bind(generationId).run()
+          throw new Error('r2_url is null after DB update')
+        }
 
         successCount++
 
@@ -395,11 +417,34 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     `).bind(sceneId, generationId).run()
 
     // 12. 新しい画像をアクティブ化、status = 'completed'
-    await c.env.DB.prepare(`
+    const r2Url = `/images/${r2Key}`
+    
+    const updateResult = await c.env.DB.prepare(`
       UPDATE image_generations 
-      SET status = 'completed', r2_key = ?, is_active = 1
+      SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1
       WHERE id = ?
-    `).bind(r2Key, generationId).run()
+    `).bind(r2Key, r2Url, generationId).run()
+
+    // ✅ DB更新失敗時の検証
+    if (!updateResult.success) {
+      console.error(`DB update failed for generation ${generationId}:`, updateResult)
+      throw new Error('Failed to update image generation record')
+    }
+
+    // ✅ r2_url が null でないことを確認
+    const verifyResult = await c.env.DB.prepare(`
+      SELECT r2_url FROM image_generations WHERE id = ?
+    `).bind(generationId).first()
+
+    if (!verifyResult || !verifyResult.r2_url) {
+      console.error(`r2_url is null after update for generation ${generationId}`)
+      await c.env.DB.prepare(`
+        UPDATE image_generations 
+        SET status = 'failed', error_message = 'R2 URL update failed'
+        WHERE id = ?
+      `).bind(generationId).run()
+      throw new Error('r2_url is null after DB update')
+    }
 
     // 13. レスポンス返却
     return c.json({
@@ -407,6 +452,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       image_generation_id: generationId,
       status: 'completed',
       r2_key: r2Key,
+      r2_url: r2Url,
       is_active: true
     }, 200)
 
