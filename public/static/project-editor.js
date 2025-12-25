@@ -5,7 +5,7 @@ const API_BASE = '/api';
 let currentProject = null;
 let isProcessing = false; // ボタン連打防止用フラグ（グローバル処理用）
 window.isBulkImageGenerating = false; // Global flag for bulk image generation (window scope for template access)
-let sceneProcessing = {}; // 行単位ロック用 { sceneId: boolean }
+window.sceneProcessing = {}; // Global flag for individual scene processing (window scope)
 let mediaRecorder = null;
 let audioChunks = [];
 let recordingStartTime = 0;
@@ -1073,12 +1073,12 @@ function renderScenes(scenes) {
 // Save scene (行単位ロック)
 async function saveScene(sceneId) {
   // 行単位チェック
-  if (sceneProcessing[sceneId]) {
+  if (window.sceneProcessing[sceneId]) {
     showToast('このシーンは処理中です', 'warning');
     return;
   }
   
-  sceneProcessing[sceneId] = true;
+  window.sceneProcessing[sceneId] = true;
   setButtonLoading(`saveBtn-${sceneId}`, true);
   
   try {
@@ -1108,7 +1108,7 @@ async function saveScene(sceneId) {
     console.error('Save scene error:', error);
     showToast('シーン保存中にエラーが発生しました', 'error');
   } finally {
-    sceneProcessing[sceneId] = false;
+    window.sceneProcessing[sceneId] = false;
     setButtonLoading(`saveBtn-${sceneId}`, false);
   }
 }
@@ -1120,12 +1120,12 @@ async function deleteScene(sceneId) {
   }
   
   // 行単位チェック
-  if (sceneProcessing[sceneId]) {
+  if (window.sceneProcessing[sceneId]) {
     showToast('このシーンは処理中です', 'warning');
     return;
   }
   
-  sceneProcessing[sceneId] = true;
+  window.sceneProcessing[sceneId] = true;
   setButtonLoading(`deleteBtn-${sceneId}`, true);
   
   try {
@@ -1143,7 +1143,7 @@ async function deleteScene(sceneId) {
     console.error('Delete scene error:', error);
     showToast('シーン削除中にエラーが発生しました', 'error');
   } finally {
-    sceneProcessing[sceneId] = false;
+    window.sceneProcessing[sceneId] = false;
     setButtonLoading(`deleteBtn-${sceneId}`, false);
   }
 }
@@ -1623,12 +1623,12 @@ async function generateSceneImage(sceneId) {
     return;
   }
   
-  if (sceneProcessing[sceneId]) {
+  if (window.window.sceneProcessing[sceneId]) {
     showToast('このシーンは処理中です', 'warning');
     return;
   }
   
-  sceneProcessing[sceneId] = true;
+  window.window.sceneProcessing[sceneId] = true;
   
   // Disable both generate and regenerate buttons
   const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
@@ -1676,7 +1676,7 @@ async function generateSceneImage(sceneId) {
       pollSceneImageGeneration(sceneId);
     } else {
       showToast('画像生成に失敗しました', 'error');
-      sceneProcessing[sceneId] = false;
+      window.window.sceneProcessing[sceneId] = false;
       await updateSingleSceneCard(sceneId);
     }
   } catch (error) {
@@ -1694,7 +1694,7 @@ async function generateSceneImage(sceneId) {
       showToast('画像生成中にエラーが発生しました', 'error');
     }
     
-    sceneProcessing[sceneId] = false;
+    window.window.sceneProcessing[sceneId] = false;
     await updateSingleSceneCard(sceneId);
   }
 }
@@ -2572,7 +2572,7 @@ function pollSceneImageGeneration(sceneId) {
       if (scene.error) {
         console.error('Scene fetch error:', scene.error);
         clearInterval(pollInterval);
-        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
         return;
       }
       
@@ -2596,7 +2596,7 @@ function pollSceneImageGeneration(sceneId) {
       
       if (imageStatus === 'completed') {
         clearInterval(pollInterval);
-        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
         showToast('画像生成が完了しました', 'success');
         
         // ✅ カード更新のみ（全体リロードなし）
@@ -2607,7 +2607,7 @@ function pollSceneImageGeneration(sceneId) {
         
       } else if (imageStatus === 'failed') {
         clearInterval(pollInterval);
-        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
         
         const errorMsg = scene.latest_image?.error_message || '画像生成に失敗しました';
         showToast(`画像生成失敗: ${errorMsg}`, 'error');
@@ -2617,7 +2617,7 @@ function pollSceneImageGeneration(sceneId) {
         
       } else if (attempts >= maxAttempts) {
         clearInterval(pollInterval);
-        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
         
         showToast('画像生成がタイムアウトしました', 'warning');
         await updateSingleSceneCard(sceneId);
@@ -2626,7 +2626,7 @@ function pollSceneImageGeneration(sceneId) {
     } catch (error) {
       console.error('Poll scene image error:', error);
       clearInterval(pollInterval);
-      if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+      if (window.sceneProcessing) window.window.sceneProcessing[sceneId] = false;
       await updateSingleSceneCard(sceneId);
     }
   }, 5000); // Poll every 5 seconds

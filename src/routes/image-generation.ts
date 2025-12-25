@@ -137,8 +137,8 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
         await c.env.R2.put(r2Key, imageResult.imageData)
 
-        // R2 URL: Pages Functions経由で配信 (/images/* → images.ts)
-        const r2Url = `/images/${r2Key}`
+        // R2 URL: r2_key がすでに "images/" で始まっているので、"/" だけ追加
+        const r2Url = `/${r2Key}`
 
         // 成功 → status = 'completed', r2_key, r2_url保存
         const updateResult = await c.env.DB.prepare(`
@@ -417,7 +417,8 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     `).bind(sceneId, generationId).run()
 
     // 12. 新しい画像をアクティブ化、status = 'completed'
-    const r2Url = `/images/${r2Key}`
+    // r2_key がすでに "images/" で始まっているので、"/" だけ追加
+    const r2Url = `/${r2Key}`
     
     const updateResult = await c.env.DB.prepare(`
       UPDATE image_generations 
