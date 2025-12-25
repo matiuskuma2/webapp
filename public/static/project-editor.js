@@ -1672,6 +1672,10 @@ async function generateSceneImage(sceneId) {
   
   // ✅ Start fake progress timer BEFORE API call (for synchronous API)
   startGenerationWatch(sceneId);
+  
+  // Wait for next tick to ensure DOM is ready
+  await new Promise(resolve => setTimeout(resolve, 0));
+  
   updateGeneratingButtonUI(sceneId, 0); // Show 0% immediately
   
   let fakePercent = 0;
@@ -2487,23 +2491,32 @@ async function updateSingleSceneCard(sceneId) {
       
       if (isGenerating || isProcessing) {
         // 生成中 - ✅ IDを付けて進捗更新を可能にする
-        actionBtnContainer.innerHTML = `
-          <button
-            id="regenerateBtn-${sceneId}"
-            disabled
-            class="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg opacity-75 cursor-not-allowed font-semibold touch-manipulation"
-          >
-            <i class="fas fa-spinner fa-spin mr-2"></i>
-            生成中... 0%
-          </button>
-          <button
-            onclick="viewImageHistory(${sceneId})"
-            class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
-            ${!activeImage ? 'disabled' : ''}
-          >
-            <i class="fas fa-history mr-2"></i>履歴
-          </button>
-        `;
+        // ✅ IMPORTANT: Don't overwrite if fake timer is running (generatingSceneWatch exists)
+        const existingBtn = document.getElementById(`regenerateBtn-${sceneId}`) || document.getElementById(`generateBtn-${sceneId}`);
+        const timerRunning = window.generatingSceneWatch?.[sceneId];
+        
+        if (!existingBtn || !timerRunning) {
+          // Only recreate button if it doesn't exist OR timer is not running
+          actionBtnContainer.innerHTML = `
+            <button
+              id="regenerateBtn-${sceneId}"
+              disabled
+              class="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg opacity-75 cursor-not-allowed font-semibold touch-manipulation"
+            >
+              <i class="fas fa-spinner fa-spin mr-2"></i>
+              生成中... 0%
+            </button>
+            <button
+              onclick="viewImageHistory(${sceneId})"
+              class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
+              ${!activeImage ? 'disabled' : ''}
+            >
+              <i class="fas fa-history mr-2"></i>履歴
+            </button>
+          `;
+        } else {
+          console.log(`[UpdateScene] Timer running for scene ${sceneId}, keeping existing button`);
+        }
       } else if (isBulkActive) {
         // 一括処理中（ロック）
         actionBtnContainer.innerHTML = `
