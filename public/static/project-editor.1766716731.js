@@ -1937,6 +1937,34 @@ async function generateBulkImages(mode) {
         btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${progressText}`;
       }
       
+      // 🎯 BULK PROGRESS: Update per-scene progress
+      try {
+        const scenesRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
+        const scenes = scenesRes.data.scenes || [];
+        
+        scenes.forEach(scene => {
+          const latestImage = scene.latest_image;
+          const imageStatus = latestImage?.status || 'pending';
+          
+          if (imageStatus === 'generating') {
+            // Start fake progress if not already running
+            if (!window.generatingSceneWatch || !window.generatingSceneWatch[scene.id]) {
+              console.log(`🚀 [BULK] Starting fake progress for scene ${scene.id}`);
+              startGenerationWatch(scene.id);
+            }
+          } else if (imageStatus === 'completed') {
+            // Stop fake progress and update to completed state
+            if (window.generatingSceneWatch && window.generatingSceneWatch[scene.id]) {
+              console.log(`✅ [BULK] Scene ${scene.id} completed, stopping fake progress`);
+              stopGenerationWatch(scene.id);
+              setPrimaryButtonState(scene.id, 'completed', 0);
+            }
+          }
+        });
+      } catch (sceneError) {
+        console.warn('[BULK] Failed to fetch scenes for progress update:', sceneError);
+      }
+      
       // 2) 完了判定
       if (pending === 0 && generating === 0) {
         // 最後のAPI呼び出しでプロジェクトステータスを 'completed' に更新
