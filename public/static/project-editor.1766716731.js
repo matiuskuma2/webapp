@@ -1677,6 +1677,9 @@ function setPrimaryButtonState(sceneId, state, percent = 0) {
   }
 }
 
+// ✅ Expose to window for debugging and external access
+window.setPrimaryButtonState = setPrimaryButtonState;
+
 // Get role text
 function getRoleText(role) {
   const roleMap = {
