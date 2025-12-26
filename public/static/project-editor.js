@@ -1515,13 +1515,17 @@ ${escapeHtml(scene.dialogue)}
             <div class="scene-action-buttons flex flex-wrap gap-2">
               <button 
                 id="primaryBtn-${scene.id}"
-                class="flex-1 px-4 py-2 text-white rounded-lg transition-colors font-semibold touch-manipulation"
-              ></button>
+                class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg transition-colors font-semibold touch-manipulation"
+              >
+                <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+              </button>
               <button
                 id="historyBtn-${scene.id}"
                 onclick="viewImageHistory(${scene.id})"
-                class="px-4 py-2 text-white rounded-lg transition-colors font-semibold touch-manipulation"
-              ></button>
+                class="px-4 py-2 bg-gray-300 text-white rounded-lg transition-colors font-semibold touch-manipulation"
+              >
+                <i class="fas fa-history mr-2"></i>履歴
+              </button>
             </div> 
                     : !activeImage || imageStatus === 'failed'
                       ? '画像生成'  // IDLE/FAILED
@@ -2585,8 +2589,12 @@ async function updateSingleSceneCard(sceneId) {
           // ボタンが存在しない、またはタイマーが動いていない場合のみ作成
           if (!existingBtn) {
             actionBtnContainer.innerHTML = `
-              <button id="primaryBtn-${sceneId}" class="flex-1"></button>
-              <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})"></button>
+              <button id="primaryBtn-${sceneId}" class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
+                <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+              </button>
+              <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})" class="px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
+                <i class="fas fa-history mr-2"></i>履歴
+              </button>
             `;
           }
           setPrimaryButtonState(sceneId, 'generating', 0);
@@ -2607,8 +2615,12 @@ async function updateSingleSceneCard(sceneId) {
         const existingBtn = document.getElementById(`primaryBtn-${sceneId}`);
         if (!existingBtn) {
           actionBtnContainer.innerHTML = `
-            <button id="primaryBtn-${sceneId}" class="flex-1"></button>
-            <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})"></button>
+            <button id="primaryBtn-${sceneId}" class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
+              <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+            </button>
+            <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})" class="px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
+              <i class="fas fa-history mr-2"></i>履歴
+            </button>
           `;
         }
         
