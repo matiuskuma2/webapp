@@ -2616,7 +2616,10 @@ async function updateSingleSceneCard(sceneId) {
       } else {
         // 完了 or 失敗 or 未生成
         const existingBtn = document.getElementById(`primaryBtn-${sceneId}`);
+        console.log(`[UpdateScene] Complete/Failed/Idle state - existingBtn: ${!!existingBtn}, hasImage: ${hasImage}, isFailed: ${isFailed}`);
+        
         if (!existingBtn) {
+          console.log(`[UpdateScene] Creating new buttons for scene ${sceneId}`);
           actionBtnContainer.innerHTML = `
             <button id="primaryBtn-${sceneId}" class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
               <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
@@ -2625,13 +2628,18 @@ async function updateSingleSceneCard(sceneId) {
               <i class="fas fa-history mr-2"></i>履歴
             </button>
           `;
+        } else {
+          console.log(`[UpdateScene] Keeping existing buttons for scene ${sceneId}`);
         }
         
         if (isFailed) {
+          console.log(`[UpdateScene] Setting FAILED state for scene ${sceneId}`);
           setPrimaryButtonState(sceneId, 'failed', 0);
         } else if (hasImage) {
+          console.log(`[UpdateScene] Setting COMPLETED state for scene ${sceneId}`);
           setPrimaryButtonState(sceneId, 'completed', 0);
         } else {
+          console.log(`[UpdateScene] Setting IDLE state for scene ${sceneId}`);
           setPrimaryButtonState(sceneId, 'idle', 0);
         }
         
