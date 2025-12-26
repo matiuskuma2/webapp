@@ -262,6 +262,7 @@ webapp/
 - **04_DB_SCHEMA.md**: データベーススキーマ完全版
 - **05_API_SPEC.md**: APIエンドポイント仕様
 - **09_AI_DEV_RULES.md**: AI開発者向けルール
+- **BUTTON_PROGRESS_FIX.md**: 画像生成ボタンと進捗表示の完全修正ドキュメント ⭐ 重要
 
 ---
 
