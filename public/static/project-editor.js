@@ -2495,8 +2495,14 @@ async function updateSingleSceneCard(sceneId) {
         const existingBtn = document.getElementById(`regenerateBtn-${sceneId}`) || document.getElementById(`generateBtn-${sceneId}`);
         const timerRunning = window.generatingSceneWatch?.[sceneId];
         
-        if (!existingBtn || !timerRunning) {
-          // Only recreate button if it doesn't exist OR timer is not running
+        // ✅ ADDITIONAL CHECK: If button already has progress % (not just "0%"), keep it
+        const hasProgressText = existingBtn?.textContent?.includes('%');
+        const isNotZeroPercent = hasProgressText && !existingBtn?.textContent?.includes('0%');
+        
+        if (!existingBtn || (!timerRunning && !isNotZeroPercent)) {
+          // Only recreate button if:
+          // - Button doesn't exist OR
+          // - (Timer not running AND button shows 0% or no %)
           actionBtnContainer.innerHTML = `
             <button
               id="regenerateBtn-${sceneId}"
@@ -2515,7 +2521,7 @@ async function updateSingleSceneCard(sceneId) {
             </button>
           `;
         } else {
-          console.log(`[UpdateScene] Timer running for scene ${sceneId}, keeping existing button`);
+          console.log(`[UpdateScene] Keeping existing button for scene ${sceneId} (timer: ${!!timerRunning}, progress: ${existingBtn?.textContent?.trim().split('\n').pop()})`);
         }
       } else if (isBulkActive) {
         // 一括処理中（ロック）
