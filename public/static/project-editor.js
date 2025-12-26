@@ -1513,25 +1513,23 @@ ${escapeHtml(scene.dialogue)}
             
             <!-- Action Buttons -->
             <div class="scene-action-buttons flex flex-wrap gap-2">
-              ${!activeImage || imageStatus === 'failed'
-                ? `<button 
-                     id="generateBtn-${scene.id}"
-                     onclick="generateSceneImage(${scene.id})"
-                     class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-purple-600 hover:bg-purple-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
-                     ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
-                   >
-                     <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-magic'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '画像生成'}
-                   </button>`
-                : `<button 
-                     id="regenerateBtn-${scene.id}"
-                     onclick="regenerateSceneImage(${scene.id})"
-                     class="flex-1 px-4 py-2 ${window.isBulkImageGenerating ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'} text-white rounded-lg transition-colors font-semibold touch-manipulation"
-                     ${window.isBulkImageGenerating ? 'disabled title="一括画像生成中"' : ''}
-                   >
-                     <i class="fas ${window.isBulkImageGenerating ? 'fa-lock' : 'fa-redo'} mr-2"></i>${window.isBulkImageGenerating ? '一括処理中' : '再生成'}
-                   </button>`
-              }
               <button 
+                id="primaryBtn-${scene.id}"
+                class="flex-1 px-4 py-2 text-white rounded-lg transition-colors font-semibold touch-manipulation"
+              ></button>
+              <button
+                id="historyBtn-${scene.id}"
+                onclick="viewImageHistory(${scene.id})"
+                class="px-4 py-2 text-white rounded-lg transition-colors font-semibold touch-manipulation"
+              ></button>
+            </div> 
+                    : !activeImage || imageStatus === 'failed'
+                      ? '画像生成'  // IDLE/FAILED
+                      : '再生成'    // DONE
+                }
+              </button>
+              <button 
+                id="historyBtn-${scene.id}"
                 onclick="viewImageHistory(${scene.id})"
                 class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
                 ${!activeImage ? 'disabled' : ''}
@@ -1572,6 +1570,107 @@ ${escapeHtml(scene.dialogue)}
       </div>
     `;
   }).join('');
+  
+  // ✅ 初期状態を設定（レンダリング直後に実行）
+  filteredScenes.forEach(scene => {
+    const activeImage = scene.active_image || null;
+    const latestImage = scene.latest_image || null;
+    const imageStatus = latestImage ? latestImage.status : 'pending';
+    const isFailed = imageStatus === 'failed';
+    const hasImage = latestImage && imageStatus === 'completed';
+    
+    // 状態に応じて初期ボタンを設定
+    if (window.isBulkImageGenerating) {
+      // 一括処理中は無効化
+      const primaryBtn = document.getElementById(`primaryBtn-${scene.id}`);
+      if (primaryBtn) {
+        primaryBtn.disabled = true;
+        primaryBtn.className = 'flex-1 px-4 py-2 bg-gray-400 text-white rounded-lg cursor-not-allowed font-semibold touch-manipulation';
+        primaryBtn.innerHTML = '<i class="fas fa-lock mr-2"></i>一括処理中';
+      }
+    } else if (isFailed) {
+      setPrimaryButtonState(scene.id, 'failed', 0);
+    } else if (hasImage) {
+      setPrimaryButtonState(scene.id, 'completed', 0);
+    } else {
+      setPrimaryButtonState(scene.id, 'idle', 0);
+    }
+    
+    // 履歴ボタンを設定
+    const historyBtn = document.getElementById(`historyBtn-${scene.id}`);
+    if (historyBtn) {
+      historyBtn.disabled = !activeImage;
+      historyBtn.className = `px-4 py-2 rounded-lg font-semibold touch-manipulation ${
+        activeImage ? 'bg-gray-600 text-white hover:bg-gray-700 transition-colors' : 'bg-gray-400 text-gray-200 cursor-not-allowed'
+      }`;
+      historyBtn.innerHTML = '<i class="fas fa-history mr-2"></i>履歴';
+    }
+  });
+}
+
+// ========== Task C: State-driven button management ==========
+/**
+ * Set primary button state (IDLE/RUNNING/DONE/FAILED)
+ * @param {number} sceneId 
+ * @param {string} state - 'IDLE' | 'RUNNING' | 'DONE' | 'FAILED'
+ * @param {number} percent - Progress percentage (for RUNNING state)
+ */
+function setPrimaryButtonState(sceneId, state, percent = 0) {
+  const primaryBtn = document.getElementById(`primaryBtn-${sceneId}`);
+  if (!primaryBtn) {
+    console.warn(`[setPrimaryButtonState] primaryBtn not found for scene ${sceneId}`);
+    return;
+  }
+
+  // Remove all state classes
+  primaryBtn.classList.remove(
+    'bg-blue-600', 'hover:bg-blue-700',     // IDLE
+    'bg-yellow-500', 'opacity-75',           // RUNNING
+    'bg-green-600', 'hover:bg-green-700',   // DONE
+    'bg-red-600', 'hover:bg-red-700',       // FAILED
+    'bg-orange-600', 'hover:bg-orange-700', // FAILED (alternative)
+    'cursor-not-allowed'
+  );
+
+  switch (state.toLowerCase()) {
+    case 'idle':
+      // Blue button: "画像生成"
+      primaryBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+      primaryBtn.disabled = false;
+      primaryBtn.onclick = () => generateSceneImage(sceneId);
+      primaryBtn.innerHTML = `<i class="fas fa-magic mr-2"></i>画像生成`;
+      break;
+
+    case 'generating':
+    case 'running':
+      // Yellow button: "生成中... XX%" (disabled)
+      primaryBtn.classList.add('bg-yellow-500', 'opacity-75', 'cursor-not-allowed');
+      primaryBtn.disabled = true;
+      primaryBtn.onclick = null;
+      primaryBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>生成中... ${percent}%`;
+      console.log(`[Progress] Scene ${sceneId}: ${percent}%`);
+      break;
+
+    case 'completed':
+    case 'done':
+      // Green button: "再生成"
+      primaryBtn.classList.add('bg-green-600', 'hover:bg-green-700');
+      primaryBtn.disabled = false;
+      primaryBtn.onclick = () => regenerateSceneImage(sceneId);
+      primaryBtn.innerHTML = `<i class="fas fa-redo mr-2"></i>再生成`;
+      break;
+
+    case 'failed':
+      // Red button: "再生成" (after failure)
+      primaryBtn.classList.add('bg-red-600', 'hover:bg-red-700');
+      primaryBtn.disabled = false;
+      primaryBtn.onclick = () => regenerateSceneImage(sceneId);
+      primaryBtn.innerHTML = `<i class="fas fa-redo mr-2"></i>再生成`;
+      break;
+
+    default:
+      console.error(`[setPrimaryButtonState] Invalid state: ${state}`);
+  }
 }
 
 // Get role text
@@ -1644,19 +1743,6 @@ async function generateSceneImage(sceneId) {
   }
   
   window.sceneProcessing[sceneId] = true;
-  
-  // Disable both generate and regenerate buttons (progress will be shown by polling)
-  const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
-  const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
-  
-  if (generateBtn) {
-    generateBtn.disabled = true;
-    generateBtn.classList.add('opacity-50', 'cursor-not-allowed');
-  }
-  if (regenerateBtn) {
-    regenerateBtn.disabled = true;
-    regenerateBtn.classList.add('opacity-50', 'cursor-not-allowed');
-  }
   
   // Update prompt if edited
   const prompt = document.getElementById(`builderPrompt-${sceneId}`)?.value.trim();
@@ -2490,38 +2576,22 @@ async function updateSingleSceneCard(sceneId) {
       const isFailed = imageStatus === 'failed';
       
       if (isGenerating || isProcessing) {
-        // 生成中 - ✅ IDを付けて進捗更新を可能にする
-        // ✅ IMPORTANT: Don't overwrite if fake timer is running (generatingSceneWatch exists)
-        const existingBtn = document.getElementById(`regenerateBtn-${sceneId}`) || document.getElementById(`generateBtn-${sceneId}`);
+        // 生成中 - ✅ setPrimaryButtonState()を使用
         const timerRunning = window.generatingSceneWatch?.[sceneId];
+        const existingBtn = document.getElementById(`primaryBtn-${sceneId}`);
         
-        // ✅ ADDITIONAL CHECK: If button already has progress % (not just "0%"), keep it
-        const hasProgressText = existingBtn?.textContent?.includes('%');
-        const isNotZeroPercent = hasProgressText && !existingBtn?.textContent?.includes('0%');
-        
-        if (!existingBtn || (!timerRunning && !isNotZeroPercent)) {
-          // Only recreate button if:
-          // - Button doesn't exist OR
-          // - (Timer not running AND button shows 0% or no %)
-          actionBtnContainer.innerHTML = `
-            <button
-              id="regenerateBtn-${sceneId}"
-              disabled
-              class="flex-1 px-4 py-2 bg-yellow-500 text-white rounded-lg opacity-75 cursor-not-allowed font-semibold touch-manipulation"
-            >
-              <i class="fas fa-spinner fa-spin mr-2"></i>
-              生成中... 0%
-            </button>
-            <button
-              onclick="viewImageHistory(${sceneId})"
-              class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
-              ${!activeImage ? 'disabled' : ''}
-            >
-              <i class="fas fa-history mr-2"></i>履歴
-            </button>
-          `;
+        // タイマーが実行中で、ボタンが既に存在する場合は上書きしない
+        if (!existingBtn || !timerRunning) {
+          // ボタンが存在しない、またはタイマーが動いていない場合のみ作成
+          if (!existingBtn) {
+            actionBtnContainer.innerHTML = `
+              <button id="primaryBtn-${sceneId}" class="flex-1"></button>
+              <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})"></button>
+            `;
+          }
+          setPrimaryButtonState(sceneId, 'generating', 0);
         } else {
-          console.log(`[UpdateScene] Keeping existing button for scene ${sceneId} (timer: ${!!timerRunning}, progress: ${existingBtn?.textContent?.trim().split('\n').pop()})`);
+          console.log(`[UpdateScene] Keeping existing button for scene ${sceneId} (timer running)`);
         }
       } else if (isBulkActive) {
         // 一括処理中（ロック）
@@ -2532,24 +2602,33 @@ async function updateSingleSceneCard(sceneId) {
             一括処理中
           </button>
         `;
-      } else if (hasImage) {
-        // 再生成ボタン
-        actionBtnContainer.innerHTML = `
-          <button onclick="regenerateSceneImage(${sceneId})" 
-                  class="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded transition">
-            <i class="fas fa-sync-alt mr-2"></i>
-            再生成
-          </button>
-        `;
       } else {
-        // 初回生成ボタン
-        actionBtnContainer.innerHTML = `
-          <button onclick="generateSceneImage(${sceneId})"
-                  class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded transition">
-            <i class="fas fa-magic mr-2"></i>
-            画像生成
-          </button>
-        `;
+        // 完了 or 失敗 or 未生成
+        const existingBtn = document.getElementById(`primaryBtn-${sceneId}`);
+        if (!existingBtn) {
+          actionBtnContainer.innerHTML = `
+            <button id="primaryBtn-${sceneId}" class="flex-1"></button>
+            <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})"></button>
+          `;
+        }
+        
+        if (isFailed) {
+          setPrimaryButtonState(sceneId, 'failed', 0);
+        } else if (hasImage) {
+          setPrimaryButtonState(sceneId, 'completed', 0);
+        } else {
+          setPrimaryButtonState(sceneId, 'idle', 0);
+        }
+        
+        // 履歴ボタンを更新
+        const historyBtn = document.getElementById(`historyBtn-${sceneId}`);
+        if (historyBtn) {
+          historyBtn.disabled = !activeImage;
+          historyBtn.className = `px-4 py-2 rounded-lg font-semibold touch-manipulation ${
+            activeImage ? 'bg-gray-600 text-white hover:bg-gray-700 transition-colors' : 'bg-gray-400 text-gray-200 cursor-not-allowed'
+          }`;
+          historyBtn.innerHTML = '<i class="fas fa-history mr-2"></i>履歴';
+        }
       }
     }
     
@@ -2707,43 +2786,8 @@ function stopGenerationWatch(sceneId) {
 
 // Update button UI with progress percentage
 function updateGeneratingButtonUI(sceneId, percent) {
-  const cardElement = document.getElementById(`builder-scene-${sceneId}`);
-  if (!cardElement) {
-    console.warn(`[updateGeneratingButtonUI] Card not found for scene ${sceneId}`);
-    return;
-  }
-  
-  // Find the specific generate/regenerate button (not the history button)
-  const generateBtn = document.getElementById(`generateBtn-${sceneId}`);
-  const regenerateBtn = document.getElementById(`regenerateBtn-${sceneId}`);
-  const actionBtn = 
-    generateBtn || 
-    regenerateBtn || 
-    cardElement.querySelector('.scene-action-buttons button'); // Fallback: any button in action container
-  
-  if (actionBtn) {
-    // Preserve original classes and just update innerHTML
-    actionBtn.disabled = true;
-    
-    // Add generating state classes without removing original layout classes
-    if (!actionBtn.classList.contains('generating-state')) {
-      actionBtn.classList.add('generating-state');
-      actionBtn.classList.remove('hover:bg-purple-700', 'hover:bg-blue-700', 'hover:bg-green-700');
-      actionBtn.classList.add('opacity-75', 'cursor-not-allowed');
-      
-      // Change background to yellow for generating state
-      actionBtn.classList.remove('bg-purple-600', 'bg-blue-600', 'bg-green-600');
-      actionBtn.classList.add('bg-yellow-500');
-    }
-    
-    actionBtn.innerHTML = `
-      <i class="fas fa-spinner fa-spin mr-2"></i>
-      生成中... ${percent}%
-    `;
-    console.log(`[Progress] Scene ${sceneId}: ${percent}%`);
-  } else {
-    console.warn(`[updateGeneratingButtonUI] Button not found for scene ${sceneId}`);
-  }
+  // Use new state-driven function
+  setPrimaryButtonState(sceneId, 'RUNNING', percent);
 }
 
 // Robust polling function with network error resilience
