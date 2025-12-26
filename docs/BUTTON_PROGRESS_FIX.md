@@ -911,15 +911,157 @@ const prompt = document.getElementById(`builderPrompt-${sceneId}`)?.value.trim()
 
 ---
 
+## 一括生成での進捗表示
+
+### 📦 一括生成の仕様
+
+**要求仕様:**
+- 一括生成時も、各シーンで独立した擬似進捗を表示
+- 個別生成と同じ UX（0% → 100%）
+- ボタンは消えない
+- 完了したシーンから順次「再生成」に戻る
+
+### 🔧 実装方針
+
+**アプローチA: 擬似進捗（採用）**
+
+- 5秒ごとのポーリング時に全シーン状態を取得
+- `status === 'generating'` のシーンで擬似進捗開始
+- `status === 'completed'` のシーンで擬似進捗停止
+- 既存の `startGenerationWatch()` / `stopGenerationWatch()` を再利用
+
+**実装コード:**
+```javascript
+// 一括生成のポーリングループ内
+while (pollCount < maxPolls) {
+  // ステータス取得
+  const statusRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/generate-images/status`);
+  const { processed, pending, failed, generating, status } = statusRes.data;
+  
+  // 🎯 各シーンの状態を取得して擬似進捗を開始/停止
+  try {
+    const scenesRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
+    const scenes = scenesRes.data.scenes || [];
+    
+    scenes.forEach(scene => {
+      const latestImage = scene.latest_image;
+      const imageStatus = latestImage?.status || 'pending';
+      
+      if (imageStatus === 'generating') {
+        // 擬似進捗開始（既に動いている場合は何もしない）
+        if (!window.generatingSceneWatch || !window.generatingSceneWatch[scene.id]) {
+          console.log(`🚀 [BULK] Starting fake progress for scene ${scene.id}`);
+          startGenerationWatch(scene.id);
+        }
+      } else if (imageStatus === 'completed') {
+        // 擬似進捗停止 & 完了状態へ
+        if (window.generatingSceneWatch && window.generatingSceneWatch[scene.id]) {
+          console.log(`✅ [BULK] Scene ${scene.id} completed, stopping fake progress`);
+          stopGenerationWatch(scene.id);
+          setPrimaryButtonState(scene.id, 'completed', 0);
+        }
+      }
+    });
+  } catch (sceneError) {
+    console.warn('[BULK] Failed to fetch scenes for progress update:', sceneError);
+  }
+  
+  // 5秒待機
+  await new Promise(resolve => setTimeout(resolve, 5000));
+  pollCount++;
+}
+```
+
+### ✅ 期待される動作
+
+**一括生成開始時:**
+1. 全シーンのボタンが「一括処理中」で無効化
+2. バックエンドが順次生成開始
+
+**生成中:**
+1. シーンAが `generating` になる → 擬似進捗開始（黄色、0%）
+2. 1秒ごとに進捗更新: 1% → 3% → 5% → ... → 95%
+3. シーンAが `completed` になる → 擬似進捗停止、100%表示、緑の「再生成」へ
+4. シーンB、C、... も同様に独立して進捗表示
+
+**完了時:**
+- すべてのシーンが緑の「再生成」ボタンになる
+- トーストで「画像生成完了！ (N件)」を表示
+
+### 🎯 重要ポイント
+
+1. **各シーン独立**
+   - 各シーンは独立したタイマーで進捗表示
+   - あるシーンが完了しても、他のシーンには影響しない
+
+2. **ポーリング頻度**
+   - 5秒ごとに全シーン状態を確認
+   - ポーリング中は擬似進捗が動作し続ける
+
+3. **状態一貫性**
+   - `startGenerationWatch()` / `stopGenerationWatch()` を使用
+   - 個別生成と一括生成で同じロジック
+
+4. **エラーハンドリング**
+   - シーン取得失敗時も、全体のポーリングは継続
+   - 個別シーンのエラーは独立して処理
+
+### 🚫 採用しなかったアプローチ
+
+**アプローチB: リアルタイム進捗（高度）**
+- バックエンドに `/api/projects/:id/generate-images/progress` を追加
+- 各シーンの実際の進捗（0-100）を返す
+- **不採用理由**: バックエンド変更が必要、擬似進捗で十分
+
+### 🔍 テスト手順
+
+**一括生成のテスト:**
+```javascript
+// 1) 一括生成を開始
+document.getElementById('generateAllImagesBtn').click();
+
+// 2) 数秒後、各シーンの進捗を確認
+Object.keys(window.generatingSceneWatch || {});  // 生成中のシーンID一覧
+
+// 3) 特定シーンの進捗を確認
+const sceneId = 306;
+document.getElementById(`primaryBtn-${sceneId}`)?.innerText;  // "生成中... X%"
+
+// 4) コンソールログを確認
+// 期待:
+// 🚀 [BULK] Starting fake progress for scene 306
+// [Progress] Scene 306: 0%
+// [Progress] Scene 306: 1%
+// ...
+// ✅ [BULK] Scene 306 completed, stopping fake progress
+```
+
+### 📝 今後の改善候補
+
+1. **全体進捗バー**
+   - 「3/10 シーン完了」のような全体進捗を表示
+   - トップバーに進捗バーを追加
+
+2. **優先度制御**
+   - 失敗したシーンを優先的に再生成
+   - ユーザーが順序を指定できる
+
+3. **リアルタイム進捗**
+   - バックエンドからの実際の進捗を表示
+   - WebSocket や Server-Sent Events を使用
+
+---
+
 ## まとめ
 
 ### ✅ 達成したこと
 
 1. **ボタンが消えない** → `primaryBtn-${sceneId}` を固定DOM化
-2. **進捗表示が動作** → 擬似進捗タイマーを実装
+2. **進捗表示が動作（個別 & 一括）** → 擬似進捗タイマーを実装
 3. **完了後の自動復帰** → `setPrimaryButtonState()` で状態管理
 4. **キャッシュ問題を解決** → ファイル名にハッシュを追加
 5. **堅牢なエラーハンドリング** → 524タイムアウトに対応
+6. **一括生成対応** → 各シーンで独立した擬似進捗表示
 
 ### 🎯 核心的な学び
 
