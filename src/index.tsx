@@ -14,6 +14,7 @@ import debug from './routes/debug'
 import runs from './routes/runs'
 import runsV2 from './routes/runs-v2'
 import styles from './routes/styles'
+import audioGeneration from './routes/audio-generation'
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -52,6 +53,9 @@ app.route('/images', images) // For direct R2 image access
 
 // Style presets routes
 app.route('/api', styles) // For /api/style-presets, /api/projects/:id/style-settings, /api/scenes/:id/style
+
+// Audio generation routes (Phase 2-A)
+app.route('/api', audioGeneration) // For /api/scenes/:id/generate-audio, /api/audio/:audioId/activate
 
 // Run management routes (Phase B-0 & B-1)
 app.route('/api', runs) // For /api/projects/:projectId/runs, /api/runs/:runId
