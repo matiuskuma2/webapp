@@ -44,6 +44,7 @@ app.route('/api/projects', formatting)
 app.route('/api/projects', imageGeneration)
 app.route('/api/projects', downloads) // For download endpoints
 app.route('/api/projects', scenes) // For /api/projects/:id/scenes/reorder
+app.route('/api', audioGeneration) // For /api/scenes/:id/audio, /api/audio/:audioId/activate (Phase 2-A) - MUST be before generic /api/scenes/:id
 app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate
@@ -53,9 +54,6 @@ app.route('/images', images) // For direct R2 image access
 
 // Style presets routes
 app.route('/api', styles) // For /api/style-presets, /api/projects/:id/style-settings, /api/scenes/:id/style
-
-// Audio generation routes (Phase 2-A)
-app.route('/api', audioGeneration) // For /api/scenes/:id/generate-audio, /api/audio/:audioId/activate
 
 // Run management routes (Phase B-0 & B-1)
 app.route('/api', runs) // For /api/projects/:projectId/runs, /api/runs/:runId
