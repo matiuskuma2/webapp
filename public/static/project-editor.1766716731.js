@@ -1569,6 +1569,20 @@ ${escapeHtml(scene.dialogue)}
                    </div>`
                 : ''
             }
+            
+            <!-- Phase 3: Audio Section (Fixed DOM placeholder) -->
+            <div class="audio-section mt-6 pt-6 border-t-2 border-gray-200" data-scene-id="${scene.id}">
+              <h4 class="text-md font-bold text-gray-800 mb-4">
+                <i class="fas fa-volume-up mr-2 text-purple-600"></i>音声生成（TTS）
+              </h4>
+              <div class="audio-section-content">
+                <!-- Audio UI will be inserted here by audio-ui.js -->
+                <div class="flex items-center justify-center py-4">
+                  <i class="fas fa-spinner fa-spin text-purple-600 mr-2"></i>
+                  <span class="text-gray-600 text-sm">音声UIを読み込み中...</span>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -1610,6 +1624,13 @@ ${escapeHtml(scene.dialogue)}
       historyBtn.innerHTML = '<i class="fas fa-history mr-2"></i>履歴';
     }
   });
+  
+  // ========== Phase 3: Audio UI Initialization ==========
+  // Initialize audio UI for all scenes (if AudioUI is loaded)
+  if (window.AudioUI && typeof window.AudioUI.initForScenes === 'function') {
+    console.log('[Builder] Initializing Audio UI for scenes');
+    window.AudioUI.initForScenes(filteredScenes);
+  }
 }
 
 // ========== Task C: State-driven button management ==========
