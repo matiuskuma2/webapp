@@ -38,7 +38,8 @@ window.AudioUI = {
         entries.forEach(entry => {
           if (entry.isIntersecting) {
             const sceneCard = entry.target;
-            const sceneId = parseInt(sceneCard.dataset.sceneId);
+            // Extract scene ID from builder-scene-{id} format (Phase X-0: Fix)
+            const sceneId = parseInt(sceneCard.id.replace('builder-scene-', ''));
             
             // Initialize if not already initialized
             if (!sceneCard.dataset.audioInitialized) {
@@ -63,9 +64,9 @@ window.AudioUI = {
       });
     }
     
-    // Observe all scene cards
+    // Observe all scene cards (Phase X-0: Fix - use fixed DOM ID instead of data-scene-id)
     scenes.forEach(scene => {
-      const sceneCard = document.querySelector(`[data-scene-id="${scene.id}"]`);
+      const sceneCard = document.getElementById(`builder-scene-${scene.id}`);
       if (sceneCard && !sceneCard.dataset.audioInitialized) {
         this.observer.observe(sceneCard);
       }
@@ -92,7 +93,7 @@ window.AudioUI = {
    */
   initForScene(scene) {
     const sceneId = scene.id;
-    const container = document.querySelector(`[data-scene-id="${sceneId}"] .audio-section-content`);
+    const container = document.querySelector(`#builder-scene-${sceneId} .audio-section-content`);
     
     if (!container) {
       console.warn(`[AudioUI] Audio section container not found for scene ${sceneId}`);

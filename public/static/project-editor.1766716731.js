@@ -1389,8 +1389,12 @@ function setSceneFilter(filter) {
   // Reset to page 1 when filter changes (Phase X-0)
   window.builderPagination.currentPage = 1;
   
-  // 再描画
-  initBuilderTab();
+  // Re-render with cached scenes (Phase X-0: Fix - avoid unnecessary fetch)
+  if (window.lastLoadedScenes) {
+    renderBuilderScenes(window.lastLoadedScenes, 1);
+  } else {
+    initBuilderTab();
+  }
 }
 
 // ========== Phase X-0: Template Functions (DOM Error Prevention) ==========
@@ -1531,7 +1535,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
  */
 function renderSceneAudioPlaceholder(scene) {
   return `
-    <div class="mt-4 bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg border-2 border-purple-200 overflow-hidden" data-scene-id="${scene.id}">
+    <div class="mt-4 bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg border-2 border-purple-200 overflow-hidden">
       <div class="bg-gradient-to-r from-purple-600 to-blue-600 px-4 py-2">
         <h4 class="text-white font-semibold text-sm flex items-center">
           <i class="fas fa-microphone mr-2"></i>
@@ -1672,6 +1676,13 @@ function renderBuilderScenes(scenes, page = 1) {
   // Initialize audio UI for visible scenes (Phase X-0: lazy loading with IntersectionObserver)
   if (window.AudioUI && typeof window.AudioUI.initForVisibleScenes === 'function') {
     console.log('[Builder] Initializing Audio UI for visible scenes (lazy loading)');
+    
+    // Phase X-0: Fix - Disconnect observer before re-initializing (prevent memory leak)
+    if (window.AudioUI.observer) {
+      window.AudioUI.observer.disconnect();
+      console.log('[AudioUI] Disconnected previous observer to prevent memory leak');
+    }
+    
     window.AudioUI.initForVisibleScenes(filteredScenes);
   } else if (window.AudioUI && typeof window.AudioUI.initForScenes === 'function') {
     // Fallback to old method if new method not available
