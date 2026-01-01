@@ -33,6 +33,19 @@ export async function composeStyledPrompt(
   sceneId: number,
   basePrompt: string
 ): Promise<string> {
+  // Phase X-2: Enhance with world/character info first (Optional - fallback to original on error)
+  let enhancedPrompt = basePrompt;
+  try {
+    const { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } = await import('./world-character-helper');
+    
+    const world = await fetchWorldSettings(db, projectId);
+    const characters = await fetchSceneCharacters(db, sceneId);
+    
+    enhancedPrompt = enhancePromptWithWorldAndCharacters(basePrompt, world, characters);
+  } catch (error) {
+    console.warn('[Prompt Builder] Phase X-2 enhancement failed, using original prompt:', error);
+  }
+
   // 1. scene_style_settings から scene固有のstyle_preset_idを取得
   const sceneStyle = await db.prepare(`
     SELECT style_preset_id 
@@ -53,9 +66,9 @@ export async function composeStyledPrompt(
     stylePresetId = projectStyle?.default_style_preset_id
   }
 
-  // 3. style_preset_id がない場合、basePromptのみ返す
+  // 3. style_preset_id がない場合、enhancedPromptのみ返す
   if (!stylePresetId) {
-    return basePrompt
+    return enhancedPrompt
   }
 
   // 4. style_presetsからprefix/suffixを取得
@@ -66,14 +79,14 @@ export async function composeStyledPrompt(
   `).bind(stylePresetId).first()
 
   if (!preset) {
-    return basePrompt
+    return enhancedPrompt
   }
 
-  // 5. 最終プロンプト: prefix + basePrompt + suffix
+  // 5. 最終プロンプト: prefix + enhancedPrompt + suffix
   const prefix = preset.prompt_prefix || ''
   const suffix = preset.prompt_suffix || ''
   
-  return `${prefix} ${basePrompt} ${suffix}`.trim()
+  return `${prefix} ${enhancedPrompt} ${suffix}`.trim()
 }
 
 /**

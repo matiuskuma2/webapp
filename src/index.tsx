@@ -16,6 +16,9 @@ import runsV2 from './routes/runs-v2'
 import styles from './routes/styles'
 import audioGeneration from './routes/audio-generation'
 import audio from './routes/audio'
+import worldSettings from './routes/world-settings' // Phase X-2
+import characterModels from './routes/character-models' // Phase X-2
+import sceneCharacters from './routes/scene-characters' // Phase X-2
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -62,6 +65,11 @@ app.route('/api', runs) // For /api/projects/:projectId/runs, /api/runs/:runId
 
 // Run v2 API routes (Phase B-2)
 app.route('/api/runs', runsV2) // For /api/runs/:runId/parse, format, generate-images, scenes
+
+// Phase X-2: World & Character Bible routes
+app.route('/api', worldSettings) // For /api/projects/:projectId/world-settings
+app.route('/api', characterModels) // For /api/projects/:projectId/characters
+app.route('/api', sceneCharacters) // For /api/scenes/:sceneId/characters
 
 // Root route - serve HTML
 app.get('/', (c) => {

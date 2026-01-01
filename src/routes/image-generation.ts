@@ -342,9 +342,29 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     const effectiveStyleId = getEffectiveStylePresetId(styleSettings)
     const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
     
-    // 6. 最終プロンプト生成（スタイル適用）
-    const basePrompt = buildImagePrompt(scene.image_prompt as string)
-    const finalPrompt = composeFinalPrompt(basePrompt, stylePreset)
+    // 6. Phase X-2: Fetch world settings and character info (Optional - no error if missing)
+    let enhancedPrompt = buildImagePrompt(scene.image_prompt as string);
+    try {
+      const { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
+      
+      const world = await fetchWorldSettings(c.env.DB, scene.project_id as number);
+      const characters = await fetchSceneCharacters(c.env.DB, parseInt(sceneId));
+      
+      // Enhance prompt with world + character context
+      enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
+      
+      console.log('[Image Gen] Phase X-2 enhancement:', {
+        has_world: !!world,
+        character_count: characters.length,
+        enhanced: enhancedPrompt !== buildImagePrompt(scene.image_prompt as string)
+      });
+    } catch (error) {
+      // Phase X-2: Fallback to original prompt if enhancement fails (no breaking change)
+      console.warn('[Image Gen] Phase X-2 enhancement failed, using original prompt:', error);
+    }
+    
+    // 7. 最終プロンプト生成（スタイル適用）
+    const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset)
 
     // 7. image_generationsレコード作成（pending状態）
     const insertResult = await c.env.DB.prepare(`
