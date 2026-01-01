@@ -115,9 +115,9 @@ window.AudioUI = {
   generateAudioSectionHTML(scene) {
     const sceneId = scene.id;
     
-    // Voice preset selector options
+    // Voice preset selector options (Phase X-1: Add data-provider)
     const voiceOptions = this.voicePresets.map(preset => 
-      `<option value="${preset.id}">${preset.name}</option>`
+      `<option value="${preset.id}" data-provider="${preset.provider || 'google'}">${preset.name}</option>`
     ).join('');
     
     return `
@@ -210,17 +210,21 @@ window.AudioUI = {
       return;
     }
     
+    // Phase X-1: Determine provider from voice preset
+    const selectedOption = voiceSelect?.options[voiceSelect.selectedIndex];
+    const provider = selectedOption?.dataset?.provider || 'google';
+    
     try {
       // Set to generating state immediately
       this.setButtonState(sceneId, 'generating', 0);
       this.hideError(sceneId);
       
-      // Call API
+      // Call API with provider
       const result = await window.AudioClient.generate(sceneId, {
         voice_id: voiceId,
-        provider: 'google',
+        provider: provider,
         format: 'mp3',
-        sample_rate: 24000
+        sample_rate: provider === 'fish' ? 44100 : 24000
       });
       
       console.log('[AudioUI] Generate started:', result);

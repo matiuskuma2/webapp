@@ -4,6 +4,7 @@ import type { Bindings } from '../types/bindings';
 import { GENERATION_STATUS, ERROR_CODES } from '../constants';
 import { createErrorResponse } from '../utils/error-response';
 import { base64ToUint8Array, generateR2Key, getR2PublicUrl } from '../utils/r2-helper';
+import { generateFishTTS } from '../utils/fish-audio'; // Phase X-1: Fish Audio integration
 
 const audioGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -29,7 +30,12 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     if (!voiceId) {
       return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'voice_id is required'), 400);
     }
-    if (!c.env.GOOGLE_TTS_API_KEY) {
+
+    // Phase X-1: Provider-specific API key validation
+    if (provider === 'fish' && !c.env.FISH_AUDIO_API_TOKEN) {
+      return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'FISH_AUDIO_API_TOKEN is not set'), 500);
+    }
+    if (provider === 'google' && !c.env.GOOGLE_TTS_API_KEY) {
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'GOOGLE_TTS_API_KEY is not set'), 500);
     }
 
@@ -86,6 +92,7 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
         projectId: Number(scene.project_id),
         sceneIndex: Number(scene.idx),
         text: dialogue,
+        provider,
         voiceId,
         format,
         sampleRate,
@@ -231,51 +238,107 @@ audioGeneration.delete('/audio/:audioId', async (c) => {
   }
 });
 
+/**
+ * Voice presets cache (Phase X-1)
+ * Hardcoded for now to avoid fetch issues in Worker environment
+ */
+const VOICE_PRESETS: Record<string, { provider: string; reference_id?: string }> = {
+  'fish-nanamin': {
+    provider: 'fish',
+    reference_id: '71bf4cb71cd44df6aa603d51db8f92ff'
+  },
+  // Google TTS presets (no reference_id)
+  'ja-JP-Standard-A': { provider: 'google' },
+  'ja-JP-Standard-B': { provider: 'google' },
+  'ja-JP-Standard-C': { provider: 'google' },
+  'ja-JP-Standard-D': { provider: 'google' },
+  'ja-JP-Wavenet-A': { provider: 'google' },
+  'ja-JP-Wavenet-B': { provider: 'google' },
+  'ja-JP-Wavenet-C': { provider: 'google' },
+  'ja-JP-Wavenet-D': { provider: 'google' },
+};
+
+/**
+ * Get Fish Audio reference_id from voice preset
+ * Returns null if not found or not a Fish preset
+ */
+async function getFishReferenceId(voiceId: string): Promise<string | null> {
+  try {
+    const preset = VOICE_PRESETS[voiceId];
+    return preset?.reference_id || null;
+  } catch (error) {
+    console.error('[Audio] Failed to get voice preset:', error);
+    return null;
+  }
+}
+
 async function generateAndUploadAudio(args: {
   env: Bindings;
   audioId: number;
   projectId: number;
   sceneIndex: number;
   text: string;
+  provider: string;
   voiceId: string;
   format: string;
   sampleRate: number;
 }) {
-  const { env, audioId, projectId, sceneIndex, text, voiceId, format, sampleRate } = args;
+  const { env, audioId, projectId, sceneIndex, text, provider, voiceId, format, sampleRate } = args;
 
   try {
-    // Google TTS REST
-    const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Goog-Api-Key': env.GOOGLE_TTS_API_KEY,
-      },
-      body: JSON.stringify({
-        input: { text },
-        voice: {
-          languageCode: 'ja-JP',
-          name: voiceId,
+    let bytes: Uint8Array;
+
+    // Phase X-1: Provider-based audio generation
+    if (provider === 'fish') {
+      // Fish Audio TTS
+      const referenceId = await getFishReferenceId(voiceId);
+      if (!referenceId) {
+        throw new Error(`Fish Audio reference_id not found for voice: ${voiceId}`);
+      }
+
+      const fishResult = await generateFishTTS(env.FISH_AUDIO_API_TOKEN, {
+        text,
+        reference_id: referenceId,
+        format: format as 'mp3' | 'wav',
+        sample_rate: sampleRate,
+        mp3_bitrate: 128,
+      });
+
+      bytes = new Uint8Array(fishResult.audio);
+    } else {
+      // Google TTS (default)
+      const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': env.GOOGLE_TTS_API_KEY,
         },
-        audioConfig: {
-          audioEncoding: format === 'wav' ? 'LINEAR16' : 'MP3',
-          sampleRateHertz: sampleRate,
-        },
-      }),
-    });
+        body: JSON.stringify({
+          input: { text },
+          voice: {
+            languageCode: 'ja-JP',
+            name: voiceId,
+          },
+          audioConfig: {
+            audioEncoding: format === 'wav' ? 'LINEAR16' : 'MP3',
+            sampleRateHertz: sampleRate,
+          },
+        }),
+      });
 
-    if (!res.ok) {
-      const errorText = await res.text().catch(() => '');
-      throw new Error(`TTS API error: ${res.status} ${errorText}`);
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        throw new Error(`TTS API error: ${res.status} ${errorText}`);
+      }
+
+      const data: any = await res.json();
+      const audioContent = data?.audioContent;
+      if (!audioContent) {
+        throw new Error('TTS API returned empty audioContent');
+      }
+
+      bytes = base64ToUint8Array(audioContent);
     }
-
-    const data: any = await res.json();
-    const audioContent = data?.audioContent;
-    if (!audioContent) {
-      throw new Error('TTS API returned empty audioContent');
-    }
-
-    const bytes = base64ToUint8Array(audioContent);
 
     const timestamp = Date.now();
     const ext = format === 'wav' ? 'wav' : 'mp3';
