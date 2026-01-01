@@ -60,6 +60,21 @@ app.post('/scenes/:sceneId/characters', async (c) => {
       );
     }
 
+    // Phase X-2: Check maximum 3 characters per scene
+    const currentCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM scene_character_map WHERE scene_id = ?
+    `).bind(sceneId).first();
+
+    if (currentCount && (currentCount.count as number) >= 3) {
+      return c.json(
+        createErrorResponse(
+          ERROR_CODES.INVALID_REQUEST,
+          'Maximum 3 characters per scene. Remove an existing character first.'
+        ),
+        400
+      );
+    }
+
     // Check if mapping already exists
     const existing = await c.env.DB.prepare(`
       SELECT id FROM scene_character_map
@@ -204,6 +219,62 @@ app.post('/scenes/:sceneId/characters/batch', async (c) => {
       createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to batch update scene characters'),
       500
     );
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/characters/auto-assign
+ * Manually trigger character auto-assignment
+ * 
+ * Phase X-2: Manual re-run of auto-assignment
+ * - Overwrites existing assignments
+ * - UI should show confirmation modal before calling
+ * 
+ * Safety:
+ * - Project existence check
+ * - Optional: Block if image/audio generation in progress (409)
+ */
+app.post('/projects/:projectId/characters/auto-assign', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    
+    // Verify project exists
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(projectId).first();
+    
+    if (!project) {
+      return c.json({
+        error: 'NOT_FOUND',
+        message: 'Project not found'
+      }, 404);
+    }
+    
+    // TODO: 要確認 - Block if generation in progress?
+    // if (project.status === 'generating_images') {
+    //   return c.json({
+    //     error: 'GENERATION_IN_PROGRESS',
+    //     message: 'Cannot re-assign while image generation is in progress'
+    //   }, 409);
+    // }
+    
+    // Execute auto-assign
+    const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
+    const result = await autoAssignCharactersToScenes(c.env.DB, projectId);
+    
+    return c.json({
+      success: true,
+      assigned: result.assigned,
+      scenes: result.scenes,
+      skipped: result.skipped,
+      message: `Assigned ${result.assigned} characters to ${result.scenes} scenes`
+    });
+  } catch (error) {
+    console.error('[SceneCharacters] Auto-assign error:', error);
+    return c.json({
+      error: 'INTERNAL_ERROR',
+      message: 'Failed to auto-assign characters'
+    }, 500);
   }
 });
 

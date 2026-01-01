@@ -22,7 +22,7 @@ app.get('/projects/:projectId/characters', async (c) => {
       SELECT 
         id, project_id, character_key, character_name, description,
         appearance_description, reference_image_r2_key, reference_image_r2_url,
-        voice_preset_id, created_at, updated_at
+        voice_preset_id, aliases_json, created_at, updated_at
       FROM project_character_models
       WHERE project_id = ?
       ORDER BY created_at ASC
@@ -89,7 +89,8 @@ app.post('/projects/:projectId/characters', async (c) => {
       appearance_description,
       reference_image_r2_key,
       reference_image_r2_url,
-      voice_preset_id
+      voice_preset_id,
+      aliases
     } = body;
 
     if (!character_key || !character_name) {
@@ -112,11 +113,22 @@ app.post('/projects/:projectId/characters', async (c) => {
       );
     }
 
+    // Validate and serialize aliases (Phase X-2 Part 2)
+    let aliasesJson = null;
+    if (aliases && Array.isArray(aliases)) {
+      // Filter: only strings, trim, remove empty
+      const validAliases = aliases
+        .filter(a => typeof a === 'string')
+        .map(a => a.trim())
+        .filter(a => a.length > 0);
+      aliasesJson = validAliases.length > 0 ? JSON.stringify(validAliases) : null;
+    }
+
     const result = await c.env.DB.prepare(`
       INSERT INTO project_character_models
         (project_id, character_key, character_name, description, appearance_description,
-         reference_image_r2_key, reference_image_r2_url, voice_preset_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         reference_image_r2_key, reference_image_r2_url, voice_preset_id, aliases_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       projectId,
       character_key,
@@ -125,7 +137,8 @@ app.post('/projects/:projectId/characters', async (c) => {
       appearance_description || null,
       reference_image_r2_key || null,
       reference_image_r2_url || null,
-      voice_preset_id || null
+      voice_preset_id || null,
+      aliasesJson
     ).run();
 
     const character = await c.env.DB.prepare(`
@@ -160,7 +173,8 @@ app.put('/projects/:projectId/characters/:characterKey', async (c) => {
       appearance_description,
       reference_image_r2_key,
       reference_image_r2_url,
-      voice_preset_id
+      voice_preset_id,
+      aliases
     } = body;
 
     const existing = await c.env.DB.prepare(`
@@ -175,11 +189,21 @@ app.put('/projects/:projectId/characters/:characterKey', async (c) => {
       );
     }
 
+    // Validate and serialize aliases (Phase X-2 Part 2)
+    let aliasesJson = null;
+    if (aliases && Array.isArray(aliases)) {
+      const validAliases = aliases
+        .filter(a => typeof a === 'string')
+        .map(a => a.trim())
+        .filter(a => a.length > 0);
+      aliasesJson = validAliases.length > 0 ? JSON.stringify(validAliases) : null;
+    }
+
     await c.env.DB.prepare(`
       UPDATE project_character_models
       SET character_name = ?, description = ?, appearance_description = ?,
           reference_image_r2_key = ?, reference_image_r2_url = ?,
-          voice_preset_id = ?, updated_at = CURRENT_TIMESTAMP
+          voice_preset_id = ?, aliases_json = ?, updated_at = CURRENT_TIMESTAMP
       WHERE project_id = ? AND character_key = ?
     `).bind(
       character_name,
@@ -188,6 +212,7 @@ app.put('/projects/:projectId/characters/:characterKey', async (c) => {
       reference_image_r2_key || null,
       reference_image_r2_url || null,
       voice_preset_id || null,
+      aliasesJson,
       projectId,
       characterKey
     ).run();

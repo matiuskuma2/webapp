@@ -799,6 +799,24 @@ async function autoMergeScenes(c: any, projectId: string, stats: any) {
       WHERE id = ?
     `).bind(projectId).run()
 
+    // Phase X-2: Auto-assign characters (non-blocking, best-effort)
+    // ✅ Runs asynchronously to avoid blocking response
+    // ✅ Failures do not affect 'formatted' status
+    try {
+      const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
+      c.executionCtx.waitUntil(
+        autoAssignCharactersToScenes(c.env.DB, parseInt(projectId))
+          .then(result => {
+            console.log(`[Phase X-2] Auto-assigned ${result.assigned} characters to ${result.scenes} scenes (project ${projectId})`);
+          })
+          .catch(err => {
+            console.error(`[Phase X-2] Auto-assign failed for project ${projectId}:`, err.message);
+          })
+      );
+    } catch (err) {
+      console.warn(`[Phase X-2] Auto-assign skipped for project ${projectId}:`, err);
+    }
+
     // 4. 結果返却
     return c.json({
       project_id: parseInt(projectId),
