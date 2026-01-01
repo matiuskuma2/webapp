@@ -16,6 +16,7 @@ import runsV2 from './routes/runs-v2'
 import styles from './routes/styles'
 import audioGeneration from './routes/audio-generation'
 import audio from './routes/audio'
+import fishTest from './routes/fish-test' // Phase X-0.5: Temporary test endpoint
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -62,6 +63,9 @@ app.route('/api', runs) // For /api/projects/:projectId/runs, /api/runs/:runId
 
 // Run v2 API routes (Phase B-2)
 app.route('/api/runs', runsV2) // For /api/runs/:runId/parse, format, generate-images, scenes
+
+// Phase X-0.5: Fish Audio Test Endpoint (TEMPORARY - DELETE after testing)
+app.route('/api/fish-test', fishTest)
 
 // Root route - serve HTML
 app.get('/', (c) => {
