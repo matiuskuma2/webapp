@@ -221,7 +221,7 @@ downloads.get('/:id/download/all', async (c) => {
 
     // 3. シーン取得
     const { results: scenes } = await c.env.DB.prepare(`
-      SELECT idx, role, title, dialogue, bullets
+      SELECT id, idx, role, title, dialogue, bullets
       FROM scenes
       WHERE project_id = ?
       ORDER BY idx ASC
@@ -245,6 +245,35 @@ downloads.get('/:id/download/all', async (c) => {
       ORDER BY s.idx ASC
     `).bind(projectId).all()
 
+    // 4-A. アクティブな音声を取得（Phase 4）
+    const sceneIds = (scenes as any[]).map(s => s.id)
+    const activeAudioBySceneId = new Map<number, any>()
+
+    // D1のIN句制限対策：80件ずつチャンク処理
+    const chunkSize = 80
+    for (let i = 0; i < sceneIds.length; i += chunkSize) {
+      const chunk = sceneIds.slice(i, i + chunkSize)
+      const placeholders = chunk.map(() => '?').join(',')
+
+      const { results } = await c.env.DB.prepare(`
+        SELECT
+          ag.id,
+          ag.scene_id,
+          ag.format,
+          ag.r2_key,
+          ag.status
+        FROM audio_generations ag
+        WHERE ag.scene_id IN (${placeholders})
+          AND ag.is_active = 1
+          AND ag.status = 'completed'
+          AND ag.r2_key IS NOT NULL
+      `).bind(...chunk).all()
+
+      for (const row of results as any[]) {
+        activeAudioBySceneId.set(Number(row.scene_id), row)
+      }
+    }
+
     // 5. ZIP生成
     const zip = new JSZip()
 
@@ -256,6 +285,34 @@ downloads.get('/:id/download/all', async (c) => {
         const imageData = await r2Object.arrayBuffer()
         const fileName = `scene_${String(img.idx).padStart(3, '0')}.png`
         imagesFolder.file(fileName, imageData)
+      }
+    }
+
+    // 5-1A. audio/ ディレクトリに音声追加（Phase 4）
+    const audioFolder = zip.folder('audio')
+    for (const scene of scenes as any[]) {
+      const audio = activeAudioBySceneId.get(Number(scene.id))
+      if (!audio) continue // 音声なしシーンはスキップ
+
+      const r2Key = String(audio.r2_key)
+      const format = (audio.format || 'mp3').toLowerCase()
+      const ext = format === 'wav' ? 'wav' : 'mp3'
+      const zipName = `scene_${String(scene.idx).padStart(3, '0')}.${ext}`
+
+      try {
+        const r2Object = await c.env.R2.get(r2Key)
+        if (!r2Object) {
+          console.warn(`[Export] Audio missing in R2: ${r2Key}`)
+          continue // R2に無い音声はスキップ
+        }
+
+        if (audioFolder) {
+          const audioData = await r2Object.arrayBuffer()
+          audioFolder.file(zipName, audioData)
+        }
+      } catch (error) {
+        console.warn(`[Export] Failed to read audio from R2: ${r2Key}`, error)
+        continue // 読み込みエラーはスキップ
       }
     }
 
@@ -293,7 +350,8 @@ downloads.get('/:id/download/all', async (c) => {
       status: project.status,
       created_at: project.created_at,
       total_scenes: scenes.length,
-      total_images: images.length
+      total_images: images.length,
+      total_audio: activeAudioBySceneId.size
     }
     zip.file('project.json', JSON.stringify(projectInfo, null, 2))
 
