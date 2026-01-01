@@ -3,6 +3,7 @@
 
 window.AudioUI = {
   voicePresets: [],
+  observer: null, // IntersectionObserver instance (Phase X-0)
   
   /**
    * Initialize audio UI for all scenes
@@ -18,6 +19,57 @@ window.AudioUI = {
     for (const scene of scenes) {
       this.initForScene(scene);
     }
+  },
+  
+  /**
+   * Initialize audio UI for visible scenes with lazy loading (Phase X-0)
+   * Uses IntersectionObserver to initialize only when scene cards become visible
+   * @param {Array} scenes 
+   */
+  async initForVisibleScenes(scenes) {
+    console.log('[AudioUI] Initializing lazy loading for scenes:', scenes.length);
+    
+    // Load voice presets once
+    await this.loadVoicePresets();
+    
+    // Create IntersectionObserver if not exists
+    if (!this.observer) {
+      this.observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const sceneCard = entry.target;
+            const sceneId = parseInt(sceneCard.dataset.sceneId);
+            
+            // Initialize if not already initialized
+            if (!sceneCard.dataset.audioInitialized) {
+              console.log(`[AudioUI] Lazy loading scene ${sceneId}`);
+              
+              // Find scene data
+              const scene = window.lastLoadedScenes?.find(s => s.id === sceneId);
+              if (scene) {
+                this.initForScene(scene);
+                sceneCard.dataset.audioInitialized = 'true';
+              }
+            }
+            
+            // Unobserve after initialization
+            this.observer.unobserve(sceneCard);
+          }
+        });
+      }, {
+        root: null,
+        rootMargin: '100px', // Load slightly ahead (100px before visible)
+        threshold: 0.1
+      });
+    }
+    
+    // Observe all scene cards
+    scenes.forEach(scene => {
+      const sceneCard = document.querySelector(`[data-scene-id="${scene.id}"]`);
+      if (sceneCard && !sceneCard.dataset.audioInitialized) {
+        this.observer.observe(sceneCard);
+      }
+    });
   },
 
   /**

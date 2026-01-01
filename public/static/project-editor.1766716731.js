@@ -12,6 +12,13 @@ let audioChunks = [];
 let recordingStartTime = 0;
 let recordingTimer = null;
 
+// Pagination state (Phase X-0: DOM Performance Optimization)
+window.builderPagination = {
+  currentPage: 1,
+  pageSize: 20,
+  totalScenes: 0
+};
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   loadProject();
@@ -1379,215 +1386,251 @@ function setSceneFilter(filter) {
     }
   });
   
+  // Reset to page 1 when filter changes (Phase X-0)
+  window.builderPagination.currentPage = 1;
+  
   // 再描画
   initBuilderTab();
 }
 
-// Render builder scene cards
-function renderBuilderScenes(scenes) {
+// ========== Phase X-0: Template Functions (DOM Error Prevention) ==========
+
+/**
+ * Render scene card header
+ * @param {object} scene 
+ * @param {string} imageStatus 
+ * @returns {string} HTML
+ */
+function renderSceneCardHeader(scene, imageStatus) {
+  return `
+    <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <span class="text-white font-bold text-xl">#${scene.idx}</span>
+        <span class="px-3 py-1 bg-white bg-opacity-20 rounded-full text-white text-sm font-semibold">
+          ${getRoleText(scene.role)}
+        </span>
+      </div>
+      <div class="scene-status-badge-container">
+        ${getSceneStatusBadge(imageStatus)}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render scene text content (dialogue, bullets, prompt, style)
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderSceneTextContent(scene) {
+  return `
+    <div class="space-y-4">
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">セリフ</label>
+        <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
+${escapeHtml(scene.dialogue)}
+        </div>
+      </div>
+      
+      ${scene.bullets && scene.bullets.length > 0 ? `
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">要点</label>
+        <ul class="list-disc list-inside space-y-1 text-sm text-gray-700">
+          ${scene.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
+        </ul>
+      </div>
+      ` : ''}
+      
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">画像プロンプト</label>
+        <textarea 
+          id="builderPrompt-${scene.id}"
+          rows="3"
+          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+        >${escapeHtml(scene.image_prompt)}</textarea>
+      </div>
+      
+      <!-- Style Selector -->
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">
+          <i class="fas fa-palette mr-1 text-purple-600"></i>スタイル
+        </label>
+        <div class="flex gap-2">
+          <select 
+            id="sceneStyle-${scene.id}"
+            class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+            onchange="setSceneStyle(${scene.id})"
+          >
+            ${renderStyleOptions(scene.style_preset_id)}
+          </select>
+          ${scene.style_preset_id 
+            ? `<button 
+                 onclick="clearSceneStyle(${scene.id})"
+                 class="px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors text-sm whitespace-nowrap"
+                 title="デフォルトに戻す"
+               >
+                 <i class="fas fa-times"></i>
+               </button>`
+            : ''
+          }
+        </div>
+        <p class="text-xs text-gray-500 mt-1">
+          ${scene.style_preset_id 
+            ? 'シーン専用スタイル設定中' 
+            : window.builderProjectDefaultStyle 
+              ? 'プロジェクトデフォルトを使用' 
+              : '未設定（オリジナルプロンプト）'}
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render scene image section
+ * @param {object} scene 
+ * @param {string} imageUrl 
+ * @param {string} imageStatus 
+ * @returns {string} HTML
+ */
+function renderSceneImageSection(scene, imageUrl, imageStatus) {
+  const isGenerating = imageStatus === 'generating';
+  
+  return `
+    <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
+      ${imageUrl 
+        ? `<img 
+             id="sceneImage-${scene.id}" 
+             src="${imageUrl}" 
+             alt="Scene ${scene.idx}"
+             class="w-full h-full object-cover"
+           />`
+        : `<div class="flex items-center justify-center h-full text-gray-400">
+             <i class="fas fa-image text-4xl"></i>
+             <span class="ml-2">画像未生成</span>
+           </div>`
+      }
+      
+      ${isGenerating 
+        ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+             <div class="text-white text-center">
+               <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
+               <p>生成中...</p>
+             </div>
+           </div>`
+        : ''
+      }
+    </div>
+  `;
+}
+
+/**
+ * Render scene audio placeholder
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderSceneAudioPlaceholder(scene) {
+  return `
+    <div class="mt-4 bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg border-2 border-purple-200 overflow-hidden" data-scene-id="${scene.id}">
+      <div class="bg-gradient-to-r from-purple-600 to-blue-600 px-4 py-2">
+        <h4 class="text-white font-semibold text-sm flex items-center">
+          <i class="fas fa-microphone mr-2"></i>
+          音声生成
+        </h4>
+      </div>
+      <div class="audio-section-content p-4">
+        <div class="flex items-center justify-center py-8 text-gray-400">
+          <i class="fas fa-spinner fa-spin text-purple-600 mr-2"></i>
+          <span class="text-gray-600 text-sm">音声UIを読み込み中...</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Render complete scene card (Phase X-0: Integrated template function)
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderBuilderSceneCard(scene) {
+  const activeImage = scene.active_image || null;
+  const latestImage = scene.latest_image || null;
+  const imageUrl = activeImage?.image_url || activeImage?.r2_url || null;
+  const imageStatus = latestImage ? latestImage.status : 'pending';
+  const errorMessage = latestImage?.error_message || null;
+  const isFailed = imageStatus === 'failed';
+  
+  return `
+    <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}" data-scene-id="${scene.id}" data-status="${imageStatus}">
+      ${renderSceneCardHeader(scene, imageStatus)}
+      
+      <!-- Content: Left-Right Split (PC) / Top-Bottom (Mobile) -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
+        <!-- Left: Text Content -->
+        ${renderSceneTextContent(scene)}
+        
+        <!-- Right: Image Preview & Actions -->
+        <div class="space-y-4">
+          ${renderSceneImageSection(scene, imageUrl, imageStatus)}
+          
+          <!-- Action Buttons (Fixed DOM for state-driven updates) -->
+          <div class="flex gap-2">
+            <button id="primaryBtn-${scene.id}" class="flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation">
+              読み込み中...
+            </button>
+            <button id="historyBtn-${scene.id}" class="px-4 py-2 rounded-lg font-semibold touch-manipulation">
+              <i class="fas fa-history"></i>
+            </button>
+          </div>
+          
+          ${isFailed && errorMessage ? `
+          <div class="bg-red-50 border-2 border-red-200 rounded-lg p-4">
+            <p class="text-sm font-semibold text-red-800 mb-2">
+              <i class="fas fa-exclamation-circle mr-1"></i>画像生成に失敗しました
+            </p>
+            <div class="text-xs text-red-700 bg-red-100 rounded p-2 font-mono whitespace-pre-wrap">
+${escapeHtml(errorMessage)}
+            </div>
+          </div>
+          ` : ''}
+        </div>
+      </div>
+      
+      <!-- Audio Section (Phase 3) -->
+      ${renderSceneAudioPlaceholder(scene)}
+    </div>
+  `;
+}
+
+// Render builder scene cards (Phase X-0: with pagination support)
+function renderBuilderScenes(scenes, page = 1) {
   // Cache scenes for re-rendering during bulk generation
   window.lastLoadedScenes = scenes;
   
   const container = document.getElementById('builderScenesList');
   
   // フィルタリング適用（グローバル変数 currentFilter）
-  const filteredScenes = filterScenes(scenes, window.currentFilter || 'all');
+  const allFilteredScenes = filterScenes(scenes, window.currentFilter || 'all');
   
-  // Debug: Log first scene's style_preset_id
+  // Update pagination state
+  window.builderPagination.totalScenes = allFilteredScenes.length;
+  window.builderPagination.currentPage = page;
+  
+  // Paginate filtered scenes
+  const pageSize = window.builderPagination.pageSize;
+  const startIdx = (page - 1) * pageSize;
+  const endIdx = startIdx + pageSize;
+  const filteredScenes = allFilteredScenes.slice(startIdx, endIdx);
+  
+  // Debug: Log pagination info
+  console.log(`[Builder] Page ${page}: Rendering ${filteredScenes.length} of ${allFilteredScenes.length} scenes (${startIdx}-${endIdx})`);
+  
   if (filteredScenes.length > 0) {
-    console.log(`[Builder] Rendering ${filteredScenes.length} scenes. First scene style_preset_id:`, filteredScenes[0].style_preset_id);
+    console.log(`[Builder] First scene style_preset_id:`, filteredScenes[0].style_preset_id);
   }
   
-  container.innerHTML = filteredScenes.map((scene) => {
-    const activeImage = scene.active_image || null;
-    const latestImage = scene.latest_image || null;
-    
-    // ✅ r2_url が null の場合は画像なしとして扱う
-    const imageUrl = activeImage?.image_url || activeImage?.r2_url || null;
-    
-    // ステータスは latest_image を優先（SSOT）
-    const imageStatus = latestImage ? latestImage.status : 'pending';
-    const errorMessage = latestImage?.error_message || null;
-    
-    return `
-      <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}" data-status="${imageStatus}">
-        <!-- Header -->
-        <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 flex items-center justify-between">
-          <div class="flex items-center gap-3">
-            <span class="text-white font-bold text-xl">#${scene.idx}</span>
-            <span class="px-3 py-1 bg-white bg-opacity-20 rounded-full text-white text-sm font-semibold">
-              ${getRoleText(scene.role)}
-            </span>
-          </div>
-          <div class="scene-status-badge-container">
-            ${getSceneStatusBadge(imageStatus)}
-          </div>
-        </div>
-        
-        <!-- Content: Left-Right Split (PC) / Top-Bottom (Mobile) -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
-          <!-- Left: Text Content -->
-          <div class="space-y-4">
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">セリフ</label>
-              <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
-${escapeHtml(scene.dialogue)}
-              </div>
-            </div>
-            
-            ${scene.bullets && scene.bullets.length > 0 ? `
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">要点</label>
-              <ul class="list-disc list-inside space-y-1 text-sm text-gray-700">
-                ${scene.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
-              </ul>
-            </div>
-            ` : ''}
-            
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">画像プロンプト</label>
-              <textarea 
-                id="builderPrompt-${scene.id}"
-                rows="3"
-                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-              >${escapeHtml(scene.image_prompt)}</textarea>
-            </div>
-            
-            <!-- Style Selector -->
-            <div>
-              <label class="block text-sm font-semibold text-gray-700 mb-2">
-                <i class="fas fa-palette mr-1 text-purple-600"></i>スタイル
-              </label>
-              <div class="flex gap-2">
-                <select 
-                  id="sceneStyle-${scene.id}"
-                  class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
-                  onchange="setSceneStyle(${scene.id})"
-                >
-                  ${renderStyleOptions(scene.style_preset_id)}
-                </select>
-                ${scene.style_preset_id 
-                  ? `<button 
-                       onclick="clearSceneStyle(${scene.id})"
-                       class="px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors text-sm whitespace-nowrap"
-                       title="デフォルトに戻す"
-                     >
-                       <i class="fas fa-times"></i>
-                     </button>`
-                  : ''
-                }
-              </div>
-              <p class="text-xs text-gray-500 mt-1">
-                ${scene.style_preset_id 
-                  ? 'シーン専用スタイル設定中' 
-                  : window.builderProjectDefaultStyle 
-                    ? 'プロジェクトデフォルトを使用' 
-                    : '未設定（オリジナルプロンプト）'}
-              </p>
-            </div>
-          </div>
-          
-          <!-- Right: Image Preview & Actions -->
-          <div class="space-y-4">
-            <!-- Image Preview -->
-            <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
-              ${imageUrl 
-                ? `<img src="${imageUrl}" alt="Scene ${scene.idx}" class="w-full h-full object-cover" id="sceneImage-${scene.id}" />`
-                : `<div class="flex items-center justify-center h-full text-gray-400">
-                     <div class="text-center">
-                       <i class="fas fa-image text-6xl mb-3"></i>
-                       <p class="text-sm">画像未生成</p>
-                     </div>
-                   </div>`
-              }
-              ${imageStatus === 'generating' 
-                ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-                     <div class="text-white text-center">
-                       <i class="fas fa-spinner fa-spin text-4xl mb-2"></i>
-                       <p>生成中...</p>
-                     </div>
-                   </div>`
-                : ''
-              }
-            </div>
-            
-            <!-- Action Buttons -->
-            <div class="scene-action-buttons flex flex-wrap gap-2">
-              <button 
-                id="primaryBtn-${scene.id}"
-                class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg transition-colors font-semibold touch-manipulation"
-              >
-                <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
-              </button>
-              <button
-                id="historyBtn-${scene.id}"
-                onclick="viewImageHistory(${scene.id})"
-                class="px-4 py-2 bg-gray-300 text-white rounded-lg transition-colors font-semibold touch-manipulation"
-              >
-                <i class="fas fa-history mr-2"></i>履歴
-              </button>
-            </div> 
-                    : !activeImage || imageStatus === 'failed'
-                      ? '画像生成'  // IDLE/FAILED
-                      : '再生成'    // DONE
-                }
-              </button>
-              <button 
-                id="historyBtn-${scene.id}"
-                onclick="viewImageHistory(${scene.id})"
-                class="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold touch-manipulation"
-                ${!activeImage ? 'disabled' : ''}
-              >
-                <i class="fas fa-history mr-2"></i>履歴
-              </button>
-            </div>
-            
-            ${imageStatus === 'failed' && errorMessage
-              ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
-                   <i class="fas fa-exclamation-circle mr-2"></i>
-                   <strong>失敗理由:</strong><br/>
-                   <div class="mt-2 font-mono text-xs bg-red-100 p-2 rounded overflow-x-auto">
-                     ${escapeHtml(errorMessage)}
-                   </div>
-                   ${(() => {
-                     try {
-                       const parsed = JSON.parse(errorMessage);
-                       return `<div class="mt-2 space-y-1">
-                         ${parsed.status ? `<div><strong>HTTP Status:</strong> ${parsed.status}</div>` : ''}
-                         ${parsed.code ? `<div><strong>Error Code:</strong> ${parsed.code}</div>` : ''}
-                         ${parsed.message ? `<div><strong>Message:</strong> ${escapeHtml(parsed.message)}</div>` : ''}
-                       </div>`;
-                     } catch(e) {
-                       return '';
-                     }
-                   })()}
-                 </div>`
-              : imageStatus === 'failed' 
-                ? `<div class="p-3 bg-red-50 border-l-4 border-red-600 rounded text-sm text-red-800">
-                     <i class="fas fa-exclamation-circle mr-2"></i>
-                     画像生成に失敗しました
-                   </div>`
-                : ''
-            }
-            
-            <!-- Phase 3: Audio Section (Fixed DOM placeholder) -->
-            <div class="audio-section mt-6 pt-6 border-t-2 border-gray-200" data-scene-id="${scene.id}">
-              <h4 class="text-md font-bold text-gray-800 mb-4">
-                <i class="fas fa-volume-up mr-2 text-purple-600"></i>音声生成（TTS）
-              </h4>
-              <div class="audio-section-content">
-                <!-- Audio UI will be inserted here by audio-ui.js -->
-                <div class="flex items-center justify-center py-4">
-                  <i class="fas fa-spinner fa-spin text-purple-600 mr-2"></i>
-                  <span class="text-gray-600 text-sm">音声UIを読み込み中...</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
-  }).join('');
+  container.innerHTML = filteredScenes.map(scene => renderBuilderSceneCard(scene)).join('');
   
   // ✅ 初期状態を設定（レンダリング直後に実行）
   filteredScenes.forEach(scene => {
@@ -1626,10 +1669,86 @@ ${escapeHtml(scene.dialogue)}
   });
   
   // ========== Phase 3: Audio UI Initialization ==========
-  // Initialize audio UI for all scenes (if AudioUI is loaded)
-  if (window.AudioUI && typeof window.AudioUI.initForScenes === 'function') {
-    console.log('[Builder] Initializing Audio UI for scenes');
+  // Initialize audio UI for visible scenes (Phase X-0: lazy loading with IntersectionObserver)
+  if (window.AudioUI && typeof window.AudioUI.initForVisibleScenes === 'function') {
+    console.log('[Builder] Initializing Audio UI for visible scenes (lazy loading)');
+    window.AudioUI.initForVisibleScenes(filteredScenes);
+  } else if (window.AudioUI && typeof window.AudioUI.initForScenes === 'function') {
+    // Fallback to old method if new method not available
+    console.log('[Builder] Initializing Audio UI for all scenes (fallback)');
     window.AudioUI.initForScenes(filteredScenes);
+  }
+  
+  // ========== Phase X-0: Pagination Controls ==========
+  renderPaginationControls(allFilteredScenes.length, page);
+}
+
+// Render pagination controls (Phase X-0)
+function renderPaginationControls(totalScenes, currentPage) {
+  const pageSize = window.builderPagination.pageSize;
+  const totalPages = Math.ceil(totalScenes / pageSize);
+  
+  const container = document.getElementById('builderScenesList');
+  
+  // Remove existing pagination
+  const existingPagination = container.querySelector('.builder-pagination');
+  if (existingPagination) {
+    existingPagination.remove();
+  }
+  
+  // No pagination needed for <= 20 scenes
+  if (totalPages <= 1) {
+    return;
+  }
+  
+  // Create pagination HTML
+  const paginationHTML = `
+    <div class="builder-pagination flex items-center justify-center gap-4 mt-6 pb-6 border-t pt-6">
+      <button 
+        id="prevPageBtn" 
+        class="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-400 transition-colors"
+        ${currentPage === 1 ? 'disabled' : ''}
+      >
+        <i class="fas fa-arrow-left mr-2"></i>前へ
+      </button>
+      
+      <span class="text-gray-700 font-semibold">
+        ページ <span class="text-blue-600">${currentPage}</span> / ${totalPages}
+        <span class="text-gray-500 text-sm ml-2">（全 ${totalScenes} シーン）</span>
+      </span>
+      
+      <button 
+        id="nextPageBtn" 
+        class="px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-gray-400 transition-colors"
+        ${currentPage === totalPages ? 'disabled' : ''}
+      >
+        次へ<i class="fas fa-arrow-right ml-2"></i>
+      </button>
+    </div>
+  `;
+  
+  container.insertAdjacentHTML('beforeend', paginationHTML);
+  
+  // Event listeners
+  const prevBtn = document.getElementById('prevPageBtn');
+  const nextBtn = document.getElementById('nextPageBtn');
+  
+  if (prevBtn) {
+    prevBtn.addEventListener('click', () => {
+      if (currentPage > 1) {
+        renderBuilderScenes(window.lastLoadedScenes, currentPage - 1);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
+  }
+  
+  if (nextBtn) {
+    nextBtn.addEventListener('click', () => {
+      if (currentPage < totalPages) {
+        renderBuilderScenes(window.lastLoadedScenes, currentPage + 1);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    });
   }
 }
 
