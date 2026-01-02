@@ -272,3 +272,75 @@ Proprietary - All rights reserved
 ---
 
 最終更新: 2025-01-19
+
+---
+
+## マイグレーション運用手順（Phase X-2）
+
+### マイグレーション番号衝突の履歴（運用事故防止ドキュメント）
+
+#### 背景
+
+2026-01-01にPhase X-2実装中、`0007_world_character_bible.sql` が既存の `0007_add_runs_system.sql` と番号衝突しました。
+
+#### 解決方針：NO-OP方式
+
+既にGitHubにpush済みのファイルを削除すると環境間で適用履歴が割れるため、以下の方針を採用：
+
+1. **`0007_world_character_bible.sql`**: NO-OP化（`SELECT 1 WHERE 1=0;` のみ）
+   - Git履歴を保全
+   - 適用済み環境でも無害
+   - ドキュメント化で負債化を防止
+
+2. **`0010_world_character_bible.sql`**: 実際のスキーマ適用
+   - `world_settings`
+   - `project_character_models`
+   - `scene_character_map`
+   - 全て `IF NOT EXISTS` 付き（環境差で落ちない）
+
+3. **`0011_add_character_aliases.sql`**: `aliases_json` カラム追加
+
+#### 復旧手順
+
+**既に `0007_world_character_bible.sql` を適用した環境の場合**:
+
+```bash
+# 1. マイグレーション状態を確認
+npx wrangler d1 migrations list webapp-production --local
+
+# 2. 0010を適用（IF NOT EXISTS なので安全）
+npx wrangler d1 migrations apply webapp-production --local
+
+# 3. テーブル存在確認
+npx wrangler d1 execute webapp-production --local --command="
+SELECT name FROM sqlite_master 
+WHERE type='table' 
+AND name IN ('world_settings', 'project_character_models', 'scene_character_map');
+"
+```
+
+**クリーン環境の場合**:
+
+```bash
+# 通常通り適用（0007はNO-OP、0010が実際の適用）
+npx wrangler d1 migrations apply webapp-production --local
+```
+
+#### 本番環境への適用
+
+```bash
+# 本番DB確認（注意：本番データに影響）
+npx wrangler d1 migrations list webapp-production --remote
+
+# 本番適用（必ずバックアップ後に実行）
+npx wrangler d1 migrations apply webapp-production --remote
+```
+
+#### なぜこの方針か
+
+- **Git履歴の整合性維持**: ファイル削除は環境間の不整合を生む
+- **べき等性**: `IF NOT EXISTS` により何度実行しても安全
+- **ドキュメント化**: 意図的な設計であることを明示
+
+---
+

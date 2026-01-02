@@ -4,15 +4,17 @@
  * Purpose: Automatically assign characters to scenes based on text matching
  * 
  * Safety Features:
- * - Minimum 3-character aliases (prevent false positives)
+ * - Minimum 2-character names, 3-character aliases (prevent false positives)
+ * - Dangerous word detection (common nouns like "先生", "母" are deprioritized)
  * - Text normalization (全角→半角、カタカナ→ひらがな)
  * - Project-scoped JOIN (prevent cross-project pollution)
  * - Maximum 3 characters per scene
- * - Primary character: first match
+ * - Primary character: first match (highest priority)
  * - Atomic operations (DELETE then INSERT)
  */
 
 import type { D1Database } from '@cloudflare/workers-types';
+import dangerousWordsData from './character-dangerous-words.json';
 
 /**
  * Character pattern for matching
@@ -68,6 +70,23 @@ function normalizeText(text: string): string {
   
   // Trim and lowercase
   return normalized.trim().toLowerCase();
+}
+
+/**
+ * Load dangerous words list
+ * These are common nouns that match too many scenes
+ */
+const DANGEROUS_WORDS = new Set([
+  ...dangerousWordsData.dangerousWords.ja.map(w => w.toLowerCase()),
+  ...dangerousWordsData.dangerousWords.en.map(w => w.toLowerCase())
+]);
+
+/**
+ * Check if a name/alias is a dangerous word
+ * Dangerous words are deprioritized in auto-assignment
+ */
+function isDangerousWord(text: string): boolean {
+  return DANGEROUS_WORDS.has(text.toLowerCase());
 }
 
 /**
@@ -237,9 +256,11 @@ function matchCharactersToScenes(
     for (const char of characterPatterns) {
       // Priority 1: character_name match (highest)
       if (scene.text.includes(char.name)) {
+        // Check if it's a dangerous word (e.g., "先生", "母")
+        const priority = isDangerousWord(char.name) ? 3 : 1; // Dangerous words → lower priority
         matched.push({
           key: char.characterKey,
-          priority: 1,
+          priority,
           matchText: char.name
         });
         continue; // Name match is exclusive (don't check aliases)
@@ -249,9 +270,11 @@ function matchCharactersToScenes(
       const sortedAliases = [...char.aliases].sort((a, b) => b.length - a.length);
       for (const alias of sortedAliases) {
         if (scene.text.includes(alias)) {
+          // Dangerous aliases also get lower priority
+          const priority = isDangerousWord(alias) ? 4 : 2;
           matched.push({
             key: char.characterKey,
-            priority: 2,
+            priority,
             matchText: alias
           });
           break; // Only match once per character
