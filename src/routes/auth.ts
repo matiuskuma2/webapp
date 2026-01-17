@@ -260,10 +260,10 @@ auth.post('/auth/register', async (c) => {
     // Hash password
     const passwordHash = await hashPassword(password);
     
-    // Create user (status: pending for approval)
+    // Create user (status: pending for approval, role: admin per DB schema)
     const result = await DB.prepare(`
       INSERT INTO users (email, password_hash, name, company, phone, role, status)
-      VALUES (?, ?, ?, ?, ?, 'user', 'pending')
+      VALUES (?, ?, ?, ?, ?, 'admin', 'pending')
     `).bind(
       email.toLowerCase().trim(),
       passwordHash,
@@ -280,6 +280,65 @@ auth.post('/auth/register', async (c) => {
   } catch (error) {
     console.error('Registration error:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Registration failed' } }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/auth/signup (alias for register)
+// ====================================================================
+
+auth.post('/auth/signup', async (c) => {
+  const { DB } = c.env;
+  
+  let body: RegisterRequest;
+  try {
+    body = await c.req.json<RegisterRequest>();
+  } catch {
+    return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid JSON body' } }, 400);
+  }
+  
+  const { email, password, name, company, phone } = body;
+  
+  if (!email || !password || !name) {
+    return c.json({ error: { code: 'MISSING_FIELDS', message: 'Email, password, and name are required' } }, 400);
+  }
+  
+  if (password.length < 8) {
+    return c.json({ error: { code: 'WEAK_PASSWORD', message: 'Password must be at least 8 characters' } }, 400);
+  }
+  
+  try {
+    // Check if email exists
+    const existing = await DB.prepare('SELECT id FROM users WHERE email = ?')
+      .bind(email.toLowerCase().trim()).first();
+    
+    if (existing) {
+      return c.json({ error: { code: 'EMAIL_EXISTS', message: 'このメールアドレスは既に登録されています' } }, 409);
+    }
+    
+    // Hash password
+    const passwordHash = await hashPassword(password);
+    
+    // Create user (status: pending for approval, role: admin per DB schema)
+    const result = await DB.prepare(`
+      INSERT INTO users (email, password_hash, name, company, phone, role, status)
+      VALUES (?, ?, ?, ?, ?, 'admin', 'pending')
+    `).bind(
+      email.toLowerCase().trim(),
+      passwordHash,
+      name.trim(),
+      company?.trim() || null,
+      phone?.trim() || null
+    ).run();
+    
+    return c.json({
+      success: true,
+      message: '登録が完了しました。管理者の承認後、ログインできるようになります。',
+      user_id: result.meta.last_row_id,
+    }, 201);
+  } catch (error) {
+    console.error('Signup error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: '登録に失敗しました' } }, 500);
   }
 });
 
