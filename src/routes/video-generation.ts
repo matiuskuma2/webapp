@@ -17,6 +17,7 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
 import { createAwsVideoClient, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
+import { decryptApiKey } from '../utils/crypto';
 
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -33,10 +34,10 @@ interface GenerateVideoRequest {
 }
 
 // ====================================================================
-// Helper: Get user's API key
+// Helper: Get user's encrypted API key from DB
 // ====================================================================
 
-async function getUserApiKey(
+async function getEncryptedApiKey(
   db: D1Database,
   userId: number,
   provider: string
@@ -47,6 +48,37 @@ async function getUserApiKey(
   `).bind(userId, provider).first<{ encrypted_key: string }>();
   
   return result?.encrypted_key || null;
+}
+
+// ====================================================================
+// Helper: Get and decrypt user's API key
+// ====================================================================
+
+async function getUserApiKey(
+  db: D1Database,
+  userId: number,
+  provider: string,
+  encryptionKey?: string
+): Promise<string | null> {
+  const encryptedKey = await getEncryptedApiKey(db, userId, provider);
+  console.log(`[getUserApiKey] userId=${userId}, provider=${provider}, encryptedKey=${encryptedKey ? 'found' : 'not found'}, encryptionKey=${encryptionKey ? `length=${encryptionKey.length}` : 'not set'}`);
+  
+  if (!encryptedKey) return null;
+  
+  // If no encryption key, assume the key is stored in plaintext (for backward compat)
+  if (!encryptionKey) {
+    console.log('[getUserApiKey] No encryption key, returning encrypted key as-is');
+    return encryptedKey;
+  }
+  
+  try {
+    const decrypted = await decryptApiKey(encryptedKey, encryptionKey);
+    console.log(`[getUserApiKey] Decryption successful, key length=${decrypted.length}`);
+    return decrypted;
+  } catch (error) {
+    console.error('[getUserApiKey] Failed to decrypt API key:', error);
+    return null;
+  }
 }
 
 // ====================================================================
@@ -81,13 +113,15 @@ async function getSceneActiveImage(
 }
 
 // ====================================================================
-// Helper: Build signed image URL for AWS Worker
+// Helper: Build image URL for AWS Worker
 // ====================================================================
 
-function buildSignedImageUrl(r2Key: string, origin: string): string {
-  // AWS Worker が取得できる署名付きURL (TTL 10分)
-  // /images/signed/{r2_key} 形式
-  return `${origin}/images/signed/${encodeURIComponent(r2Key)}`;
+function buildImageUrl(r2Key: string, origin: string): string {
+  // AWS Worker が取得できるURL
+  // /images/* エンドポイントはパブリックアクセス可能
+  // r2Key例: images/22/scene_1/56_1765956080658.png
+  // URL例: https://webapp-c7n.pages.dev/images/22/scene_1/56_1765956080658.png
+  return `${origin}/${r2Key}`;
 }
 
 // ====================================================================
@@ -163,8 +197,21 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
   let vertexProjectId: string | null = null;
   let vertexLocation: string | null = null;
   
+  const encryptionKey = c.env.ENCRYPTION_KEY;
+  
   if (videoEngine === 'veo2') {
-    apiKey = await getUserApiKey(c.env.DB, executorUserId, 'gemini');
+    // Try user's key first ('gemini' or 'google' provider)
+    apiKey = await getUserApiKey(c.env.DB, executorUserId, 'gemini', encryptionKey);
+    if (!apiKey) {
+      apiKey = await getUserApiKey(c.env.DB, executorUserId, 'google', encryptionKey);
+    }
+    
+    // Fallback to system GEMINI_API_KEY if user key not available/decryption failed
+    if (!apiKey && c.env.GEMINI_API_KEY) {
+      console.log('[generate-video] Using system GEMINI_API_KEY as fallback');
+      apiKey = c.env.GEMINI_API_KEY;
+    }
+    
     if (!apiKey) {
       return c.json({
         error: {
@@ -176,7 +223,7 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
     }
   } else {
     // Veo3: Vertex SA JSON
-    vertexSaJson = await getUserApiKey(c.env.DB, executorUserId, 'vertex');
+    vertexSaJson = await getUserApiKey(c.env.DB, executorUserId, 'vertex', encryptionKey);
     if (!vertexSaJson) {
       return c.json({
         error: {
@@ -236,7 +283,7 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
   }
   
   const origin = new URL(c.req.url).origin;
-  const imageUrl = buildSignedImageUrl(activeImage.r2_key, origin);
+  const imageUrl = buildImageUrl(activeImage.r2_key, origin);
   
   const awsResponse = await awsClient.startVideo({
     project_id: scene.project_id,
@@ -354,8 +401,8 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
     return c.json({ error: { code: 'VIDEO_NOT_FOUND', message: 'Video generation not found' } }, 404);
   }
   
-  // generating中でjob_idがある場合はAWSに問い合わせ
-  if (video.status === 'generating' && video.job_id) {
+  // generating中 または completed（presigned URL refresh）でjob_idがある場合はAWSに問い合わせ
+  if ((video.status === 'generating' || video.status === 'completed') && video.job_id) {
     const awsClient = createAwsVideoClient(c.env);
     if (awsClient) {
       const awsStatus = await awsClient.getStatus(video.job_id);
