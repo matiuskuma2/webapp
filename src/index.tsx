@@ -20,6 +20,7 @@ import worldSettings from './routes/world-settings' // Phase X-2
 import characterModels from './routes/character-models' // Phase X-2
 import sceneCharacters from './routes/scene-characters' // Phase X-2
 import videoGeneration from './routes/video-generation' // Video I2V
+import settings from './routes/settings' // User settings & API keys
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -74,6 +75,9 @@ app.route('/api', sceneCharacters) // For /api/scenes/:sceneId/characters
 
 // Video I2V routes
 app.route('/api', videoGeneration) // For /api/scenes/:sceneId/generate-video, /api/videos/:videoId/*
+
+// Settings routes (API key management)
+app.route('/api', settings) // For /api/settings/api-keys/*
 
 // Root route - serve HTML
 app.get('/', (c) => {
