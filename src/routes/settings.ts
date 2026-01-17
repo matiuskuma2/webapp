@@ -99,9 +99,12 @@ settings.get('/user/api-keys', async (c) => {
           }
         }
         
+        const isConfigured = key.is_active === 1 && decryptionStatus === 'valid';
+        
         return {
           provider: key.provider,
           is_active: key.is_active === 1,
+          is_configured: isConfigured, // For frontend compatibility
           decryption_status: decryptionStatus,
           created_at: key.created_at,
           updated_at: key.updated_at,
