@@ -3883,14 +3883,39 @@ async function openVideoModal(sceneId) {
         </h3>
       </div>
       <div class="p-6 space-y-6">
-        <!-- Duration Selection -->
+        <!-- Engine Selection (Veo2 / Veo3) -->
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-2">
+            <i class="fas fa-cog mr-1"></i>動画エンジン
+          </label>
+          <div class="grid grid-cols-2 gap-3">
+            <label class="relative cursor-pointer">
+              <input type="radio" name="videoEngine-${sceneId}" value="veo2" class="peer sr-only" checked>
+              <div class="p-3 border-2 rounded-lg peer-checked:border-purple-500 peer-checked:bg-purple-50 hover:bg-gray-50 transition-colors">
+                <div class="font-semibold text-gray-800">🎬 Veo2</div>
+                <div class="text-xs text-gray-500 mt-1">Google AI Studio</div>
+                <div class="text-xs text-blue-600 mt-1">5秒 / 手軽</div>
+              </div>
+            </label>
+            <label class="relative cursor-pointer">
+              <input type="radio" name="videoEngine-${sceneId}" value="veo3" class="peer sr-only">
+              <div class="p-3 border-2 rounded-lg peer-checked:border-purple-500 peer-checked:bg-purple-50 hover:bg-gray-50 transition-colors">
+                <div class="font-semibold text-gray-800">🚀 Veo3</div>
+                <div class="text-xs text-gray-500 mt-1">Vertex AI</div>
+                <div class="text-xs text-green-600 mt-1">8秒 / 高品質</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <!-- Duration Display (changes based on engine) -->
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-2">
             <i class="fas fa-clock mr-1"></i>動画の長さ
           </label>
-          <div class="flex gap-4 items-center">
-            <span class="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">8秒（固定）</span>
-            <span class="text-xs text-gray-500">※ Google Veo 3 の仕様です</span>
+          <div class="flex gap-4 items-center" id="durationDisplay-${sceneId}">
+            <span class="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">5秒（固定）</span>
+            <span class="text-xs text-gray-500">※ Veo2 の仕様です</span>
           </div>
         </div>
         
@@ -3963,6 +3988,25 @@ async function openVideoModal(sceneId) {
       closeVideoModal();
     }
   });
+  
+  // Engine selection change handler
+  const engineRadios = modal.querySelectorAll(`input[name="videoEngine-${sceneId}"]`);
+  engineRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+      const display = document.getElementById(`durationDisplay-${sceneId}`);
+      if (radio.value === 'veo3') {
+        display.innerHTML = `
+          <span class="px-3 py-1 bg-green-100 text-green-700 rounded-full text-sm font-medium">8秒（固定）</span>
+          <span class="text-xs text-gray-500">※ Veo3 の仕様です</span>
+        `;
+      } else {
+        display.innerHTML = `
+          <span class="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-sm font-medium">5秒（固定）</span>
+          <span class="text-xs text-gray-500">※ Veo2 の仕様です</span>
+        `;
+      }
+    });
+  });
 }
 
 /**
@@ -4002,9 +4046,12 @@ async function generateVideo(sceneId) {
     return;
   }
   
-  // Get duration
-  // Veo 3 generates 8-second videos (fixed duration)
-  const duration = 8;
+  // Get selected engine (veo2 or veo3)
+  const engineRadio = document.querySelector(`input[name="videoEngine-${sceneId}"]:checked`);
+  const videoEngine = engineRadio?.value || 'veo2';
+  
+  // Duration depends on engine
+  const duration = videoEngine === 'veo3' ? 8 : 5;
   
   // Get prompt
   const promptEl = document.getElementById(`videoPrompt-${sceneId}`);
@@ -4028,7 +4075,8 @@ async function generateVideo(sceneId) {
     const response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-video`, {
       duration_sec: duration,
       prompt: prompt,
-      provider: 'google'
+      provider: 'google',
+      video_engine: videoEngine
     });
     
     if (response.data.success) {

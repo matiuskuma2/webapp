@@ -11,13 +11,14 @@
 
 ### user_api_keys.provider 値
 
-| provider | 用途 | 備考 |
-|----------|------|------|
-| `google` | Veo2 (Gemini API) | Gemini API Key |
-| `vertex` | Veo3 (Vertex AI) | Service Account JSON |
-| `openai` | OpenAI関連 | Whisper, Chat API用 |
+| provider | 用途 | 認証方式 | 取得場所 |
+|----------|------|----------|----------|
+| `google` | Veo2 (Gemini API) | API Key | [Google AI Studio](https://aistudio.google.com/) |
+| `vertex` | Veo3 (Vertex AI) | API Key | [Vertex AI Studio > 設定 > APIキー](https://console.cloud.google.com/vertex-ai/studio/settings/api-keys) |
+| `openai` | OpenAI関連 | API Key | OpenAI Dashboard |
 
 **禁止**: `gemini` は使用しない（過去に混在あり、`google`に統一）
+**注意**: Veo3 は Service Account JSON ではなく **Vertex AI API Key** を使用
 
 ### video_engine 値
 
