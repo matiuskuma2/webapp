@@ -423,4 +423,47 @@
 
 ---
 
+### [2026-01-17] 技術負債修正 A/B/C
+
+#### 変更理由
+- Gate 1通過後に発見された技術負債の解消
+- 運用インシデント（コスト事故、画像漏洩）の防止
+
+#### A: APIキー復号確実化
+- **問題**: フォールバックでシステムキーを暗黙使用 → コスト把握困難
+- **対応**:
+  - billing_source判定ロジック追加（user/sponsor分離）
+  - user mode: ユーザーキー必須、復号失敗は明示エラー
+  - sponsor mode: システムキー使用（明示的）
+  - getUserApiKey戻り値を { key } | { error } に変更
+- **provider名統一**: `google` for Veo2, `vertex` for Veo3（`gemini`禁止）
+
+#### B: /images/signed HMAC署名方式
+- **問題**: /images/* が公開URL → URL推測攻撃、画像漏洩リスク
+- **対応**:
+  - `src/utils/signed-url.ts`: HMAC-SHA256署名生成・検証
+  - `GET /images/signed/*`: 署名検証付き画像配信エンドポイント
+  - AWS Workerへは署名付きURLを渡す
+  - TTL 10分、署名検証失敗時403
+- **Secret**: `IMAGE_URL_SIGNING_SECRET`
+
+#### C: provider名・SSOT方針ドキュメント化
+- `docs/VIDEO_ARCHITECTURE.md` 作成
+- SSOT定義: DynamoDB = ジョブ状態権威、D1 = キャッシュ
+- 禁止事項明記: フォールバック禁止、provider名混在禁止、公開URL禁止
+
+#### 影響範囲
+- ✅ **API**: video-generation.ts 大幅修正
+- ✅ **Worker**: signed-url.ts 追加、images.ts 修正
+- ✅ **Docs**: VIDEO_ARCHITECTURE.md 追加
+- ❌ **DB**: 変更なし
+- ❌ **Storage**: 変更なし
+
+#### 分割コミット
+- cf76de2: fix(A): APIキー復号確実化
+- 5f0b0d2: fix(B): /images/signed HMAC署名方式実装
+- e035ee3: docs(C): Video Architecture
+
+---
+
 最終更新: 2026-01-17
