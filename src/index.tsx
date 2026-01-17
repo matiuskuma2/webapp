@@ -22,6 +22,7 @@ import sceneCharacters from './routes/scene-characters' // Phase X-2
 import videoGeneration from './routes/video-generation' // Video I2V
 import settings from './routes/settings' // User settings & API keys
 import auth from './routes/auth' // Authentication
+import admin from './routes/admin' // Admin API routes
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -84,6 +85,7 @@ app.route('/api', settings) // For /api/settings/api-keys/*
 
 // Authentication routes
 app.route('/api', auth) // For /api/auth/*
+app.route('/api/admin', admin) // For /api/admin/* (superadmin only)
 
 // Root route - serve HTML
 // Root route - with authentication check
