@@ -8,4 +8,6 @@ export type Bindings = {
   // AWS Video Proxy (Veo2/Veo3)
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;
+  AWS_ORCH_BASE_URL?: string;  // e.g. https://sddd2nwesf.execute-api.ap-northeast-1.amazonaws.com/prod
+  AWS_REGION?: string;          // e.g. ap-northeast-1
 }

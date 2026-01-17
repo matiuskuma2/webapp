@@ -10,9 +10,9 @@
  */
 
 // AWS SigV4署名に必要な定数
-const AWS_REGION = 'ap-northeast-1';
 const AWS_SERVICE = 'execute-api';
-const API_GATEWAY_ENDPOINT = 'https://sddd2nwesf.execute-api.ap-northeast-1.amazonaws.com/prod';
+const DEFAULT_AWS_REGION = 'ap-northeast-1';
+const DEFAULT_API_GATEWAY_ENDPOINT = 'https://sddd2nwesf.execute-api.ap-northeast-1.amazonaws.com/prod';
 
 // ====================================================================
 // Types
@@ -133,7 +133,8 @@ async function signRequest(
   url: string,
   body: string,
   accessKeyId: string,
-  secretAccessKey: string
+  secretAccessKey: string,
+  region: string = DEFAULT_AWS_REGION
 ): Promise<SignedHeaders> {
   const parsedUrl = new URL(url);
   const host = parsedUrl.host;
@@ -167,7 +168,7 @@ async function signRequest(
   const canonicalRequestHash = await sha256(canonicalRequest);
   
   // String to sign
-  const credentialScope = `${dateStamp}/${AWS_REGION}/${AWS_SERVICE}/aws4_request`;
+  const credentialScope = `${dateStamp}/${region}/${AWS_SERVICE}/aws4_request`;
   const stringToSign = [
     'AWS4-HMAC-SHA256',
     amzDate,
@@ -176,7 +177,7 @@ async function signRequest(
   ].join('\n');
   
   // Signature
-  const signingKey = await getSignatureKey(secretAccessKey, dateStamp, AWS_REGION, AWS_SERVICE);
+  const signingKey = await getSignatureKey(secretAccessKey, dateStamp, region, AWS_SERVICE);
   const signatureBuffer = await hmacSha256(signingKey, stringToSign);
   const signature = toHex(signatureBuffer);
   
@@ -205,21 +206,30 @@ async function signRequest(
 export class AwsVideoClient {
   private accessKeyId: string;
   private secretAccessKey: string;
+  private baseUrl: string;
+  private region: string;
   
-  constructor(accessKeyId: string, secretAccessKey: string) {
+  constructor(
+    accessKeyId: string,
+    secretAccessKey: string,
+    baseUrl?: string,
+    region?: string
+  ) {
     this.accessKeyId = accessKeyId;
     this.secretAccessKey = secretAccessKey;
+    this.baseUrl = baseUrl || DEFAULT_API_GATEWAY_ENDPOINT;
+    this.region = region || DEFAULT_AWS_REGION;
   }
   
   /**
    * POST /video/start - 動画生成ジョブを登録
    */
   async startVideo(request: StartVideoRequest): Promise<StartVideoResponse> {
-    const url = `${API_GATEWAY_ENDPOINT}/video/start`;
+    const url = `${this.baseUrl}/video/start`;
     const body = JSON.stringify(request);
     
     try {
-      const signedHeaders = await signRequest('POST', url, body, this.accessKeyId, this.secretAccessKey);
+      const signedHeaders = await signRequest('POST', url, body, this.accessKeyId, this.secretAccessKey, this.region);
       
       const response = await fetch(url, {
         method: 'POST',
@@ -254,10 +264,10 @@ export class AwsVideoClient {
    * GET /video/status/{jobId} - ジョブステータスを取得
    */
   async getStatus(jobId: string): Promise<StatusVideoResponse> {
-    const url = `${API_GATEWAY_ENDPOINT}/video/status/${encodeURIComponent(jobId)}`;
+    const url = `${this.baseUrl}/video/status/${encodeURIComponent(jobId)}`;
     
     try {
-      const signedHeaders = await signRequest('GET', url, '', this.accessKeyId, this.secretAccessKey);
+      const signedHeaders = await signRequest('GET', url, '', this.accessKeyId, this.secretAccessKey, this.region);
       
       const response = await fetch(url, {
         method: 'GET',
@@ -288,10 +298,20 @@ export class AwsVideoClient {
 /**
  * Create AWS Video Client from environment
  */
-export function createAwsVideoClient(env: { AWS_ACCESS_KEY_ID?: string; AWS_SECRET_ACCESS_KEY?: string }): AwsVideoClient | null {
+export function createAwsVideoClient(env: {
+  AWS_ACCESS_KEY_ID?: string;
+  AWS_SECRET_ACCESS_KEY?: string;
+  AWS_ORCH_BASE_URL?: string;
+  AWS_REGION?: string;
+}): AwsVideoClient | null {
   if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
     console.error('[AwsVideoClient] Missing AWS credentials in environment');
     return null;
   }
-  return new AwsVideoClient(env.AWS_ACCESS_KEY_ID, env.AWS_SECRET_ACCESS_KEY);
+  return new AwsVideoClient(
+    env.AWS_ACCESS_KEY_ID,
+    env.AWS_SECRET_ACCESS_KEY,
+    env.AWS_ORCH_BASE_URL,
+    env.AWS_REGION
+  );
 }
