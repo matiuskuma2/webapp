@@ -21,6 +21,7 @@ import characterModels from './routes/character-models' // Phase X-2
 import sceneCharacters from './routes/scene-characters' // Phase X-2
 import videoGeneration from './routes/video-generation' // Video I2V
 import settings from './routes/settings' // User settings & API keys
+import auth from './routes/auth' // Authentication
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -78,6 +79,9 @@ app.route('/api', videoGeneration) // For /api/scenes/:sceneId/generate-video, /
 
 // Settings routes (API key management)
 app.route('/api', settings) // For /api/settings/api-keys/*
+
+// Authentication routes
+app.route('/api', auth) // For /api/auth/*
 
 // Root route - serve HTML
 app.get('/', (c) => {
@@ -991,6 +995,441 @@ app.get('/projects/:id', (c) => {
     <script src="/static/audio-state.js"></script>
     <script src="/static/audio-ui.js"></script>
     <script src="/static/project-editor.1766716731.js"></script>
+</body>
+</html>
+  `)
+})
+
+// Login page
+app.get('/login', (c) => {
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ログイン - RILARC</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-purple-50 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
+        <div class="text-center mb-8">
+            <i class="fas fa-video text-5xl text-blue-600 mb-4"></i>
+            <h1 class="text-2xl font-bold text-gray-800">RILARC</h1>
+            <p class="text-gray-600 mt-2">アカウントにログイン</p>
+        </div>
+        
+        <form id="loginForm" class="space-y-6">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-envelope mr-1"></i>メールアドレス
+                </label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    required
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="your@email.com"
+                >
+            </div>
+            
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-lock mr-1"></i>パスワード
+                </label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    required
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="••••••••"
+                >
+            </div>
+            
+            <div id="errorMessage" class="hidden p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded">
+                <i class="fas fa-exclamation-circle mr-2"></i>
+                <span id="errorText"></span>
+            </div>
+            
+            <button 
+                type="submit"
+                class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+            >
+                <i class="fas fa-sign-in-alt"></i>
+                ログイン
+            </button>
+        </form>
+        
+        <div class="mt-6 text-center space-y-3">
+            <a href="/forgot-password" class="text-blue-600 hover:underline text-sm">
+                <i class="fas fa-key mr-1"></i>パスワードをお忘れですか？
+            </a>
+            <div class="text-gray-500 text-sm">
+                アカウントをお持ちでない方は
+                <a href="/register" class="text-blue-600 hover:underline">新規登録</a>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+        document.getElementById('loginForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorDiv = document.getElementById('errorMessage');
+            const errorText = document.getElementById('errorText');
+            
+            errorDiv.classList.add('hidden');
+            
+            try {
+                const response = await axios.post('/api/auth/login', { email, password });
+                if (response.data.success) {
+                    window.location.href = '/';
+                }
+            } catch (error) {
+                errorDiv.classList.remove('hidden');
+                const message = error.response?.data?.error?.message || 'ログインに失敗しました';
+                errorText.textContent = message;
+            }
+        });
+    </script>
+</body>
+</html>
+  `)
+})
+
+// Register page
+app.get('/register', (c) => {
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新規登録 - RILARC</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-purple-50 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
+        <div class="text-center mb-8">
+            <i class="fas fa-video text-5xl text-blue-600 mb-4"></i>
+            <h1 class="text-2xl font-bold text-gray-800">RILARC</h1>
+            <p class="text-gray-600 mt-2">新規アカウント登録</p>
+        </div>
+        
+        <form id="registerForm" class="space-y-5">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-user mr-1"></i>お名前 <span class="text-red-500">*</span>
+                </label>
+                <input 
+                    type="text" 
+                    id="name" 
+                    required
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="山田 太郎"
+                >
+            </div>
+            
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-envelope mr-1"></i>メールアドレス <span class="text-red-500">*</span>
+                </label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    required
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="your@email.com"
+                >
+            </div>
+            
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-lock mr-1"></i>パスワード <span class="text-red-500">*</span>
+                </label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    required
+                    minlength="8"
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="8文字以上"
+                >
+            </div>
+            
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-building mr-1"></i>会社名（任意）
+                </label>
+                <input 
+                    type="text" 
+                    id="company"
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="株式会社〇〇"
+                >
+            </div>
+            
+            <div id="errorMessage" class="hidden p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded">
+                <i class="fas fa-exclamation-circle mr-2"></i>
+                <span id="errorText"></span>
+            </div>
+            
+            <div id="successMessage" class="hidden p-4 bg-green-50 border-l-4 border-green-500 text-green-700 rounded">
+                <i class="fas fa-check-circle mr-2"></i>
+                <span id="successText"></span>
+            </div>
+            
+            <button 
+                type="submit"
+                class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+            >
+                <i class="fas fa-user-plus"></i>
+                登録する
+            </button>
+        </form>
+        
+        <div class="mt-6 text-center">
+            <span class="text-gray-500 text-sm">
+                すでにアカウントをお持ちの方は
+                <a href="/login" class="text-blue-600 hover:underline">ログイン</a>
+            </span>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+        document.getElementById('registerForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const name = document.getElementById('name').value;
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const company = document.getElementById('company').value;
+            
+            const errorDiv = document.getElementById('errorMessage');
+            const successDiv = document.getElementById('successMessage');
+            const errorText = document.getElementById('errorText');
+            const successText = document.getElementById('successText');
+            
+            errorDiv.classList.add('hidden');
+            successDiv.classList.add('hidden');
+            
+            try {
+                const response = await axios.post('/api/auth/register', { name, email, password, company });
+                if (response.data.success) {
+                    successDiv.classList.remove('hidden');
+                    successText.textContent = response.data.message;
+                    document.getElementById('registerForm').reset();
+                }
+            } catch (error) {
+                errorDiv.classList.remove('hidden');
+                const message = error.response?.data?.error?.message || '登録に失敗しました';
+                errorText.textContent = message;
+            }
+        });
+    </script>
+</body>
+</html>
+  `)
+})
+
+// Forgot password page
+app.get('/forgot-password', (c) => {
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>パスワードリセット - RILARC</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-purple-50 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
+        <div class="text-center mb-8">
+            <i class="fas fa-key text-5xl text-blue-600 mb-4"></i>
+            <h1 class="text-2xl font-bold text-gray-800">パスワードリセット</h1>
+            <p class="text-gray-600 mt-2">登録メールアドレスを入力してください</p>
+        </div>
+        
+        <form id="forgotForm" class="space-y-6">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-envelope mr-1"></i>メールアドレス
+                </label>
+                <input 
+                    type="email" 
+                    id="email" 
+                    required
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="your@email.com"
+                >
+            </div>
+            
+            <div id="successMessage" class="hidden p-4 bg-green-50 border-l-4 border-green-500 text-green-700 rounded">
+                <i class="fas fa-check-circle mr-2"></i>
+                リセットリンクを送信しました。メールをご確認ください。
+            </div>
+            
+            <button 
+                type="submit"
+                class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+            >
+                <i class="fas fa-paper-plane"></i>
+                リセットリンクを送信
+            </button>
+        </form>
+        
+        <div class="mt-6 text-center">
+            <a href="/login" class="text-blue-600 hover:underline text-sm">
+                <i class="fas fa-arrow-left mr-1"></i>ログインに戻る
+            </a>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+        document.getElementById('forgotForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const email = document.getElementById('email').value;
+            const successDiv = document.getElementById('successMessage');
+            
+            try {
+                await axios.post('/api/auth/forgot-password', { email });
+                successDiv.classList.remove('hidden');
+            } catch (error) {
+                // Always show success to prevent email enumeration
+                successDiv.classList.remove('hidden');
+            }
+        });
+    </script>
+</body>
+</html>
+  `)
+})
+
+// Reset password page
+app.get('/reset-password', (c) => {
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>新しいパスワード設定 - RILARC</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-purple-50 min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
+        <div class="text-center mb-8">
+            <i class="fas fa-lock text-5xl text-blue-600 mb-4"></i>
+            <h1 class="text-2xl font-bold text-gray-800">新しいパスワード設定</h1>
+            <p class="text-gray-600 mt-2">新しいパスワードを入力してください</p>
+        </div>
+        
+        <form id="resetForm" class="space-y-6">
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-lock mr-1"></i>新しいパスワード
+                </label>
+                <input 
+                    type="password" 
+                    id="password" 
+                    required
+                    minlength="8"
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="8文字以上"
+                >
+            </div>
+            
+            <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                    <i class="fas fa-lock mr-1"></i>パスワード確認
+                </label>
+                <input 
+                    type="password" 
+                    id="passwordConfirm" 
+                    required
+                    minlength="8"
+                    class="w-full px-4 py-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all"
+                    placeholder="もう一度入力"
+                >
+            </div>
+            
+            <div id="errorMessage" class="hidden p-4 bg-red-50 border-l-4 border-red-500 text-red-700 rounded">
+                <i class="fas fa-exclamation-circle mr-2"></i>
+                <span id="errorText"></span>
+            </div>
+            
+            <div id="successMessage" class="hidden p-4 bg-green-50 border-l-4 border-green-500 text-green-700 rounded">
+                <i class="fas fa-check-circle mr-2"></i>
+                パスワードを更新しました。<a href="/login" class="underline">ログイン</a>してください。
+            </div>
+            
+            <button 
+                type="submit"
+                class="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+            >
+                <i class="fas fa-save"></i>
+                パスワードを更新
+            </button>
+        </form>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+        document.getElementById('resetForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const password = document.getElementById('password').value;
+            const passwordConfirm = document.getElementById('passwordConfirm').value;
+            const errorDiv = document.getElementById('errorMessage');
+            const successDiv = document.getElementById('successMessage');
+            const errorText = document.getElementById('errorText');
+            
+            errorDiv.classList.add('hidden');
+            successDiv.classList.add('hidden');
+            
+            if (password !== passwordConfirm) {
+                errorDiv.classList.remove('hidden');
+                errorText.textContent = 'パスワードが一致しません';
+                return;
+            }
+            
+            const urlParams = new URLSearchParams(window.location.search);
+            const token = urlParams.get('token');
+            
+            if (!token) {
+                errorDiv.classList.remove('hidden');
+                errorText.textContent = '無効なリセットリンクです';
+                return;
+            }
+            
+            try {
+                const response = await axios.post('/api/auth/reset-password', { token, password });
+                if (response.data.success) {
+                    successDiv.classList.remove('hidden');
+                    document.getElementById('resetForm').reset();
+                }
+            } catch (error) {
+                errorDiv.classList.remove('hidden');
+                const message = error.response?.data?.error?.message || 'パスワードリセットに失敗しました';
+                errorText.textContent = message;
+            }
+        });
+    </script>
 </body>
 </html>
   `)
