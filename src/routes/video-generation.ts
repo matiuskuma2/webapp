@@ -18,6 +18,7 @@ import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
 import { createAwsVideoClient, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
 import { decryptApiKey } from '../utils/crypto';
+import { generateSignedImageUrl } from '../utils/signed-url';
 
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -143,15 +144,18 @@ async function getSceneActiveImage(
 }
 
 // ====================================================================
-// Helper: Build image URL for AWS Worker
+// Helper: Build signed image URL for AWS Worker
 // ====================================================================
+// 署名付きURL（TTL 10分）を生成
+// 外部サービス（AWS Worker）からのアクセス用
 
-function buildImageUrl(r2Key: string, origin: string): string {
-  // AWS Worker が取得できるURL
-  // /images/* エンドポイントはパブリックアクセス可能
-  // r2Key例: images/22/scene_1/56_1765956080658.png
-  // URL例: https://webapp-c7n.pages.dev/images/22/scene_1/56_1765956080658.png
-  return `${origin}/${r2Key}`;
+async function buildSignedImageUrl(
+  r2Key: string,
+  origin: string,
+  signingSecret: string
+): Promise<string> {
+  // TTL 10分（AWS Workerが画像を取得するのに十分な時間）
+  return generateSignedImageUrl(r2Key, signingSecret, origin, 600);
 }
 
 // ====================================================================
@@ -334,9 +338,23 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
     }, 500);
   }
   
-  const origin = new URL(c.req.url).origin;
-  const imageUrl = buildImageUrl(activeImage.r2_key, origin);
+  // 9. 署名付き画像URLを生成
+  const signingSecret = c.env.IMAGE_URL_SIGNING_SECRET;
+  if (!signingSecret) {
+    await c.env.DB.prepare(`
+      UPDATE video_generations SET status = 'failed', error_message = 'IMAGE_URL_SIGNING_SECRET not configured'
+      WHERE id = ?
+    `).bind(videoGenerationId).run();
+    
+    return c.json({
+      error: { code: 'SERVER_CONFIG_ERROR', message: 'Image signing not configured' },
+    }, 500);
+  }
   
+  const origin = new URL(c.req.url).origin;
+  const imageUrl = await buildSignedImageUrl(activeImage.r2_key, origin, signingSecret);
+  
+  // 10. AWS Video Proxy 呼び出し
   const awsResponse = await awsClient.startVideo({
     project_id: scene.project_id,
     scene_id: sceneId,

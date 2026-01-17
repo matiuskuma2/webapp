@@ -7,6 +7,8 @@ export type Bindings = {
   FISH_AUDIO_API_TOKEN: string;
   // Encryption for API keys
   ENCRYPTION_KEY?: string;      // For decrypting user_api_keys.encrypted_key
+  // Image URL signing (HMAC-SHA256)
+  IMAGE_URL_SIGNING_SECRET?: string;  // For signed image URLs (prevents URL guessing)
   // AWS Video Proxy (Veo2/Veo3)
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;

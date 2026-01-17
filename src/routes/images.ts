@@ -1,9 +1,60 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types/bindings'
+import { parseSignedUrlParams, verifySignedUrl } from '../utils/signed-url'
 
 const images = new Hono<{ Bindings: Bindings }>()
 
-// GET /images/* - R2バケットから画像直接配信
+// ====================================================================
+// GET /images/signed/* - 署名付きURL経由でR2画像配信（外部サービス用）
+// ====================================================================
+// URL形式: /images/signed/{r2_key}?exp={timestamp}&sig={signature}
+// - AWS Video Workerなど外部サービスからのアクセス用
+// - HMAC-SHA256署名で認証、TTL付き
+images.get('/signed/*', async (c) => {
+  try {
+    const secret = c.env.IMAGE_URL_SIGNING_SECRET;
+    if (!secret) {
+      console.error('[images/signed] IMAGE_URL_SIGNING_SECRET not configured');
+      return c.json({ error: 'Server configuration error' }, 500);
+    }
+    
+    const url = new URL(c.req.url);
+    const { r2Key, exp, sig } = parseSignedUrlParams(url);
+    
+    if (!r2Key || !exp || !sig) {
+      return c.json({ error: 'Missing required parameters (exp, sig)' }, 400);
+    }
+    
+    // 署名検証
+    const verification = await verifySignedUrl(r2Key, exp, sig, secret);
+    if (!verification.valid) {
+      return c.json({ error: verification.reason }, 403);
+    }
+    
+    // R2から画像取得
+    const object = await c.env.R2.get(r2Key);
+    if (!object) {
+      return c.notFound();
+    }
+    
+    const headers = new Headers();
+    headers.set('Content-Type', object.httpMetadata?.contentType || 'image/png');
+    // 署名付きURLはキャッシュ短め（署名の有効期限に合わせる）
+    headers.set('Cache-Control', 'private, max-age=300');
+    headers.set('Access-Control-Allow-Origin', '*');
+    
+    return new Response(object.body, { headers });
+  } catch (error) {
+    console.error('[images/signed] Error:', error);
+    return c.json({ error: 'Failed to fetch image' }, 500);
+  }
+});
+
+// ====================================================================
+// GET /images/* - R2バケットから画像直接配信（内部用・レガシー）
+// ====================================================================
+// 注意: このエンドポイントは内部UIからのアクセス用
+// 外部サービスからは /images/signed/* を使用すること
 images.get('/*', async (c) => {
   try {
     // Request path: /images/12/scene_1/21_xxx.png
