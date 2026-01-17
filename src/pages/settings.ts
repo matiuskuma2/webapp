@@ -109,6 +109,21 @@ export const settingsHtml = `
                     ※ Google Cloud Console（GCP）ではありません。AI Studio のキーをご利用ください。
                 </p>
             </div>
+            
+            <!-- Key Migration Notice (P1: 移行案内) -->
+            <div id="migrationNotice" class="hidden bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+                <div class="flex items-start">
+                    <i class="fas fa-exclamation-triangle text-amber-500 mt-0.5 mr-3"></i>
+                    <div class="flex-1">
+                        <p class="font-semibold text-amber-800">暗号鍵の更新について</p>
+                        <p class="text-sm text-amber-700 mt-1">
+                            過去に保存したAPIキーが移行対象になっている場合があります。
+                            「テスト」ボタンを押すと、必要に応じて自動的に新しい鍵へ移行されます（数秒で完了）。
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
             <div id="apiKeysSection">
                 <!-- Loaded dynamically -->
                 <div class="text-center py-4">
@@ -228,7 +243,7 @@ export const settingsHtml = `
         });
         
         // ======================
-        // Video API Key Management (Phase D-1)
+        // Video API Key Management (Phase D-1 + P1 Key Migration)
         // ======================
         
         // 仕様: provider は 'google' のみ
@@ -238,33 +253,102 @@ export const settingsHtml = `
             { provider: 'google', name: 'Google (Veo)', description: 'Google AI Studio のAPIキーで動画生成' }
         ];
         
+        // P1: 状態に応じたメッセージとスタイル
+        function getStatusInfo(key) {
+            if (!key) {
+                return { text: '未設定', icon: 'times-circle', color: 'text-gray-400', badge: '' };
+            }
+            
+            const status = key.decryption_status || 'unknown';
+            const needsMigration = key.needs_migration || false;
+            
+            if (status === 'invalid') {
+                return {
+                    text: '復号失敗',
+                    icon: 'exclamation-circle',
+                    color: 'text-red-600',
+                    badge: 'bg-red-100 text-red-700 border-red-200',
+                    message: '復号に失敗しました。キーの形式が変わった可能性があります。再入力が必要です。'
+                };
+            }
+            
+            if (status === 'valid' && needsMigration) {
+                return {
+                    text: '移行が必要',
+                    icon: 'exclamation-triangle',
+                    color: 'text-amber-600',
+                    badge: 'bg-amber-100 text-amber-700 border-amber-200',
+                    message: '旧鍵で復号されました。「テスト」を押して自動移行してください。'
+                };
+            }
+            
+            if (status === 'valid') {
+                return {
+                    text: '正常',
+                    icon: 'check-circle',
+                    color: 'text-green-600',
+                    badge: 'bg-green-100 text-green-700 border-green-200',
+                    message: null
+                };
+            }
+            
+            return {
+                text: '設定済み',
+                icon: 'check-circle',
+                color: 'text-green-600',
+                badge: '',
+                message: null
+            };
+        }
+        
         async function loadApiKeys() {
             try {
                 const res = await axios.get('/api/user/api-keys');
                 const configuredKeys = res.data.keys || [];
                 
+                // P1: 移行が必要なキーがあるか確認
+                const hasMigrationNeeded = configuredKeys.some(k => k.needs_migration);
+                const hasInvalid = configuredKeys.some(k => k.decryption_status === 'invalid');
+                const migrationNotice = document.getElementById('migrationNotice');
+                
+                if (hasMigrationNeeded || hasInvalid) {
+                    migrationNotice.classList.remove('hidden');
+                } else {
+                    migrationNotice.classList.add('hidden');
+                }
+                
                 const section = document.getElementById('apiKeysSection');
                 section.innerHTML = PROVIDERS.map(p => {
                     const configured = configuredKeys.find(k => k.provider === p.provider);
-                    const isConfigured = !!configured;
+                    const isConfigured = !!configured && configured.decryption_status !== 'invalid';
+                    const statusInfo = getStatusInfo(configured);
+                    
                     return \`
-                    <div class="border rounded-lg p-4 mb-3" id="api-key-\${p.provider}">
+                    <div class="border rounded-lg p-4 mb-3 \${statusInfo.badge ? 'border-2 ' + statusInfo.badge.split(' ')[2] : ''}" id="api-key-\${p.provider}">
                         <div class="flex items-center justify-between mb-2">
                             <div>
                                 <h3 class="font-semibold text-gray-800">\${p.name}</h3>
                                 <p class="text-xs text-gray-500">\${p.description}</p>
                             </div>
-                            <span class="\${isConfigured ? 'text-green-600' : 'text-gray-400'} text-sm">
-                                <i class="fas fa-\${isConfigured ? 'check-circle' : 'times-circle'} mr-1"></i>
-                                \${isConfigured ? '設定済み' : '未設定'}
+                            <span class="\${statusInfo.color} text-sm font-medium">
+                                <i class="fas fa-\${statusInfo.icon} mr-1"></i>
+                                \${statusInfo.text}
                             </span>
                         </div>
-                        <div class="flex gap-2">
+                        
+                        \${statusInfo.message ? \`
+                        <div class="mb-3 p-2 rounded-lg text-sm \${statusInfo.badge}">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            \${statusInfo.message}
+                        </div>
+                        \` : ''}
+                        
+                        <div class="flex gap-2 flex-wrap">
                             <input 
                                 type="password" 
                                 id="apiKey-\${p.provider}"
                                 placeholder="\${isConfigured ? '新しいキーで上書き...' : 'APIキーを入力...'}"
-                                class="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                class="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                             />
                             <button 
                                 onclick="saveApiKey('\${p.provider}')"
@@ -272,7 +356,14 @@ export const settingsHtml = `
                             >
                                 <i class="fas fa-save mr-1"></i>保存
                             </button>
-                            \${isConfigured ? \`
+                            \${configured ? \`
+                                <button 
+                                    onclick="testApiKey('\${p.provider}')"
+                                    class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"
+                                    id="testBtn-\${p.provider}"
+                                >
+                                    <i class="fas fa-flask mr-1"></i>テスト
+                                </button>
                                 <button 
                                     onclick="deleteApiKey('\${p.provider}')"
                                     class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-semibold"
@@ -323,13 +414,61 @@ export const settingsHtml = `
             }
         }
         
+        // P1: テストボタン - 自動移行を実行
+        async function testApiKey(provider) {
+            const btn = document.getElementById(\`testBtn-\${provider}\`);
+            const originalHtml = btn.innerHTML;
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>テスト中...';
+            
+            try {
+                const res = await axios.get(\`/api/settings/api-keys/\${provider}/test\`);
+                const data = res.data;
+                
+                let message = '';
+                let isSuccess = true;
+                
+                if (data.migrated) {
+                    // 自動移行が成功
+                    message = '✅ 自動移行しました（旧鍵 → 新鍵）。キープレビュー: ' + data.key_preview;
+                } else if (data.was_legacy_key) {
+                    // 旧鍵で復号できたが移行は他で完了済み
+                    message = '✅ 復号できました（移行は完了済みの可能性があります）。キープレビュー: ' + data.key_preview;
+                } else {
+                    // 現行鍵で復号成功
+                    message = '✅ 正常に復号できました。キープレビュー: ' + data.key_preview + ' (' + data.key_length + '文字)';
+                }
+                
+                showApiKeyMessage(provider, message, false);
+                
+                // 状態をリフレッシュ
+                setTimeout(loadApiKeys, 1000);
+                
+            } catch (err) {
+                const errorData = err.response?.data?.error;
+                let message = '復号に失敗しました';
+                
+                if (errorData) {
+                    message = errorData.message || message;
+                    if (errorData.hint) {
+                        message += '\\n' + errorData.hint;
+                    }
+                }
+                
+                showApiKeyMessage(provider, message, true);
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = originalHtml;
+            }
+        }
+        
         function showApiKeyMessage(provider, message, isError = false) {
             const el = document.getElementById(\`apiKeyMessage-\${provider}\`);
             if (!el) return;
-            el.textContent = message;
+            el.innerHTML = message.replace(/\\n/g, '<br>');
             el.className = 'text-sm p-2 rounded mt-2 ' + (isError ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-600');
             el.classList.remove('hidden');
-            setTimeout(() => el.classList.add('hidden'), 5000);
+            setTimeout(() => el.classList.add('hidden'), 8000);
         }
         
         // Load API keys on page load
