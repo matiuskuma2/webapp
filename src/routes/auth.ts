@@ -422,7 +422,7 @@ auth.get('/auth/me', async (c) => {
   const sessionId = getCookie(c, 'session');
   
   if (!sessionId) {
-    return c.json({ error: { code: 'NOT_AUTHENTICATED', message: 'Not logged in' } }, 401);
+    return c.json({ authenticated: false, error: { code: 'NOT_AUTHENTICATED', message: 'Not logged in' } }, 401);
   }
   
   try {
@@ -448,10 +448,11 @@ auth.get('/auth/me', async (c) => {
     
     if (!session) {
       deleteCookie(c, 'session', { path: '/' });
-      return c.json({ error: { code: 'SESSION_EXPIRED', message: 'Session expired' } }, 401);
+      return c.json({ authenticated: false, error: { code: 'SESSION_EXPIRED', message: 'Session expired' } }, 401);
     }
     
     return c.json({
+      authenticated: true,
       user: {
         id: session.id,
         email: session.email,
