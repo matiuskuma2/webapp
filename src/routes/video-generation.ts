@@ -220,14 +220,49 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
   const videoEngine: VideoEngine = body.video_engine || 
     (body.model?.includes('veo-3') ? 'veo3' : 'veo2');
   
+  // 5.5. Get logged-in user info (for superadmin check)
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  let loggedInUserId: number | null = null;
+  let loggedInUserRole: string | null = null;
+  
+  if (sessionId) {
+    const sessionUser = await c.env.DB.prepare(`
+      SELECT s.user_id, u.role FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.id = ? AND s.expires_at > datetime('now')
+    `).bind(sessionId).first<{ user_id: number; role: string }>();
+    
+    if (sessionUser) {
+      loggedInUserId = sessionUser.user_id;
+      loggedInUserRole = sessionUser.role;
+    }
+  }
+  
+  const isSuperadmin = loggedInUserRole === 'superadmin';
+  
   // 6. 認証情報取得 - billing_source判定と鍵取得
-  const { billingSource, sponsorUserId } = await determineBillingSource(
-    c.env.DB, scene.project_id, scene.owner_user_id
-  );
-  const executorUserId = scene.owner_user_id;
+  // Superadminの場合はシステムキーを使用
+  let billingSource: BillingSource = 'user';
+  let sponsorUserId: number | null = null;
+  
+  if (isSuperadmin) {
+    // Superadmin uses system key, billing to superadmin
+    billingSource = 'sponsor';
+    sponsorUserId = loggedInUserId;
+  } else {
+    const billingInfo = await determineBillingSource(
+      c.env.DB, scene.project_id, scene.owner_user_id
+    );
+    billingSource = billingInfo.billingSource;
+    sponsorUserId = billingInfo.sponsorUserId;
+  }
+  
+  // executorUserId: 実行者（ログインユーザー or プロジェクトオーナー）
+  const executorUserId = loggedInUserId || scene.owner_user_id;
   const billingUserId = billingSource === 'sponsor' && sponsorUserId 
     ? sponsorUserId 
-    : scene.owner_user_id;
+    : executorUserId;
   
   let apiKey: string | null = null;
   let vertexSaJson: string | null = null;
@@ -237,17 +272,30 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
   const encryptionKey = c.env.ENCRYPTION_KEY;
   
   if (videoEngine === 'veo2') {
-    if (billingSource === 'sponsor') {
-      // Sponsor mode: use system GEMINI_API_KEY
+    if (isSuperadmin || billingSource === 'sponsor') {
+      // Superadmin or Sponsor mode: use system GEMINI_API_KEY
       if (!c.env.GEMINI_API_KEY) {
-        return c.json({
-          error: {
-            code: 'SPONSOR_KEY_NOT_CONFIGURED',
-            message: 'Sponsor API key not configured on server.',
-          },
-        }, 500);
+        // Try superadmin's own API key first
+        if (isSuperadmin && loggedInUserId) {
+          const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'google', encryptionKey);
+          if ('key' in keyResult) {
+            apiKey = keyResult.key;
+          }
+        }
+        
+        if (!apiKey) {
+          return c.json({
+            error: {
+              code: 'SPONSOR_KEY_NOT_CONFIGURED',
+              message: isSuperadmin 
+                ? 'システムAPIキーが設定されていません。設定画面でGoogle APIキーを設定するか、管理者にシステムキーの設定を依頼してください。'
+                : 'Sponsor API key not configured on server.',
+            },
+          }, 500);
+        }
+      } else {
+        apiKey = c.env.GEMINI_API_KEY;
       }
-      apiKey = c.env.GEMINI_API_KEY;
     } else {
       // User mode: user's own key required, decryption failure is error
       // Provider: 'google' for Veo2 (統一)
@@ -266,29 +314,41 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
     }
   } else {
     // Veo3: Vertex SA JSON
-    if (billingSource === 'sponsor') {
-      // TODO: Sponsor用のVertex SA JSONをsystem_settingsから取得
-      return c.json({
-        error: {
-          code: 'SPONSOR_VERTEX_NOT_IMPLEMENTED',
-          message: 'Sponsor mode for Veo3 not yet implemented.',
-        },
-      }, 501);
+    if (isSuperadmin || billingSource === 'sponsor') {
+      // Superadmin: Try user's own Vertex key first, then system
+      if (isSuperadmin && loggedInUserId) {
+        const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'vertex', encryptionKey);
+        if ('key' in keyResult) {
+          vertexSaJson = keyResult.key;
+        }
+      }
+      
+      if (!vertexSaJson) {
+        // TODO: Sponsor用のVertex SA JSONをsystem_settingsから取得
+        return c.json({
+          error: {
+            code: 'SPONSOR_VERTEX_NOT_IMPLEMENTED',
+            message: isSuperadmin
+              ? 'Vertex APIキーが設定されていません。設定画面でVertex APIキーを設定してください。'
+              : 'Sponsor mode for Veo3 not yet implemented.',
+          },
+        }, 501);
+      }
+    } else {
+      // User mode: user's own Vertex SA JSON required
+      const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', encryptionKey);
+      
+      if ('error' in keyResult) {
+        return c.json({
+          error: {
+            code: 'USER_KEY_ERROR',
+            message: keyResult.error,
+            redirect: '/settings?focus=vertex',
+          },
+        }, 400);
+      }
+      vertexSaJson = keyResult.key;
     }
-    
-    // User mode: user's own Vertex SA JSON required
-    const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', encryptionKey);
-    
-    if ('error' in keyResult) {
-      return c.json({
-        error: {
-          code: 'USER_KEY_ERROR',
-          message: keyResult.error,
-          redirect: '/settings?focus=vertex',
-        },
-      }, 400);
-    }
-    vertexSaJson = keyResult.key;
     
     // Parse SA JSON to get project_id
     try {
