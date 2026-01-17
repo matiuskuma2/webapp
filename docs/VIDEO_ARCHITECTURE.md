@@ -54,19 +54,54 @@ queued → processing → completed
 
 ---
 
-## 3. 課金ソース (billing_source)
+## 3. 課金・キー選択 SSOT（確定版 2026-01-17）
+
+### billing_source 定義
 
 | billing_source | 説明 | APIキー取得元 |
 |----------------|------|--------------|
 | `user` | ユーザー自身の課金 | user_api_keys（復号必須） |
-| `sponsor` | 運営負担 | system_settings or env |
+| `sponsor` | 運営負担 | system_settings (sponsor_key) or superadmin's key |
 
-### 判定ロジック
+### 判定ロジック（優先順位）
 
 ```
-1. system_settings.default_sponsor_user_id があれば sponsor
-2. なければ user
+1. executor が superadmin
+   → billing_source = 'sponsor'
+   → 運営キー（GEMINI_API_KEY / Vertex SA）を使用
+   → billing_user_id = superadmin.id
+
+2. 対象ユーザーの users.api_sponsor_id が NULL でない
+   → billing_source = 'sponsor'
+   → スポンサー（api_sponsor_id）のAPIキーを使用
+   → billing_user_id = users.api_sponsor_id
+
+3. それ以外
+   → billing_source = 'user'
+   → 対象ユーザー自身のAPIキーを使用
+   → billing_user_id = target_user.id
 ```
+
+### SSOT 定義
+
+| 項目 | 参照元 | 備考 |
+|------|--------|------|
+| **スポンサー判定** | `users.api_sponsor_id` | NULL でなければスポンサー |
+| **運営キー** | `system_settings` or env | superadmin/sponsor時に使用 |
+| **ユーザーキー** | `user_api_keys` | user課金時に使用 |
+
+**廃止**: `system_settings.default_sponsor_user_id` は全体デフォルト用途としては**廃止**。
+スポンサー判定は必ず `users.api_sponsor_id` を参照すること。
+
+### ログ記録項目（api_usage_logs）
+
+| カラム | 内容 | 例 |
+|--------|------|-----|
+| `user_id` | 対象ユーザーID | プロジェクトオーナー |
+| `sponsored_by_user_id` | 課金者ID（sponsor時のみ） | superadmin or api_sponsor_id |
+| `metadata_json.billing_source` | 課金ソース | 'user' or 'sponsor' |
+| `metadata_json.billing_user_id` | 課金ユーザーID | 上記ロジックで決定 |
+| `metadata_json.executor_user_id` | 実行者ID | ボタンを押したユーザー |
 
 **重要**: `user` モードでAPIキー復号失敗時は **明示的エラー**（フォールバック禁止）
 
@@ -145,13 +180,43 @@ Client → Cloudflare → AWS (DynamoDB) → Presigned URL → Client (再生)
 
 | 変数名 | 用途 | 必須 |
 |--------|------|------|
-| `ENCRYPTION_KEY` | user_api_keys復号 | ✓ |
+| `ENCRYPTION_KEY` | user_api_keys復号（現行鍵） | ✓ |
+| `ENCRYPTION_KEY_OLD_1` | 旧鍵1（Key-Ring用） | ローテ時 |
+| `ENCRYPTION_KEY_OLD_2` | 旧鍵2（Key-Ring用） | ローテ時 |
 | `IMAGE_URL_SIGNING_SECRET` | 画像URL署名 | ✓ |
 | `GEMINI_API_KEY` | Sponsor用Veo2キー | sponsor時のみ |
 | `AWS_ACCESS_KEY_ID` | AWS API Gateway認証 | ✓ |
 | `AWS_SECRET_ACCESS_KEY` | AWS API Gateway認証 | ✓ |
 | `AWS_ORCH_BASE_URL` | AWS API Gatewayエンドポイント | ✓ |
 | `AWS_REGION` | AWSリージョン | ✓ |
+
+### Key-Ring 仕様（暗号鍵ローテーション）
+
+**鍵形式**: hex 64文字（32bytes / 256bit）
+**生成**: `openssl rand -hex 32`
+
+**復号順序**:
+1. `ENCRYPTION_KEY`（現行鍵）
+2. `ENCRYPTION_KEY_OLD_1`（旧鍵1）
+3. `ENCRYPTION_KEY_OLD_2`（旧鍵2）
+
+**自動移行**:
+- 旧鍵で復号成功 → 新鍵で再暗号化 → CAS更新
+- 設定画面の「テスト」ボタンで実行
+- 動画生成ルートでは読み取りのみ（DB更新しない）
+
+**ローテ手順**:
+```bash
+# 1. 新鍵生成
+openssl rand -hex 32
+
+# 2. Cloudflare Secrets 更新
+ENCRYPTION_KEY_OLD_1 = 現行ENCRYPTION_KEY
+ENCRYPTION_KEY = 新鍵
+
+# 3. デプロイ（コード変更なし）
+# 4. ユーザーは設定画面のテストで自動移行
+```
 
 ---
 
@@ -176,6 +241,27 @@ Client → Cloudflare → AWS (DynamoDB) → Presigned URL → Client (再生)
 | `SERVER_CONFIG_ERROR` | 署名Secret未設定 | サーバー設定確認 |
 | `AWS_CONFIG_ERROR` | AWS認証情報未設定 | サーバー設定確認 |
 | `GENERATION_IN_PROGRESS` | 同一シーンで生成中 | 完了を待つ |
+
+---
+
+---
+
+## 9. Gate別チェックリスト
+
+### Gate 1: Veo2 E2E（完了）
+
+- [x] Cloudflare → AWS start 成立
+- [x] DynamoDB SSOT → SQS → Worker → S3
+- [x] Presigned URL（GET）で200
+- [x] sponsor判定 SSOT（users.api_sponsor_id）
+
+### Gate 2: Veo3 E2E（準備中）
+
+- [ ] Vertex SA JSON 暗号化・復号
+- [ ] provider=vertex のキー選択ロジック
+- [ ] AWS Worker の Veo3 対応確認
+- [ ] UI: Veo2/Veo3 選択
+- [ ] コスト分離ログ
 
 ---
 
