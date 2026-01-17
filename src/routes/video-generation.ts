@@ -94,28 +94,35 @@ async function getUserApiKey(
 // ====================================================================
 // Helper: Determine billing source (user or sponsor)
 // ====================================================================
+// 
+// スポンサー判定のSSOT: users.api_sponsor_id
+// - api_sponsor_id が設定されている → sponsor課金（api_sponsor_idのユーザーが支払う）
+// - api_sponsor_id が NULL → user課金（本人が支払う）
+// 
+// ※ superadmin操作時の優先は呼び出し側で処理（isSuperadmin判定）
+// ※ system_settings.default_sponsor_user_id は廃止（全員スポンサー化の事故防止）
 
 async function determineBillingSource(
   db: D1Database,
   projectId: number,
   userId: number
 ): Promise<{ billingSource: BillingSource; sponsorUserId: number | null }> {
-  // Check if project has a sponsor configured
-  const sponsor = await db.prepare(`
-    SELECT ss.value as sponsor_user_id 
-    FROM system_settings ss
-    WHERE ss.key = 'default_sponsor_user_id'
-  `).first<{ sponsor_user_id: string }>();
+  // Check user's api_sponsor_id (set by superadmin in admin panel)
+  const user = await db.prepare(`
+    SELECT api_sponsor_id FROM users WHERE id = ?
+  `).bind(userId).first<{ api_sponsor_id: number | null }>();
   
-  // TODO: Per-project sponsor設定、ユーザーのsponsor eligibility確認
-  // 現時点では system_settings.default_sponsor_user_id があればsponsor
-  if (sponsor?.sponsor_user_id) {
+  // If user has api_sponsor_id set, they are sponsored
+  if (user?.api_sponsor_id) {
+    console.log(`[BillingSource] User ${userId} is sponsored by ${user.api_sponsor_id}`);
     return {
       billingSource: 'sponsor',
-      sponsorUserId: parseInt(sponsor.sponsor_user_id, 10),
+      sponsorUserId: user.api_sponsor_id,
     };
   }
   
+  // Otherwise, user pays for themselves
+  console.log(`[BillingSource] User ${userId} pays for themselves (no sponsor)`);
   return { billingSource: 'user', sponsorUserId: null };
 }
 
@@ -285,16 +292,31 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   
   const isSuperadmin = loggedInUserRole === 'superadmin';
   
-  // 6. 認証情報取得 - billing_source判定と鍵取得
-  // Superadminの場合はシステムキーを使用
+  // ========================================================================
+  // 6. 課金判定 - billing_source と APIキー選択
+  // ========================================================================
+  // 
+  // 【APIキー選択の優先順位（SSOT）】
+  // 1. executor が superadmin → superadminの動画化用API（運営キー）
+  // 2. target user に api_sponsor_id がある → api_sponsor_id（=superadmin）の動画化用API
+  // 3. それ以外 → target user の動画化用API
+  // 
+  // 【課金の責任】
+  // - billing_source = 'sponsor' → api_sponsor_id のユーザー（または superadmin）が支払う
+  // - billing_source = 'user' → 操作したユーザー本人が支払う
+  // 
+  // ========================================================================
+  
   let billingSource: BillingSource = 'user';
   let sponsorUserId: number | null = null;
   
   if (isSuperadmin) {
-    // Superadmin uses system key, billing to superadmin
+    // Priority 1: Superadmin操作 → 必ず sponsor（運営キー使用）
     billingSource = 'sponsor';
     sponsorUserId = loggedInUserId;
+    console.log(`[VideoGen] Superadmin operation: billing_source=sponsor, sponsor_id=${sponsorUserId}`);
   } else {
+    // Priority 2/3: 通常ユーザー → users.api_sponsor_id を確認
     const billingInfo = await determineBillingSource(
       c.env.DB, scene.project_id, scene.owner_user_id
     );
@@ -302,11 +324,16 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     sponsorUserId = billingInfo.sponsorUserId;
   }
   
-  // executorUserId: 実行者（ログインユーザー or プロジェクトオーナー）
+  // executorUserId: 実際に操作した人（ログが追跡に必要）
   const executorUserId = loggedInUserId || scene.owner_user_id;
+  
+  // billingUserId: 課金される人
   const billingUserId = billingSource === 'sponsor' && sponsorUserId 
     ? sponsorUserId 
     : executorUserId;
+  
+  // ログ出力（コスト追跡用）
+  console.log(`[VideoGen] Billing decision: billing_source=${billingSource}, billing_user_id=${billingUserId}, executor_user_id=${executorUserId}, owner_user_id=${scene.owner_user_id}`);
   
   let apiKey: string | null = null;
   let vertexSaJson: string | null = null;
@@ -496,16 +523,28 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   `).bind(awsResponse.job_id, videoGenerationId).run();
   
   // 10. api_usage_logs 記録
+  // - user_id: 実行者（executor）
+  // - sponsored_by_user_id: スポンサー課金時は支払い者、user課金時はNULL
   await c.env.DB.prepare(`
     INSERT INTO api_usage_logs (
-      user_id, project_id, api_type, provider, model, video_engine, metadata_json
-    ) VALUES (?, ?, 'video_generation', 'google', ?, ?, ?)
+      user_id, project_id, api_type, provider, model, video_engine, 
+      sponsored_by_user_id, metadata_json
+    ) VALUES (?, ?, 'video_generation', 'google', ?, ?, ?, ?)
   `).bind(
     executorUserId,
     scene.project_id,
     model,
     videoEngine,
-    JSON.stringify({ scene_id: sceneId, duration_sec: durationSec, job_id: awsResponse.job_id })
+    billingSource === 'sponsor' ? billingUserId : null,
+    JSON.stringify({ 
+      scene_id: sceneId, 
+      duration_sec: durationSec, 
+      job_id: awsResponse.job_id,
+      billing_source: billingSource,
+      billing_user_id: billingUserId,
+      executor_user_id: executorUserId,
+      owner_user_id: scene.owner_user_id
+    })
   ).run();
   
   return c.json({
