@@ -4302,7 +4302,7 @@ function renderVideoCard(video, sceneId) {
       <div class="aspect-video bg-gray-100">
         ${video.status === 'completed' && video.r2_url 
           ? `<video 
-               src="/video/${video.r2_url}" 
+               src="${video.r2_url.startsWith('http') ? video.r2_url : '/video/' + video.r2_url}" 
                class="w-full h-full object-cover"
                controls
                preload="metadata"
@@ -4361,7 +4361,7 @@ function renderVideoCard(video, sceneId) {
               </button>
             ` : ''}
             <a 
-              href="/video/${video.r2_url}"
+              href="${video.r2_url.startsWith('http') ? video.r2_url : '/video/' + video.r2_url}"
               download="scene_${getSceneIndex(sceneId)}_video_${video.id}.mp4"
               class="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition-colors"
               title="ダウンロード"
