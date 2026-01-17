@@ -17,7 +17,7 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
 import { createAwsVideoClient, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
-import { decryptApiKey } from '../utils/crypto';
+import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
@@ -59,9 +59,14 @@ async function getEncryptedApiKey(
 }
 
 // ====================================================================
-// Helper: Get and decrypt user's API key
+// Helper: Get and decrypt user's API key (Key-Ring対応)
 // Returns: { key: string } on success, { error: string } on failure
 // ====================================================================
+// 
+// Key-Ring: 複数の鍵を順番に試して復号
+// - 動画生成時はDB更新しない（読み取りのみ）
+// - 自動移行は settings.ts の test エンドポイントで行う
+//
 
 type ApiKeyResult = { key: string } | { error: string };
 
@@ -69,7 +74,7 @@ async function getUserApiKey(
   db: D1Database,
   userId: number,
   provider: string,
-  encryptionKey?: string
+  keyRing: string[]  // [現行鍵, 旧鍵1, 旧鍵2, ...]
 ): Promise<ApiKeyResult> {
   const encryptedKey = await getEncryptedApiKey(db, userId, provider);
   
@@ -77,13 +82,19 @@ async function getUserApiKey(
     return { error: `No API key found for provider '${provider}'` };
   }
   
-  // Encryption key is required for decryption
-  if (!encryptionKey) {
+  // At least one key is required for decryption
+  if (keyRing.length === 0) {
     return { error: 'ENCRYPTION_KEY not configured on server' };
   }
   
   try {
-    const decrypted = await decryptApiKey(encryptedKey, encryptionKey);
+    const { decrypted, keyIndex } = await decryptWithKeyRing(encryptedKey, keyRing);
+    
+    // 旧鍵で復号された場合はログ出力（移行が必要だが、ここではDB更新しない）
+    if (keyIndex > 0) {
+      console.log(`[VideoGen] API key for user ${userId} provider ${provider} needs migration (keyIndex=${keyIndex})`);
+    }
+    
     return { key: decrypted };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
@@ -340,7 +351,12 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   let vertexProjectId: string | null = null;
   let vertexLocation: string | null = null;
   
-  const encryptionKey = c.env.ENCRYPTION_KEY;
+  // Key-Ring: [現行鍵, 旧鍵1, 旧鍵2] (falsy values are filtered out)
+  const keyRing = [
+    c.env.ENCRYPTION_KEY,
+    c.env.ENCRYPTION_KEY_OLD_1,
+    c.env.ENCRYPTION_KEY_OLD_2
+  ].filter(Boolean) as string[];
   
   if (videoEngine === 'veo2') {
     if (isSuperadmin || billingSource === 'sponsor') {
@@ -348,7 +364,7 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       if (!c.env.GEMINI_API_KEY) {
         // Try superadmin's own API key first
         if (isSuperadmin && loggedInUserId) {
-          const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'google', encryptionKey);
+          const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'google', keyRing);
           if ('key' in keyResult) {
             apiKey = keyResult.key;
           }
@@ -370,7 +386,7 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     } else {
       // User mode: user's own key required, decryption failure is error
       // Provider: 'google' for Veo2 (統一)
-      const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'google', encryptionKey);
+      const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'google', keyRing);
       
       if ('error' in keyResult) {
         return c.json({
@@ -388,7 +404,7 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     if (isSuperadmin || billingSource === 'sponsor') {
       // Superadmin: Try user's own Vertex key first, then system
       if (isSuperadmin && loggedInUserId) {
-        const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'vertex', encryptionKey);
+        const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'vertex', keyRing);
         if ('key' in keyResult) {
           vertexSaJson = keyResult.key;
         }
@@ -407,7 +423,7 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       }
     } else {
       // User mode: user's own Vertex SA JSON required
-      const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', encryptionKey);
+      const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', keyRing);
       
       if ('error' in keyResult) {
         return c.json({

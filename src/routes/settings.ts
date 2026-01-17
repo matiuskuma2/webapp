@@ -15,7 +15,7 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Bindings } from '../types/bindings';
-import { encryptApiKey, decryptApiKey } from '../utils/crypto';
+import { encryptApiKey, decryptApiKey, decryptWithKeyRing, reEncryptApiKey } from '../utils/crypto';
 
 const settings = new Hono<{ Bindings: Bindings }>();
 
@@ -64,7 +64,7 @@ settings.get('/user/api-keys', async (c) => {
   if (!userId) {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
   }
-  const { DB, ENCRYPTION_KEY } = c.env;
+  const { DB, ENCRYPTION_KEY, ENCRYPTION_KEY_OLD_1, ENCRYPTION_KEY_OLD_2 } = c.env;
   
   try {
     const keys = await DB.prepare(`
@@ -79,11 +79,15 @@ settings.get('/user/api-keys', async (c) => {
       updated_at: string;
     }>();
     
+    // Build key ring (一覧表示では復号試行のみ、DB更新はしない)
+    const keyRing = [ENCRYPTION_KEY, ENCRYPTION_KEY_OLD_1, ENCRYPTION_KEY_OLD_2].filter(Boolean) as string[];
+    
     const keysWithStatus = await Promise.all(
       (keys.results || []).map(async (key) => {
         let decryptionStatus = 'unknown';
+        let needsMigration = false;
         
-        if (ENCRYPTION_KEY) {
+        if (keyRing.length > 0) {
           try {
             const encrypted = await DB.prepare(`
               SELECT encrypted_key FROM user_api_keys
@@ -91,8 +95,9 @@ settings.get('/user/api-keys', async (c) => {
             `).bind(userId, key.provider).first<{ encrypted_key: string }>();
             
             if (encrypted?.encrypted_key) {
-              await decryptApiKey(encrypted.encrypted_key, ENCRYPTION_KEY);
+              const result = await decryptWithKeyRing(encrypted.encrypted_key, keyRing);
               decryptionStatus = 'valid';
+              needsMigration = result.keyIndex > 0;
             }
           } catch {
             decryptionStatus = 'invalid';
@@ -106,6 +111,7 @@ settings.get('/user/api-keys', async (c) => {
           is_active: key.is_active === 1,
           is_configured: isConfigured, // For frontend compatibility
           decryption_status: decryptionStatus,
+          needs_migration: needsMigration, // 旧鍵で復号された場合 true
           created_at: key.created_at,
           updated_at: key.updated_at,
         };
@@ -199,7 +205,7 @@ settings.get('/settings/api-keys', async (c) => {
   if (!userId) {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
   }
-  const { DB, ENCRYPTION_KEY } = c.env;
+  const { DB, ENCRYPTION_KEY, ENCRYPTION_KEY_OLD_1, ENCRYPTION_KEY_OLD_2 } = c.env;
   
   try {
     const keys = await DB.prepare(`
@@ -214,12 +220,16 @@ settings.get('/settings/api-keys', async (c) => {
       updated_at: string;
     }>();
     
+    // Build key ring (一覧表示では復号試行のみ、DB更新はしない)
+    const keyRing = [ENCRYPTION_KEY, ENCRYPTION_KEY_OLD_1, ENCRYPTION_KEY_OLD_2].filter(Boolean) as string[];
+    
     // Test decryption for each key to check validity
     const keysWithStatus = await Promise.all(
       (keys.results || []).map(async (key) => {
         let decryptionStatus = 'unknown';
+        let needsMigration = false;
         
-        if (ENCRYPTION_KEY) {
+        if (keyRing.length > 0) {
           try {
             const encrypted = await DB.prepare(`
               SELECT encrypted_key FROM user_api_keys
@@ -227,8 +237,9 @@ settings.get('/settings/api-keys', async (c) => {
             `).bind(userId, key.provider).first<{ encrypted_key: string }>();
             
             if (encrypted?.encrypted_key) {
-              await decryptApiKey(encrypted.encrypted_key, ENCRYPTION_KEY);
+              const result = await decryptWithKeyRing(encrypted.encrypted_key, keyRing);
               decryptionStatus = 'valid';
+              needsMigration = result.keyIndex > 0;
             }
           } catch {
             decryptionStatus = 'invalid';
@@ -239,6 +250,7 @@ settings.get('/settings/api-keys', async (c) => {
           provider: key.provider,
           is_active: key.is_active === 1,
           decryption_status: decryptionStatus,
+          needs_migration: needsMigration,
           created_at: key.created_at,
           updated_at: key.updated_at,
         };
@@ -398,6 +410,12 @@ settings.delete('/settings/api-keys/:provider', async (c) => {
 // ====================================================================
 // GET /api/settings/api-keys/:provider/test - Test API key
 // ====================================================================
+// 
+// Key-Ring対応:
+// - 複数の鍵を順番に試して復号
+// - 旧鍵で復号成功した場合、新鍵で再暗号化してDB更新（CAS付き）
+// - これにより、ユーザーがテストボタンを押すだけで自動移行される
+//
 
 settings.get('/settings/api-keys/:provider/test', async (c) => {
   const userId = await getUserId(c);
@@ -405,7 +423,7 @@ settings.get('/settings/api-keys/:provider/test', async (c) => {
     return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
   }
   const provider = c.req.param('provider');
-  const { DB, ENCRYPTION_KEY } = c.env;
+  const { DB, ENCRYPTION_KEY, ENCRYPTION_KEY_OLD_1, ENCRYPTION_KEY_OLD_2 } = c.env;
   
   if (!ENCRYPTION_KEY) {
     return c.json({
@@ -418,9 +436,9 @@ settings.get('/settings/api-keys/:provider/test', async (c) => {
   
   try {
     const stored = await DB.prepare(`
-      SELECT encrypted_key FROM user_api_keys
+      SELECT id, encrypted_key FROM user_api_keys
       WHERE user_id = ? AND provider = ? AND is_active = 1
-    `).bind(userId, provider).first<{ encrypted_key: string }>();
+    `).bind(userId, provider).first<{ id: number; encrypted_key: string }>();
     
     if (!stored?.encrypted_key) {
       return c.json({
@@ -431,8 +449,41 @@ settings.get('/settings/api-keys/:provider/test', async (c) => {
       }, 404);
     }
     
-    // Try to decrypt
-    const decrypted = await decryptApiKey(stored.encrypted_key, ENCRYPTION_KEY);
+    // Build key ring: [現行鍵, 旧鍵1, 旧鍵2] (falsy values are filtered out)
+    const keys = [ENCRYPTION_KEY, ENCRYPTION_KEY_OLD_1, ENCRYPTION_KEY_OLD_2].filter(Boolean) as string[];
+    
+    // Try to decrypt with key ring
+    const { decrypted, keyIndex } = await decryptWithKeyRing(stored.encrypted_key, keys);
+    
+    let migrated = false;
+    let migrationError: string | null = null;
+    
+    // If decrypted with old key (keyIndex > 0), re-encrypt with current key
+    if (keyIndex > 0) {
+      console.log(`[KeyRing] User ${userId} provider ${provider}: decrypted with old key index=${keyIndex}, migrating...`);
+      
+      try {
+        const reEncrypted = await reEncryptApiKey(decrypted, ENCRYPTION_KEY);
+        
+        // CAS update: only update if encrypted_key hasn't changed (prevents race conditions)
+        const updateResult = await DB.prepare(`
+          UPDATE user_api_keys
+          SET encrypted_key = ?, updated_at = datetime('now')
+          WHERE id = ? AND encrypted_key = ?
+        `).bind(reEncrypted, stored.id, stored.encrypted_key).run();
+        
+        if (updateResult.meta.changes && updateResult.meta.changes > 0) {
+          migrated = true;
+          console.log(`[KeyRing] Successfully migrated key for user ${userId} provider ${provider}`);
+        } else {
+          // CAS failed - someone else updated it, that's OK
+          console.log(`[KeyRing] CAS failed for user ${userId} provider ${provider} (concurrent update?)`);
+        }
+      } catch (err) {
+        migrationError = err instanceof Error ? err.message : String(err);
+        console.error(`[KeyRing] Migration failed for user ${userId} provider ${provider}:`, migrationError);
+      }
+    }
     
     // Return masked key for verification
     const masked = decrypted.substring(0, 4) + '...' + decrypted.substring(decrypted.length - 4);
@@ -443,6 +494,11 @@ settings.get('/settings/api-keys/:provider/test', async (c) => {
       decryption: 'success',
       key_preview: masked,
       key_length: decrypted.length,
+      // Key-Ring情報
+      used_key_index: keyIndex,
+      was_legacy_key: keyIndex > 0,
+      migrated,
+      migration_error: migrationError,
     });
   } catch (error) {
     console.error('Failed to test API key:', error);
@@ -451,6 +507,7 @@ settings.get('/settings/api-keys/:provider/test', async (c) => {
       error: {
         code: 'DECRYPTION_FAILED',
         message: `Decryption failed: ${message}`,
+        hint: 'APIキーの復号に失敗しました。キーを再設定してください。',
       },
     }, 500);
   }

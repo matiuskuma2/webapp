@@ -5,8 +5,11 @@ export type Bindings = {
   GEMINI_API_KEY: string;
   GOOGLE_TTS_API_KEY: string;
   FISH_AUDIO_API_TOKEN: string;
-  // Encryption for API keys
-  ENCRYPTION_KEY?: string;      // For decrypting user_api_keys.encrypted_key
+  // Encryption for API keys (Key-Ring対応)
+  // 鍵は必ず hex 64文字（32 bytes = 256 bit）で統一
+  ENCRYPTION_KEY?: string;        // 現行鍵（新規暗号化に使用）
+  ENCRYPTION_KEY_OLD_1?: string;  // 1世代前の旧鍵（Key-Ring用）
+  ENCRYPTION_KEY_OLD_2?: string;  // 2世代前の旧鍵（Key-Ring用、必要な場合のみ）
   // Image URL signing (HMAC-SHA256)
   IMAGE_URL_SIGNING_SECRET?: string;  // For signed image URLs (prevents URL guessing)
   // AWS Video Proxy (Veo2/Veo3)
