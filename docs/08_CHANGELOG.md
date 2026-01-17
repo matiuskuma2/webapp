@@ -349,4 +349,78 @@
 
 ---
 
-最終更新: 2025-12-13
+### [2026-01-17] Gate 0: DBマイグレーション整備
+
+#### 変更理由
+- D1本番スキーマとGitHub mainのマイグレーションが乖離
+- 新環境再現・DR（災害復旧）が困難な状態を解消
+
+#### 変更内容
+- **D1本番スキーマをdocsにスナップショット保存**:
+  - `docs/D1_PRODUCTION_SCHEMA_2026-01-17.md` 作成
+- **Video関連マイグレーション追加**:
+  - `migrations/0012_create_video_generations.sql`
+  - `migrations/0013_create_video_builds.sql`
+  - `migrations/0014_create_api_usage_logs.sql`
+  - `migrations/0015_create_user_api_keys.sql`
+  - `migrations/0016_create_system_settings.sql`
+- ローカルD1への適用・本番スキーマとの差分検証完了
+
+#### 影響範囲
+- ✅ **DB**: マイグレーション追加（0012〜0016）
+- ✅ **Docs**: 本番スキーマスナップショット追加
+- ❌ **API**: 変更なし
+- ❌ **Worker**: 変更なし
+
+---
+
+### [2026-01-17] Gate 1: Veo2 E2E実装完了
+
+#### 変更理由
+- Veo2動画生成のE2E（End-to-End）パイプライン構築
+- Cloudflare → AWS Video Proxy → S3 presigned URL の流れを確立
+
+#### 変更内容
+- **Cloudflare側実装**:
+  - `src/routes/video-generation.ts`: I2V API実装（5エンドポイント）
+    - POST /api/scenes/:sceneId/generate-video
+    - GET /api/scenes/:sceneId/videos
+    - GET /api/videos/:videoId/status
+    - POST /api/videos/:videoId/activate
+    - DELETE /api/videos/:videoId
+  - `src/utils/aws-video-client.ts`: AWS API Gateway SigV4クライアント
+  - `src/utils/crypto.ts`: AES-GCM復号ユーティリティ
+  - `src/types/bindings.ts`: AWS環境変数・ENCRYPTION_KEY追加
+  - `src/index.tsx`: videoGenerationルートマウント
+- **機能**:
+  - システムGEMINI_API_KEYフォールバック（ユーザーキー復号失敗時）
+  - completed時もAWSからfresh presigned URL取得
+  - `/images/*` 直接アクセス対応（署名不要）
+- **セキュリティ要件実装**:
+  - 同一シーンでgenerating中は409返却
+  - completed時r2_url必須
+  - activeは最大1件（activate時に他をdeactivate）
+
+#### Gate 1テスト結果
+| 条件 | 状態 | 詳細 |
+|------|------|------|
+| A. Cloudflare → AWS start | ✅ | job_id取得成功、D1記録済み |
+| B. AWS側ジョブ処理 | ✅ | status: completed |
+| C. Cloudflare status API | ✅ | presigned_url返却、DB更新 |
+| D. クライアント再生 | ⚠️ | Presigned URL 403（AWS STS問題） |
+
+#### 影響範囲
+- ✅ **API**: Video Generation API 5エンドポイント追加
+- ✅ **Worker**: AWS API Gateway統合、SigV4署名実装
+- ✅ **DB**: video_generations テーブル運用開始
+- ❌ **Storage**: R2変更なし（presigned URLはS3から直接配信）
+- ❌ **UI**: 今回は変更なし
+
+#### 次のステップ
+- Gate 2: Veo3 (Vertex AI) E2E検証
+- AWS側: Presigned URL 403問題の調査（IAM/STS設定）
+- UI: 動画生成モーダル実装
+
+---
+
+最終更新: 2026-01-17
