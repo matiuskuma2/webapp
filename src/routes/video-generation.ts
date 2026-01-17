@@ -23,6 +23,13 @@ import { generateSignedImageUrl } from '../utils/signed-url';
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
 
 // ====================================================================
+// Constants
+// ====================================================================
+
+// Stuck job detection: mark as failed if generating for more than 15 minutes
+const STUCK_JOB_THRESHOLD_MINUTES = 15;
+
+// ====================================================================
 // Types
 // ====================================================================
 
@@ -128,6 +135,40 @@ async function getSystemSetting(
 }
 
 // ====================================================================
+// Helper: Detect and mark stuck jobs as failed
+// ====================================================================
+
+async function detectAndMarkStuckJobs(
+  db: D1Database,
+  sceneId?: number
+): Promise<number> {
+  // Find jobs that have been 'generating' for more than STUCK_JOB_THRESHOLD_MINUTES
+  const thresholdMinutes = STUCK_JOB_THRESHOLD_MINUTES;
+  
+  let query = `
+    UPDATE video_generations 
+    SET status = 'failed', 
+        error_message = 'Generation timed out (exceeded ${thresholdMinutes} minutes)',
+        updated_at = CURRENT_TIMESTAMP
+    WHERE status = 'generating' 
+      AND datetime(updated_at) < datetime('now', '-${thresholdMinutes} minutes')
+  `;
+  
+  if (sceneId) {
+    query += ` AND scene_id = ${sceneId}`;
+  }
+  
+  const result = await db.prepare(query).run();
+  const updatedCount = result.meta.changes || 0;
+  
+  if (updatedCount > 0) {
+    console.log(`[StuckDetector] Marked ${updatedCount} stuck job(s) as failed`);
+  }
+  
+  return updatedCount;
+}
+
+// ====================================================================
 // Helper: Get scene's active image
 // ====================================================================
 
@@ -201,7 +242,10 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     }, 400);
   }
   
-  // 4. 競合チェック（generating中は409）
+  // 4. Stuck job detection (mark old generating jobs as failed)
+  await detectAndMarkStuckJobs(c.env.DB, sceneId);
+  
+  // 5. 競合チェック（generating中は409）
   const generating = await c.env.DB.prepare(`
     SELECT id FROM video_generations
     WHERE scene_id = ? AND status = 'generating'
@@ -489,6 +533,9 @@ videoGeneration.get('/:sceneId/videos', async (c) => {
     return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
   }
   
+  // Auto-detect and mark stuck jobs before listing
+  await detectAndMarkStuckJobs(c.env.DB, sceneId);
+  
   const { results: videos } = await c.env.DB.prepare(`
     SELECT id, scene_id, provider, model, status, duration_sec, prompt,
            source_image_r2_key, r2_key, r2_url, error_message, is_active, job_id,
@@ -747,6 +794,47 @@ videoGeneration.delete('/videos/:videoId', async (c) => {
   await c.env.DB.prepare(`DELETE FROM video_generations WHERE id = ?`).bind(videoId).run();
   
   return c.json({ success: true, deleted_id: videoId });
+});
+
+// ====================================================================
+// Stuck Job Sweeper API (Manual trigger)
+// ====================================================================
+
+/**
+ * POST /api/video-generations/sweep-stuck
+ * Manually trigger stuck job detection and cleanup
+ * Requires superadmin role
+ */
+videoGeneration.post('/sweep-stuck', async (c) => {
+  try {
+    const { getCookie } = await import('hono/cookie');
+    const sessionId = getCookie(c, 'session');
+    if (!sessionId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+    
+    const session = await c.env.DB.prepare(`
+      SELECT s.user_id, u.role FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.id = ? AND s.expires_at > datetime('now')
+    `).bind(sessionId).first<{ user_id: number; role: string }>();
+    
+    if (!session || session.role !== 'superadmin') {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Superadmin access required' } }, 403);
+    }
+    
+    // Run sweeper globally (no sceneId filter)
+    const markedCount = await detectAndMarkStuckJobs(c.env.DB);
+    
+    return c.json({
+      success: true,
+      marked_as_failed: markedCount,
+      threshold_minutes: STUCK_JOB_THRESHOLD_MINUTES,
+    });
+  } catch (error) {
+    console.error('[StuckSweeper] Error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to run sweeper' } }, 500);
+  }
 });
 
 // ====================================================================
