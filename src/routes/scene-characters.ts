@@ -14,7 +14,7 @@ const app = new Hono<{ Bindings: Bindings }>();
  * GET /api/scenes/:sceneId/characters
  * List characters in a scene
  */
-app.get('/scenes/:sceneId/characters', async (c) => {
+app.get('/:sceneId/characters', async (c) => {
   try {
     const sceneId = Number(c.req.param('sceneId'));
     
@@ -46,7 +46,7 @@ app.get('/scenes/:sceneId/characters', async (c) => {
  * POST /api/scenes/:sceneId/characters
  * Add a character to a scene
  */
-app.post('/scenes/:sceneId/characters', async (c) => {
+app.post('/:sceneId/characters', async (c) => {
   try {
     const sceneId = Number(c.req.param('sceneId'));
     const body = await c.req.json();
@@ -119,7 +119,7 @@ app.post('/scenes/:sceneId/characters', async (c) => {
  * PUT /api/scenes/:sceneId/characters/:characterKey
  * Update character mapping in a scene (e.g., toggle is_primary)
  */
-app.put('/scenes/:sceneId/characters/:characterKey', async (c) => {
+app.put('/:sceneId/characters/:characterKey', async (c) => {
   try {
     const sceneId = Number(c.req.param('sceneId'));
     const characterKey = c.req.param('characterKey');
@@ -154,7 +154,7 @@ app.put('/scenes/:sceneId/characters/:characterKey', async (c) => {
  * DELETE /api/scenes/:sceneId/characters/:characterKey
  * Remove a character from a scene
  */
-app.delete('/scenes/:sceneId/characters/:characterKey', async (c) => {
+app.delete('/:sceneId/characters/:characterKey', async (c) => {
   try {
     const sceneId = Number(c.req.param('sceneId'));
     const characterKey = c.req.param('characterKey');
@@ -178,7 +178,7 @@ app.delete('/scenes/:sceneId/characters/:characterKey', async (c) => {
  * POST /api/scenes/:sceneId/characters/batch
  * Batch update: Replace all characters in a scene
  */
-app.post('/scenes/:sceneId/characters/batch', async (c) => {
+app.post('/:sceneId/characters/batch', async (c) => {
   try {
     const sceneId = Number(c.req.param('sceneId'));
     const body = await c.req.json();
@@ -222,60 +222,6 @@ app.post('/scenes/:sceneId/characters/batch', async (c) => {
   }
 });
 
-/**
- * POST /api/projects/:projectId/characters/auto-assign
- * Manually trigger character auto-assignment
- * 
- * Phase X-2: Manual re-run of auto-assignment
- * - Overwrites existing assignments
- * - UI should show confirmation modal before calling
- * 
- * Safety:
- * - Project existence check
- * - Optional: Block if image/audio generation in progress (409)
- */
-app.post('/projects/:projectId/characters/auto-assign', async (c) => {
-  try {
-    const projectId = Number(c.req.param('projectId'));
-    
-    // Verify project exists
-    const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
-    `).bind(projectId).first();
-    
-    if (!project) {
-      return c.json({
-        error: 'NOT_FOUND',
-        message: 'Project not found'
-      }, 404);
-    }
-    
-    // TODO: 要確認 - Block if generation in progress?
-    // if (project.status === 'generating_images') {
-    //   return c.json({
-    //     error: 'GENERATION_IN_PROGRESS',
-    //     message: 'Cannot re-assign while image generation is in progress'
-    //   }, 409);
-    // }
-    
-    // Execute auto-assign
-    const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
-    const result = await autoAssignCharactersToScenes(c.env.DB, projectId);
-    
-    return c.json({
-      success: true,
-      assigned: result.assigned,
-      scenes: result.scenes,
-      skipped: result.skipped,
-      message: `Assigned ${result.assigned} characters to ${result.scenes} scenes`
-    });
-  } catch (error) {
-    console.error('[SceneCharacters] Auto-assign error:', error);
-    return c.json({
-      error: 'INTERNAL_ERROR',
-      message: 'Failed to auto-assign characters'
-    }, 500);
-  }
-});
+// auto-assign moved to character-models.ts
 
 export default app;

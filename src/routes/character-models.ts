@@ -462,4 +462,48 @@ app.delete('/projects/:projectId/characters/:characterKey', async (c) => {
   }
 });
 
+/**
+ * POST /api/projects/:projectId/characters/auto-assign
+ * Manually trigger character auto-assignment
+ * 
+ * Phase X-2: Manual re-run of auto-assignment
+ * - Overwrites existing assignments
+ * - UI should show confirmation modal before calling
+ */
+app.post('/projects/:projectId/characters/auto-assign', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    
+    // Verify project exists
+    const project = await c.env.DB.prepare(`
+      SELECT id, status FROM projects WHERE id = ?
+    `).bind(projectId).first();
+    
+    if (!project) {
+      return c.json(
+        createErrorResponse(ERROR_CODES.NOT_FOUND, 'Project not found'),
+        404
+      );
+    }
+    
+    // Execute auto-assign
+    const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
+    const result = await autoAssignCharactersToScenes(c.env.DB, projectId);
+    
+    return c.json({
+      success: true,
+      assigned: result.assigned,
+      scenes: result.scenes,
+      skipped: result.skipped,
+      message: `Assigned ${result.assigned} characters to ${result.scenes} scenes`
+    });
+  } catch (error) {
+    console.error('[Characters] Auto-assign error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to auto-assign characters'),
+      500
+    );
+  }
+});
+
 export default app;

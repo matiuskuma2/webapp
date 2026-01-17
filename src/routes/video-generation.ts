@@ -609,4 +609,238 @@ videoGeneration.delete('/videos/:videoId', async (c) => {
   return c.json({ success: true, deleted_id: videoId });
 });
 
+// ====================================================================
+// Video Build API (Full video rendering)
+// ====================================================================
+
+/**
+ * GET /api/video-builds/usage
+ * Get current user's video build usage stats
+ */
+videoGeneration.get('/video-builds/usage', async (c) => {
+  try {
+    const { getCookie } = await import('hono/cookie');
+    const sessionId = getCookie(c, 'session');
+    if (!sessionId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+    
+    const session = await c.env.DB.prepare(`
+      SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
+    `).bind(sessionId).first<{ user_id: number }>();
+    
+    if (!session) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+    }
+    
+    const userId = session.user_id;
+    
+    // Get usage stats from system settings
+    const settings = await c.env.DB.prepare(`
+      SELECT setting_key, setting_value FROM system_settings
+      WHERE setting_key IN ('video_build_daily_limit', 'video_build_concurrent_limit')
+    `).all();
+    
+    const settingsMap = new Map(
+      (settings.results || []).map((r: any) => [r.setting_key, r.setting_value])
+    );
+    
+    const dailyLimit = parseInt(settingsMap.get('video_build_daily_limit') || '3', 10);
+    const concurrentLimit = parseInt(settingsMap.get('video_build_concurrent_limit') || '1', 10);
+    
+    // Count today's builds
+    const todayBuilds = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM video_builds
+      WHERE executor_user_id = ? AND DATE(created_at) = DATE('now')
+    `).bind(userId).first<{ count: number }>();
+    
+    // Count active builds
+    const activeBuilds = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM video_builds
+      WHERE executor_user_id = ? AND status IN ('queued', 'validating', 'submitted', 'rendering', 'uploading')
+    `).bind(userId).first<{ count: number }>();
+    
+    return c.json({
+      daily_limit: dailyLimit,
+      daily_used: todayBuilds?.count || 0,
+      daily_remaining: Math.max(0, dailyLimit - (todayBuilds?.count || 0)),
+      concurrent_limit: concurrentLimit,
+      concurrent_active: activeBuilds?.count || 0,
+      can_start: (todayBuilds?.count || 0) < dailyLimit && (activeBuilds?.count || 0) < concurrentLimit
+    });
+  } catch (error) {
+    console.error('[VideoBuild] Usage error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get usage' } }, 500);
+  }
+});
+
+/**
+ * GET /api/projects/:projectId/video-builds
+ * List video builds for a project
+ */
+videoGeneration.get('/projects/:projectId/video-builds', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    
+    const { getCookie } = await import('hono/cookie');
+    const sessionId = getCookie(c, 'session');
+    if (!sessionId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+    
+    const session = await c.env.DB.prepare(`
+      SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
+    `).bind(sessionId).first<{ user_id: number }>();
+    
+    if (!session) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+    }
+    
+    const builds = await c.env.DB.prepare(`
+      SELECT 
+        vb.id, vb.project_id, vb.status, vb.progress_percent, vb.progress_stage,
+        vb.progress_message, vb.settings_json, vb.total_scenes, vb.total_duration_ms,
+        vb.render_started_at, vb.render_completed_at, vb.render_duration_sec,
+        vb.estimated_cost_usd, vb.error_code, vb.error_message, vb.download_url,
+        vb.created_at, vb.updated_at,
+        u.name as executor_name
+      FROM video_builds vb
+      LEFT JOIN users u ON vb.executor_user_id = u.id
+      WHERE vb.project_id = ?
+      ORDER BY vb.created_at DESC
+      LIMIT 50
+    `).bind(projectId).all();
+    
+    return c.json({ builds: builds.results || [] });
+  } catch (error) {
+    console.error('[VideoBuild] List error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to list builds' } }, 500);
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/video-builds
+ * Create a new video build
+ */
+videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    const body = await c.req.json();
+    
+    const { getCookie } = await import('hono/cookie');
+    const sessionId = getCookie(c, 'session');
+    if (!sessionId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+    
+    const session = await c.env.DB.prepare(`
+      SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
+    `).bind(sessionId).first<{ user_id: number }>();
+    
+    if (!session) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+    }
+    
+    const userId = session.user_id;
+    
+    // Get project owner
+    const project = await c.env.DB.prepare(`
+      SELECT id, user_id, title FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; user_id: number; title: string }>();
+    
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+    }
+    
+    // Settings
+    const settings = {
+      include_captions: body.include_captions ?? true,
+      include_bgm: body.include_bgm ?? true,
+      include_motion: body.include_motion ?? false,
+      resolution: body.resolution || '1080p',
+      aspect_ratio: body.aspect_ratio || '9:16'
+    };
+    
+    // Create build record
+    const result = await c.env.DB.prepare(`
+      INSERT INTO video_builds (
+        project_id, owner_user_id, executor_user_id, 
+        settings_json, status
+      ) VALUES (?, ?, ?, ?, 'queued')
+    `).bind(
+      projectId,
+      project.user_id,
+      userId,
+      JSON.stringify(settings)
+    ).run();
+    
+    const build = await c.env.DB.prepare(`
+      SELECT * FROM video_builds WHERE id = ?
+    `).bind(result.meta.last_row_id).first();
+    
+    // TODO: Trigger AWS Lambda for actual video build
+    // This would normally call AWS to start the rendering process
+    
+    return c.json({ build }, 201);
+  } catch (error) {
+    console.error('[VideoBuild] Create error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create build' } }, 500);
+  }
+});
+
+/**
+ * POST /api/video-builds/:buildId/refresh
+ * Refresh video build status from AWS
+ */
+videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
+  try {
+    const buildId = parseInt(c.req.param('buildId'), 10);
+    
+    const { getCookie } = await import('hono/cookie');
+    const sessionId = getCookie(c, 'session');
+    if (!sessionId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+    
+    const build = await c.env.DB.prepare(`
+      SELECT * FROM video_builds WHERE id = ?
+    `).bind(buildId).first();
+    
+    if (!build) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Build not found' } }, 404);
+    }
+    
+    // TODO: Actually query AWS for status update
+    // For now, just return current status
+    
+    return c.json({ build });
+  } catch (error) {
+    console.error('[VideoBuild] Refresh error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to refresh build' } }, 500);
+  }
+});
+
+/**
+ * GET /api/video-builds/:buildId
+ * Get a single video build
+ */
+videoGeneration.get('/video-builds/:buildId', async (c) => {
+  try {
+    const buildId = parseInt(c.req.param('buildId'), 10);
+    
+    const build = await c.env.DB.prepare(`
+      SELECT * FROM video_builds WHERE id = ?
+    `).bind(buildId).first();
+    
+    if (!build) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Build not found' } }, 404);
+    }
+    
+    return c.json({ build });
+  } catch (error) {
+    console.error('[VideoBuild] Get error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get build' } }, 500);
+  }
+});
+
 export default videoGeneration;
