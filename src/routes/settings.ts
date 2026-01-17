@@ -452,4 +452,281 @@ settings.get('/settings/api-keys/:provider/test', async (c) => {
   }
 });
 
+// ====================================================================
+// User Characters Library (マイキャラ)
+// ====================================================================
+
+/**
+ * GET /user/characters
+ * List all characters in user's library
+ */
+settings.get('/user/characters', async (c) => {
+  const userId = await getUserId(c);
+  if (!userId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const { DB } = c.env;
+  
+  try {
+    const characters = await DB.prepare(`
+      SELECT * FROM user_characters
+      WHERE user_id = ?
+      ORDER BY is_favorite DESC, character_name ASC
+    `).bind(userId).all();
+    
+    return c.json({ characters: characters.results || [] });
+  } catch (error) {
+    console.error('[Settings] Get user characters error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get characters' } }, 500);
+  }
+});
+
+/**
+ * POST /user/characters
+ * Create a new character in user's library
+ */
+settings.post('/user/characters', async (c) => {
+  const userId = await getUserId(c);
+  if (!userId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const { DB } = c.env;
+  const body = await c.req.json();
+  const {
+    character_key,
+    character_name,
+    description,
+    appearance_description,
+    reference_image_r2_key,
+    reference_image_r2_url,
+    voice_preset_id,
+    aliases
+  } = body;
+  
+  if (!character_key || !character_name) {
+    return c.json({ error: { code: 'INVALID_REQUEST', message: 'character_key and character_name are required' } }, 400);
+  }
+  
+  try {
+    // Check duplicate
+    const existing = await DB.prepare(`
+      SELECT id FROM user_characters WHERE user_id = ? AND character_key = ?
+    `).bind(userId, character_key).first();
+    
+    if (existing) {
+      return c.json({ error: { code: 'DUPLICATE', message: 'Character key already exists' } }, 400);
+    }
+    
+    // Serialize aliases
+    let aliasesJson = null;
+    if (aliases && Array.isArray(aliases)) {
+      const validAliases = aliases
+        .filter(a => typeof a === 'string')
+        .map(a => a.trim())
+        .filter(a => a.length > 0);
+      aliasesJson = validAliases.length > 0 ? JSON.stringify(validAliases) : null;
+    }
+    
+    const result = await DB.prepare(`
+      INSERT INTO user_characters
+        (user_id, character_key, character_name, description, appearance_description,
+         reference_image_r2_key, reference_image_r2_url, voice_preset_id, aliases_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      userId,
+      character_key,
+      character_name,
+      description || null,
+      appearance_description || null,
+      reference_image_r2_key || null,
+      reference_image_r2_url || null,
+      voice_preset_id || null,
+      aliasesJson
+    ).run();
+    
+    const character = await DB.prepare(`
+      SELECT * FROM user_characters WHERE id = ?
+    `).bind(result.meta.last_row_id).first();
+    
+    return c.json({ character }, 201);
+  } catch (error) {
+    console.error('[Settings] Create user character error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create character' } }, 500);
+  }
+});
+
+/**
+ * POST /user/characters/from-project
+ * Copy a character from a project to user's library (マイキャラに追加)
+ * Used by: character-library.js, world-character-ui.js
+ */
+settings.post('/user/characters/from-project', async (c) => {
+  const userId = await getUserId(c);
+  if (!userId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const { DB } = c.env;
+  const body = await c.req.json();
+  const { project_id, character_key } = body;
+  
+  if (!project_id || !character_key) {
+    return c.json({ error: { code: 'INVALID_REQUEST', message: 'project_id and character_key are required' } }, 400);
+  }
+  
+  try {
+    // Get character from project
+    const projectChar = await DB.prepare(`
+      SELECT * FROM project_character_models WHERE project_id = ? AND character_key = ?
+    `).bind(project_id, character_key).first();
+    
+    if (!projectChar) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Character not found in project' } }, 404);
+    }
+    
+    // Upsert to user's library
+    await DB.prepare(`
+      INSERT INTO user_characters
+        (user_id, character_key, character_name, description, appearance_description,
+         reference_image_r2_key, reference_image_r2_url, voice_preset_id, aliases_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(user_id, character_key) DO UPDATE SET
+        character_name = excluded.character_name,
+        description = excluded.description,
+        appearance_description = excluded.appearance_description,
+        reference_image_r2_key = excluded.reference_image_r2_key,
+        reference_image_r2_url = excluded.reference_image_r2_url,
+        voice_preset_id = excluded.voice_preset_id,
+        aliases_json = excluded.aliases_json,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(
+      userId,
+      projectChar.character_key,
+      projectChar.character_name,
+      projectChar.description,
+      projectChar.appearance_description,
+      projectChar.reference_image_r2_key,
+      projectChar.reference_image_r2_url,
+      projectChar.voice_preset_id,
+      projectChar.aliases_json
+    ).run();
+    
+    // Get the saved character
+    const savedChar = await DB.prepare(`
+      SELECT * FROM user_characters WHERE user_id = ? AND character_key = ?
+    `).bind(userId, projectChar.character_key).first();
+    
+    return c.json({ 
+      success: true, 
+      message: 'Character saved to library',
+      character: savedChar
+    });
+  } catch (error) {
+    console.error('[Settings] Save character to library error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to save character' } }, 500);
+  }
+});
+
+/**
+ * PUT /user/characters/:characterKey
+ * Update a character in user's library
+ */
+settings.put('/user/characters/:characterKey', async (c) => {
+  const userId = await getUserId(c);
+  if (!userId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const { DB } = c.env;
+  const characterKey = c.req.param('characterKey');
+  const body = await c.req.json();
+  const {
+    character_name,
+    description,
+    appearance_description,
+    reference_image_r2_key,
+    reference_image_r2_url,
+    voice_preset_id,
+    aliases,
+    is_favorite
+  } = body;
+  
+  try {
+    // Check exists
+    const existing = await DB.prepare(`
+      SELECT id FROM user_characters WHERE user_id = ? AND character_key = ?
+    `).bind(userId, characterKey).first();
+    
+    if (!existing) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Character not found' } }, 404);
+    }
+    
+    // Serialize aliases
+    let aliasesJson = null;
+    if (aliases && Array.isArray(aliases)) {
+      const validAliases = aliases
+        .filter(a => typeof a === 'string')
+        .map(a => a.trim())
+        .filter(a => a.length > 0);
+      aliasesJson = validAliases.length > 0 ? JSON.stringify(validAliases) : null;
+    }
+    
+    await DB.prepare(`
+      UPDATE user_characters
+      SET character_name = ?, description = ?, appearance_description = ?,
+          reference_image_r2_key = ?, reference_image_r2_url = ?,
+          voice_preset_id = ?, aliases_json = ?, is_favorite = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE user_id = ? AND character_key = ?
+    `).bind(
+      character_name,
+      description || null,
+      appearance_description || null,
+      reference_image_r2_key || null,
+      reference_image_r2_url || null,
+      voice_preset_id || null,
+      aliasesJson,
+      is_favorite ? 1 : 0,
+      userId,
+      characterKey
+    ).run();
+    
+    const character = await DB.prepare(`
+      SELECT * FROM user_characters WHERE user_id = ? AND character_key = ?
+    `).bind(userId, characterKey).first();
+    
+    return c.json({ character });
+  } catch (error) {
+    console.error('[Settings] Update user character error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update character' } }, 500);
+  }
+});
+
+/**
+ * DELETE /user/characters/:characterKey
+ * Delete a character from user's library
+ */
+settings.delete('/user/characters/:characterKey', async (c) => {
+  const userId = await getUserId(c);
+  if (!userId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const { DB } = c.env;
+  const characterKey = c.req.param('characterKey');
+  
+  try {
+    await DB.prepare(`
+      DELETE FROM user_characters WHERE user_id = ? AND character_key = ?
+    `).bind(userId, characterKey).run();
+    
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('[Settings] Delete user character error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete character' } }, 500);
+  }
+});
+
 export default settings;
