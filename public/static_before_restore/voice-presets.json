@@ -1,0 +1,77 @@
+{
+  "voice_presets": [
+    {
+      "id": "fish-nanamin",
+      "name": "🐟 ななみん（Fish Audio）",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "Fish Audio - 高品質な日本語音声（ななみん）",
+      "provider": "fish",
+      "reference_id": "71bf4cb71cd44df6aa603d51db8f92ff"
+    },
+    {
+      "id": "ja-JP-Standard-A",
+      "name": "日本語 女性A（標準）",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "標準的な女性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Standard-B",
+      "name": "日本語 男性A（標準）",
+      "language": "ja-JP",
+      "gender": "male",
+      "description": "標準的な男性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Standard-C",
+      "name": "日本語 男性B（標準）",
+      "language": "ja-JP",
+      "gender": "male",
+      "description": "低めの男性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Standard-D",
+      "name": "日本語 女性B（標準）",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "高めの女性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Wavenet-A",
+      "name": "日本語 女性A（高品質）",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "WaveNet技術を使用した高品質な女性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Wavenet-B",
+      "name": "日本語 男性A（高品質）",
+      "language": "ja-JP",
+      "gender": "male",
+      "description": "WaveNet技術を使用した高品質な男性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Wavenet-C",
+      "name": "日本語 男性B（高品質）",
+      "language": "ja-JP",
+      "gender": "male",
+      "description": "WaveNet技術を使用した低めの男性の声",
+      "provider": "google"
+    },
+    {
+      "id": "ja-JP-Wavenet-D",
+      "name": "日本語 女性B（高品質）",
+      "language": "ja-JP",
+      "gender": "female",
+      "description": "WaveNet技術を使用した高めの女性の声",
+      "provider": "google"
+    }
+  ]
+}

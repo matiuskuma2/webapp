@@ -22,8 +22,6 @@ import sceneCharacters from './routes/scene-characters' // Phase X-2
 import videoGeneration from './routes/video-generation' // Video I2V
 import settings from './routes/settings' // User settings & API keys
 import auth from './routes/auth' // Authentication
-import { adminHtml } from './pages/admin' // Admin page HTML
-import { settingsHtml } from './pages/settings' // Settings page HTML
 
 const app = new Hono<{ Bindings: Bindings }>()
 
@@ -86,7 +84,6 @@ app.route('/api', settings) // For /api/settings/api-keys/*
 app.route('/api', auth) // For /api/auth/*
 
 // Root route - serve HTML
-// Root route - with authentication check
 app.get('/', (c) => {
   return c.html(`
 <!DOCTYPE html>
@@ -147,129 +144,46 @@ app.get('/', (c) => {
         .animate-pulse {
             animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
         }
-        
-        /* User dropdown menu */
-        .user-dropdown {
-            position: relative;
-        }
-        .user-dropdown-menu {
-            position: absolute;
-            right: 0;
-            top: 100%;
-            margin-top: 0.5rem;
-            background: white;
-            border-radius: 0.5rem;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.15);
-            min-width: 200px;
-            z-index: 100;
-            display: none;
-        }
-        .user-dropdown-menu.show {
-            display: block;
-        }
-        .user-dropdown-menu a, .user-dropdown-menu button {
-            display: block;
-            width: 100%;
-            padding: 0.75rem 1rem;
-            text-align: left;
-            color: #374151;
-            transition: background-color 0.2s;
-        }
-        .user-dropdown-menu a:hover, .user-dropdown-menu button:hover {
-            background-color: #f3f4f6;
-        }
     </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
-    <!-- Loading / Auth Check -->
-    <div id="authLoading" class="flex items-center justify-center min-h-screen">
-        <div class="text-center">
-            <i class="fas fa-spinner fa-spin text-4xl text-blue-600 mb-4"></i>
-            <p class="text-gray-600">認証を確認中...</p>
-        </div>
-    </div>
-
-    <!-- Main Content (hidden until authenticated) -->
-    <div id="mainContent" class="hidden">
-        <!-- Header with User Info (Phase C-2-2) -->
-        <header class="bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg">
-            <div class="container mx-auto px-4 py-4 flex items-center justify-between">
-                <h1 class="text-xl font-bold">
-                    <i class="fas fa-video mr-2"></i>
-                    RILARC Scenario Generator
-                </h1>
-                <div class="flex items-center gap-4">
-                    <!-- Admin Link (superadmin only) -->
-                    <a id="adminLink" href="/admin" class="hidden text-white/80 hover:text-white transition-colors">
-                        <i class="fas fa-cog mr-1"></i>
-                        <span class="hidden sm:inline">管理画面</span>
-                    </a>
-                    
-                    <!-- User Dropdown -->
-                    <div class="user-dropdown">
-                        <button id="userDropdownBtn" class="flex items-center gap-2 px-3 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors">
-                            <i class="fas fa-user-circle text-xl"></i>
-                            <span id="userName" class="hidden sm:inline">ユーザー</span>
-                            <i class="fas fa-chevron-down text-xs"></i>
-                        </button>
-                        <div id="userDropdownMenu" class="user-dropdown-menu">
-                            <div class="px-4 py-3 border-b">
-                                <p id="userEmail" class="text-sm text-gray-500">email@example.com</p>
-                                <p id="userRole" class="text-xs text-blue-600 mt-1">管理者</p>
-                            </div>
-                            <a href="/settings">
-                                <i class="fas fa-cog mr-2 text-gray-400"></i>設定
-                            </a>
-                            <button id="logoutBtn" class="text-red-600 hover:bg-red-50">
-                                <i class="fas fa-sign-out-alt mr-2"></i>ログアウト
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </header>
+    <div class="container mx-auto px-4 py-8">
+        <h1 class="text-3xl font-bold text-gray-800 mb-8">
+            <i class="fas fa-video mr-2 text-blue-600"></i>
+            RILARC Scenario Generator
+        </h1>
         
-        <div class="container mx-auto px-4 py-8">
-            <!-- Phase 1: プロジェクト作成 -->
-            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
-                <h2 class="text-xl font-semibold text-gray-700 mb-4">
-                    <i class="fas fa-folder-plus mr-2 text-blue-600"></i>
-                    新規プロジェクト作成
-                </h2>
-                <div class="flex flex-col sm:flex-row gap-4">
-                    <div class="flex flex-1 gap-2">
-                        <input 
-                            type="text" 
-                            id="projectTitle" 
-                            placeholder="プロジェクトタイトルを入力"
-                            class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        />
-                        <button 
-                            id="createProjectBtn"
-                            onclick="createProject()"
-                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap"
-                        >
-                            <i class="fas fa-plus mr-2"></i>作成
-                        </button>
-                    </div>
-                    <button 
-                        onclick="openTemplateModal()"
-                        class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors whitespace-nowrap"
-                    >
-                        <i class="fas fa-copy mr-2"></i>テンプレから作成
-                    </button>
-                </div>
+        <!-- Phase 1: プロジェクト作成 -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">
+                <i class="fas fa-folder-plus mr-2 text-blue-600"></i>
+                新規プロジェクト作成
+            </h2>
+            <div class="flex gap-4">
+                <input 
+                    type="text" 
+                    id="projectTitle" 
+                    placeholder="プロジェクトタイトルを入力"
+                    class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button 
+                    id="createProjectBtn"
+                    onclick="createProject()"
+                    class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                    <i class="fas fa-plus mr-2"></i>作成
+                </button>
             </div>
+        </div>
 
-            <!-- プロジェクト一覧 -->
-            <div class="bg-white rounded-lg shadow-md p-6">
-                <h2 class="text-xl font-semibold text-gray-700 mb-4">
-                    <i class="fas fa-list mr-2 text-blue-600"></i>
-                    プロジェクト一覧
-                </h2>
-                <div id="projectsList" class="space-y-3">
-                    <p class="text-gray-500 text-center py-8">読み込み中...</p>
-                </div>
+        <!-- プロジェクト一覧 -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">
+                <i class="fas fa-list mr-2 text-blue-600"></i>
+                プロジェクト一覧
+            </h2>
+            <div id="projectsList" class="space-y-3">
+                <p class="text-gray-500 text-center py-8">読み込み中...</p>
             </div>
         </div>
     </div>
@@ -280,44 +194,6 @@ app.get('/', (c) => {
             <div class="flex items-center">
                 <i id="toastIcon" class="fas fa-check-circle text-2xl mr-3"></i>
                 <p id="toastMessage" class="text-gray-800"></p>
-            </div>
-        </div>
-    </div>
-
-    <!-- テンプレート選択モーダル -->
-    <div id="templateModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-40 flex items-center justify-center">
-        <div class="bg-white rounded-lg shadow-xl max-w-lg w-full mx-4 max-h-[80vh] overflow-hidden flex flex-col">
-            <div class="p-6 border-b">
-                <div class="flex justify-between items-center">
-                    <h2 class="text-xl font-bold text-gray-800">
-                        <i class="fas fa-copy mr-2 text-green-600"></i>
-                        テンプレートから作成
-                    </h2>
-                    <button onclick="closeTemplateModal()" class="text-gray-500 hover:text-gray-700">
-                        <i class="fas fa-times text-xl"></i>
-                    </button>
-                </div>
-            </div>
-            <div class="p-6 overflow-y-auto flex-1">
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">新規プロジェクト名</label>
-                    <input 
-                        type="text" 
-                        id="templateProjectTitle" 
-                        placeholder="（空欄の場合はテンプレ名 + コピー）"
-                        class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    />
-                </div>
-                <div class="mb-2">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">テンプレートを選択</label>
-                </div>
-                <div id="templateList" class="space-y-2">
-                    <p class="text-gray-500 text-center py-4">読み込み中...</p>
-                </div>
-            </div>
-            <div class="p-4 border-t bg-gray-50 text-sm text-gray-500">
-                <i class="fas fa-info-circle mr-1"></i>
-                テンプレートを選択すると、シーン構成・キャラクター設定がコピーされます
             </div>
         </div>
     </div>
@@ -338,70 +214,6 @@ app.get('/', (c) => {
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
-    <script>
-        // Phase C-1-1: Authentication check on page load
-        window.currentUser = null;
-        
-        async function checkAuth() {
-            try {
-                const res = await axios.get('/api/auth/me');
-                if (!res.data.authenticated) {
-                    window.location.href = '/login';
-                    return;
-                }
-                
-                window.currentUser = res.data.user;
-                
-                // Update UI with user info
-                document.getElementById('userName').textContent = res.data.user.name;
-                document.getElementById('userEmail').textContent = res.data.user.email;
-                document.getElementById('userRole').textContent = 
-                    res.data.user.role === 'superadmin' ? 'スーパー管理者' : '管理者';
-                
-                // Show admin link for superadmin
-                if (res.data.user.role === 'superadmin') {
-                    document.getElementById('adminLink').classList.remove('hidden');
-                }
-                
-                // Hide loading, show content
-                document.getElementById('authLoading').classList.add('hidden');
-                document.getElementById('mainContent').classList.remove('hidden');
-                
-                // Load projects
-                if (typeof loadProjects === 'function') {
-                    loadProjects();
-                }
-            } catch (err) {
-                console.error('Auth check failed:', err);
-                window.location.href = '/login';
-            }
-        }
-        
-        // User dropdown toggle
-        document.getElementById('userDropdownBtn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            document.getElementById('userDropdownMenu').classList.toggle('show');
-        });
-        
-        // Close dropdown when clicking outside
-        document.addEventListener('click', () => {
-            document.getElementById('userDropdownMenu').classList.remove('show');
-        });
-        
-        // Logout
-        document.getElementById('logoutBtn').addEventListener('click', async () => {
-            try {
-                await axios.post('/api/auth/logout');
-                window.location.href = '/login';
-            } catch (err) {
-                console.error('Logout failed:', err);
-                window.location.href = '/login';
-            }
-        });
-        
-        // Check auth on page load
-        checkAuth();
-    </script>
     <script src="/static/app.js"></script>
 </body>
 </html>
@@ -1572,7 +1384,7 @@ app.get('/login', (c) => {
             </a>
             <div class="text-gray-500 text-sm">
                 アカウントをお持ちでない方は
-                <a href="/signup" class="text-blue-600 hover:underline">新規登録</a>
+                <a href="/register" class="text-blue-600 hover:underline">新規登録</a>
             </div>
         </div>
     </div>
@@ -1931,162 +1743,6 @@ app.get('/reset-password', (c) => {
                 errorDiv.classList.remove('hidden');
                 const message = error.response?.data?.error?.message || 'パスワードリセットに失敗しました';
                 errorText.textContent = message;
-            }
-        });
-    </script>
-</body>
-</html>
-  `)
-})
-
-// Admin route
-app.get('/admin', (c) => {
-  return c.html(adminHtml)
-})
-
-// Settings route
-app.get('/settings', (c) => {
-  return c.html(settingsHtml)
-})
-
-// Signup route
-app.get('/signup', (c) => {
-  return c.html(`
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>新規登録 - RILARC Scenario Generator</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
-</head>
-<body class="bg-gradient-to-br from-green-50 to-teal-100 min-h-screen flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl shadow-xl w-full max-w-md p-8">
-        <div class="text-center mb-8">
-            <h1 class="text-2xl font-bold text-gray-800">
-                <i class="fas fa-film text-green-600 mr-2"></i>
-                RILARC
-            </h1>
-            <p class="text-gray-600 mt-2">新規アカウント登録</p>
-        </div>
-        
-        <form id="signupForm" class="space-y-5">
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">
-                    お名前 <span class="text-red-500">*</span>
-                </label>
-                <input 
-                    type="text" 
-                    id="name" 
-                    required
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="山田 太郎"
-                />
-            </div>
-            
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">
-                    メールアドレス <span class="text-red-500">*</span>
-                </label>
-                <input 
-                    type="email" 
-                    id="email" 
-                    required
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="your@email.com"
-                />
-            </div>
-            
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">
-                    パスワード <span class="text-red-500">*</span>
-                </label>
-                <input 
-                    type="password" 
-                    id="password" 
-                    required
-                    minlength="8"
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="8文字以上"
-                />
-            </div>
-            
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">
-                    会社名（任意）
-                </label>
-                <input 
-                    type="text" 
-                    id="company"
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="株式会社〇〇"
-                />
-            </div>
-            
-            <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">
-                    電話番号（任意）
-                </label>
-                <input 
-                    type="tel" 
-                    id="phone"
-                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
-                    placeholder="090-1234-5678"
-                />
-            </div>
-            
-            <div id="error" class="hidden text-red-600 text-sm bg-red-50 p-3 rounded-lg"></div>
-            <div id="success" class="hidden text-green-600 text-sm bg-green-50 p-3 rounded-lg"></div>
-            
-            <button 
-                type="submit"
-                class="w-full py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold"
-            >
-                <i class="fas fa-user-plus mr-2"></i>
-                登録する
-            </button>
-        </form>
-        
-        <div class="mt-6 text-center">
-            <p class="text-gray-600 text-sm">
-                すでにアカウントをお持ちの方は
-                <a href="/login" class="text-green-600 hover:underline font-semibold">ログイン</a>
-            </p>
-        </div>
-    </div>
-    
-    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
-    <script>
-        document.getElementById('signupForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const name = document.getElementById('name').value;
-            const email = document.getElementById('email').value;
-            const password = document.getElementById('password').value;
-            const company = document.getElementById('company').value || null;
-            const phone = document.getElementById('phone').value || null;
-            const errorEl = document.getElementById('error');
-            const successEl = document.getElementById('success');
-            
-            errorEl.classList.add('hidden');
-            successEl.classList.add('hidden');
-            
-            try {
-                const res = await axios.post('/api/auth/signup', { name, email, password, company, phone });
-                if (res.data.success) {
-                    successEl.innerHTML = \`
-                        <i class="fas fa-check-circle mr-2"></i>
-                        \${res.data.message}<br>
-                        <span class="text-xs mt-1 block">管理者の承認後、ログインできるようになります。</span>
-                    \`;
-                    successEl.classList.remove('hidden');
-                    document.getElementById('signupForm').reset();
-                }
-            } catch (err) {
-                const msg = err.response?.data?.error?.message || '登録に失敗しました';
-                errorEl.textContent = msg;
-                errorEl.classList.remove('hidden');
             }
         });
     </script>

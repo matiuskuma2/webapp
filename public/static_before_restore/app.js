@@ -131,7 +131,7 @@ async function loadProjects() {
           </div>
         </div>
       ` + response.data.projects.map(project => `
-        <div class="border ${project.is_template ? 'border-green-400 bg-green-50' : 'border-gray-200'} rounded-lg p-4 hover:shadow-md transition-shadow">
+        <div class="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
           <div class="flex items-center gap-3">
             <input 
               type="checkbox" 
@@ -140,11 +140,8 @@ async function loadProjects() {
               class="w-5 h-5 text-blue-600 rounded focus:ring-2 focus:ring-blue-500"
             />
             <div class="flex-1">
-              <div class="flex items-center gap-2">
-                <h3 class="font-semibold text-gray-800">${escapeHtml(project.title)}</h3>
-                ${project.is_template ? '<span class="px-2 py-0.5 bg-green-600 text-white text-xs rounded-full"><i class="fas fa-copy mr-1"></i>テンプレート</span>' : ''}
-              </div>
-              <div class="flex items-center gap-4 mt-2 text-sm text-gray-600 flex-wrap">
+              <h3 class="font-semibold text-gray-800">${escapeHtml(project.title)}</h3>
+              <div class="flex items-center gap-4 mt-2 text-sm text-gray-600">
                 <span class="flex items-center">
                   <i class="fas fa-info-circle mr-1"></i>
                   <span class="ml-1 font-medium ${getStatusColor(project.status)}">${getStatusText(project.status)}</span>
@@ -153,28 +150,9 @@ async function loadProjects() {
                   <i class="fas fa-clock mr-1"></i>
                   ${new Date(project.created_at).toLocaleString('ja-JP')}
                 </span>
-                ${project.user_id && window.currentUser?.role === 'superadmin' ? `<span class="flex items-center text-purple-600"><i class="fas fa-user mr-1"></i>ID: ${project.user_id}</span>` : ''}
               </div>
             </div>
-            <div class="flex gap-2 flex-wrap justify-end">
-              ${window.currentUser?.role === 'superadmin' ? `
-                ${project.is_template ? `
-                  <button 
-                    onclick="editTemplate(${project.id}, '${escapeHtml(project.template_label || project.title)}', '${escapeHtml(project.template_description || '')}')"
-                    class="px-3 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors touch-manipulation"
-                    title="テンプレート編集"
-                  >
-                    <i class="fas fa-edit"></i>
-                  </button>
-                ` : ''}
-                <button 
-                  onclick="toggleTemplate(${project.id}, ${!project.is_template}, '${escapeHtml(project.title)}')"
-                  class="px-3 py-2 ${project.is_template ? 'bg-gray-500' : 'bg-green-600'} text-white rounded-lg hover:opacity-80 transition-colors touch-manipulation"
-                  title="${project.is_template ? 'テンプレート解除' : 'テンプレートに設定'}"
-                >
-                  <i class="fas ${project.is_template ? 'fa-times' : 'fa-star'}"></i>
-                </button>
-              ` : ''}
+            <div class="flex gap-2">
               <button 
                 onclick="deleteProjectDirect(${project.id})"
                 class="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors touch-manipulation"
@@ -193,35 +171,12 @@ async function loadProjects() {
         </div>
       `).join('');
     } else {
-      // No projects - show onboarding guide and auto-open template modal
       projectsList.innerHTML = `
-        <div class="text-center py-12">
-          <div class="mb-6">
-            <i class="fas fa-rocket text-6xl text-green-500 mb-4"></i>
-            <h3 class="text-xl font-bold text-gray-800 mb-2">最初のプロジェクトを作成しましょう！</h3>
-            <p class="text-gray-600 mb-6">テンプレートから始めると、すぐにビルダーで編集できます</p>
-          </div>
-          <button 
-            onclick="openTemplateModal()"
-            class="px-8 py-4 bg-green-600 text-white text-lg rounded-lg hover:bg-green-700 transition-colors shadow-lg"
-          >
-            <i class="fas fa-copy mr-2"></i>テンプレートから作成する
-          </button>
-          <p class="text-sm text-gray-500 mt-4">
-            または、上部の入力欄から空のプロジェクトを作成できます
-          </p>
-        </div>
+        <p class="text-gray-500 text-center py-8">
+          <i class="fas fa-inbox text-4xl mb-2"></i><br>
+          プロジェクトがありません
+        </p>
       `;
-      
-      // Auto-open template modal for first-time users
-      // Check if this is first visit (no localStorage flag)
-      if (!localStorage.getItem('onboarding_seen')) {
-        localStorage.setItem('onboarding_seen', 'true');
-        // Small delay to let the UI render first
-        setTimeout(() => {
-          openTemplateModal();
-        }, 500);
-      }
     }
   } catch (error) {
     console.error('Load projects error:', error);
@@ -616,295 +571,4 @@ function escapeHtml(text) {
     "'": '&#039;'
   };
   return text.replace(/[&<>"']/g, m => map[m]);
-}
-
-// =============================================================================
-// Template Functions (Phase D-3)
-// =============================================================================
-
-let templateList = [];
-
-// Open template modal
-async function openTemplateModal() {
-  const modal = document.getElementById('templateModal');
-  const listEl = document.getElementById('templateList');
-  
-  modal.classList.remove('hidden');
-  listEl.innerHTML = '<p class="text-gray-500 text-center py-4"><i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...</p>';
-  
-  try {
-    const response = await axios.get(`${API_BASE}/templates`);
-    templateList = response.data.templates || [];
-    
-    if (templateList.length === 0) {
-      listEl.innerHTML = `
-        <div class="text-center py-8 text-gray-500">
-          <i class="fas fa-folder-open text-4xl mb-4"></i>
-          <p>利用可能なテンプレートがありません</p>
-          <p class="text-sm mt-2">管理者にテンプレートの作成をご依頼ください</p>
-        </div>
-      `;
-      return;
-    }
-    
-    listEl.innerHTML = templateList.map(t => `
-      <div 
-        class="border border-gray-200 rounded-lg p-4 hover:bg-green-50 hover:border-green-300 cursor-pointer transition-colors"
-        onclick="cloneTemplate(${t.id}, '${escapeHtml(t.template_label || t.title)}')"
-      >
-        <div class="flex items-center justify-between">
-          <div class="flex-1">
-            <h3 class="font-semibold text-gray-800">${escapeHtml(t.template_label || t.title)}</h3>
-            ${t.template_description ? `<p class="text-sm text-gray-600 mt-1">${escapeHtml(t.template_description)}</p>` : ''}
-            <p class="text-sm text-gray-500 mt-1">
-              <i class="fas fa-film mr-1"></i>${t.scene_count} シーン
-              <span class="mx-2">•</span>
-              <i class="fas fa-user mr-1"></i>${escapeHtml(t.owner_name)}
-            </p>
-          </div>
-          <i class="fas fa-chevron-right text-gray-400 ml-2"></i>
-        </div>
-      </div>
-    `).join('');
-    
-  } catch (error) {
-    console.error('Load templates error:', error);
-    listEl.innerHTML = `
-      <div class="text-center py-8 text-red-500">
-        <i class="fas fa-exclamation-circle text-4xl mb-4"></i>
-        <p>テンプレートの読み込みに失敗しました</p>
-      </div>
-    `;
-  }
-}
-
-// Close template modal
-function closeTemplateModal() {
-  document.getElementById('templateModal').classList.add('hidden');
-  document.getElementById('templateProjectTitle').value = '';
-}
-
-// Clone template
-async function cloneTemplate(templateId, templateName) {
-  if (isProcessing) {
-    showToast('処理中です。しばらくお待ちください', 'warning');
-    return;
-  }
-  
-  const titleInput = document.getElementById('templateProjectTitle');
-  const customTitle = titleInput.value.trim();
-  
-  isProcessing = true;
-  
-  // Show loading in modal
-  const listEl = document.getElementById('templateList');
-  const originalContent = listEl.innerHTML;
-  listEl.innerHTML = `
-    <div class="text-center py-8">
-      <i class="fas fa-spinner fa-spin text-4xl text-green-600 mb-4"></i>
-      <p class="text-gray-600">「${escapeHtml(templateName)}」をコピー中...</p>
-    </div>
-  `;
-  
-  try {
-    const response = await axios.post(`${API_BASE}/projects/${templateId}/clone`, {
-      title: customTitle || undefined
-    });
-    
-    if (response.data.success) {
-      showToast('テンプレートからプロジェクトを作成しました', 'success');
-      closeTemplateModal();
-      
-      // Auto-navigate to the new project (Builder)
-      const newProjectId = response.data.new_project_id;
-      if (newProjectId) {
-        window.location.href = `/projects/${newProjectId}`;
-      } else {
-        loadProjects();
-      }
-    } else {
-      throw new Error(response.data.error?.message || 'Unknown error');
-    }
-    
-  } catch (error) {
-    console.error('Clone template error:', error);
-    showToast(error.response?.data?.error?.message || 'テンプレートのコピーに失敗しました', 'error');
-    listEl.innerHTML = originalContent;
-  } finally {
-    isProcessing = false;
-  }
-}
-
-// Toggle template status (superadmin only)
-async function toggleTemplate(projectId, setAsTemplate, projectTitle) {
-  if (isProcessing) {
-    showToast('処理中です', 'warning');
-    return;
-  }
-  
-  // If setting as template, open edit modal instead
-  if (setAsTemplate) {
-    openTemplateEditModal(projectId, projectTitle, '', '');
-    return;
-  }
-  
-  // Unsetting template
-  if (!confirm(`「${projectTitle}」のテンプレートを解除しますか？`)) {
-    return;
-  }
-  
-  isProcessing = true;
-  
-  try {
-    const response = await axios.put(`${API_BASE}/projects/${projectId}/template`, {
-      is_template: false,
-      template_label: null,
-      template_description: null
-    });
-    
-    if (response.data.success) {
-      showToast('テンプレートを解除しました', 'success');
-      loadProjects();
-    } else {
-      throw new Error(response.data.error?.message || 'Unknown error');
-    }
-    
-  } catch (error) {
-    console.error('Toggle template error:', error);
-    showToast(error.response?.data?.error?.message || 'テンプレート解除に失敗しました', 'error');
-  } finally {
-    isProcessing = false;
-  }
-}
-
-// =============================================================================
-// Template Edit Modal (superadmin only)
-// =============================================================================
-
-let editingTemplateProjectId = null;
-
-function openTemplateEditModal(projectId, currentLabel, currentDescription, projectTitle) {
-  editingTemplateProjectId = projectId;
-  
-  // Create modal if not exists
-  let modal = document.getElementById('templateEditModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'templateEditModal';
-    modal.className = 'fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center';
-    modal.innerHTML = `
-      <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
-        <div class="p-6 border-b">
-          <div class="flex justify-between items-center">
-            <h2 class="text-xl font-bold text-gray-800">
-              <i class="fas fa-star mr-2 text-yellow-500"></i>
-              テンプレート設定
-            </h2>
-            <button onclick="closeTemplateEditModal()" class="text-gray-500 hover:text-gray-700">
-              <i class="fas fa-times text-xl"></i>
-            </button>
-          </div>
-        </div>
-        <div class="p-6">
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-gray-700 mb-2">テンプレート名</label>
-            <input 
-              type="text" 
-              id="templateEditLabel" 
-              placeholder="テンプレートの表示名"
-              maxlength="50"
-              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-500"
-            />
-          </div>
-          <div class="mb-4">
-            <label class="block text-sm font-medium text-gray-700 mb-2">説明文（推奨: 50〜200文字）</label>
-            <textarea 
-              id="templateEditDescription" 
-              placeholder="新規ユーザーがテンプレートを選ぶ際のガイドになります"
-              maxlength="500"
-              rows="3"
-              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-500"
-            ></textarea>
-            <p class="text-xs text-gray-500 mt-1" id="templateDescCharCount">0 / 500</p>
-          </div>
-        </div>
-        <div class="p-4 border-t bg-gray-50 flex justify-end gap-2">
-          <button 
-            onclick="closeTemplateEditModal()" 
-            class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400"
-          >
-            キャンセル
-          </button>
-          <button 
-            onclick="saveTemplateSettings()" 
-            class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600"
-          >
-            <i class="fas fa-save mr-2"></i>保存
-          </button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(modal);
-    
-    // Add character count listener
-    document.getElementById('templateEditDescription').addEventListener('input', (e) => {
-      document.getElementById('templateDescCharCount').textContent = `${e.target.value.length} / 500`;
-    });
-  }
-  
-  // Set values
-  document.getElementById('templateEditLabel').value = currentLabel || projectTitle || '';
-  document.getElementById('templateEditDescription').value = currentDescription || '';
-  document.getElementById('templateDescCharCount').textContent = `${(currentDescription || '').length} / 500`;
-  
-  modal.classList.remove('hidden');
-}
-
-function closeTemplateEditModal() {
-  const modal = document.getElementById('templateEditModal');
-  if (modal) {
-    modal.classList.add('hidden');
-  }
-  editingTemplateProjectId = null;
-}
-
-async function saveTemplateSettings() {
-  if (!editingTemplateProjectId || isProcessing) return;
-  
-  const label = document.getElementById('templateEditLabel').value.trim();
-  const description = document.getElementById('templateEditDescription').value.trim();
-  
-  if (!label) {
-    showToast('テンプレート名を入力してください', 'error');
-    return;
-  }
-  
-  isProcessing = true;
-  
-  try {
-    const response = await axios.put(`${API_BASE}/projects/${editingTemplateProjectId}/template`, {
-      is_template: true,
-      template_label: label,
-      template_description: description || null
-    });
-    
-    if (response.data.success) {
-      showToast('テンプレート設定を保存しました', 'success');
-      closeTemplateEditModal();
-      loadProjects();
-    } else {
-      throw new Error(response.data.error?.message || 'Unknown error');
-    }
-    
-  } catch (error) {
-    console.error('Save template settings error:', error);
-    showToast(error.response?.data?.error?.message || 'テンプレート設定の保存に失敗しました', 'error');
-  } finally {
-    isProcessing = false;
-  }
-}
-
-// Edit existing template (superadmin only)
-function editTemplate(projectId, currentLabel, currentDescription) {
-  openTemplateEditModal(projectId, currentLabel, currentDescription, currentLabel);
 }

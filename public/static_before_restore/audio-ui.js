@@ -214,18 +214,6 @@ window.AudioUI = {
     const selectedOption = voiceSelect?.options[voiceSelect.selectedIndex];
     const provider = selectedOption?.dataset?.provider || 'google';
     
-    // F-6: Fish Audio使用時に警告
-    if (provider === 'fish') {
-      const confirmed = confirm(
-        '⚠️ Fish Audio を選択しています。\n\n' +
-        'Fish Audio は読み間違いが多いため、本番運用では Google TTS を推奨します。\n\n' +
-        'Fish Audio で音声生成を続けますか？'
-      );
-      if (!confirmed) {
-        return;
-      }
-    }
-    
     try {
       // Set to generating state immediately
       this.setButtonState(sceneId, 'generating', 0);
