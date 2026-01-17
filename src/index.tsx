@@ -1131,6 +1131,173 @@ app.get('/projects/:id', (c) => {
         </div>
     </div>
 
+    <!-- Phase 2-3: Scene Edit Modal -->
+    <div id="scene-edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto">
+        <div class="min-h-screen px-4 flex items-center justify-center">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl my-8">
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4 rounded-t-xl">
+                    <h2 class="text-2xl font-bold text-white">
+                        <i class="fas fa-edit mr-2"></i>シーン編集
+                    </h2>
+                </div>
+                
+                <!-- Content -->
+                <div class="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+                    <!-- Scene ID (hidden) -->
+                    <input type="hidden" id="edit-scene-id" />
+                    
+                    <!-- Dialogue -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-comment mr-1 text-blue-600"></i>セリフ
+                        </label>
+                        <textarea 
+                            id="edit-dialogue"
+                            rows="4"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            placeholder="セリフを入力..."
+                        ></textarea>
+                    </div>
+                    
+                    <!-- Bullets -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-list mr-1 text-green-600"></i>要点
+                        </label>
+                        <textarea 
+                            id="edit-bullets"
+                            rows="3"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            placeholder="要点を改行区切りで入力..."
+                        ></textarea>
+                    </div>
+                    
+                    <!-- Image Prompt -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-image mr-1 text-purple-600"></i>画像プロンプト
+                        </label>
+                        <textarea 
+                            id="edit-image-prompt"
+                            rows="3"
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            placeholder="画像プロンプトを入力..."
+                        ></textarea>
+                    </div>
+                    
+                    <!-- Character Assignment (Phase 2-3) -->
+                    <div class="border-t pt-6">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">
+                            <i class="fas fa-users mr-2 text-indigo-600"></i>キャラクター割り当て
+                        </h3>
+                        
+                        <!-- Image Characters -->
+                        <div class="mb-4">
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-image mr-1 text-blue-600"></i>画像キャラクター（最大3人）
+                            </label>
+                            <div id="edit-image-characters" class="space-y-2">
+                                <!-- Dynamically populated -->
+                            </div>
+                            <p class="text-xs text-gray-500 mt-1">画像に登場するキャラクターを選択してください</p>
+                        </div>
+                        
+                        <!-- Voice Character -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-microphone mr-1 text-green-600"></i>音声キャラクター（1人）
+                            </label>
+                            <select 
+                                id="edit-voice-character"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                            >
+                                <option value="">-- 音声キャラクターを選択 --</option>
+                                <!-- Dynamically populated -->
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">セリフを喋るキャラクターを選択してください</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Footer -->
+                <div class="bg-gray-50 px-6 py-4 rounded-b-xl flex gap-3 justify-end">
+                    <button 
+                        id="cancel-edit-scene"
+                        class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+                    >
+                        キャンセル
+                    </button>
+                    <button 
+                        id="save-edit-scene"
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                    >
+                        <i class="fas fa-save mr-2"></i>保存
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Phase A-3: Character Library Import Modal -->
+    <div id="library-import-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto">
+        <div class="min-h-screen px-4 flex items-center justify-center">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl my-8">
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-green-600 to-teal-600 px-6 py-4 rounded-t-xl">
+                    <h2 class="text-2xl font-bold text-white">
+                        <i class="fas fa-book mr-2"></i>マイキャラクターライブラリ
+                    </h2>
+                </div>
+                
+                <!-- Content -->
+                <div class="p-6 max-h-[60vh] overflow-y-auto">
+                    <p class="text-sm text-gray-600 mb-4">
+                        ライブラリから追加したいキャラクターを選択してください。
+                    </p>
+                    
+                    <!-- Search -->
+                    <div class="mb-4">
+                        <input 
+                            type="text" 
+                            id="library-search"
+                            placeholder="キャラクター名で検索..."
+                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 text-sm"
+                        />
+                    </div>
+                    
+                    <!-- Character List -->
+                    <div id="library-characters-list" class="space-y-3">
+                        <div class="text-gray-500 text-sm">読み込み中...</div>
+                    </div>
+                    
+                    <!-- Empty state message -->
+                    <div id="library-empty-message" class="hidden text-center py-8">
+                        <i class="fas fa-folder-open text-4xl text-gray-300 mb-3"></i>
+                        <p class="text-gray-500">ライブラリにキャラクターがないか、すべてインポート済みです</p>
+                        <p class="text-sm text-gray-400 mt-2">
+                            「新規作成」ボタンで新しいキャラクターを作成できます
+                        </p>
+                    </div>
+                </div>
+                
+                <!-- Footer -->
+                <div class="bg-gray-50 px-6 py-4 rounded-b-xl flex gap-3 justify-between">
+                    <a href="/library.html" target="_blank" class="text-sm text-green-600 hover:underline flex items-center">
+                        <i class="fas fa-external-link-alt mr-1"></i>
+                        ライブラリを管理
+                    </a>
+                    <button 
+                        id="close-library-modal"
+                        class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+                    >
+                        閉じる
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
         const PROJECT_ID = ${projectId};
