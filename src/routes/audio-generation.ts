@@ -35,7 +35,9 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     if (provider === 'fish' && !c.env.FISH_AUDIO_API_TOKEN) {
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'FISH_AUDIO_API_TOKEN is not set'), 500);
     }
-    if (provider === 'google' && !c.env.GOOGLE_TTS_API_KEY) {
+    // Google TTS can use either GOOGLE_TTS_API_KEY or GEMINI_API_KEY
+    const googleTtsKey = c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY;
+    if (provider === 'google' && !googleTtsKey) {
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'GOOGLE_TTS_API_KEY is not set'), 500);
     }
 
@@ -259,11 +261,19 @@ const VOICE_PRESETS: Record<string, { provider: string; reference_id?: string }>
 };
 
 /**
- * Get Fish Audio reference_id from voice preset
- * Returns null if not found or not a Fish preset
+ * Get Fish Audio reference_id from voice preset or voice ID
+ * Supports:
+ * - Preset name lookup: 'fish-nanamin' -> '71bf4cb71cd44df6aa603d51db8f92ff'
+ * - Direct fish:ID format: 'fish:71bf4cb71cd44df6aa603d51db8f92ff' -> '71bf4cb71cd44df6aa603d51db8f92ff'
  */
 async function getFishReferenceId(voiceId: string): Promise<string | null> {
   try {
+    // Check if voiceId is in format 'fish:REFERENCE_ID'
+    if (voiceId.startsWith('fish:')) {
+      return voiceId.substring(5); // Extract the reference_id after 'fish:'
+    }
+    
+    // Otherwise, look up in presets
     const preset = VOICE_PRESETS[voiceId];
     return preset?.reference_id || null;
   } catch (error) {
@@ -306,12 +316,13 @@ async function generateAndUploadAudio(args: {
 
       bytes = new Uint8Array(fishResult.audio);
     } else {
-      // Google TTS (default)
+      // Google TTS (default) - can use either GOOGLE_TTS_API_KEY or GEMINI_API_KEY
+      const googleTtsKey = env.GOOGLE_TTS_API_KEY || env.GEMINI_API_KEY;
       const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Goog-Api-Key': env.GOOGLE_TTS_API_KEY,
+          'X-Goog-Api-Key': googleTtsKey,
         },
         body: JSON.stringify({
           input: { text },
