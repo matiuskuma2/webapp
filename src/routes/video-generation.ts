@@ -465,6 +465,8 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   ).run();
   
   return c.json({
+    success: true,
+    video_id: videoGenerationId,
     video_generation: {
       id: videoGenerationId,
       scene_id: sceneId,
@@ -505,7 +507,85 @@ videoGeneration.get('/:sceneId/videos', async (c) => {
 });
 
 // ====================================================================
-// GET /api/videos/:videoId/status
+// GET /api/scenes/:sceneId/videos/:videoId/status
+// Frontend polls this endpoint for status updates
+// ====================================================================
+
+videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
+  const videoId = parseInt(c.req.param('videoId'), 10);
+  if (isNaN(videoId)) {
+    return c.json({ error: { code: 'INVALID_VIDEO_ID', message: 'Invalid video ID' } }, 400);
+  }
+  
+  const video = await c.env.DB.prepare(`
+    SELECT id, scene_id, status, job_id, r2_url, error_message, updated_at
+    FROM video_generations WHERE id = ?
+  `).bind(videoId).first<{
+    id: number;
+    scene_id: number;
+    status: string;
+    job_id: string | null;
+    r2_url: string | null;
+    error_message: string | null;
+    updated_at: string;
+  }>();
+  
+  if (!video) {
+    return c.json({ error: { code: 'VIDEO_NOT_FOUND', message: 'Video generation not found' } }, 404);
+  }
+  
+  // generating中 または completed（presigned URL refresh）でjob_idがある場合はAWSに問い合わせ
+  if ((video.status === 'generating' || video.status === 'completed') && video.job_id) {
+    const awsClient = createAwsVideoClient(c.env);
+    if (awsClient) {
+      const awsStatus = await awsClient.getStatus(video.job_id);
+      
+      if (awsStatus.success && awsStatus.job) {
+        const jobStatus = awsStatus.job.status;
+        
+        if (jobStatus === 'completed' && awsStatus.job.presigned_url) {
+          await c.env.DB.prepare(`
+            UPDATE video_generations 
+            SET status = 'completed', r2_url = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(awsStatus.job.presigned_url, videoId).run();
+          
+          return c.json({
+            status: 'completed',
+            r2_url: awsStatus.job.presigned_url,
+            progress_stage: 'completed',
+          });
+        } else if (jobStatus === 'failed') {
+          await c.env.DB.prepare(`
+            UPDATE video_generations 
+            SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(awsStatus.job.error_message || 'Generation failed', videoId).run();
+          
+          return c.json({
+            status: 'failed',
+            error: { message: awsStatus.job.error_message || 'Generation failed' },
+          });
+        } else {
+          // Still processing
+          return c.json({
+            status: video.status,
+            progress_stage: awsStatus.job.progress_stage || 'processing',
+          });
+        }
+      }
+    }
+  }
+  
+  return c.json({
+    status: video.status,
+    r2_url: video.r2_url,
+    error: video.error_message ? { message: video.error_message } : undefined,
+  });
+});
+
+// ====================================================================
+// GET /api/videos/:videoId/status (Legacy endpoint)
 // ====================================================================
 
 videoGeneration.get('/videos/:videoId/status', async (c) => {
