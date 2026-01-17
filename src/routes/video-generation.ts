@@ -52,33 +52,63 @@ async function getEncryptedApiKey(
 
 // ====================================================================
 // Helper: Get and decrypt user's API key
+// Returns: { key: string } on success, { error: string } on failure
 // ====================================================================
+
+type ApiKeyResult = { key: string } | { error: string };
 
 async function getUserApiKey(
   db: D1Database,
   userId: number,
   provider: string,
   encryptionKey?: string
-): Promise<string | null> {
+): Promise<ApiKeyResult> {
   const encryptedKey = await getEncryptedApiKey(db, userId, provider);
-  console.log(`[getUserApiKey] userId=${userId}, provider=${provider}, encryptedKey=${encryptedKey ? 'found' : 'not found'}, encryptionKey=${encryptionKey ? `length=${encryptionKey.length}` : 'not set'}`);
   
-  if (!encryptedKey) return null;
+  if (!encryptedKey) {
+    return { error: `No API key found for provider '${provider}'` };
+  }
   
-  // If no encryption key, assume the key is stored in plaintext (for backward compat)
+  // Encryption key is required for decryption
   if (!encryptionKey) {
-    console.log('[getUserApiKey] No encryption key, returning encrypted key as-is');
-    return encryptedKey;
+    return { error: 'ENCRYPTION_KEY not configured on server' };
   }
   
   try {
     const decrypted = await decryptApiKey(encryptedKey, encryptionKey);
-    console.log(`[getUserApiKey] Decryption successful, key length=${decrypted.length}`);
-    return decrypted;
+    return { key: decrypted };
   } catch (error) {
-    console.error('[getUserApiKey] Failed to decrypt API key:', error);
-    return null;
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    return { error: `Failed to decrypt API key: ${message}` };
   }
+}
+
+// ====================================================================
+// Helper: Determine billing source (user or sponsor)
+// ====================================================================
+
+async function determineBillingSource(
+  db: D1Database,
+  projectId: number,
+  userId: number
+): Promise<{ billingSource: BillingSource; sponsorUserId: number | null }> {
+  // Check if project has a sponsor configured
+  const sponsor = await db.prepare(`
+    SELECT ss.value as sponsor_user_id 
+    FROM system_settings ss
+    WHERE ss.key = 'default_sponsor_user_id'
+  `).first<{ sponsor_user_id: string }>();
+  
+  // TODO: Per-project sponsor設定、ユーザーのsponsor eligibility確認
+  // 現時点では system_settings.default_sponsor_user_id があればsponsor
+  if (sponsor?.sponsor_user_id) {
+    return {
+      billingSource: 'sponsor',
+      sponsorUserId: parseInt(sponsor.sponsor_user_id, 10),
+    };
+  }
+  
+  return { billingSource: 'user', sponsorUserId: null };
 }
 
 // ====================================================================
@@ -186,11 +216,14 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
   const videoEngine: VideoEngine = body.video_engine || 
     (body.model?.includes('veo-3') ? 'veo3' : 'veo2');
   
-  // 6. 認証情報取得
-  // TODO: sponsor判定（現時点ではユーザー自身のキーを使用）
-  const billingSource: BillingSource = 'user';
+  // 6. 認証情報取得 - billing_source判定と鍵取得
+  const { billingSource, sponsorUserId } = await determineBillingSource(
+    c.env.DB, scene.project_id, scene.owner_user_id
+  );
   const executorUserId = scene.owner_user_id;
-  const billingUserId = scene.owner_user_id;
+  const billingUserId = billingSource === 'sponsor' && sponsorUserId 
+    ? sponsorUserId 
+    : scene.owner_user_id;
   
   let apiKey: string | null = null;
   let vertexSaJson: string | null = null;
@@ -200,39 +233,58 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
   const encryptionKey = c.env.ENCRYPTION_KEY;
   
   if (videoEngine === 'veo2') {
-    // Try user's key first ('gemini' or 'google' provider)
-    apiKey = await getUserApiKey(c.env.DB, executorUserId, 'gemini', encryptionKey);
-    if (!apiKey) {
-      apiKey = await getUserApiKey(c.env.DB, executorUserId, 'google', encryptionKey);
-    }
-    
-    // Fallback to system GEMINI_API_KEY if user key not available/decryption failed
-    if (!apiKey && c.env.GEMINI_API_KEY) {
-      console.log('[generate-video] Using system GEMINI_API_KEY as fallback');
+    if (billingSource === 'sponsor') {
+      // Sponsor mode: use system GEMINI_API_KEY
+      if (!c.env.GEMINI_API_KEY) {
+        return c.json({
+          error: {
+            code: 'SPONSOR_KEY_NOT_CONFIGURED',
+            message: 'Sponsor API key not configured on server.',
+          },
+        }, 500);
+      }
       apiKey = c.env.GEMINI_API_KEY;
-    }
-    
-    if (!apiKey) {
-      return c.json({
-        error: {
-          code: 'MISSING_GEMINI_KEY',
-          message: 'Gemini API key not configured. Please add it in settings.',
-          redirect: '/settings?focus=gemini',
-        },
-      }, 400);
+    } else {
+      // User mode: user's own key required, decryption failure is error
+      // Provider: 'google' for Veo2 (統一)
+      const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'google', encryptionKey);
+      
+      if ('error' in keyResult) {
+        return c.json({
+          error: {
+            code: 'USER_KEY_ERROR',
+            message: keyResult.error,
+            redirect: '/settings?focus=google',
+          },
+        }, 400);
+      }
+      apiKey = keyResult.key;
     }
   } else {
     // Veo3: Vertex SA JSON
-    vertexSaJson = await getUserApiKey(c.env.DB, executorUserId, 'vertex', encryptionKey);
-    if (!vertexSaJson) {
+    if (billingSource === 'sponsor') {
+      // TODO: Sponsor用のVertex SA JSONをsystem_settingsから取得
       return c.json({
         error: {
-          code: 'MISSING_VERTEX_SA',
-          message: 'Vertex AI Service Account not configured. Please add it in settings.',
+          code: 'SPONSOR_VERTEX_NOT_IMPLEMENTED',
+          message: 'Sponsor mode for Veo3 not yet implemented.',
+        },
+      }, 501);
+    }
+    
+    // User mode: user's own Vertex SA JSON required
+    const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', encryptionKey);
+    
+    if ('error' in keyResult) {
+      return c.json({
+        error: {
+          code: 'USER_KEY_ERROR',
+          message: keyResult.error,
           redirect: '/settings?focus=vertex',
         },
       }, 400);
     }
+    vertexSaJson = keyResult.key;
     
     // Parse SA JSON to get project_id
     try {
