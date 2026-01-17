@@ -103,7 +103,7 @@ export const settingsHtml = `
                     <p class="font-semibold text-blue-800 mb-2">📌 Veo2 と Veo3 の違い</p>
                     <ul class="text-xs text-blue-700 space-y-1 ml-4 list-disc">
                         <li><strong>Veo2</strong>: Google AI Studio のAPIキー（無料枠あり、手軽）</li>
-                        <li><strong>Veo3</strong>: Google Cloud Vertex AI（高品質、Service Account 必要）</li>
+                        <li><strong>Veo3</strong>: Vertex AI のAPIキー（高品質、GCP プロジェクト必要）</li>
                     </ul>
                 </div>
                 <p class="text-xs text-gray-500">
@@ -249,7 +249,7 @@ export const settingsHtml = `
         
         // 仕様: provider は 'google'（Veo2）と 'vertex'（Veo3）
         // google: Google AI Studio (https://aistudio.google.com/) のAPIキー
-        // vertex: Google Cloud Console で作成した Service Account JSON
+        // vertex: Vertex AI Studio (https://console.cloud.google.com/vertex-ai/studio/settings/api-keys) のAPIキー
         const PROVIDERS = [
             { 
                 provider: 'google', 
@@ -262,11 +262,10 @@ export const settingsHtml = `
             { 
                 provider: 'vertex', 
                 name: '🚀 Veo3 (Vertex AI)', 
-                description: 'Google Cloud の Service Account JSON で高品質動画生成',
-                placeholder: '{"type": "service_account", "project_id": "...", ...}',
-                helpUrl: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
-                helpText: 'GCP で Service Account を作成し、JSON キーをダウンロード',
-                isJson: true
+                description: 'Vertex AI のAPIキーで高品質動画生成',
+                placeholder: 'AQ.Ab8RN...',
+                helpUrl: 'https://console.cloud.google.com/vertex-ai/studio/settings/api-keys',
+                helpText: 'Vertex AI Studio > 設定 > APIキー で取得'
             }
         ];
         
@@ -364,23 +363,14 @@ export const settingsHtml = `
                         \` : ''}
                         
                         <div class="flex gap-2 flex-wrap">
-                            \${p.isJson ? \`
-                            <textarea 
-                                id="apiKey-\${p.provider}"
-                                placeholder="\${isConfigured ? '新しいJSONで上書き...' : p.placeholder}"
-                                rows="3"
-                                class="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
-                            ></textarea>
-                            \` : \`
                             <input 
                                 type="password" 
                                 id="apiKey-\${p.provider}"
                                 placeholder="\${isConfigured ? '新しいキーで上書き...' : p.placeholder}"
                                 class="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                             />
-                            \`}
                             <button 
-                                onclick="saveApiKey('\${p.provider}', \${p.isJson || false})"
+                                onclick="saveApiKey('\${p.provider}')"
                                 class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold"
                             >
                                 <i class="fas fa-save mr-1"></i>保存
@@ -410,32 +400,18 @@ export const settingsHtml = `
             }
         }
         
-        async function saveApiKey(provider, isJson = false) {
+        async function saveApiKey(provider) {
             const input = document.getElementById(\`apiKey-\${provider}\`);
             const apiKey = input.value.trim();
             
             if (!apiKey) {
-                showApiKeyMessage(provider, isJson ? 'JSONを入力してください' : 'APIキーを入力してください', true);
+                showApiKeyMessage(provider, 'APIキーを入力してください', true);
                 return;
-            }
-            
-            // JSON形式の場合はバリデーション
-            if (isJson) {
-                try {
-                    const parsed = JSON.parse(apiKey);
-                    if (!parsed.type || !parsed.project_id) {
-                        showApiKeyMessage(provider, 'Service Account JSON には "type" と "project_id" が必要です', true);
-                        return;
-                    }
-                } catch (e) {
-                    showApiKeyMessage(provider, 'JSONの形式が正しくありません', true);
-                    return;
-                }
             }
             
             try {
                 await axios.put(\`/api/user/api-keys/\${provider}\`, { api_key: apiKey });
-                showApiKeyMessage(provider, isJson ? 'Service Account JSON を保存しました' : 'APIキーを保存しました');
+                showApiKeyMessage(provider, 'APIキーを保存しました');
                 input.value = '';
                 loadApiKeys(); // Refresh status
             } catch (err) {

@@ -400,29 +400,39 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       apiKey = keyResult.key;
     }
   } else {
-    // Veo3: Vertex SA JSON
+    // Veo3: Vertex AI API Key
+    let vertexApiKey: string | null = null;
+    
     if (isSuperadmin || billingSource === 'sponsor') {
-      // Superadmin: Try user's own Vertex key first, then system
+      // Superadmin/Sponsor: Try user's own Vertex key first
       if (isSuperadmin && loggedInUserId) {
         const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'vertex', keyRing);
         if ('key' in keyResult) {
-          vertexSaJson = keyResult.key;
+          vertexApiKey = keyResult.key;
         }
       }
       
-      if (!vertexSaJson) {
-        // TODO: Sponsor用のVertex SA JSONをsystem_settingsから取得
+      // If superadmin has no key, try sponsor's key
+      if (!vertexApiKey && sponsorUserId) {
+        const keyResult = await getUserApiKey(c.env.DB, sponsorUserId, 'vertex', keyRing);
+        if ('key' in keyResult) {
+          vertexApiKey = keyResult.key;
+        }
+      }
+      
+      if (!vertexApiKey) {
         return c.json({
           error: {
-            code: 'SPONSOR_VERTEX_NOT_IMPLEMENTED',
+            code: 'SPONSOR_VERTEX_NOT_CONFIGURED',
             message: isSuperadmin
               ? 'Vertex APIキーが設定されていません。設定画面でVertex APIキーを設定してください。'
-              : 'Sponsor mode for Veo3 not yet implemented.',
+              : 'スポンサーのVertex APIキーが設定されていません。',
+            redirect: '/settings?focus=vertex',
           },
-        }, 501);
+        }, 400);
       }
     } else {
-      // User mode: user's own Vertex SA JSON required
+      // User mode: user's own Vertex API key required
       const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', keyRing);
       
       if ('error' in keyResult) {
@@ -434,18 +444,15 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
           },
         }, 400);
       }
-      vertexSaJson = keyResult.key;
+      vertexApiKey = keyResult.key;
     }
     
-    // Parse SA JSON to get project_id
-    try {
-      const sa = JSON.parse(vertexSaJson);
-      vertexProjectId = sa.project_id;
-    } catch {
-      return c.json({
-        error: { code: 'INVALID_VERTEX_SA', message: 'Invalid Vertex SA JSON format' },
-      }, 400);
-    }
+    // Store Vertex API key for AWS Worker
+    // Note: vertexSaJson is reused to store API key for backward compatibility with AWS Worker
+    vertexSaJson = vertexApiKey;
+    
+    // Project ID from system settings (required for Vertex AI endpoint URL)
+    vertexProjectId = await getSystemSetting(c.env.DB, 'vertex_project_id') || null;
     
     // Location from system settings or default
     vertexLocation = await getSystemSetting(c.env.DB, 'vertex_default_location') || 'us-central1';

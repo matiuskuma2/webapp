@@ -3,6 +3,10 @@
  * 
  * Calls Vertex AI Video Generation API (Veo3) using predictLongRunning pattern.
  * 
+ * Supports TWO authentication methods:
+ * 1. API Key (recommended): Simple key from Vertex AI Studio > Settings > API Keys
+ * 2. Service Account JSON (legacy): OAuth-based authentication
+ * 
  * Flow:
  * 1. Start generation with predictLongRunning → returns operation name
  * 2. Poll operations.get until done
@@ -16,6 +20,19 @@
 import { getVertexAccessToken } from './vertex-auth';
 import { logger } from '../utils/logger';
 import type { Veo3GenerateInput, Veo3GenerationResult } from '../types';
+
+// =============================================================================
+// Auth Type Detection
+// =============================================================================
+
+/**
+ * Detect if the provided credential is an API key or Service Account JSON
+ */
+function isApiKey(credential: string): boolean {
+  // API keys are typically alphanumeric strings starting with specific prefixes
+  // Service Account JSON always starts with '{'
+  return !credential.trim().startsWith('{');
+}
 
 // =============================================================================
 // Constants
@@ -42,18 +59,64 @@ function getVertexEndpoint(location: string): string {
 /**
  * Start Veo3 video generation (long-running operation)
  * 
+ * Supports both API key and Service Account JSON authentication.
+ * 
  * @returns Operation name for polling
  */
 export async function startVeo3Generation(input: Veo3GenerateInput): Promise<{
   operationName: string;
   projectId: string;
+  authMethod: 'api_key' | 'service_account';
 }> {
-  const { accessToken, projectId: saProjectId } = await getVertexAccessToken(input.serviceAccountJson);
-  const projectId = input.projectId || saProjectId;
+  const useApiKey = isApiKey(input.serviceAccountJson);
+  let authHeader: Record<string, string>;
+  let projectId: string;
+  let authMethod: 'api_key' | 'service_account';
+
+  if (useApiKey) {
+    // API Key authentication - simpler, recommended
+    authMethod = 'api_key';
+    projectId = input.projectId || '';
+    
+    if (!projectId) {
+      throw new Error('Project ID is required when using API key authentication');
+    }
+    
+    // API key is passed as query parameter, not header
+    authHeader = {
+      'Content-Type': 'application/json',
+    };
+    
+    logger.info('Using API key authentication for Veo3', {
+      projectId,
+      location: input.location,
+    });
+  } else {
+    // Service Account JSON authentication - legacy
+    authMethod = 'service_account';
+    const { accessToken, projectId: saProjectId } = await getVertexAccessToken(input.serviceAccountJson);
+    projectId = input.projectId || saProjectId;
+    
+    authHeader = {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+    };
+    
+    logger.info('Using Service Account authentication for Veo3', {
+      projectId,
+      location: input.location,
+    });
+  }
+
   const endpoint = getVertexEndpoint(input.location);
 
   // Vertex AI predictLongRunning endpoint for video generation
-  const url = `${endpoint}/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(input.location)}/publishers/google/models/${encodeURIComponent(input.model)}:predictLongRunning`;
+  let url = `${endpoint}/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(input.location)}/publishers/google/models/${encodeURIComponent(input.model)}:predictLongRunning`;
+  
+  // Add API key as query parameter if using API key auth
+  if (useApiKey) {
+    url += `?key=${encodeURIComponent(input.serviceAccountJson)}`;
+  }
 
   logger.info('Starting Veo3 generation', {
     projectId,
@@ -62,6 +125,7 @@ export async function startVeo3Generation(input: Veo3GenerateInput): Promise<{
     promptPreview: input.prompt.substring(0, 50),
     durationSec: input.durationSec,
     imageMimeType: input.imageMimeType,
+    authMethod,
   });
 
   // Build request body following Vertex AI video generation schema
@@ -85,10 +149,7 @@ export async function startVeo3Generation(input: Veo3GenerateInput): Promise<{
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-    },
+    headers: authHeader,
     body: JSON.stringify(requestBody),
   });
 
@@ -116,31 +177,43 @@ export async function startVeo3Generation(input: Veo3GenerateInput): Promise<{
   return {
     operationName: json.name,
     projectId,
+    authMethod,
   };
 }
 
 /**
  * Poll Veo3 operation until completion
  * 
- * @param serviceAccountJson - SA JSON for auth (needed for each poll)
+ * Supports both API key and Service Account JSON authentication.
+ * 
+ * @param credential - API key or SA JSON for auth (needed for each poll)
  * @param location - GCP region
  * @param operationName - Operation name from startVeo3Generation
  * @param timeoutMs - Maximum time to wait (default: 10 minutes)
  * @param intervalMs - Polling interval (default: 5 seconds)
  */
 export async function pollVeo3Operation(
-  serviceAccountJson: string,
+  credential: string,
   location: string,
   operationName: string,
   timeoutMs: number = POLL_TIMEOUT_MS,
   intervalMs: number = POLL_INTERVAL_MS
 ): Promise<Veo3GenerationResult> {
-  const { accessToken } = await getVertexAccessToken(serviceAccountJson);
+  const useApiKey = isApiKey(credential);
   const endpoint = getVertexEndpoint(location);
 
   // Operation name format: projects/.../locations/.../operations/...
   // We need to use the full name as returned
-  const url = `${endpoint}/v1/${operationName}`;
+  let baseUrl = `${endpoint}/v1/${operationName}`;
+  
+  let authHeader: Record<string, string> = {};
+  
+  if (useApiKey) {
+    baseUrl += `?key=${encodeURIComponent(credential)}`;
+  } else {
+    const { accessToken } = await getVertexAccessToken(credential);
+    authHeader = { 'Authorization': `Bearer ${accessToken}` };
+  }
 
   const startTime = Date.now();
   let pollCount = 0;
@@ -149,16 +222,25 @@ export async function pollVeo3Operation(
     operationName,
     timeoutMs,
     intervalMs,
+    authMethod: useApiKey ? 'api_key' : 'service_account',
   });
 
   while (Date.now() - startTime < timeoutMs) {
     pollCount++;
 
+    // Refresh access token for SA auth on each poll (tokens expire)
+    let url = baseUrl;
+    let headers = authHeader;
+    
+    if (!useApiKey) {
+      // Refresh token for long-running operations
+      const { accessToken } = await getVertexAccessToken(credential);
+      headers = { 'Authorization': `Bearer ${accessToken}` };
+    }
+
     const res = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${accessToken}`,
-      },
+      headers,
     });
 
     if (!res.ok) {
