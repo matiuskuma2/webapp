@@ -411,12 +411,10 @@ app.get('/', (c) => {
 })
 
 // Project Editor route
-
 app.get('/projects/:id', (c) => {
   const projectId = c.req.param('id')
   
   return c.html(`
-
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -700,34 +698,6 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Character Speaker Guidelines -->
-                <div class="mt-6 p-6 bg-amber-50 border-2 border-amber-300 rounded-lg">
-                    <h3 class="font-semibold text-gray-800 mb-3 flex items-center">
-                        <i class="fas fa-user-tag mr-2 text-amber-600"></i>
-                        📝 キャラクター情報の記載について（重要）
-                    </h3>
-                    <div class="space-y-3 text-sm text-gray-700">
-                        <p class="leading-relaxed">
-                            <strong class="text-amber-700">シナリオにキャラクター名（話者情報）を含めると、自動的にキャラクターが割り当てられます。</strong>
-                        </p>
-                        <div class="bg-white p-4 rounded border border-amber-200">
-                            <p class="font-semibold text-gray-800 mb-2">【推奨フォーマット】</p>
-                            <pre class="text-xs text-gray-700 font-mono bg-gray-50 p-2 rounded">太郎: 「おはよう、花子！」
-花子: 「おはよう、太郎！」
-ナレーター: 二人は笑顔で挨拶を交わした。</pre>
-                        </div>
-                        <div class="space-y-1">
-                            <p><i class="fas fa-check-circle text-green-600 mr-1"></i> キャラクター名は事前に <strong>Styles &gt; Characters</strong> で登録してください</p>
-                            <p><i class="fas fa-info-circle text-blue-600 mr-1"></i> 話者情報がない場合、AIが推測しますが精度が下がります</p>
-                            <p><i class="fas fa-edit text-purple-600 mr-1"></i> 後から <strong>Builder</strong> タブで手動修正も可能です</p>
-                        </div>
-                        <p class="text-xs text-amber-700 mt-3">
-                            <i class="fas fa-exclamation-triangle mr-1"></i>
-                            <strong>適用範囲:</strong> マイク録音、ファイルアップロード、テキスト貼り付けすべてに適用されます
-                        </p>
-                    </div>
-                </div>
-                
                 <!-- Next Step Guidance -->
                 <div id="nextStepGuide" class="mt-6 p-4 bg-blue-50 border-l-4 border-blue-600 rounded hidden">
                     <p class="text-sm text-gray-700">
@@ -763,42 +733,6 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Character Pre-Registration Warning (Phase F-5) -->
-                <div id="characterWarningSection" class="mb-6 p-4 bg-amber-50 rounded-lg border-2 border-amber-400 hidden">
-                    <div class="flex items-start gap-4">
-                        <i class="fas fa-exclamation-triangle text-amber-600 text-2xl flex-shrink-0 mt-1"></i>
-                        <div class="flex-1">
-                            <h3 class="font-bold text-amber-800 mb-2">
-                                <i class="fas fa-users mr-2"></i>キャラクター事前登録のお勧め
-                            </h3>
-                            <p class="text-sm text-amber-700 mb-3">
-                                シーン分割前にキャラクターを登録しておくと、<strong>自動割り当ての精度が大幅に向上</strong>します。
-                            </p>
-                            <div class="bg-white p-3 rounded border border-amber-300 mb-3">
-                                <p class="text-xs text-gray-700 mb-2">
-                                    <strong>推奨手順:</strong>
-                                </p>
-                                <ol class="text-xs text-gray-600 space-y-1 list-decimal list-inside">
-                                    <li><strong>Styles</strong>タブ → <strong>Characters</strong>セクションでキャラを登録</li>
-                                    <li>参照画像を設定すると外見の一貫性が向上</li>
-                                    <li>エイリアス（別名）を設定すると検出精度が向上</li>
-                                </ol>
-                            </div>
-                            <div class="flex flex-wrap gap-2">
-                                <button 
-                                    onclick="switchTab('styles')"
-                                    class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-semibold"
-                                >
-                                    <i class="fas fa-users mr-2"></i>Stylesでキャラ登録
-                                </button>
-                                <span id="characterCountBadge" class="inline-flex items-center px-3 py-2 bg-gray-100 text-gray-700 rounded-lg text-sm">
-                                    <i class="fas fa-user-check mr-2"></i>登録済み: <span id="registeredCharacterCount">0</span>人
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
                 <!-- Format Button -->
                 <div id="formatSection" class="mb-6 p-4 bg-purple-50 rounded-lg border-l-4 border-purple-600 hidden">
                     <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
@@ -816,51 +750,19 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Reset to Input Section (Phase F-3) -->
-                <div id="resetToInputSection" class="mb-6 p-4 bg-orange-50 rounded-lg border-l-4 border-orange-500 hidden">
-                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                        <div>
-                            <h3 class="font-semibold text-gray-800 mb-1">
-                                <i class="fas fa-undo mr-2 text-orange-600"></i>入力からやり直す
-                            </h3>
-                            <p class="text-sm text-gray-600">
-                                シーン・画像・音声を削除し、入力テキストから再分割します。<br>
-                                <span class="text-orange-700">※キャラクター設定・ワールド設定・スタイル設定は保持されます</span>
-                            </p>
-                        </div>
-                        <button 
-                            id="resetToInputBtn"
-                            onclick="showResetToInputModal()"
-                            class="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-semibold whitespace-nowrap touch-manipulation"
-                        >
-                            <i class="fas fa-undo mr-2"></i>やり直す
-                        </button>
-                    </div>
-                </div>
-                
                 <!-- Scenes Table -->
                 <div id="scenesSection" class="hidden">
                     <div class="flex items-center justify-between mb-4">
                         <h3 class="text-lg font-semibold text-gray-800">
                             シーン一覧（<span id="scenesCount">0</span>件）
                         </h3>
-                        <div class="flex gap-2">
-                            <button 
-                                id="resetToInputBtnSmall"
-                                onclick="showResetToInputModal()"
-                                class="px-4 py-2 bg-orange-100 text-orange-700 rounded-lg hover:bg-orange-200 transition-colors font-semibold touch-manipulation"
-                                title="入力からやり直す"
-                            >
-                                <i class="fas fa-undo mr-1"></i>やり直す
-                            </button>
-                            <button 
-                                id="goToBuilderBtn"
-                                onclick="goToBuilder()"
-                                class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation hidden"
-                            >
-                                <i class="fas fa-arrow-right mr-2"></i>Builderへ進む
-                            </button>
-                        </div>
+                        <button 
+                            id="goToBuilderBtn"
+                            onclick="goToBuilder()"
+                            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold touch-manipulation hidden"
+                        >
+                            <i class="fas fa-arrow-right mr-2"></i>Builderへ進む
+                        </button>
                     </div>
                     
                     <div id="scenesList" class="space-y-4">
@@ -882,47 +784,14 @@ app.get('/projects/:id', (c) => {
                     制作ボード（Builder）
                 </h2>
                 
-                <!-- Top Action Bar (Phase F-5: Improved workflow order) -->
+                <!-- Top Action Bar -->
                 <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
-                    <!-- Workflow Guide -->
-                    <div class="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
-                        <p class="text-sm text-blue-800">
-                            <i class="fas fa-info-circle mr-2"></i>
-                            <strong>推奨ワークフロー:</strong>
-                            ① キャラ割り当て → ② スタイル設定 → ③ 画像生成
-                        </p>
-                    </div>
-                    
-                    <!-- Step 1: Character Auto-Assign -->
-                    <div class="mb-4 pb-4 border-b border-gray-300">
-                        <div class="flex items-center justify-between">
-                            <div>
-                                <label class="block text-sm font-semibold text-gray-700 mb-1">
-                                    <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-blue-600 text-white text-xs mr-2">1</span>
-                                    <i class="fas fa-users mr-1 text-blue-600"></i>キャラクター自動割り当て
-                                </label>
-                                <p class="text-xs text-gray-500 ml-7">各シーンのセリフから登場キャラクターを自動判定</p>
-                            </div>
-                            <button id="btnAutoAssignRerun"
-                                class="px-4 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors whitespace-nowrap">
-                                <i class="fas fa-sync-alt mr-2"></i>
-                                Auto-Assign 実行
-                            </button>
-                        </div>
-                        <p class="text-xs text-amber-600 mt-2 ml-7">
-                            <i class="fas fa-lightbulb mr-1"></i>
-                            キャラクターを事前登録すると割り当て精度が向上します
-                            <button onclick="switchTab('styles')" class="underline ml-1">Stylesで登録</button>
-                        </p>
-                    </div>
-                    
-                    <!-- Step 2: Bulk Style Selection -->
+                    <!-- Bulk Style Selection -->
                     <div class="mb-4 pb-4 border-b border-gray-300">
                         <label class="block text-sm font-semibold text-gray-700 mb-2">
-                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-purple-600 text-white text-xs mr-2">2</span>
                             <i class="fas fa-palette mr-1 text-purple-600"></i>一括スタイル設定
                         </label>
-                        <div class="flex flex-col sm:flex-row gap-2 ml-7">
+                        <div class="flex gap-2">
                             <select 
                                 id="bulkStyleSelector"
                                 class="flex-1 px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:ring-2 focus:ring-purple-200 text-sm"
@@ -936,20 +805,16 @@ app.get('/projects/:id', (c) => {
                                 <i class="fas fa-check mr-2"></i>全シーンに適用
                             </button>
                         </div>
-                        <p class="text-xs text-gray-500 mt-1 ml-7">すべてのシーンに同じスタイルを一括設定できます</p>
+                        <p class="text-xs text-gray-500 mt-1">すべてのシーンに同じスタイルを一括設定できます</p>
                     </div>
                     
-                    <!-- Step 3: Image Generation -->
-                    <div class="mb-4 pb-4 border-b border-gray-300">
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">
-                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-green-600 text-white text-xs mr-2">3</span>
-                            <i class="fas fa-image mr-1 text-green-600"></i>画像生成
-                        </label>
-                        <div class="flex flex-wrap gap-2 ml-7">
+                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+                        <!-- Bulk Generation Buttons -->
+                        <div class="flex flex-wrap gap-2">
                             <button 
                                 id="generateAllImagesBtn"
                                 onclick="generateBulkImages('all')"
-                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation"
+                                class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold touch-manipulation"
                             >
                                 <i class="fas fa-magic mr-2"></i>全画像生成
                             </button>
@@ -967,14 +832,6 @@ app.get('/projects/:id', (c) => {
                             >
                                 <i class="fas fa-redo mr-2"></i>失敗のみ
                             </button>
-                        </div>
-                        <p class="text-xs text-gray-500 mt-1 ml-7">キャラクター参照画像が設定されていると一貫性が向上します</p>
-                    </div>
-                    
-                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                        <!-- Status Summary -->
-                        <div id="builderStatusSummary" class="text-sm text-gray-600">
-                            <!-- Will be populated by JS -->
                         </div>
                         
                         <!-- Export Navigation -->
@@ -1117,7 +974,7 @@ app.get('/projects/:id', (c) => {
                 </div>
             </div>
 
-            <!-- Video Build Tab (Phase B-3) -->
+            <!-- Video Build Tab -->
             <div id="contentVideoBuild" class="hidden">
                 <h2 class="text-xl font-bold text-gray-800 mb-6">
                     <i class="fas fa-film mr-2 text-purple-600"></i>
@@ -1257,129 +1114,8 @@ app.get('/projects/:id', (c) => {
             <div id="contentStyles" class="hidden">
                 <h2 class="text-xl font-bold text-gray-800 mb-6">
                     <i class="fas fa-palette mr-2 text-purple-600"></i>
-                    スタイル・シーン・キャラクター設定
+                    スタイル設定
                 </h2>
-                
-                <!-- Phase X-5: World & Characters Panel (moved from Builder) -->
-                <div id="world-characters-panel-styles" class="border-2 border-gray-200 rounded-lg p-6 bg-white mb-6">
-                    <div class="space-y-6">
-                        <!-- Scene Split Settings Section -->
-                        <div>
-                            <h2 class="text-lg font-bold text-gray-800 mb-4">
-                                <i class="fas fa-cut mr-2 text-indigo-600"></i>
-                                Scene Split Settings
-                            </h2>
-                            <p class="text-sm text-gray-600 mb-4">
-                                シーン分割の設定を行います。<strong>Format実行前</strong>に設定してください。
-                            </p>
-                            
-                            <div class="bg-gray-50 rounded-lg p-4 space-y-4">
-                                <!-- Target Scene Count -->
-                                <div>
-                                    <label for="targetSceneCount" class="block text-sm font-medium text-gray-700 mb-2">
-                                        Target Scene Count
-                                    </label>
-                                    <div class="flex flex-wrap items-center gap-2 mb-2">
-                                        <button data-preset="15" class="split-preset px-3 py-1 rounded bg-gray-200 hover:bg-blue-500 hover:text-white text-sm font-medium transition-colors">15</button>
-                                        <button data-preset="20" class="split-preset px-3 py-1 rounded bg-blue-500 text-white text-sm font-medium">20</button>
-                                        <button data-preset="30" class="split-preset px-3 py-1 rounded bg-gray-200 hover:bg-blue-500 hover:text-white text-sm font-medium transition-colors">30</button>
-                                        <button data-preset="45" class="split-preset px-3 py-1 rounded bg-gray-200 hover:bg-blue-500 hover:text-white text-sm font-medium transition-colors">45</button>
-                                        <button data-preset="60" class="split-preset px-3 py-1 rounded bg-gray-200 hover:bg-blue-500 hover:text-white text-sm font-medium transition-colors border-2 border-orange-300" title="長文向け（10,000字以上推奨）">60</button>
-                                        <button data-preset="100" class="split-preset px-3 py-1 rounded bg-gray-200 hover:bg-blue-500 hover:text-white text-sm font-medium transition-colors border-2 border-orange-300" title="超長文向け（15,000字以上推奨）">100</button>
-                                        <span class="text-gray-500 mx-2">or</span>
-                                        <input type="number" id="targetSceneCount" 
-                                            class="w-20 px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500"
-                                            min="5" max="200" value="20">
-                                    </div>
-                                    <p class="text-xs text-gray-500">
-                                        ⚠️ 目標値です（必ずこの数にはなりません）。プリセットクリックで自動調整されます。
-                                    </p>
-                                    <p class="text-xs text-amber-600 mt-1">
-                                        💡 <strong>入力が短い場合は自動的に下限（5シーン程度）になります。</strong>より細かく分割したい場合は、入力テキストを増やしてください。
-                                    </p>
-                                    <p class="text-xs text-orange-600 mt-1">
-                                        🔶 <strong>60/100シーンは長文向け</strong>（10,000字以上推奨）。短い入力では期待した数になりません。
-                                    </p>
-                                </div>
-
-                                <!-- Pacing -->
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">
-                                        Pacing
-                                    </label>
-                                    <div class="flex items-center gap-2">
-                                        <button data-pacing="fast" class="pacing-btn px-3 py-1 rounded bg-gray-200 hover:bg-green-500 hover:text-white text-sm font-medium transition-colors">Fast</button>
-                                        <button data-pacing="normal" class="pacing-btn px-3 py-1 rounded bg-green-500 text-white text-sm font-medium">Normal</button>
-                                        <button data-pacing="slow" class="pacing-btn px-3 py-1 rounded bg-gray-200 hover:bg-green-500 hover:text-white text-sm font-medium transition-colors">Slow</button>
-                                    </div>
-                                    <p class="text-xs text-gray-500 mt-1">Fast: テンポ重視 / Normal: バランス / Slow: 詳細重視</p>
-                                </div>
-
-                                <!-- Advanced Settings (collapsed) -->
-                                <details class="mt-4">
-                                    <summary class="text-sm font-medium text-gray-700 cursor-pointer hover:text-blue-600">
-                                        <i class="fas fa-cog mr-1"></i>
-                                        Advanced Settings
-                                    </summary>
-                                    <div class="mt-3 space-y-3 pl-4">
-                                        <div>
-                                            <label for="minChars" class="block text-xs font-medium text-gray-600 mb-1">
-                                                Min Chars per Scene
-                                            </label>
-                                            <input type="number" id="minChars" 
-                                                class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500"
-                                                min="100" max="5000" value="600" readonly>
-                                            <p class="text-xs text-gray-400 mt-1">プリセット連動（自動設定）</p>
-                                        </div>
-                                        <div>
-                                            <label for="maxChars" class="block text-xs font-medium text-gray-600 mb-1">
-                                                Max Chars per Scene
-                                            </label>
-                                            <input type="number" id="maxChars" 
-                                                class="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:ring-2 focus:ring-blue-500"
-                                                min="100" max="5000" value="1200" readonly>
-                                            <p class="text-xs text-gray-400 mt-1">プリセット連動（自動設定）</p>
-                                        </div>
-                                    </div>
-                                </details>
-
-                                <!-- Save Button -->
-                                <div class="pt-2">
-                                    <button id="btnSaveSplitSettings"
-                                        class="px-4 py-2 rounded-lg font-semibold bg-indigo-600 text-white hover:bg-indigo-700 transition-colors">
-                                        <i class="fas fa-save mr-2"></i>
-                                        Save Settings
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Characters Section -->
-                        <div class="border-t pt-6">
-                            <div class="flex items-center justify-between mb-3">
-                                <h2 class="text-lg font-bold text-gray-800">
-                                    <i class="fas fa-users mr-2 text-blue-600"></i>
-                                    Characters
-                                </h2>
-                                <div class="flex gap-2">
-                                    <button id="btnImportFromLibrary"
-                                        class="px-4 py-2 rounded-lg font-semibold bg-green-600 text-white hover:bg-green-700 transition-colors">
-                                        <i class="fas fa-book mr-2"></i>
-                                        マイキャラから追加
-                                    </button>
-                                    <button id="btnAddCharacter"
-                                        class="px-4 py-2 rounded-lg font-semibold bg-blue-600 text-white hover:bg-blue-700 transition-colors">
-                                        <i class="fas fa-plus mr-2"></i>
-                                        新規作成
-                                    </button>
-                                </div>
-                            </div>
-                            <div id="characters-list" class="text-sm text-gray-600">
-                                （キャラクター未登録）
-                            </div>
-                        </div>
-                    </div>
-                </div>
                 
                 <!-- Project Default Style -->
                 <div class="mb-6 p-6 bg-gradient-to-r from-purple-50 to-pink-50 rounded-lg border-2 border-purple-200">
@@ -1754,10 +1490,7 @@ app.get('/projects/:id', (c) => {
 
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
-        // Backward compatible global project id
-        window.PROJECT_ID = ${projectId};
-        // Keep legacy access (PROJECT_ID) for existing scripts
-        const PROJECT_ID = window.PROJECT_ID;
+        const PROJECT_ID = ${projectId};
     </script>
     <script src="/static/audio-client.js"></script>
     <script src="/static/audio-state.js"></script>
@@ -1772,6 +1505,8 @@ app.get('/projects/:id', (c) => {
 </html>
   `)
 })
+
+// Login page
 app.get('/login', (c) => {
   return c.html(`
 <!DOCTYPE html>
