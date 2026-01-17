@@ -92,21 +92,22 @@ export const settingsHtml = `
             </form>
         </div>
         
-        <!-- Video API Key Section (Phase D-1) -->
+        <!-- Video API Key Section (Phase D-1 + Gate2) -->
         <div class="bg-white rounded-xl shadow-md p-6 mb-6">
             <h2 class="text-lg font-bold text-gray-800 mb-4">
                 <i class="fas fa-video mr-2 text-purple-600"></i>
-                🎬 動画生成（Google Veo）
+                動画生成 API キー設定
             </h2>
-            <div class="text-sm text-gray-600 mb-4 space-y-2">
-                <p>動画生成には <strong>Google AI Studio</strong> で発行した APIキーが必要です。</p>
-                <ol class="list-decimal list-inside ml-2 space-y-1">
-                    <li><a href="https://aistudio.google.com/" target="_blank" class="text-blue-600 hover:underline">Google AI Studio</a> にアクセス</li>
-                    <li>APIキーを作成（無料枠あり）</li>
-                    <li>下の欄に貼り付けて保存</li>
-                </ol>
-                <p class="text-xs text-gray-500 mt-2">
-                    ※ Google Cloud Console（GCP）ではありません。AI Studio のキーをご利用ください。
+            <div class="text-sm text-gray-600 mb-4 space-y-3">
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <p class="font-semibold text-blue-800 mb-2">📌 Veo2 と Veo3 の違い</p>
+                    <ul class="text-xs text-blue-700 space-y-1 ml-4 list-disc">
+                        <li><strong>Veo2</strong>: Google AI Studio のAPIキー（無料枠あり、手軽）</li>
+                        <li><strong>Veo3</strong>: Google Cloud Vertex AI（高品質、Service Account 必要）</li>
+                    </ul>
+                </div>
+                <p class="text-xs text-gray-500">
+                    ※ 使用する動画生成エンジンに応じて、対応するAPIキーを設定してください。
                 </p>
             </div>
             
@@ -243,14 +244,30 @@ export const settingsHtml = `
         });
         
         // ======================
-        // Video API Key Management (Phase D-1 + P1 Key Migration)
+        // Video API Key Management (Phase D-1 + P1 Key Migration + Gate2 Veo3)
         // ======================
         
-        // 仕様: provider は 'google' のみ
-        // 取得元: Google AI Studio (https://aistudio.google.com/)
-        // ※ Google Cloud Console (GCP) ではない
+        // 仕様: provider は 'google'（Veo2）と 'vertex'（Veo3）
+        // google: Google AI Studio (https://aistudio.google.com/) のAPIキー
+        // vertex: Google Cloud Console で作成した Service Account JSON
         const PROVIDERS = [
-            { provider: 'google', name: 'Google (Veo)', description: 'Google AI Studio のAPIキーで動画生成' }
+            { 
+                provider: 'google', 
+                name: '🎬 Veo2 (Google AI Studio)', 
+                description: 'Google AI Studio のAPIキーで動画生成',
+                placeholder: 'AIzaSy...',
+                helpUrl: 'https://aistudio.google.com/',
+                helpText: 'AI Studio でAPIキーを作成'
+            },
+            { 
+                provider: 'vertex', 
+                name: '🚀 Veo3 (Vertex AI)', 
+                description: 'Google Cloud の Service Account JSON で高品質動画生成',
+                placeholder: '{"type": "service_account", "project_id": "...", ...}',
+                helpUrl: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+                helpText: 'GCP で Service Account を作成し、JSON キーをダウンロード',
+                isJson: true
+            }
         ];
         
         // P1: 状態に応じたメッセージとスタイル
@@ -324,11 +341,14 @@ export const settingsHtml = `
                     const statusInfo = getStatusInfo(configured);
                     
                     return \`
-                    <div class="border rounded-lg p-4 mb-3 \${statusInfo.badge ? 'border-2 ' + statusInfo.badge.split(' ')[2] : ''}" id="api-key-\${p.provider}">
+                    <div class="border rounded-lg p-4 mb-4 \${statusInfo.badge ? 'border-2 ' + statusInfo.badge.split(' ')[2] : ''}" id="api-key-\${p.provider}">
                         <div class="flex items-center justify-between mb-2">
                             <div>
                                 <h3 class="font-semibold text-gray-800">\${p.name}</h3>
                                 <p class="text-xs text-gray-500">\${p.description}</p>
+                                <a href="\${p.helpUrl}" target="_blank" class="text-xs text-blue-600 hover:underline">
+                                    <i class="fas fa-external-link-alt mr-1"></i>\${p.helpText}
+                                </a>
                             </div>
                             <span class="\${statusInfo.color} text-sm font-medium">
                                 <i class="fas fa-\${statusInfo.icon} mr-1"></i>
@@ -344,14 +364,23 @@ export const settingsHtml = `
                         \` : ''}
                         
                         <div class="flex gap-2 flex-wrap">
+                            \${p.isJson ? \`
+                            <textarea 
+                                id="apiKey-\${p.provider}"
+                                placeholder="\${isConfigured ? '新しいJSONで上書き...' : p.placeholder}"
+                                rows="3"
+                                class="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-purple-500"
+                            ></textarea>
+                            \` : \`
                             <input 
                                 type="password" 
                                 id="apiKey-\${p.provider}"
-                                placeholder="\${isConfigured ? '新しいキーで上書き...' : 'APIキーを入力...'}"
+                                placeholder="\${isConfigured ? '新しいキーで上書き...' : p.placeholder}"
                                 class="flex-1 min-w-[200px] px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
                             />
+                            \`}
                             <button 
-                                onclick="saveApiKey('\${p.provider}')"
+                                onclick="saveApiKey('\${p.provider}', \${p.isJson || false})"
                                 class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold"
                             >
                                 <i class="fas fa-save mr-1"></i>保存
@@ -381,18 +410,32 @@ export const settingsHtml = `
             }
         }
         
-        async function saveApiKey(provider) {
+        async function saveApiKey(provider, isJson = false) {
             const input = document.getElementById(\`apiKey-\${provider}\`);
             const apiKey = input.value.trim();
             
             if (!apiKey) {
-                showApiKeyMessage(provider, 'APIキーを入力してください', true);
+                showApiKeyMessage(provider, isJson ? 'JSONを入力してください' : 'APIキーを入力してください', true);
                 return;
+            }
+            
+            // JSON形式の場合はバリデーション
+            if (isJson) {
+                try {
+                    const parsed = JSON.parse(apiKey);
+                    if (!parsed.type || !parsed.project_id) {
+                        showApiKeyMessage(provider, 'Service Account JSON には "type" と "project_id" が必要です', true);
+                        return;
+                    }
+                } catch (e) {
+                    showApiKeyMessage(provider, 'JSONの形式が正しくありません', true);
+                    return;
+                }
             }
             
             try {
                 await axios.put(\`/api/user/api-keys/\${provider}\`, { api_key: apiKey });
-                showApiKeyMessage(provider, 'APIキーを保存しました');
+                showApiKeyMessage(provider, isJson ? 'Service Account JSON を保存しました' : 'APIキーを保存しました');
                 input.value = '';
                 loadApiKeys(); // Refresh status
             } catch (err) {
