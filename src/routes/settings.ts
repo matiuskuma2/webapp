@@ -109,7 +109,8 @@ settings.get('/user/api-keys', async (c) => {
       })
     );
     
-    return c.json({ api_keys: keysWithStatus });
+    // Return both 'api_keys' (new) and 'keys' (legacy for frontend compatibility)
+    return c.json({ api_keys: keysWithStatus, keys: keysWithStatus });
   } catch (error) {
     console.error('Failed to list API keys:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to list API keys' } }, 500);
