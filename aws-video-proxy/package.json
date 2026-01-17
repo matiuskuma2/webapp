@@ -1,0 +1,29 @@
+{
+  "name": "rilarc-video-proxy",
+  "version": "1.0.0",
+  "description": "AWS Lambda for Google Veo video generation proxy",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "package": "npm run build && cd dist && zip -r ../function.zip . && cd .. && zip -r function.zip node_modules",
+    "deploy": "aws lambda update-function-code --function-name rilarc-video-proxy --zip-file fileb://function.zip --region ap-northeast-1",
+    "test:local": "node --experimental-specifier-resolution=node dist/index.js"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.970.0",
+    "@aws-sdk/client-lambda": "^3.970.0",
+    "@aws-sdk/client-s3": "^3.970.0",
+    "@aws-sdk/client-sqs": "^3.970.0",
+    "@aws-sdk/lib-dynamodb": "^3.970.0",
+    "@aws-sdk/s3-request-presigner": "^3.970.0",
+    "@google/genai": "^1.37.0"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.145",
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
