@@ -162,7 +162,7 @@ async function buildSignedImageUrl(
 // POST /api/scenes/:sceneId/generate-video
 // ====================================================================
 
-videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
+videoGeneration.post('/:sceneId/generate-video', async (c) => {
   const sceneIdParam = c.req.param('sceneId');
   const sceneId = parseInt(sceneIdParam, 10);
   
@@ -481,7 +481,7 @@ videoGeneration.post('/scenes/:sceneId/generate-video', async (c) => {
 // GET /api/scenes/:sceneId/videos
 // ====================================================================
 
-videoGeneration.get('/scenes/:sceneId/videos', async (c) => {
+videoGeneration.get('/:sceneId/videos', async (c) => {
   const sceneId = parseInt(c.req.param('sceneId'), 10);
   if (isNaN(sceneId)) {
     return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
