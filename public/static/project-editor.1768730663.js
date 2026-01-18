@@ -2112,12 +2112,16 @@ function renderSceneCardHeader(scene, imageStatus) {
   // Phase1.7: 漫画採用中はシーン編集を非活性化（画像プロンプト変更が漫画と矛盾するため）
   const sceneEditDisabled = isComicMode;
   
+  // デフォルト値を設定（undefinedやnull対策）
+  const sceneIdx = scene.idx ?? '?';
+  const sceneRole = scene.role || 'unknown';
+  
   return `
     <div class="bg-gradient-to-r ${isComicMode ? 'from-orange-600 to-purple-600' : 'from-blue-600 to-purple-600'} px-4 py-3 flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-2">
-        <span class="text-white font-bold text-lg">#${scene.idx}</span>
+        <span class="text-white font-bold text-lg">#${sceneIdx}</span>
         <span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">
-          ${getRoleText(scene.role)}
+          ${getRoleText(sceneRole)}
         </span>
         ${isComicMode ? `<span class="px-2 py-0.5 bg-orange-400 rounded-full text-white text-xs font-semibold"><i class="fas fa-comment-alt mr-1"></i>漫画</span>` : ''}
       </div>

@@ -1774,7 +1774,7 @@ app.get('/projects/:id', (c) => {
     <!-- comic-editor v1 は凍結（Phase1.6 SSOT再構築中） -->
     <!-- <script src="/static/comic-editor.js"></script> -->
     <script src="/static/comic-editor-v2.js"></script>
-    <script src="/static/project-editor.1768570000.js"></script>
+    <script src="/static/project-editor.1768730663.js"></script>
 </body>
 </html>
   `)
