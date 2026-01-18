@@ -2118,6 +2118,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
              controls
              preload="metadata"
              poster="${displayUrl || ''}"
+             onerror="refreshVideoUrl(${activeVideo.id}, ${scene.id})"
            >
              <source src="${activeVideo.r2_url}" type="video/mp4">
            </video>
@@ -2157,6 +2158,42 @@ async function switchDisplayAssetType(sceneId, newType) {
 
 // グローバルに公開
 window.switchDisplayAssetType = switchDisplayAssetType;
+
+/**
+ * 動画のURLをリフレッシュ（署名付きURLの期限切れ対応）
+ * @param {number} videoId - 動画ID
+ * @param {number} sceneId - シーンID
+ */
+window.refreshVideoUrl = async function(videoId, sceneId) {
+  console.log(`[refreshVideoUrl] Refreshing video ${videoId} for scene ${sceneId}`);
+  try {
+    // ステータスAPIを呼び出して最新のpresigned URLを取得
+    const res = await axios.get(`${API_BASE}/videos/${videoId}/status`);
+    if (res.data.r2_url) {
+      const videoEl = document.getElementById(`sceneVideo-${sceneId}`);
+      if (videoEl) {
+        // onerrorを一時的に無効化して無限ループを防ぐ
+        videoEl.onerror = null;
+        videoEl.src = res.data.r2_url;
+        // sourceタグも更新
+        const source = videoEl.querySelector('source');
+        if (source) {
+          source.src = res.data.r2_url;
+        }
+        videoEl.load();
+        console.log(`[refreshVideoUrl] Updated video URL for scene ${sceneId}`);
+        showToast('動画URLを更新しました', 'success');
+      }
+    } else if (res.data.status === 'failed') {
+      showToast('動画の生成に失敗しています', 'error');
+    } else {
+      showToast('動画URLの取得に失敗しました', 'error');
+    }
+  } catch (e) {
+    console.error('[refreshVideoUrl] Error:', e);
+    showToast('動画の再読み込みに失敗しました', 'error');
+  }
+};
 
 /**
  * Phase F-6: Render audio section with voice character selection
