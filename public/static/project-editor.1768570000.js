@@ -2197,7 +2197,7 @@ function renderBuilderSceneCard(scene) {
             <button id="primaryBtn-${scene.id}" class="flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation">
               読み込み中...
             </button>
-            <button id="historyBtn-${scene.id}" class="px-4 py-2 rounded-lg font-semibold touch-manipulation">
+            <button id="historyBtn-${scene.id}" onclick="viewImageHistory(${scene.id})" class="px-4 py-2 rounded-lg font-semibold touch-manipulation">
               <i class="fas fa-history"></i>
             </button>
           </div>
