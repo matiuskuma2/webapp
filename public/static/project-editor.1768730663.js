@@ -2091,64 +2091,61 @@ function setSceneFilter(filter) {
  * @returns {string} HTML
  */
 function renderSceneCardHeader(scene, imageStatus) {
-  // デバッグ: シーンデータの確認
-  if (!scene || !scene.id) {
-    console.error('[renderSceneCardHeader] Invalid scene data:', scene);
-    return '<div class="bg-red-600 px-4 py-3 text-white">シーンデータエラー</div>';
-  }
-  
-  const hasImage = imageStatus === 'completed';
-  const displayAssetType = scene.display_asset_type || 'image';
+  // 安全なデフォルト値を最初に設定
+  const safeScene = scene || {};
+  const sceneId = safeScene.id || 0;
+  const sceneIdx = safeScene.idx ?? '?';
+  const sceneRole = safeScene.role || 'unknown';
+  const safeStatus = imageStatus || 'pending';
+  const displayAssetType = safeScene.display_asset_type || 'image';
   const isComicMode = displayAssetType === 'comic';
-  const hasPublishedComic = !!scene.active_comic?.r2_url;
-  // Phase1.7: latest_image がある場合も漫画化を許可（is_active=0 でも漫画化可能）
-  const hasAnyCompletedImage = hasImage || hasPublishedComic || (scene.latest_image?.status === 'completed' && scene.latest_image?.r2_url);
   
-  // Phase1.7: 漫画化ボタンの表示条件
-  // - 画像モード: AI画像がある場合のみ表示（latest_image でも可）
-  // - 漫画モード: 常に表示（漫画編集の再開用）
+  // デバッグ: コンソールに出力
+  console.log('[renderSceneCardHeader] sceneId=' + sceneId + ', isComicMode=' + isComicMode + ', displayAssetType=' + displayAssetType);
+  const hasPublishedComic = !!(safeScene.active_comic && safeScene.active_comic.r2_url);
+  const hasImage = safeStatus === 'completed';
+  const latestImageCompleted = safeScene.latest_image && safeScene.latest_image.status === 'completed' && safeScene.latest_image.r2_url;
+  const hasAnyCompletedImage = hasImage || hasPublishedComic || latestImageCompleted;
   const showComicButton = hasAnyCompletedImage;
-  
-  // Phase1.7: 漫画採用中はシーン編集を非活性化（画像プロンプト変更が漫画と矛盾するため）
   const sceneEditDisabled = isComicMode;
   
-  // デフォルト値を設定（undefinedやnull対策）
-  const sceneIdx = scene.idx ?? '?';
-  const sceneRole = scene.role || 'unknown';
+  // ヘッダーHTML生成（Phase1.7: Tailwind safelistで保護済み）
+  let headerClass = isComicMode ? 'from-orange-600 to-purple-600' : 'from-blue-600 to-purple-600';
+  let comicBadge = isComicMode ? '<span class="px-2 py-0.5 bg-orange-100 text-orange-800 rounded-full text-xs font-semibold"><i class="fas fa-comment-alt mr-1"></i>漫画</span>' : '';
   
-  return `
-    <div class="bg-gradient-to-r ${isComicMode ? 'from-orange-600 to-purple-600' : 'from-blue-600 to-purple-600'} px-4 py-3 flex items-center justify-between flex-wrap gap-2">
-      <div class="flex items-center gap-2">
-        <span class="text-white font-bold text-lg">#${sceneIdx}</span>
-        <span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">
-          ${getRoleText(sceneRole)}
-        </span>
-        ${isComicMode ? `<span class="px-2 py-0.5 bg-orange-400 rounded-full text-white text-xs font-semibold"><i class="fas fa-comment-alt mr-1"></i>漫画</span>` : ''}
-      </div>
-      <div class="flex items-center gap-2 flex-wrap">
-        <button 
-          onclick="${sceneEditDisabled ? '' : `openSceneEditModal(${scene.id})`}"
-          class="px-3 py-1.5 ${sceneEditDisabled ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-400'} rounded-lg text-white text-xs font-semibold transition-colors"
-          title="${sceneEditDisabled ? '漫画採用中はシーン編集できません。「画像を採用」に切り替えるか、漫画化ボタンから編集してください。' : 'セリフ・要点・プロンプトを編集'}"
-          ${sceneEditDisabled ? 'disabled' : ''}
-        >
-          <i class="fas fa-${sceneEditDisabled ? 'lock' : 'pen'} mr-1"></i>${sceneEditDisabled ? '編集不可' : 'シーン編集'}
-        </button>
-        ${showComicButton ? `
-        <button 
-          onclick="openComicEditor(${scene.id})"
-          class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 rounded-lg text-white text-xs font-semibold transition-colors"
-          title="${isComicMode ? '漫画を編集' : '画像に吹き出しを追加して漫画化'}"
-        >
-          <i class="fas fa-comment-dots mr-1"></i>${isComicMode ? '漫画編集' : '漫画化'}
-        </button>
-        ` : ''}
-        <div class="scene-status-badge-container">
-          ${getSceneStatusBadge(imageStatus)}
-        </div>
-      </div>
-    </div>
-  `;
+  // シーン編集ボタン（漫画モード時は非活性化）
+  let editBtnOnclick = sceneEditDisabled ? '' : 'openSceneEditModal(' + sceneId + ')';
+  let editBtnClass = sceneEditDisabled ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-400';
+  let editBtnTitle = sceneEditDisabled ? '漫画採用中はシーン編集できません' : 'シーンを編集';
+  let editBtnDisabled = sceneEditDisabled ? 'disabled' : '';
+  let editBtnIcon = sceneEditDisabled ? 'lock' : 'pen';
+  let editBtnText = sceneEditDisabled ? '編集不可' : 'シーン編集';
+  
+  // 漫画化ボタン
+  let comicBtn = '';
+  if (showComicButton) {
+    let comicBtnTitle = isComicMode ? '漫画を編集' : '画像に吹き出しを追加して漫画化';
+    let comicBtnText = isComicMode ? '漫画編集' : '漫画化';
+    comicBtn = '<button onclick="openComicEditor(' + sceneId + ')" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 rounded-lg text-white text-xs font-semibold transition-colors" title="' + comicBtnTitle + '"><i class="fas fa-comment-dots mr-1"></i>' + comicBtnText + '</button>';
+  }
+  
+  let statusBadge = getSceneStatusBadge(safeStatus);
+  let roleText = getRoleText(sceneRole);
+  
+  return '<div class="bg-gradient-to-r ' + headerClass + ' px-4 py-3 flex items-center justify-between flex-wrap gap-2">' +
+    '<div class="flex items-center gap-2">' +
+      '<span class="text-white font-bold text-lg">#' + sceneIdx + '</span>' +
+      '<span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">' + roleText + '</span>' +
+      comicBadge +
+    '</div>' +
+    '<div class="flex items-center gap-2 flex-wrap">' +
+      '<button onclick="' + editBtnOnclick + '" class="px-3 py-1.5 ' + editBtnClass + ' rounded-lg text-white text-xs font-semibold transition-colors" title="' + editBtnTitle + '" ' + editBtnDisabled + '>' +
+        '<i class="fas fa-' + editBtnIcon + ' mr-1"></i>' + editBtnText +
+      '</button>' +
+      comicBtn +
+      '<div class="scene-status-badge-container">' + statusBadge + '</div>' +
+    '</div>' +
+  '</div>';
 }
 
 /**
