@@ -914,20 +914,22 @@ window.ComicEditor = {
 
   /**
    * 指定座標の吹き出しを探す
+   * SSOT: 表示サイズ = publishScale * displayScale
    */
   findBubbleAt(canvasX, canvasY) {
     const containRect = this.getContainRect();
     if (!containRect) return null;
     
     const bubbles = this.draft.bubbles || [];
-    const scale = containRect.width / 1000;
+    // SSOT: プレビュー表示サイズ = (naturalWidth/1000) * (displayWidth/naturalWidth) = displayWidth/1000
+    const displayBubbleScale = containRect.width / 1000;
     
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const bubble = bubbles[i];
       const containerPos = this.normalizedToContainer(bubble.position.x, bubble.position.y);
       const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
-      const bubbleWidth = size.w * scale;
-      const bubbleHeight = size.h * scale;
+      const bubbleWidth = size.w * displayBubbleScale;
+      const bubbleHeight = size.h * displayBubbleScale;
       
       if (canvasX >= containerPos.x && canvasX <= containerPos.x + bubbleWidth &&
           canvasY >= containerPos.y && canvasY <= containerPos.y + bubbleHeight) {
@@ -940,19 +942,21 @@ window.ComicEditor = {
 
   /**
    * 削除ボタンクリック判定
+   * SSOT: 表示サイズ = publishScale * displayScale = displayWidth/1000
    */
   isDeleteButtonClick(canvasX, canvasY, bubble) {
     const containRect = this.getContainRect();
     if (!containRect) return false;
     
-    const scale = containRect.width / 1000;
+    // SSOT: プレビュー表示サイズのスケール
+    const displayBubbleScale = containRect.width / 1000;
     const containerPos = this.normalizedToContainer(bubble.position.x, bubble.position.y);
     const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
-    const bubbleWidth = size.w * scale;
+    const bubbleWidth = size.w * displayBubbleScale;
     
-    const btnX = containerPos.x + bubbleWidth - 8 * scale;
-    const btnY = containerPos.y + 8 * scale;
-    const btnRadius = 14 * scale;
+    const btnX = containerPos.x + bubbleWidth - 8 * displayBubbleScale;
+    const btnY = containerPos.y + 8 * displayBubbleScale;
+    const btnRadius = 14 * displayBubbleScale;
     
     const dx = canvasX - btnX;
     const dy = canvasY - btnY;
@@ -962,6 +966,7 @@ window.ComicEditor = {
 
   /**
    * プレビュー描画（SSOT）
+   * 公開画像と同じスケールで描画し、表示用にdisplayScaleで縮小
    */
   renderPreview() {
     const canvas = document.getElementById('comicPreviewCanvas');
@@ -975,7 +980,11 @@ window.ComicEditor = {
     ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
     
     const bubbles = this.draft.bubbles || [];
-    const scale = containRect.width / 1000;
+    
+    // SSOT: 公開画像と同じスケール（naturalWidth基準）
+    const publishScale = containRect.naturalWidth / 1000;
+    // 表示用縮小率（displayWidth / naturalWidth）
+    const displayScale = containRect.scale;
     
     // バリデーション結果を取得
     const validation = this.validateDraft();
@@ -989,16 +998,19 @@ window.ComicEditor = {
       
       ctx.save();
       ctx.translate(containerPos.x, containerPos.y);
+      // 表示用に縮小（公開画像と同じ見た目を実現）
+      ctx.scale(displayScale, displayScale);
       
-      // エラーの吹き出しは赤枠で囲む
+      // エラーの吹き出しは赤枠で囲む（publishScale基準）
       if (errorBubbleIds.has(bubble.id)) {
         const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
         ctx.strokeStyle = '#EF4444';
-        ctx.lineWidth = 4 * scale;
-        ctx.strokeRect(-2 * scale, -2 * scale, size.w * scale + 4 * scale, size.h * scale + 4 * scale);
+        ctx.lineWidth = 4 * publishScale;
+        ctx.strokeRect(-2 * publishScale, -2 * publishScale, size.w * publishScale + 4 * publishScale, size.h * publishScale + 4 * publishScale);
       }
       
-      this.drawOneBubble(ctx, bubble, text, scale, { showDeleteButton: true });
+      // 公開と同じスケールで描画（SSOTの核心）
+      this.drawOneBubble(ctx, bubble, text, publishScale, { showDeleteButton: true });
       
       ctx.restore();
     });
