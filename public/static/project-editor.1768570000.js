@@ -1820,6 +1820,13 @@ function renderSceneCardHeader(scene, imageStatus) {
         </span>
       </div>
       <div class="flex items-center gap-2">
+        <button 
+          onclick="openSceneEditModal(${scene.id})"
+          class="px-3 py-1 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg text-white text-sm font-semibold transition-colors"
+          title="セリフ・要点・プロンプトを編集"
+        >
+          <i class="fas fa-pen mr-1"></i>内容編集
+        </button>
         <div class="scene-status-badge-container">
           ${getSceneStatusBadge(imageStatus)}
         </div>
@@ -1836,18 +1843,9 @@ function renderSceneCardHeader(scene, imageStatus) {
 function renderSceneTextContent(scene) {
   return `
     <div class="space-y-4">
-      <!-- セリフ + シーン編集ボタン -->
+      <!-- セリフ -->
       <div>
-        <div class="flex items-center justify-between mb-2">
-          <label class="block text-sm font-semibold text-gray-700">セリフ</label>
-          <button 
-            onclick="openSceneEditModal(${scene.id})"
-            class="px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-gray-600 text-xs font-semibold transition-colors"
-            title="セリフ・要点・プロンプトを編集"
-          >
-            <i class="fas fa-pen mr-1"></i>内容を編集
-          </button>
-        </div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">セリフ</label>
         <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
 ${escapeHtml(scene.dialogue)}
         </div>
@@ -1966,17 +1964,20 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
         <i class="fas ${isShowingComic ? 'fa-comment-alt' : 'fa-image'} mr-1"></i>${isShowingComic ? '漫画' : '画像'}
       </div>
       
-      <!-- 右上: 漫画化ボタン（画像に吹き出しを追加） -->
-      ${imageUrl ? `
+    </div>
+    
+    <!-- 漫画化ボタン（画像の下に配置） -->
+    ${imageUrl ? `
+    <div class="mt-2">
       <button 
         onclick="openComicEditor(${scene.id})"
-        class="absolute top-2 right-2 px-3 py-1.5 bg-orange-500 text-white text-xs rounded-lg font-semibold hover:bg-orange-600 transition-colors shadow-md"
+        class="w-full px-4 py-2 bg-orange-500 text-white rounded-lg font-semibold hover:bg-orange-600 transition-colors shadow-md"
         title="画像に吹き出しを追加して漫画化"
       >
-        <i class="fas fa-comment-dots mr-1"></i>漫画化
+        <i class="fas fa-comment-dots mr-2"></i>漫画化（吹き出し追加）
       </button>
-      ` : ''}
     </div>
+    ` : ''}
     
     <!-- Phase1.5: 採用切替ボタン（公開漫画がある場合のみ表示） -->
     ${hasPublishedComic && imageUrl ? `

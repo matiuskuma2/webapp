@@ -183,11 +183,12 @@ app.post('/:sceneId/characters/batch', async (c) => {
     const sceneId = Number(c.req.param('sceneId'));
     const body = await c.req.json();
 
-    const { character_keys } = body;
+    // Support both old format (character_keys) and new format (image_characters)
+    const character_keys = body.character_keys || body.image_characters;
 
     if (!Array.isArray(character_keys)) {
       return c.json(
-        createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'character_keys must be an array'),
+        createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'character_keys or image_characters must be an array'),
         400
       );
     }
