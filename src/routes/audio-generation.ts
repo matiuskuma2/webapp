@@ -22,10 +22,13 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     }
 
     const body = await c.req.json().catch(() => ({} as any));
-    const voiceId = body.voice_id as string | undefined;
+    // Phase1.7: voice_preset_id もサポート（フロントエンド互換性）
+    const voiceId = (body.voice_id || body.voice_preset_id) as string | undefined;
     const provider = (body.provider as string | undefined) ?? 'google';
     const format = (body.format as string | undefined) ?? 'mp3';
     const sampleRate = Number(body.sample_rate ?? 24000);
+    // Phase1.7: text_override で任意のテキストを指定可能（漫画発話用）
+    const textOverride = body.text_override as string | undefined;
 
     if (!voiceId) {
       return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'voice_id is required'), 400);
@@ -51,9 +54,10 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     if (!scene) {
       return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'), 404);
     }
-    const dialogue = (scene.dialogue ?? '').trim();
+    // Phase1.7: text_override が指定されている場合はそちらを使用（漫画発話用）
+    const dialogue = textOverride?.trim() || (scene.dialogue ?? '').trim();
     if (!dialogue) {
-      return c.json(createErrorResponse(ERROR_CODES.NO_DIALOGUE, 'Scene has no dialogue'), 400);
+      return c.json(createErrorResponse(ERROR_CODES.NO_DIALOGUE, 'Scene has no dialogue or text_override'), 400);
     }
 
     // 2) 競合チェック（同一sceneで generating が残っている）
