@@ -160,22 +160,34 @@ window.ComicEditor = {
                 <!-- 吹き出し追加（種類選択） -->
                 <div class="pt-4 border-t border-gray-200">
                   <label class="block text-xs font-semibold text-gray-600 mb-2">吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）</label>
-                  <div class="grid grid-cols-2 gap-2" id="bubbleTypeButtons">
-                    <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm">
-                      <i class="fas fa-comment text-gray-700 mr-1"></i>通常
-                    </button>
-                    <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm">
-                      <i class="fas fa-cloud text-gray-500 mr-1"></i>思考
-                    </button>
-                    <button onclick="ComicEditor.addBubble('shout')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-yellow-50 hover:border-yellow-400 transition-colors text-sm">
-                      <i class="fas fa-bolt text-yellow-500 mr-1"></i>叫び
-                    </button>
-                    <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm">
-                      <i class="fas fa-comment-dots text-purple-500 mr-1"></i>ささやき
-                    </button>
-                    <button onclick="ComicEditor.addBubble('narration')" class="col-span-2 px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm">
-                      <i class="fas fa-quote-right mr-1"></i>ナレーション（テロップ風）
-                    </button>
+                  <div class="space-y-2" id="bubbleTypeButtons">
+                    <!-- キャラクター用吹き出し -->
+                    <p class="text-xs text-gray-500 font-semibold">セリフ用</p>
+                    <div class="grid grid-cols-2 gap-2">
+                      <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm">
+                        <i class="fas fa-comment text-gray-700 mr-1"></i>通常
+                      </button>
+                      <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm">
+                        <i class="fas fa-cloud text-gray-500 mr-1"></i>思考
+                      </button>
+                      <button onclick="ComicEditor.addBubble('shout')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-yellow-50 hover:border-yellow-400 transition-colors text-sm">
+                        <i class="fas fa-bolt text-yellow-500 mr-1"></i>叫び
+                      </button>
+                      <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm">
+                        <i class="fas fa-comment-dots text-purple-500 mr-1"></i>ささやき
+                      </button>
+                    </div>
+                    
+                    <!-- ナレーション用 -->
+                    <p class="text-xs text-gray-500 font-semibold mt-3">ナレーション用</p>
+                    <div class="grid grid-cols-2 gap-2">
+                      <button onclick="ComicEditor.addBubble('narration')" class="px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm">
+                        <i class="fas fa-tv mr-1"></i>テロップ帯
+                      </button>
+                      <button onclick="ComicEditor.addBubble('caption')" class="px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-500 transition-colors text-sm">
+                        <i class="fas fa-align-left mr-1"></i>字幕（枠なし）
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -224,48 +236,121 @@ window.ComicEditor = {
   },
 
   /**
-   * 発話リストを描画
+   * 発話リストを描画（SSOT: シーンのキャラクターから選択）
    */
   renderUtterances() {
     const container = document.getElementById('utteranceList');
     if (!container) return;
 
     const utterances = this.draft.utterances || [];
+    // シーンに割り当てられたキャラクター（最大3人）
+    const sceneCharacters = this.currentScene.characters || [];
+    // 音声プリセット（ナレーション用）
+    const voicePresets = [
+      { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）' },
+      { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）' },
+      { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）' },
+      { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）' },
+      { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）' },
+      { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）' }
+    ];
     
-    container.innerHTML = utterances.map((ut, index) => `
+    container.innerHTML = utterances.map((ut, index) => {
+      const isNarration = ut.speaker_type === 'narration';
+      const isCharacter = ut.speaker_type === 'character';
+      
+      // キャラクター選択オプション
+      const charOptions = sceneCharacters.length > 0 
+        ? sceneCharacters.map(c => 
+            `<option value="${c.character_key}" ${ut.speaker_character_key === c.character_key ? 'selected' : ''}>${this.escapeHtml(c.character_name)}</option>`
+          ).join('')
+        : '<option value="" disabled>キャラクター未割当</option>';
+      
+      // 音声プリセットオプション
+      const presetOptions = voicePresets.map(p => 
+        `<option value="${p.id}" ${ut.narrator_voice_preset_id === p.id ? 'selected' : ''}>${p.name}</option>`
+      ).join('');
+      
+      return `
       <div class="bg-gray-50 rounded-lg p-4 border border-gray-200" data-utterance-id="${ut.id}">
-        <div class="flex items-center justify-between mb-2">
+        <div class="flex items-center justify-between mb-3">
           <span class="font-semibold text-sm text-gray-700">
-            発話 ${index + 1}
+            <i class="fas fa-comment-alt mr-1 text-purple-500"></i>発話 ${index + 1}
           </span>
-          <div class="flex items-center gap-2">
-            <select 
-              onchange="ComicEditor.updateUtteranceSpeaker('${ut.id}', this.value)"
-              class="text-xs px-2 py-1 rounded border border-gray-300"
-            >
-              <option value="narration" ${ut.speaker_type === 'narration' ? 'selected' : ''}>ナレーション</option>
-              <option value="character" ${ut.speaker_type === 'character' ? 'selected' : ''}>キャラクター</option>
-            </select>
-            ${utterances.length > 1 ? `
-            <button 
-              onclick="ComicEditor.removeUtterance('${ut.id}')"
-              class="text-red-500 hover:text-red-700 text-sm"
-              title="この発話を削除"
-            >
-              <i class="fas fa-trash"></i>
-            </button>
-            ` : ''}
-          </div>
+          ${utterances.length > 1 ? `
+          <button 
+            onclick="ComicEditor.removeUtterance('${ut.id}')"
+            class="text-red-500 hover:text-red-700 text-sm px-2 py-1 rounded hover:bg-red-50"
+            title="この発話を削除"
+          >
+            <i class="fas fa-trash"></i>
+          </button>
+          ` : ''}
         </div>
+        
+        <!-- 話者タイプ選択 -->
+        <div class="flex gap-2 mb-3">
+          <button 
+            onclick="ComicEditor.updateUtteranceSpeakerType('${ut.id}', 'narration')"
+            class="flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${isNarration ? 'bg-purple-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-purple-50'}"
+          >
+            <i class="fas fa-microphone mr-1"></i>ナレーション
+          </button>
+          <button 
+            onclick="ComicEditor.updateUtteranceSpeakerType('${ut.id}', 'character')"
+            class="flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${isCharacter ? 'bg-green-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-green-50'} ${sceneCharacters.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
+            ${sceneCharacters.length === 0 ? 'disabled title="シーンにキャラクターを割り当ててください"' : ''}
+          >
+            <i class="fas fa-user mr-1"></i>キャラクター
+          </button>
+        </div>
+        
+        <!-- ナレーション用：音声プリセット選択 -->
+        ${isNarration ? `
+        <div class="mb-3">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">
+            <i class="fas fa-sliders-h mr-1"></i>音声プリセット
+          </label>
+          <select 
+            onchange="ComicEditor.updateUtteranceNarratorVoice('${ut.id}', this.value)"
+            class="w-full text-sm px-3 py-2 rounded-lg border border-purple-300 bg-purple-50 focus:border-purple-500"
+          >
+            ${presetOptions}
+          </select>
+        </div>
+        ` : ''}
+        
+        <!-- キャラクター用：シーン内キャラから選択 -->
+        ${isCharacter ? `
+        <div class="mb-3">
+          <label class="block text-xs font-semibold text-gray-600 mb-1">
+            <i class="fas fa-users mr-1"></i>話すキャラクター
+          </label>
+          <select 
+            onchange="ComicEditor.updateUtteranceCharacter('${ut.id}', this.value)"
+            class="w-full text-sm px-3 py-2 rounded-lg border border-green-300 bg-green-50 focus:border-green-500"
+          >
+            ${charOptions}
+          </select>
+          ${sceneCharacters.length === 0 ? `
+          <p class="text-xs text-orange-600 mt-1">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            シーンにキャラクターが割り当てられていません
+          </p>
+          ` : ''}
+        </div>
+        ` : ''}
+        
+        <!-- セリフ入力 -->
         <textarea
           id="utteranceText-${ut.id}"
           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none"
           rows="3"
-          placeholder="セリフを入力..."
+          placeholder="${isNarration ? 'ナレーションテキストを入力...' : 'セリフを入力...'}"
           onchange="ComicEditor.updateUtterance('${ut.id}', this.value)"
         >${this.escapeHtml(ut.text)}</textarea>
       </div>
-    `).join('');
+    `}).join('');
 
     // 発話追加ボタン（最大3まで）
     if (utterances.length < this.MAX_UTTERANCES) {
@@ -315,46 +400,50 @@ window.ComicEditor = {
       g.setAttribute('transform', `translate(${x}, ${y})`);
       g.style.cursor = 'move';
 
-      // 吹き出し背景（サイズ拡大）
-      const bubbleWidth = bubble.type === 'narration' ? 280 : 200;
-      const bubbleHeight = bubble.type === 'narration' ? 60 : 100;
+      // 吹き出し背景（サイズはタイプ別）
+      const bubbleWidth = (bubble.type === 'narration' || bubble.type === 'caption') ? 280 : 200;
+      const bubbleHeight = (bubble.type === 'narration' || bubble.type === 'caption') ? 60 : 100;
       const path = this.createBubblePath(bubble.type, bubbleWidth, bubbleHeight);
       
-      const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      pathEl.setAttribute('d', path);
-      
-      // 種類別スタイル
-      switch (bubble.type) {
-        case 'thought':
-          pathEl.setAttribute('fill', '#F3F4F6');
-          pathEl.setAttribute('stroke', '#9CA3AF');
-          pathEl.setAttribute('stroke-width', '2');
-          break;
-        case 'shout':
-          pathEl.setAttribute('fill', '#FEF3C7');
-          pathEl.setAttribute('stroke', '#F59E0B');
-          pathEl.setAttribute('stroke-width', '3');
-          break;
-        case 'whisper':
-          pathEl.setAttribute('fill', '#F9FAFB');
-          pathEl.setAttribute('stroke', '#9CA3AF');
-          pathEl.setAttribute('stroke-width', '1');
-          pathEl.setAttribute('stroke-dasharray', '5,3');
-          break;
-        case 'narration':
-          pathEl.setAttribute('fill', 'rgba(0,0,0,0.7)');
-          pathEl.setAttribute('stroke', 'none');
-          break;
-        default:
-          pathEl.setAttribute('fill', 'white');
-          pathEl.setAttribute('stroke', '#374151');
-          pathEl.setAttribute('stroke-width', '2');
+      // caption タイプは吹き出し背景なし（縁取りテキストのみ）
+      if (path !== null) {
+        const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        pathEl.setAttribute('d', path);
+        
+        // 種類別スタイル
+        switch (bubble.type) {
+          case 'thought':
+            pathEl.setAttribute('fill', '#F3F4F6');
+            pathEl.setAttribute('stroke', '#9CA3AF');
+            pathEl.setAttribute('stroke-width', '2');
+            break;
+          case 'shout':
+            pathEl.setAttribute('fill', '#FEF3C7');
+            pathEl.setAttribute('stroke', '#F59E0B');
+            pathEl.setAttribute('stroke-width', '3');
+            break;
+          case 'whisper':
+            pathEl.setAttribute('fill', '#F9FAFB');
+            pathEl.setAttribute('stroke', '#9CA3AF');
+            pathEl.setAttribute('stroke-width', '1');
+            pathEl.setAttribute('stroke-dasharray', '5,3');
+            break;
+          case 'narration':
+            pathEl.setAttribute('fill', 'rgba(0,0,0,0.7)');
+            pathEl.setAttribute('stroke', 'none');
+            break;
+          default:
+            pathEl.setAttribute('fill', 'white');
+            pathEl.setAttribute('stroke', '#374151');
+            pathEl.setAttribute('stroke-width', '2');
+        }
+        pathEl.setAttribute('filter', 'url(#bubbleShadow)');
+        g.appendChild(pathEl);
       }
-      pathEl.setAttribute('filter', 'url(#bubbleShadow)');
-      g.appendChild(pathEl);
 
       // テキスト（複数行対応）- サイズ拡大
-      const charsPerLine = bubble.type === 'narration' ? 28 : 20;
+      const isNarrationStyle = bubble.type === 'narration' || bubble.type === 'caption';
+      const charsPerLine = isNarrationStyle ? 28 : 20;
       const lines = this.wrapText(text, charsPerLine);
       const lineHeight = 20;
       const textStartY = (bubbleHeight - lines.length * lineHeight) / 2 + lineHeight;
@@ -364,12 +453,21 @@ window.ComicEditor = {
         textEl.setAttribute('x', bubbleWidth / 2);
         textEl.setAttribute('y', textStartY + i * lineHeight);
         textEl.setAttribute('text-anchor', 'middle');
-        textEl.setAttribute('font-size', bubble.type === 'narration' ? '16' : '14');
-        textEl.setAttribute('font-weight', bubble.type === 'narration' ? 'bold' : 'normal');
-        textEl.setAttribute('fill', bubble.type === 'narration' ? '#FFFFFF' : '#1F2937');
-        if (bubble.type === 'narration') {
+        textEl.setAttribute('font-size', isNarrationStyle ? '18' : '14');
+        textEl.setAttribute('font-weight', isNarrationStyle ? 'bold' : 'normal');
+        
+        // caption: 縁取りテキスト（白文字に黒縁）
+        if (bubble.type === 'caption') {
+          textEl.setAttribute('fill', '#FFFFFF');
+          textEl.setAttribute('stroke', '#000000');
+          textEl.setAttribute('stroke-width', '3');
+          textEl.setAttribute('paint-order', 'stroke');
+        } else if (bubble.type === 'narration') {
+          textEl.setAttribute('fill', '#FFFFFF');
           textEl.setAttribute('stroke', '#000000');
           textEl.setAttribute('stroke-width', '0.5');
+        } else {
+          textEl.setAttribute('fill', '#1F2937');
         }
         textEl.textContent = line;
         g.appendChild(textEl);
@@ -500,12 +598,17 @@ window.ComicEditor = {
                 Z`;
       
       case 'narration':
-        // ナレーション（テロップ風 - 半透明黒背景）
+        // ナレーション（テロップ風 - 半透明黒背景の帯）
         return `M 0,0 
                 H ${width} 
                 V ${height}
                 H 0
                 Z`;
+      
+      case 'caption':
+        // キャプション（吹き出しなし - 縁取りテキストのみ）
+        // pathは描画しない。renderBubblesで特別処理
+        return null;
       
       default:
         // 通常の吹き出し（角丸矩形 + しっぽ）
@@ -629,6 +732,8 @@ window.ComicEditor = {
       id: newId,
       speaker_type: 'narration',
       speaker_id: null,
+      speaker_character_key: null,
+      narrator_voice_preset_id: 'ja-JP-Neural2-B', // デフォルト
       text: ''
     });
 
@@ -647,13 +752,50 @@ window.ComicEditor = {
   },
 
   /**
-   * 発話のspeaker_typeを更新
+   * 発話のspeaker_typeを更新（UI再描画あり）
    */
-  updateUtteranceSpeaker(utteranceId, speakerType) {
+  updateUtteranceSpeakerType(utteranceId, speakerType) {
     const utterance = this.draft.utterances.find(u => u.id === utteranceId);
     if (utterance) {
       utterance.speaker_type = speakerType;
+      // キャラクターに変更した場合、シーンの最初のキャラを自動選択
+      if (speakerType === 'character') {
+        const sceneCharacters = this.currentScene.characters || [];
+        if (sceneCharacters.length > 0 && !utterance.speaker_character_key) {
+          utterance.speaker_character_key = sceneCharacters[0].character_key;
+        }
+      }
+      this.renderUtterances();
+      this.renderBubbles();
     }
+  },
+
+  /**
+   * 発話のナレーター音声プリセットを更新
+   */
+  updateUtteranceNarratorVoice(utteranceId, presetId) {
+    const utterance = this.draft.utterances.find(u => u.id === utteranceId);
+    if (utterance) {
+      utterance.narrator_voice_preset_id = presetId;
+    }
+  },
+
+  /**
+   * 発話のキャラクターを更新
+   */
+  updateUtteranceCharacter(utteranceId, characterKey) {
+    const utterance = this.draft.utterances.find(u => u.id === utteranceId);
+    if (utterance) {
+      utterance.speaker_character_key = characterKey;
+      this.renderBubbles(); // 吹き出しの表示を更新
+    }
+  },
+
+  /**
+   * @deprecated Use updateUtteranceSpeakerType instead
+   */
+  updateUtteranceSpeaker(utteranceId, speakerType) {
+    this.updateUtteranceSpeakerType(utteranceId, speakerType);
   },
 
   /**
