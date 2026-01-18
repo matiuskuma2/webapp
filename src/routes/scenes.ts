@@ -103,6 +103,22 @@ scenes.get('/:id', async (c) => {
         LIMIT 1
       `).bind(sceneId).first()
 
+      // Phase1.7: アクティブ動画取得
+      const activeVideo = await c.env.DB.prepare(`
+        SELECT 
+          id,
+          scene_id,
+          r2_key,
+          r2_url,
+          status,
+          model,
+          duration_sec,
+          created_at
+        FROM video_generations
+        WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+        LIMIT 1
+      `).bind(sceneId).first()
+
       // スタイルプリセット取得
       const stylePreset = await c.env.DB.prepare(`
         SELECT sp.id, sp.name, sp.description, sp.prompt_prefix, sp.prompt_suffix
@@ -166,6 +182,17 @@ scenes.get('/:id', async (c) => {
           image_url: activeComic.r2_url,
           status: activeComic.status,
           created_at: activeComic.created_at
+        } : null,
+        // Phase1.7: 動画情報
+        active_video: activeVideo ? {
+          id: activeVideo.id,
+          scene_id: activeVideo.scene_id,
+          r2_key: activeVideo.r2_key,
+          r2_url: activeVideo.r2_url,
+          status: activeVideo.status,
+          model: activeVideo.model,
+          duration_sec: activeVideo.duration_sec,
+          created_at: activeVideo.created_at
         } : null,
         style_preset: stylePreset || null,
         style_preset_id: stylePreset?.id || null,
