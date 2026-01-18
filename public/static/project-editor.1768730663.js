@@ -1219,15 +1219,7 @@ window.generateCharacterVoice = async function(sceneId) {
   const voicePresetId = voiceChar.voice_preset_id;
   const provider = voicePresetId.startsWith('fish:') ? 'fish' : 'google';
   
-  // F-6: Fish Audio warning
-  if (provider === 'fish') {
-    const confirmed = confirm(
-      '⚠️ Fish Audio を使用します。\n\n' +
-      'Fish Audio は読み間違いが多いため、本番運用では Google TTS を推奨します。\n\n' +
-      'Fish Audio で音声生成を続けますか？'
-    );
-    if (!confirmed) return;
-  }
+  // F-6: Fish Audio warning removed - ユーザーの判断に委ねる
   
   const btn = document.getElementById(`charAudioBtn-${sceneId}`);
   if (btn) {
@@ -1290,10 +1282,7 @@ window.generateSelectedCharVoice = async function(sceneId) {
   
   const provider = voicePresetId.startsWith('fish:') ? 'fish' : 'google';
   
-  if (provider === 'fish') {
-    const confirmed = confirm('⚠️ Fish Audio を使用します。読み間違いが多いため、本番運用では Google TTS を推奨します。続けますか？');
-    if (!confirmed) return;
-  }
+  // Fish Audio warning removed - ユーザーの判断に委ねる
   
   const btn = select.nextElementSibling;
   if (btn) {

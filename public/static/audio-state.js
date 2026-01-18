@@ -123,11 +123,18 @@ window.AudioState = {
           window.AudioUI.setButtonState(sceneId, 'generating', 100);
         }
         
+        // Also update character voice button if exists
+        this.updateCharAudioButton(sceneId, 'completed');
+        
         // Wait 500ms, then update preview and button
         setTimeout(() => {
           if (window.AudioUI) {
             window.AudioUI.updatePreview(sceneId, latest);
             window.AudioUI.setButtonState(sceneId, 'completed', 100);
+          }
+          // Show toast for character voice generation
+          if (window.showToast) {
+            window.showToast('音声生成が完了しました', 'success');
           }
         }, 500);
         
@@ -140,6 +147,14 @@ window.AudioState = {
         if (window.AudioUI) {
           window.AudioUI.setButtonState(sceneId, 'failed', 0);
           window.AudioUI.showError(sceneId, latest.error_message || '音声生成に失敗しました');
+        }
+        
+        // Also update character voice button if exists
+        this.updateCharAudioButton(sceneId, 'failed', latest.error_message);
+        
+        // Show toast for failure
+        if (window.showToast) {
+          window.showToast('音声生成に失敗しました: ' + (latest.error_message || '不明なエラー'), 'error');
         }
       }
       // If generating: keep watching and polling
@@ -162,6 +177,47 @@ window.AudioState = {
           window.AudioUI.setButtonState(sceneId, 'failed', 0);
         }
       }
+    }
+  },
+
+  /**
+   * Update character voice button state (charAudioBtn-{sceneId})
+   * @param {number} sceneId 
+   * @param {string} state - 'completed' | 'failed'
+   * @param {string} errorMessage - optional error message
+   */
+  updateCharAudioButton(sceneId, state, errorMessage) {
+    const btn = document.getElementById(`charAudioBtn-${sceneId}`);
+    if (!btn) return;
+    
+    btn.disabled = false;
+    
+    if (state === 'completed') {
+      btn.innerHTML = '<i class="fas fa-check mr-2"></i>完了 - 再生成';
+      btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
+      btn.classList.add('bg-green-500', 'hover:bg-green-600');
+      
+      // Reset to normal state after 3 seconds
+      setTimeout(() => {
+        if (btn) {
+          btn.innerHTML = '<i class="fas fa-volume-up mr-2"></i>キャラ音声で生成';
+          btn.classList.remove('bg-green-500', 'hover:bg-green-600');
+          btn.classList.add('bg-orange-500', 'hover:bg-orange-600');
+        }
+      }, 3000);
+    } else if (state === 'failed') {
+      btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>失敗 - 再試行';
+      btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
+      btn.classList.add('bg-red-500', 'hover:bg-red-600');
+      
+      // Reset to normal state after 5 seconds
+      setTimeout(() => {
+        if (btn) {
+          btn.innerHTML = '<i class="fas fa-volume-up mr-2"></i>キャラ音声で生成';
+          btn.classList.remove('bg-red-500', 'hover:bg-red-600');
+          btn.classList.add('bg-orange-500', 'hover:bg-orange-600');
+        }
+      }, 5000);
     }
   },
 
