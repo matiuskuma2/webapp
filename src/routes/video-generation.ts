@@ -769,9 +769,15 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
         const jobStatus = awsStatus.job.status;
         
         if (jobStatus === 'completed' && awsStatus.job.presigned_url) {
+          // First, deactivate all videos for this scene
+          await c.env.DB.prepare(`
+            UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
+          `).bind(video.scene_id).run();
+          
+          // Then, set this video as active and completed
           await c.env.DB.prepare(`
             UPDATE video_generations 
-            SET status = 'completed', r2_url = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = 'completed', r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).bind(awsStatus.job.presigned_url, videoId).run();
           
@@ -846,11 +852,15 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
         const jobStatus = awsStatus.job.status;
         
         if (jobStatus === 'completed' && awsStatus.job.presigned_url) {
-          // TODO: presigned_url をR2にコピーしてr2_keyを取得
-          // 暫定: presigned_urlを直接返す
+          // First, deactivate all videos for this scene
+          await c.env.DB.prepare(`
+            UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
+          `).bind(video.scene_id).run();
+          
+          // Then, set this video as active and completed
           await c.env.DB.prepare(`
             UPDATE video_generations 
-            SET status = 'completed', r2_url = ?, updated_at = CURRENT_TIMESTAMP
+            SET status = 'completed', r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
           `).bind(awsStatus.job.presigned_url, videoId).run();
           
