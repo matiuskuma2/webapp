@@ -189,19 +189,16 @@ window.AudioState = {
    */
   updateCharAudioButton(sceneId, state, errorMessage, audioData) {
     const btn = document.getElementById(`charAudioBtn-${sceneId}`);
-    if (!btn) return;
-    
-    btn.disabled = false;
     
     if (state === 'completed') {
-      btn.innerHTML = '<i class="fas fa-redo mr-2"></i>再生成';
-      btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
-      btn.classList.add('bg-green-600', 'hover:bg-green-700');
-      
-      // Update audio preview
+      // Update audio preview (this will hide the generate button)
       this.updateCharAudioPreview(sceneId, audioData);
       
     } else if (state === 'failed') {
+      if (!btn) return;
+      
+      btn.disabled = false;
+      btn.classList.remove('hidden');
       btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>失敗 - 再試行';
       btn.classList.remove('bg-green-600', 'hover:bg-green-700');
       btn.classList.add('bg-red-500', 'hover:bg-red-600');
@@ -224,16 +221,18 @@ window.AudioState = {
    */
   updateCharAudioPreview(sceneId, audioData) {
     const container = document.getElementById(`charAudioPreview-${sceneId}`);
+    const btnContainer = document.getElementById(`charVoiceSettings-${sceneId}`);
     if (!container) return;
     
     if (audioData && audioData.r2_url) {
+      // Show audio player with playback controls
       container.innerHTML = `
         <div class="bg-green-50 border border-green-200 rounded-lg p-3">
           <div class="flex items-center gap-2 mb-2">
             <i class="fas fa-check-circle text-green-600"></i>
-            <span class="text-sm font-semibold text-green-800">音声生成完了</span>
+            <span class="text-sm font-semibold text-green-800">音声生成済み</span>
           </div>
-          <audio controls class="w-full">
+          <audio controls class="w-full" id="charAudio-${sceneId}">
             <source src="${audioData.r2_url}" type="audio/mpeg">
             お使いのブラウザは音声再生に対応していません。
           </audio>
@@ -241,16 +240,20 @@ window.AudioState = {
       `;
       container.classList.remove('hidden');
       
-      // Also update the char audio button to show "再生成"
+      // Hide the generate button when audio exists (user can use 履歴 to regenerate if needed)
       const btn = document.getElementById(`charAudioBtn-${sceneId}`);
       if (btn) {
-        btn.innerHTML = '<i class="fas fa-redo mr-2"></i>再生成';
-        btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
-        btn.classList.add('bg-green-600', 'hover:bg-green-700');
+        btn.classList.add('hidden');
       }
     } else {
       container.innerHTML = '';
       container.classList.add('hidden');
+      
+      // Show generate button when no audio
+      const btn = document.getElementById(`charAudioBtn-${sceneId}`);
+      if (btn) {
+        btn.classList.remove('hidden');
+      }
     }
   },
 
