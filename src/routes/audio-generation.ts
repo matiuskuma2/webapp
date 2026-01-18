@@ -26,7 +26,9 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     const voiceId = (body.voice_id || body.voice_preset_id) as string | undefined;
     const provider = (body.provider as string | undefined) ?? 'google';
     const format = (body.format as string | undefined) ?? 'mp3';
-    const sampleRate = Number(body.sample_rate ?? 24000);
+    // Fish Audio requires 32000 or 44100 Hz for mp3, Google TTS uses 24000 Hz
+    const defaultSampleRate = provider === 'fish' ? 44100 : 24000;
+    const sampleRate = Number(body.sample_rate ?? defaultSampleRate);
     // Phase1.7: text_override で任意のテキストを指定可能（漫画発話用）
     const textOverride = body.text_override as string | undefined;
 

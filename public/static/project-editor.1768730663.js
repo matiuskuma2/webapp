@@ -4295,8 +4295,17 @@ async function applyBulkStyle() {
     
     showToast(`${successCount}/${total}シーンにスタイルを適用しました`, 'success');
     
+    // Save the applied style to restore after reload
+    const appliedStyleId = styleId;
+    
     // Reload builder
     await initBuilderTab();
+    
+    // Restore the applied style selection in dropdown
+    const newSelect = document.getElementById('bulkStyleSelector');
+    if (newSelect && appliedStyleId !== null) {
+      newSelect.value = appliedStyleId;
+    }
     
     // Reset button after reload (with slight delay for visual feedback)
     setTimeout(() => {
