@@ -177,6 +177,7 @@ app.delete('/:sceneId/characters/:characterKey', async (c) => {
 /**
  * POST /api/scenes/:sceneId/characters/batch
  * Batch update: Replace all characters in a scene
+ * Supports: image_characters (array), voice_character (string, optional)
  */
 app.post('/:sceneId/characters/batch', async (c) => {
   try {
@@ -185,6 +186,7 @@ app.post('/:sceneId/characters/batch', async (c) => {
 
     // Support both old format (character_keys) and new format (image_characters)
     const character_keys = body.character_keys || body.image_characters;
+    const voice_character = body.voice_character || null;
 
     if (!Array.isArray(character_keys)) {
       return c.json(
@@ -198,12 +200,21 @@ app.post('/:sceneId/characters/batch', async (c) => {
       DELETE FROM scene_character_map WHERE scene_id = ?
     `).bind(sceneId).run();
 
-    // Insert new mappings
+    // Insert new mappings (voice_character gets is_primary=1)
     for (const key of character_keys) {
+      const isPrimary = (key === voice_character) ? 1 : 0;
       await c.env.DB.prepare(`
         INSERT INTO scene_character_map (scene_id, character_key, is_primary)
-        VALUES (?, ?, 0)
-      `).bind(sceneId, key).run();
+        VALUES (?, ?, ?)
+      `).bind(sceneId, key, isPrimary).run();
+    }
+
+    // If voice_character is specified but not in image_characters, add it as primary
+    if (voice_character && !character_keys.includes(voice_character)) {
+      await c.env.DB.prepare(`
+        INSERT INTO scene_character_map (scene_id, character_key, is_primary)
+        VALUES (?, ?, 1)
+      `).bind(sceneId, voice_character).run();
     }
 
     // Return updated list

@@ -111,6 +111,26 @@ scenes.get('/:id', async (c) => {
         WHERE sss.scene_id = ?
       `).bind(sceneId).first()
 
+      // キャラクター情報取得（プロジェクトIDを取得してから）
+      const projectId = scene.project_id
+      const { results: characterMappings } = await c.env.DB.prepare(`
+        SELECT 
+          scm.character_key,
+          scm.is_primary,
+          pc.character_name,
+          pc.voice_preset_id,
+          pc.reference_image_r2_url
+        FROM scene_character_map scm
+        LEFT JOIN project_characters pc 
+          ON scm.character_key = pc.character_key AND pc.project_id = ?
+        WHERE scm.scene_id = ?
+      `).bind(projectId, sceneId).all()
+
+      // 音声キャラクター（is_primary=1 のキャラ、またはvoice_preset_idがあるキャラ）
+      const voiceCharacter = characterMappings.find((c: any) => c.is_primary === 1 && c.voice_preset_id)
+        || characterMappings.find((c: any) => c.voice_preset_id)
+        || null
+
       return c.json({
         ...sceneData,
         latest_image: latestImage ? {
@@ -145,7 +165,20 @@ scenes.get('/:id', async (c) => {
           created_at: activeComic.created_at
         } : null,
         style_preset: stylePreset || null,
-        style_preset_id: stylePreset?.id || null
+        style_preset_id: stylePreset?.id || null,
+        // キャラクター情報追加
+        characters: characterMappings.map((c: any) => ({
+          character_key: c.character_key,
+          character_name: c.character_name,
+          is_primary: c.is_primary,
+          voice_preset_id: c.voice_preset_id,
+          reference_image_r2_url: c.reference_image_r2_url
+        })),
+        voice_character: voiceCharacter ? {
+          character_key: voiceCharacter.character_key,
+          character_name: voiceCharacter.character_name,
+          voice_preset_id: voiceCharacter.voice_preset_id
+        } : null
       })
     }
 

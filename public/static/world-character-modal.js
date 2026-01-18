@@ -750,6 +750,12 @@
       toast('Character Name は2文字以上です', 'warning');
       return null;
     }
+    
+    // 音声必須バリデーション（キャラクターには必ず音声を設定）
+    if (!voice) {
+      toast('音声設定は必須です。Voice Preset または Fish Audio ID を設定してください。', 'warning');
+      return null;
+    }
 
     // Aliases validation
     const { valid, invalid } = parseAliases(aliasesText);
