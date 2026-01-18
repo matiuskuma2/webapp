@@ -1263,7 +1263,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
   
   // Helper imports
   const { validateProjectAssets, buildProjectJson, hashProjectJson } = await import('../utils/video-build-helpers');
-  const { startVideoBuild, DEFAULT_OUTPUT_BUCKET, getDefaultOutputKey } = await import('../utils/aws-video-build-client');
+  const { startVideoBuild, createVideoBuildClientConfig, DEFAULT_OUTPUT_BUCKET, getDefaultOutputKey } = await import('../utils/aws-video-build-client');
   
   try {
     const projectId = parseInt(c.req.param('projectId'), 10);
@@ -1475,26 +1475,26 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     }
     
     // 9. AWS Orchestrator呼び出し
-    const baseUrl = c.env.AWS_ORCH_BASE_URL;
+    const clientConfig = createVideoBuildClientConfig(c.env);
     
-    if (!baseUrl) {
-      // AWS not configured - leave as validating
+    if (!clientConfig) {
+      // AWS credentials not configured
       await c.env.DB.prepare(`
         UPDATE video_builds 
-        SET status = 'failed', error_code = 'AWS_NOT_CONFIGURED', error_message = 'AWS Orchestrator URL not configured'
+        SET status = 'failed', error_code = 'AWS_NOT_CONFIGURED', error_message = 'AWS credentials or Orchestrator URL not configured'
         WHERE id = ?
       `).bind(videoBuildId).run();
       
       return c.json({
         error: {
           code: 'AWS_NOT_CONFIGURED',
-          message: 'Video Build サービスが設定されていません'
+          message: 'Video Build サービスが設定されていません（AWS認証情報が不足）'
         }
       }, 500);
     }
     
-    // Call AWS Orchestrator
-    const awsResponse = await startVideoBuild(baseUrl, {
+    // Call AWS Orchestrator (SigV4 署名付き)
+    const awsResponse = await startVideoBuild(clientConfig, {
       video_build_id: videoBuildId,
       project_id: projectId,
       owner_user_id: project.user_id,
@@ -1609,7 +1609,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
  */
 videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
   const { getCookie } = await import('hono/cookie');
-  const { getVideoBuildStatus } = await import('../utils/aws-video-build-client');
+  const { getVideoBuildStatus, createVideoBuildClientConfig } = await import('../utils/aws-video-build-client');
   
   try {
     const buildId = parseInt(c.req.param('buildId'), 10);
@@ -1641,12 +1641,12 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
     const shouldQueryAws = !skipAwsStatuses.includes(build.status);
     
     // 3. AWS Orchestrator に status 問い合わせ
-    const baseUrl = c.env.AWS_ORCH_BASE_URL;
+    const clientConfig = createVideoBuildClientConfig(c.env);
     
-    if (!baseUrl) {
+    if (!clientConfig) {
       return c.json({
         build,
-        warning: 'AWS Orchestrator URL not configured'
+        warning: 'AWS credentials or Orchestrator URL not configured'
       });
     }
     
@@ -1658,7 +1658,7 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
     }
     
     const awsResponse = await getVideoBuildStatus(
-      baseUrl,
+      clientConfig,
       build.aws_job_id || buildId,
       {
         render_id: build.remotion_render_id || undefined,

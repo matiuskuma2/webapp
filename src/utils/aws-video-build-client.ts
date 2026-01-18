@@ -7,8 +7,17 @@
  * - POST /start  → Video Build開始（project.jsonを送信）
  * - GET /status/{buildId} → ビルドステータス確認
  * 
+ * 認証: SigV4 署名（aws-video-client.ts と同じ API Gateway を使用）
+ * 
  * 注意: AWS_ORCH_BASE_URLが /prod で終わっている場合と終わっていない場合の両方に対応
  */
+
+// ====================================================================
+// AWS SigV4 Constants
+// ====================================================================
+
+const AWS_SERVICE = 'execute-api';
+const DEFAULT_AWS_REGION = 'ap-northeast-1';
 
 // ====================================================================
 // Types
@@ -131,6 +140,133 @@ export interface VideoBuildStatusResponse {
   };
 }
 
+export interface VideoBuildClientConfig {
+  baseUrl: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  region?: string;
+}
+
+// ====================================================================
+// SigV4 Signing (Web Crypto API for Cloudflare Workers)
+// ====================================================================
+
+async function hmacSha256(key: ArrayBuffer, message: string): Promise<ArrayBuffer> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    key,
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  return crypto.subtle.sign('HMAC', cryptoKey, new TextEncoder().encode(message));
+}
+
+async function sha256(message: string): Promise<string> {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+function toHex(buffer: ArrayBuffer): string {
+  return Array.from(new Uint8Array(buffer))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+async function getSignatureKey(
+  secretKey: string,
+  dateStamp: string,
+  regionName: string,
+  serviceName: string
+): Promise<ArrayBuffer> {
+  const kDate = await hmacSha256(new TextEncoder().encode('AWS4' + secretKey).buffer, dateStamp);
+  const kRegion = await hmacSha256(kDate, regionName);
+  const kService = await hmacSha256(kRegion, serviceName);
+  const kSigning = await hmacSha256(kService, 'aws4_request');
+  return kSigning;
+}
+
+interface SignedHeaders {
+  'x-amz-date': string;
+  'x-amz-content-sha256': string;
+  'Authorization': string;
+  'Content-Type'?: string;
+}
+
+async function signRequest(
+  method: string,
+  url: string,
+  body: string,
+  accessKeyId: string,
+  secretAccessKey: string,
+  region: string = DEFAULT_AWS_REGION
+): Promise<SignedHeaders> {
+  const parsedUrl = new URL(url);
+  const host = parsedUrl.host;
+  const path = parsedUrl.pathname;
+  const queryString = parsedUrl.search.slice(1);
+  
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  
+  const payloadHash = await sha256(body);
+  
+  // Canonical request
+  const signedHeadersList = ['host', 'x-amz-content-sha256', 'x-amz-date'];
+  const signedHeaders = signedHeadersList.join(';');
+  
+  const canonicalHeaders = 
+    `host:${host}\n` +
+    `x-amz-content-sha256:${payloadHash}\n` +
+    `x-amz-date:${amzDate}\n`;
+  
+  const canonicalRequest = [
+    method,
+    path,
+    queryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash
+  ].join('\n');
+  
+  const canonicalRequestHash = await sha256(canonicalRequest);
+  
+  // String to sign
+  const credentialScope = `${dateStamp}/${region}/${AWS_SERVICE}/aws4_request`;
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    canonicalRequestHash
+  ].join('\n');
+  
+  // Signature
+  const signingKey = await getSignatureKey(secretAccessKey, dateStamp, region, AWS_SERVICE);
+  const signatureBuffer = await hmacSha256(signingKey, stringToSign);
+  const signature = toHex(signatureBuffer);
+  
+  // Authorization header
+  const authorizationHeader = 
+    `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${credentialScope}, ` +
+    `SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  
+  const headers: SignedHeaders = {
+    'x-amz-date': amzDate,
+    'x-amz-content-sha256': payloadHash,
+    'Authorization': authorizationHeader,
+  };
+  
+  if (body) {
+    headers['Content-Type'] = 'application/json';
+  }
+  
+  return headers;
+}
+
 // ====================================================================
 // URL Normalization (二重prod防止)
 // ====================================================================
@@ -162,19 +298,23 @@ export function normalizeOrchestratorUrl(baseUrl: string, path: string): string 
 }
 
 // ====================================================================
-// API Client Functions
+// API Client Functions (SigV4 対応版)
 // ====================================================================
 
 /**
  * Video Build を開始する
  * POST /start
+ * 
+ * @param config - クライアント設定（認証情報含む）
+ * @param request - リクエストボディ
+ * @param options - オプション（タイムアウト等）
  */
 export async function startVideoBuild(
-  baseUrl: string,
+  config: VideoBuildClientConfig,
   request: StartVideoBuildRequest,
   options?: { timeout?: number }
 ): Promise<StartVideoBuildResponse> {
-  const url = normalizeOrchestratorUrl(baseUrl, '/start');
+  const url = normalizeOrchestratorUrl(config.baseUrl, '/start');
   const body = JSON.stringify(request);
   const timeout = options?.timeout || 25000;  // API Gateway 29秒制限を考慮
   
@@ -183,14 +323,22 @@ export async function startVideoBuild(
   console.log('[VideoBuildClient] Scenes count:', request.project_json.scenes.length);
   
   try {
+    // SigV4 署名
+    const signedHeaders = await signRequest(
+      'POST',
+      url,
+      body,
+      config.accessKeyId,
+      config.secretAccessKey,
+      config.region || DEFAULT_AWS_REGION
+    );
+    
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
     
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: signedHeaders,
       body,
       signal: controller.signal,
     });
@@ -246,9 +394,14 @@ export async function startVideoBuild(
 /**
  * Video Build のステータスを取得する
  * GET /status/{buildId}
+ * 
+ * @param config - クライアント設定（認証情報含む）
+ * @param buildId - ビルドID（aws_job_id または video_build_id）
+ * @param params - オプションのクエリパラメータ
+ * @param options - オプション（タイムアウト等）
  */
 export async function getVideoBuildStatus(
-  baseUrl: string,
+  config: VideoBuildClientConfig,
   buildId: number | string,
   params?: {
     render_id?: string;
@@ -267,20 +420,28 @@ export async function getVideoBuildStatus(
   
   const queryString = queryParams.toString();
   const path = `/status/${buildId}${queryString ? `?${queryString}` : ''}`;
-  const url = normalizeOrchestratorUrl(baseUrl, path);
+  const url = normalizeOrchestratorUrl(config.baseUrl, path);
   const timeout = options?.timeout || 25000;
   
   console.log('[VideoBuildClient] Calling status:', url);
   
   try {
+    // SigV4 署名（GET なのでボディは空）
+    const signedHeaders = await signRequest(
+      'GET',
+      url,
+      '',
+      config.accessKeyId,
+      config.secretAccessKey,
+      config.region || DEFAULT_AWS_REGION
+    );
+    
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
     
     const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: signedHeaders,
       signal: controller.signal,
     });
     
@@ -314,6 +475,35 @@ export async function getVideoBuildStatus(
       },
     };
   }
+}
+
+// ====================================================================
+// Factory Function (環境変数から設定を取得)
+// ====================================================================
+
+export interface VideoBuildEnv {
+  AWS_ORCH_BASE_URL?: string;
+  AWS_ACCESS_KEY_ID?: string;
+  AWS_SECRET_ACCESS_KEY?: string;
+  AWS_REGION?: string;
+}
+
+/**
+ * 環境変数からクライアント設定を生成
+ * 認証情報が不足している場合は null を返す
+ */
+export function createVideoBuildClientConfig(env: VideoBuildEnv): VideoBuildClientConfig | null {
+  if (!env.AWS_ORCH_BASE_URL || !env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
+    console.warn('[VideoBuildClient] Missing AWS credentials or base URL');
+    return null;
+  }
+  
+  return {
+    baseUrl: env.AWS_ORCH_BASE_URL,
+    accessKeyId: env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
+    region: env.AWS_REGION || DEFAULT_AWS_REGION,
+  };
 }
 
 // ====================================================================
