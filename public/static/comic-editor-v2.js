@@ -1895,26 +1895,39 @@
     }
     
     const activeImage = state.scene.active_image;
-    const activeComic = state.scene.active_comic;
+    const baseImage = state.scene.base_image; // Phase1.7: 漫画編集用の元画像（吹き出しなし）
     const latestImage = state.scene.latest_image;
     const displayAssetType = state.scene.display_asset_type || 'image';
     
-    // Phase1.7: 画像取得の優先順位
-    // 1. activeImage（アクティブなAI画像）
-    // 2. activeComic（公開済み漫画画像 - 再編集のユースケース）
+    // Phase1.7: 漫画編集時は必ず吹き出しなしのAI画像をベースにする
+    // 優先順位:
+    // 1. base_image（公開済み漫画の元画像 - 再編集時に最も重要）
+    // 2. activeImage（アクティブなAI画像）
     // 3. latestImage（最新の画像 - is_active=0 でも漫画化可能）
-    let imageUrl = activeImage?.r2_url || activeImage?.image_url;
+    // 
+    // 重要: activeComic（吹き出し付き漫画画像）は絶対に使わない！
+    // 吹き出し付き画像の上に吹き出しを描画すると二重になるため
     
-    // 漫画が公開済みで、かつAI画像がない場合は、公開済み漫画画像で編集を許可
-    if (!imageUrl && activeComic?.r2_url) {
-      imageUrl = activeComic.r2_url;
-      console.log('[ComicEditorV2] Using published comic image as base (no AI image available)');
+    let imageUrl = null;
+    let baseImageId = null;
+    
+    // 1. base_image を最優先（再編集時）
+    if (baseImage?.r2_url) {
+      imageUrl = baseImage.r2_url;
+      baseImageId = baseImage.id;
+      console.log('[ComicEditorV2] Using base_image (original AI image for comic editing)');
     }
-    
-    // 最新画像がある場合はそれを使用（is_active=0 でも漫画化を許可）
-    if (!imageUrl && latestImage?.r2_url && latestImage?.status === 'completed') {
+    // 2. activeImage（新規漫画化時）
+    else if (activeImage?.r2_url || activeImage?.image_url) {
+      imageUrl = activeImage.r2_url || activeImage.image_url;
+      baseImageId = activeImage.id;
+      console.log('[ComicEditorV2] Using active_image (new comic creation)');
+    }
+    // 3. latestImage（フォールバック）
+    else if (latestImage?.r2_url && latestImage?.status === 'completed') {
       imageUrl = latestImage.r2_url;
-      console.log('[ComicEditorV2] Using latest image (not active but completed)');
+      baseImageId = latestImage.id;
+      console.log('[ComicEditorV2] Using latest_image (fallback)');
     }
     
     if (!imageUrl) {
@@ -1922,7 +1935,7 @@
       return;
     }
     
-    state.baseImageGenerationId = activeImage?.id || null;
+    state.baseImageGenerationId = baseImageId;
     initComicData();
     renderModal(imageUrl);
   }

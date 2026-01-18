@@ -119,6 +119,22 @@ scenes.get('/:id', async (c) => {
         LIMIT 1
       `).bind(sceneId).first()
 
+      // Phase1.7: 漫画編集用の元画像を取得（base_image_generation_id から）
+      // 漫画編集時は吹き出し付き画像ではなく、元のAI画像をベースにする必要がある
+      let baseImage = null
+      const baseImageId = comicData?.base_image_generation_id
+      if (baseImageId) {
+        baseImage = await c.env.DB.prepare(`
+          SELECT id, scene_id, r2_key, r2_url, status, created_at
+          FROM image_generations
+          WHERE id = ?
+        `).bind(baseImageId).first()
+      }
+      // base_image_generation_id がない場合は activeImage をフォールバック
+      if (!baseImage && activeImage) {
+        baseImage = activeImage
+      }
+
       // スタイルプリセット取得
       const stylePreset = await c.env.DB.prepare(`
         SELECT sp.id, sp.name, sp.description, sp.prompt_prefix, sp.prompt_suffix
@@ -193,6 +209,16 @@ scenes.get('/:id', async (c) => {
           model: activeVideo.model,
           duration_sec: activeVideo.duration_sec,
           created_at: activeVideo.created_at
+        } : null,
+        // Phase1.7: 漫画編集用の元画像（吹き出しなしのAI画像）
+        base_image: baseImage ? {
+          id: baseImage.id,
+          scene_id: baseImage.scene_id,
+          r2_key: baseImage.r2_key,
+          r2_url: baseImage.r2_url,
+          image_url: baseImage.r2_url,
+          status: baseImage.status,
+          created_at: baseImage.created_at
         } : null,
         // Phase1.7: display_image SSOT（display_asset_typeに基づく採用素材）
         display_image: (() => {

@@ -2458,8 +2458,8 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
     
 
     
-    <!-- Phase1.5: 採用切替ボタン（公開漫画がある場合のみ表示） -->
-    ${hasPublishedComic && imageUrl ? `
+    <!-- Phase1.7: 採用切替ボタン（公開漫画がある場合に表示、imageUrlの有無は問わない） -->
+    ${hasPublishedComic ? `
     <div class="flex gap-2 mt-2">
       <button 
         onclick="switchDisplayAssetType(${scene.id}, 'image')"
@@ -2468,6 +2468,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
             ? 'bg-blue-600 text-white' 
             : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
         }"
+        ${!imageUrl && !latestImageUrl ? 'disabled title="AI画像がありません"' : ''}
       >
         <i class="fas fa-image mr-1"></i>画像を採用
       </button>
