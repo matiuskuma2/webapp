@@ -180,9 +180,14 @@ window.ComicEditor = {
                     
                     <!-- ナレーション用 -->
                     <p class="text-xs text-gray-500 font-semibold">ナレーション用</p>
-                    <button onclick="ComicEditor.addBubble('narration')" class="w-full px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm">
-                      <i class="fas fa-tv mr-1"></i>テロップ帯（黒背景）
-                    </button>
+                    <div class="grid grid-cols-2 gap-2">
+                      <button onclick="ComicEditor.addBubble('narration')" class="px-3 py-2 bg-gray-900 text-white border-2 border-gray-900 rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium">
+                        <i class="fas fa-square mr-1"></i>テロップ帯
+                      </button>
+                      <button onclick="ComicEditor.addBubble('caption')" class="px-3 py-2 bg-white text-gray-800 border-2 border-gray-400 rounded-lg hover:bg-gray-100 transition-colors text-sm font-medium">
+                        <i class="fas fa-font mr-1"></i>字幕（枠なし）
+                      </button>
+                    </div>
                   </div>
                 </div>
               </div>
