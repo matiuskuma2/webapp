@@ -390,4 +390,84 @@ async function generateAndUploadAudio(args: {
   }
 }
 
+/**
+ * POST /api/tts/preview
+ * 音声プリセットのプレビュー再生用（短いサンプルテキスト）
+ */
+audioGeneration.post('/tts/preview', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { text, voice_id } = body;
+
+    if (!voice_id) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'voice_id is required'), 400);
+    }
+
+    const sampleText = text || 'こんにちは、これはサンプル音声です。';
+    
+    // Determine provider from voice_id
+    const isFishVoice = voice_id.startsWith('fish:');
+    const provider = isFishVoice ? 'fish' : 'google';
+
+    if (provider === 'fish') {
+      // Fish Audio
+      if (!c.env.FISH_AUDIO_API_TOKEN) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'FISH_AUDIO_API_TOKEN is not set'), 500);
+      }
+      
+      const referenceId = voice_id.replace('fish:', '');
+      const audioBuffer = await generateFishTTS(sampleText, referenceId, c.env.FISH_AUDIO_API_TOKEN);
+      
+      // Return as base64 data URL
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
+      return c.json({
+        success: true,
+        audio_url: `data:audio/mpeg;base64,${base64}`
+      });
+    } else {
+      // Google TTS
+      const googleTtsKey = c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY;
+      if (!googleTtsKey) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'GOOGLE_TTS_API_KEY is not set'), 500);
+      }
+
+      const ttsUrl = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleTtsKey}`;
+      const ttsResponse = await fetch(ttsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: { text: sampleText },
+          voice: {
+            languageCode: 'ja-JP',
+            name: voice_id,
+          },
+          audioConfig: {
+            audioEncoding: 'MP3',
+            sampleRateHertz: 24000,
+          },
+        }),
+      });
+
+      if (!ttsResponse.ok) {
+        const errorText = await ttsResponse.text();
+        console.error('[TTS Preview] Google TTS error:', errorText);
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'TTS generation failed'), 500);
+      }
+
+      const ttsData = await ttsResponse.json() as { audioContent?: string };
+      if (!ttsData.audioContent) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'No audio content returned'), 500);
+      }
+
+      return c.json({
+        success: true,
+        audio_url: `data:audio/mpeg;base64,${ttsData.audioContent}`
+      });
+    }
+  } catch (error) {
+    console.error('[TTS Preview] Error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'TTS preview failed'), 500);
+  }
+});
+
 export default audioGeneration;

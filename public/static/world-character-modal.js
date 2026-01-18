@@ -229,11 +229,22 @@
             <label class="block text-sm font-semibold text-gray-700 mb-1">
               Voice Preset（任意）
             </label>
-            <select id="wc-voice" 
-              class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
-              <option value="">-- None --</option>
-            </select>
-            <p class="text-xs text-gray-500 mt-1">Fish Audio / Google TTS のプリセットから選択</p>
+            <div class="flex gap-2">
+              <select id="wc-voice" 
+                class="flex-1 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <option value="">-- None --</option>
+              </select>
+              <button 
+                type="button"
+                id="wc-voice-preview-btn"
+                onclick="window.WorldCharacterModal.previewVoice()"
+                class="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
+                title="選択した音声をプレビュー"
+              >
+                <i class="fas fa-play"></i>
+              </button>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">Fish Audio / Google TTS のプリセットから選択（▶で試聴）</p>
           </div>
 
           <!-- Fish Audio Character ID (Custom) -->
@@ -1266,6 +1277,62 @@
     }
   }
 
+  /**
+   * Preview voice using TTS API
+   */
+  async function previewVoice() {
+    const voiceSelect = document.getElementById('wc-voice');
+    const voiceId = voiceSelect?.value;
+    
+    if (!voiceId) {
+      toast('音声プリセットを選択してください', 'warning');
+      return;
+    }
+    
+    const btn = document.getElementById('wc-voice-preview-btn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    
+    try {
+      // サンプルテキストで音声生成
+      const sampleText = 'こんにちは、これはサンプル音声です。';
+      
+      const response = await fetch('/api/tts/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: sampleText,
+          voice_id: voiceId
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error('音声生成に失敗しました');
+      }
+      
+      const data = await response.json();
+      
+      if (data.audio_url) {
+        // 音声を再生
+        const audio = new Audio(data.audio_url);
+        audio.play();
+        toast('音声を再生中...', 'success');
+      } else {
+        throw new Error('音声URLが取得できませんでした');
+      }
+    } catch (err) {
+      console.error('[WorldCharacterModal] Voice preview failed:', err);
+      toast('音声プレビューに失敗しました', 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-play"></i>';
+      }
+    }
+  }
+
   // Expose API to global scope
   window.WorldCharacterModal = {
     open,
@@ -1273,6 +1340,7 @@
     ensureDom,
     openAssign,
     closeAssign,
+    previewVoice,
     onSave: null, // Set by world-character-ui.js
     getPendingImageFile: () => state.pendingImage?.file || null,
     clearPendingImage: () => {

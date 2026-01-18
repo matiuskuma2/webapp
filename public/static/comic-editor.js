@@ -127,7 +127,7 @@ window.ComicEditor = {
                 </h3>
                 <div id="comicCanvasContainer" class="relative bg-gray-100 rounded-lg overflow-hidden" style="aspect-ratio: 16/9;">
                   <img id="comicBaseImage" src="${imageUrl}" crossorigin="anonymous" class="w-full h-full object-contain" alt="Scene image" />
-                  <svg id="comicSvgOverlay" class="absolute inset-0 w-full h-full pointer-events-none" style="pointer-events: all;">
+                  <svg id="comicSvgOverlay" class="absolute inset-0 w-full h-full" style="pointer-events: auto;">
                     <!-- 吹き出しがここに描画される -->
                   </svg>
                 </div>
@@ -357,12 +357,15 @@ window.ComicEditor = {
       svg.appendChild(g);
     });
 
-    // ドラッグイベントリスナー（グローバル）
-    svg.addEventListener('mousemove', (e) => this.onDrag(e));
-    svg.addEventListener('mouseup', () => this.endDrag());
-    svg.addEventListener('mouseleave', () => this.endDrag());
-    svg.addEventListener('touchmove', (e) => this.onDrag(e), { passive: false });
-    svg.addEventListener('touchend', () => this.endDrag());
+    // ドラッグイベントリスナー（グローバル）- 重複防止のため一度だけ設定
+    if (!svg.dataset.listenersAttached) {
+      svg.addEventListener('mousemove', (e) => this.onDrag(e));
+      svg.addEventListener('mouseup', () => this.endDrag());
+      svg.addEventListener('mouseleave', () => this.endDrag());
+      svg.addEventListener('touchmove', (e) => this.onDrag(e), { passive: false });
+      svg.addEventListener('touchend', () => this.endDrag());
+      svg.dataset.listenersAttached = 'true';
+    }
 
     // 追加ボタンの状態更新
     const addBtn = document.getElementById('addBubbleBtn');
