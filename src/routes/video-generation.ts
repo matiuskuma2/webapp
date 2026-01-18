@@ -19,6 +19,7 @@ import type { Bindings } from '../types/bindings';
 import { createAwsVideoClient, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
+import { logApiError, createApiErrorLogger } from '../utils/error-logger';
 
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -225,7 +226,15 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   const sceneIdParam = c.req.param('sceneId');
   const sceneId = parseInt(sceneIdParam, 10);
   
+  // Create error logger for this endpoint
+  const logError = createApiErrorLogger(c.env.DB, 'video_generation', '/api/scenes/:sceneId/generate-video');
+  
   if (isNaN(sceneId)) {
+    await logError({
+      errorCode: 'INVALID_SCENE_ID',
+      errorMessage: `Invalid scene ID: ${sceneIdParam}`,
+      httpStatusCode: 400,
+    });
     return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
   }
   
@@ -246,12 +255,26 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   `).bind(sceneId).first<{ id: number; project_id: number; dialogue: string; owner_user_id: number }>();
   
   if (!scene) {
+    await logError({
+      sceneId: sceneId,
+      errorCode: 'SCENE_NOT_FOUND',
+      errorMessage: `Scene not found: ${sceneId}`,
+      httpStatusCode: 404,
+    });
     return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
   }
   
   // 3. Active image 取得
   const activeImage = await getSceneActiveImage(c.env.DB, sceneId);
   if (!activeImage) {
+    await logError({
+      sceneId: sceneId,
+      projectId: scene.project_id,
+      userId: scene.owner_user_id,
+      errorCode: 'NO_ACTIVE_IMAGE',
+      errorMessage: 'No active image for this scene. Generate and activate an image first.',
+      httpStatusCode: 400,
+    });
     return c.json({
       error: {
         code: 'NO_ACTIVE_IMAGE',
@@ -270,6 +293,15 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   `).bind(sceneId).first();
   
   if (generating) {
+    await logError({
+      sceneId: sceneId,
+      projectId: scene.project_id,
+      userId: scene.owner_user_id,
+      errorCode: 'GENERATION_IN_PROGRESS',
+      errorMessage: 'Video generation already in progress for this scene',
+      httpStatusCode: 409,
+      errorDetails: { existing_video_id: generating.id },
+    });
     return c.json({
       error: {
         code: 'GENERATION_IN_PROGRESS',
@@ -371,6 +403,17 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
         }
         
         if (!apiKey) {
+          await logError({
+            sceneId: sceneId,
+            projectId: scene.project_id,
+            userId: executorUserId,
+            provider: 'google',
+            videoEngine: 'veo2',
+            errorCode: 'SPONSOR_KEY_NOT_CONFIGURED',
+            errorMessage: 'システムAPIキーが設定されていません',
+            httpStatusCode: 500,
+            errorDetails: { isSuperadmin, billingSource },
+          });
           return c.json({
             error: {
               code: 'SPONSOR_KEY_NOT_CONFIGURED',
@@ -389,6 +432,17 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'google', keyRing);
       
       if ('error' in keyResult) {
+        await logError({
+          sceneId: sceneId,
+          projectId: scene.project_id,
+          userId: executorUserId,
+          provider: 'google',
+          videoEngine: 'veo2',
+          errorCode: 'USER_KEY_ERROR',
+          errorMessage: keyResult.error,
+          httpStatusCode: 400,
+          errorDetails: { billingSource },
+        });
         return c.json({
           error: {
             code: 'USER_KEY_ERROR',
@@ -421,6 +475,17 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       }
       
       if (!vertexApiKey) {
+        await logError({
+          sceneId: sceneId,
+          projectId: scene.project_id,
+          userId: executorUserId,
+          provider: 'vertex',
+          videoEngine: 'veo3',
+          errorCode: 'SPONSOR_VERTEX_NOT_CONFIGURED',
+          errorMessage: 'Vertex APIキーが設定されていません',
+          httpStatusCode: 400,
+          errorDetails: { isSuperadmin, billingSource, sponsorUserId },
+        });
         return c.json({
           error: {
             code: 'SPONSOR_VERTEX_NOT_CONFIGURED',
@@ -436,6 +501,17 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', keyRing);
       
       if ('error' in keyResult) {
+        await logError({
+          sceneId: sceneId,
+          projectId: scene.project_id,
+          userId: executorUserId,
+          provider: 'vertex',
+          videoEngine: 'veo3',
+          errorCode: 'USER_KEY_ERROR',
+          errorMessage: keyResult.error,
+          httpStatusCode: 400,
+          errorDetails: { billingSource },
+        });
         return c.json({
           error: {
             code: 'USER_KEY_ERROR',
@@ -487,6 +563,17 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       WHERE id = ?
     `).bind(videoGenerationId).run();
     
+    await logError({
+      sceneId: sceneId,
+      projectId: scene.project_id,
+      userId: executorUserId,
+      videoEngine: videoEngine,
+      errorCode: 'AWS_CONFIG_ERROR',
+      errorMessage: 'AWS credentials not configured',
+      httpStatusCode: 500,
+      errorDetails: { videoGenerationId },
+    });
+    
     return c.json({
       error: { code: 'AWS_CONFIG_ERROR', message: 'AWS credentials not configured' },
     }, 500);
@@ -499,6 +586,17 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       UPDATE video_generations SET status = 'failed', error_message = 'IMAGE_URL_SIGNING_SECRET not configured'
       WHERE id = ?
     `).bind(videoGenerationId).run();
+    
+    await logError({
+      sceneId: sceneId,
+      projectId: scene.project_id,
+      userId: executorUserId,
+      videoEngine: videoEngine,
+      errorCode: 'SERVER_CONFIG_ERROR',
+      errorMessage: 'IMAGE_URL_SIGNING_SECRET not configured',
+      httpStatusCode: 500,
+      errorDetails: { videoGenerationId },
+    });
     
     return c.json({
       error: { code: 'SERVER_CONFIG_ERROR', message: 'Image signing not configured' },
@@ -530,10 +628,28 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   
   if (!awsResponse.success || !awsResponse.job_id) {
     // AWS call failed → mark as failed
+    const errorMessage = awsResponse.error?.message || 'AWS call failed';
     await c.env.DB.prepare(`
       UPDATE video_generations SET status = 'failed', error_message = ?
       WHERE id = ?
-    `).bind(awsResponse.error?.message || 'AWS call failed', videoGenerationId).run();
+    `).bind(errorMessage, videoGenerationId).run();
+    
+    await logError({
+      sceneId: sceneId,
+      projectId: scene.project_id,
+      userId: executorUserId,
+      provider: videoEngine === 'veo3' ? 'vertex' : 'google',
+      videoEngine: videoEngine,
+      errorCode: awsResponse.error?.code || 'AWS_START_FAILED',
+      errorMessage: errorMessage,
+      httpStatusCode: 500,
+      errorDetails: { 
+        videoGenerationId, 
+        billingSource, 
+        billingUserId,
+        awsError: awsResponse.error,
+      },
+    });
     
     return c.json({
       error: awsResponse.error || { code: 'AWS_START_FAILED', message: 'Failed to start video generation' },
@@ -1131,6 +1247,85 @@ videoGeneration.get('/video-builds/:buildId', async (c) => {
     console.error('[VideoBuild] Get error:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get build' } }, 500);
   }
+});
+
+// ====================================================================
+// GET /api/scenes/:sceneId/error-logs
+// Get error logs for a specific scene (admin only)
+// ====================================================================
+
+videoGeneration.get('/:sceneId/error-logs', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  if (isNaN(sceneId)) {
+    return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
+  }
+  
+  // Auth check (admin only)
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+  
+  const session = await c.env.DB.prepare(`
+    SELECT u.role FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ role: string }>();
+  
+  if (!session || !['superadmin', 'admin'].includes(session.role)) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Admin access required' } }, 403);
+  }
+  
+  // Get recent error logs for this scene
+  const { results: errorLogs } = await c.env.DB.prepare(`
+    SELECT id, user_id, project_id, scene_id, api_type, api_endpoint, 
+           provider, video_engine, error_code, error_message, 
+           error_details_json, http_status_code, created_at
+    FROM api_error_logs
+    WHERE scene_id = ?
+    ORDER BY created_at DESC
+    LIMIT 50
+  `).bind(sceneId).all();
+  
+  return c.json({ error_logs: errorLogs || [] });
+});
+
+// ====================================================================
+// GET /api/error-logs/recent
+// Get recent error logs across all scenes (superadmin only)
+// ====================================================================
+
+videoGeneration.get('/error-logs/recent', async (c) => {
+  // Auth check (superadmin only)
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+  
+  const session = await c.env.DB.prepare(`
+    SELECT u.role FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ role: string }>();
+  
+  if (!session || session.role !== 'superadmin') {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Superadmin access required' } }, 403);
+  }
+  
+  // Get recent error logs
+  const { results: errorLogs } = await c.env.DB.prepare(`
+    SELECT e.id, e.user_id, u.email as user_email, e.project_id, e.scene_id, 
+           e.api_type, e.api_endpoint, e.provider, e.video_engine, 
+           e.error_code, e.error_message, e.http_status_code, e.created_at
+    FROM api_error_logs e
+    LEFT JOIN users u ON e.user_id = u.id
+    ORDER BY e.created_at DESC
+    LIMIT 100
+  `).all();
+  
+  return c.json({ error_logs: errorLogs || [] });
 });
 
 export default videoGeneration;
