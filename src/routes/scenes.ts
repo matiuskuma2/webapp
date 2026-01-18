@@ -203,7 +203,7 @@ scenes.get('/:id', async (c) => {
 scenes.put('/:id', async (c) => {
   try {
     const sceneId = c.req.param('id')
-    const { title, dialogue, bullets, image_prompt, comic_data } = await c.req.json()
+    const { title, dialogue, bullets, image_prompt, comic_data, display_asset_type } = await c.req.json()
 
     // シーン存在確認
     const scene = await c.env.DB.prepare(`
@@ -243,6 +243,11 @@ scenes.put('/:id', async (c) => {
     if (comic_data !== undefined) {
       updates.push('comic_data = ?')
       values.push(comic_data === null ? null : JSON.stringify(comic_data))
+    }
+    // display_asset_type の切替（image/comic/video）
+    if (display_asset_type !== undefined) {
+      updates.push('display_asset_type = ?')
+      values.push(display_asset_type)
     }
 
     if (updates.length === 0) {
@@ -292,6 +297,85 @@ scenes.put('/:id', async (c) => {
       error: {
         code: 'INTERNAL_ERROR',
         message: 'Failed to update scene'
+      }
+    }, 500)
+  }
+})
+
+// PATCH /api/scenes/:id - シーン部分更新（PUTと同じ処理）
+scenes.patch('/:id', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+    const body = await c.req.json()
+
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE id = ?
+    `).bind(sceneId).first()
+
+    if (!scene) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Scene not found'
+        }
+      }, 404)
+    }
+
+    // 部分更新（指定されたフィールドのみ）
+    const updates: string[] = []
+    const values: any[] = []
+
+    if (body.title !== undefined) {
+      updates.push('title = ?')
+      values.push(body.title)
+    }
+    if (body.dialogue !== undefined) {
+      updates.push('dialogue = ?')
+      values.push(body.dialogue)
+    }
+    if (body.bullets !== undefined) {
+      updates.push('bullets = ?')
+      values.push(JSON.stringify(body.bullets))
+    }
+    if (body.image_prompt !== undefined) {
+      updates.push('image_prompt = ?')
+      values.push(body.image_prompt)
+    }
+    if (body.comic_data !== undefined) {
+      updates.push('comic_data = ?')
+      values.push(body.comic_data === null ? null : JSON.stringify(body.comic_data))
+    }
+    if (body.display_asset_type !== undefined) {
+      updates.push('display_asset_type = ?')
+      values.push(body.display_asset_type)
+    }
+
+    if (updates.length === 0) {
+      return c.json({
+        error: {
+          code: 'NO_UPDATES',
+          message: 'No fields to update'
+        }
+      }, 400)
+    }
+
+    updates.push('updated_at = CURRENT_TIMESTAMP')
+    values.push(sceneId)
+
+    await c.env.DB.prepare(`
+      UPDATE scenes
+      SET ${updates.join(', ')}
+      WHERE id = ?
+    `).bind(...values).run()
+
+    return c.json({ success: true, scene_id: sceneId })
+  } catch (error) {
+    console.error('Error patching scene:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to patch scene'
       }
     }, 500)
   }

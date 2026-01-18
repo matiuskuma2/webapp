@@ -23,13 +23,20 @@
     caption: { name: '字幕', icon: 'fa-font', hasTail: false, category: 'narration' }
   };
 
-  // サイズ定義（1000px基準）
+  // サイズ定義（1000px基準）- デフォルト
   const BUBBLE_SIZES = {
     speech:  { w: 360, h: 180 },
     whisper: { w: 360, h: 180 },
     thought: { w: 340, h: 170 },
     telop:   { w: 720, h: 120 },
     caption: { w: 720, h: 100 }
+  };
+
+  // サイズプリセット（S/M/L）
+  const SIZE_PRESETS = {
+    S: { multiplier: 0.7, name: '小' },
+    M: { multiplier: 1.0, name: '中' },
+    L: { multiplier: 1.4, name: '大' }
   };
 
   // スタイル定義
@@ -173,19 +180,27 @@
 
   /**
    * 吹き出しサイズ（公開画像ピクセル）
+   * @param {string} type - 吹き出しタイプ
+   * @param {number} naturalW - 元画像の幅
+   * @param {string} sizePreset - サイズプリセット (S/M/L)
    */
-  function getBubbleSizePx(type, naturalW) {
+  function getBubbleSizePx(type, naturalW, sizePreset = 'M') {
     const scale = naturalW / 1000;
     const base = BUBBLE_SIZES[type] || BUBBLE_SIZES.speech;
-    return { w: base.w * scale, h: base.h * scale };
+    const preset = SIZE_PRESETS[sizePreset] || SIZE_PRESETS.M;
+    return { 
+      w: base.w * scale * preset.multiplier, 
+      h: base.h * scale * preset.multiplier 
+    };
   }
 
   /**
-   * 画面内クランプ（サイズ込み）
+   * 画面内クランプ（サイズ込み、端まで移動可能）
    */
-  function clampPosition(pos, type, naturalW, naturalH) {
-    const size = getBubbleSizePx(type, naturalW);
-    const marginPx = 12;
+  function clampPosition(pos, type, naturalW, naturalH, sizePreset = 'M') {
+    const size = getBubbleSizePx(type, naturalW, sizePreset);
+    // マージンを最小化（端まで移動可能に）
+    const marginPx = 2;
     
     const mx = marginPx / naturalW;
     const my = marginPx / naturalH;
@@ -437,9 +452,10 @@
    * 1つの吹き出しを描画（SSOT統合関数）
    */
   function drawOneBubble(ctx, bubble, text, scale, options = {}) {
-    const size = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
-    const w = size.w * scale;
-    const h = size.h * scale;
+    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+    const sizePreset = SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M;
+    const w = baseSize.w * scale * sizePreset.multiplier;
+    const h = baseSize.h * scale * sizePreset.multiplier;
     
     const tailTip = bubble.tail?.enabled
       ? { x: (bubble.tail.tip?.x ?? 0.55) * w, y: (bubble.tail.tip?.y ?? 1.15) * h }
@@ -503,25 +519,26 @@
     for (const bubble of state.draft.bubbles || []) {
       const ut = state.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = (ut?.text || '').trim();
+      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
       
       // 画面外チェック
-      const clamped = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight);
+      const clamped = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size);
       if (Math.abs(clamped.x - bubble.position.x) > 0.001 || Math.abs(clamped.y - bubble.position.y) > 0.001) {
         errors.push({ type: 'OUT_OF_BOUNDS', bubbleId: bubble.id, message: '吹き出しが画面外です' });
       }
       
       // 文字溢れチェック
       if (text) {
-        const size = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
         const style = BUBBLE_STYLES[bubble.type] || BUBBLE_STYLES.speech;
-        const w = size.w * scale;
-        const h = size.h * scale;
-        const padding = style.padding * scale;
+        const w = baseSize.w * scale * sizeMultiplier;
+        const h = baseSize.h * scale * sizeMultiplier;
+        const padding = style.padding * scale * sizeMultiplier;
         const innerW = w - padding * 2;
         const innerH = h - padding * 2;
         
-        const baseFontPx = style.fontSize * scale;
-        const baseLineH = style.lineHeight * scale;
+        const baseFontPx = style.fontSize * scale * sizeMultiplier;
+        const baseLineH = style.lineHeight * scale * sizeMultiplier;
         const isNarration = bubble.type === 'telop' || bubble.type === 'caption';
         
         const fit = fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
@@ -568,10 +585,13 @@
       
       // エラー表示
       if (errorBubbleIds.has(bubble.id)) {
-        const size = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+        const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+        const w = baseSize.w * publishScale * sizeMultiplier;
+        const h = baseSize.h * publishScale * sizeMultiplier;
         ctx.strokeStyle = '#EF4444';
         ctx.lineWidth = 3 * publishScale;
-        ctx.strokeRect(-2 * publishScale, -2 * publishScale, size.w * publishScale + 4 * publishScale, size.h * publishScale + 4 * publishScale);
+        ctx.strokeRect(-2 * publishScale, -2 * publishScale, w + 4 * publishScale, h + 4 * publishScale);
       }
       
       drawOneBubble(ctx, bubble, text, publishScale, { showDeleteButton: true });
@@ -641,9 +661,10 @@
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const bubble = bubbles[i];
       const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-      const size = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
-      const bubbleWidth = size.w * displayBubbleScale;
-      const bubbleHeight = size.h * displayBubbleScale;
+      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+      const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
+      const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
       
       if (canvasX >= containerPos.x && canvasX <= containerPos.x + bubbleWidth &&
           canvasY >= containerPos.y && canvasY <= containerPos.y + bubbleHeight) {
@@ -660,8 +681,9 @@
     
     const displayBubbleScale = rect.width / 1000;
     const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-    const size = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
-    const bubbleWidth = size.w * displayBubbleScale;
+    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+    const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+    const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
     
     const btnX = containerPos.x + bubbleWidth - 6 * displayBubbleScale;
     const btnY = containerPos.y + 6 * displayBubbleScale;
@@ -889,6 +911,7 @@
       id: generateId(),
       utterance_id: utteranceId,
       type: type,
+      size: 'M',  // デフォルトサイズ
       position: pos,
       tail: hasTail ? { enabled: true, tip: { x: 0.55, y: 1.15 } } : { enabled: false }
     };
@@ -916,7 +939,23 @@
       
       const rect = getContainRect();
       if (rect) {
-        bubble.position = clampPosition(bubble.position, type, rect.naturalWidth, rect.naturalHeight);
+        bubble.position = clampPosition(bubble.position, type, rect.naturalWidth, rect.naturalHeight, bubble.size);
+      }
+      
+      renderBubbles();
+      renderPreview();
+    }
+  }
+
+  function updateBubbleSize(bubbleId, size) {
+    if (!state.draft) return;
+    const bubble = state.draft.bubbles.find(b => b.id === bubbleId);
+    if (bubble) {
+      bubble.size = size;
+      
+      const rect = getContainRect();
+      if (rect) {
+        bubble.position = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, size);
       }
       
       renderBubbles();
@@ -1023,21 +1062,30 @@
     const bubbles = state.draft?.bubbles || [];
     const utterances = state.draft?.utterances || [];
     
+    // 発話ごとの色（紐付け表示用）
+    const utteranceColors = ['bg-purple-100 border-purple-300', 'bg-green-100 border-green-300', 'bg-blue-100 border-blue-300'];
+    
     container.innerHTML = bubbles.map((bubble, index) => {
       const utterance = utterances.find(u => u.id === bubble.utterance_id);
-      const utteranceIndex = utterances.findIndex(u => u.id === bubble.utterance_id) + 1;
+      const utteranceIndex = utterances.findIndex(u => u.id === bubble.utterance_id);
       const bubbleType = BUBBLE_TYPES[bubble.type] || BUBBLE_TYPES.speech;
+      const colorClass = utteranceColors[utteranceIndex] || 'bg-gray-100 border-gray-300';
+      const currentSize = bubble.size || 'M';
       
       const typeOptions = Object.entries(BUBBLE_TYPES).map(([key, val]) => 
         `<option value="${key}" ${bubble.type === key ? 'selected' : ''}>${val.name}</option>`
       ).join('');
       
+      const sizeOptions = Object.entries(SIZE_PRESETS).map(([key, val]) =>
+        `<option value="${key}" ${currentSize === key ? 'selected' : ''}>${val.name}</option>`
+      ).join('');
+      
       return `
-      <div class="bg-white rounded-lg p-2 border border-gray-200 text-xs" data-bubble-id="${bubble.id}">
+      <div class="rounded-lg p-2 border text-xs ${colorClass}" data-bubble-id="${bubble.id}">
         <div class="flex items-center justify-between mb-1">
-          <span class="text-gray-600">
-            <i class="fas ${bubbleType.icon} mr-1 text-blue-500"></i>
-            吹出${index + 1} → 発話${utteranceIndex}
+          <span class="font-medium text-gray-700">
+            <i class="fas ${bubbleType.icon} mr-1"></i>
+            吹出${index + 1} → <span class="font-bold">発話${utteranceIndex + 1}</span>
           </span>
           <button 
             onclick="window.ComicEditorV2.removeBubble('${bubble.id}')"
@@ -1046,12 +1094,21 @@
             <i class="fas fa-times"></i>
           </button>
         </div>
-        <select 
-          class="w-full px-1 py-1 text-xs border border-gray-300 rounded"
-          onchange="window.ComicEditorV2.updateBubbleType('${bubble.id}', this.value)"
-        >
-          ${typeOptions}
-        </select>
+        <div class="flex gap-1">
+          <select 
+            class="flex-1 px-1 py-1 text-xs border border-gray-300 rounded"
+            onchange="window.ComicEditorV2.updateBubbleType('${bubble.id}', this.value)"
+          >
+            ${typeOptions}
+          </select>
+          <select 
+            class="w-12 px-1 py-1 text-xs border border-gray-300 rounded"
+            onchange="window.ComicEditorV2.updateBubbleSize('${bubble.id}', this.value)"
+            title="サイズ"
+          >
+            ${sizeOptions}
+          </select>
+        </div>
       </div>
       `;
     }).join('');
@@ -1177,17 +1234,18 @@
         <!-- Body（スクロール可能） -->
         <div class="flex-1 overflow-y-auto p-6">
           <div class="flex gap-6">
-            <!-- 左: プレビュー -->
-            <div class="flex-1">
-              <div id="comicCanvasContainer" class="relative bg-gray-100 rounded-lg overflow-hidden" style="aspect-ratio: 1/1;">
+            <!-- 左: プレビュー（画像のアスペクト比に合わせる） -->
+            <div class="flex-1 flex items-center justify-center">
+              <div id="comicCanvasContainer" class="relative bg-gray-100 rounded-lg" style="max-height: 70vh; width: 100%;">
                 <img id="comicBaseImage" 
                      src="${imageUrl}" 
-                     class="w-full h-full object-contain"
+                     class="w-full h-auto max-h-[70vh] object-contain mx-auto block"
                      crossorigin="anonymous"
                      onload="window.ComicEditorV2.onBaseImageLoad()"
                      onerror="window.ComicEditorV2.onBaseImageError()">
                 <canvas id="comicPreviewCanvas" 
-                        class="absolute inset-0 w-full h-full pointer-events-auto cursor-grab"></canvas>
+                        class="absolute inset-0 w-full h-full pointer-events-auto cursor-grab"
+                        style="touch-action: none;"></canvas>
               </div>
             </div>
             
@@ -1446,6 +1504,7 @@
     addBubbleFromUI,
     removeBubble,
     updateBubbleType,
+    updateBubbleSize,
     saveDraft,
     publish
   };
