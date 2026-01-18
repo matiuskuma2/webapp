@@ -369,7 +369,16 @@ window.ComicEditor = {
 
     const bubbles = this.draft.bubbles || [];
     const container = document.getElementById('comicCanvasContainer');
+    const baseImage = document.getElementById('comicBaseImage');
     const rect = container.getBoundingClientRect();
+    
+    // 元画像の実際のサイズを取得（Canvas出力時と同じ座標系にする）
+    const naturalWidth = baseImage?.naturalWidth || rect.width;
+    const naturalHeight = baseImage?.naturalHeight || rect.height;
+    
+    // SVGにviewBoxを設定（元画像サイズ基準）
+    svg.setAttribute('viewBox', `0 0 ${naturalWidth} ${naturalHeight}`);
+    svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
 
     // SVGをクリア（defs以外）
     svg.innerHTML = `
@@ -380,13 +389,16 @@ window.ComicEditor = {
       </defs>
     `;
 
+    // 吹き出しサイズのスケール係数（元画像の幅を基準）
+    const baseScale = naturalWidth / 1000; // 1000px幅を基準
+
     bubbles.forEach((bubble, index) => {
       const utterance = this.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = utterance?.text || '';
       
-      // 正規化座標からピクセル座標に変換
-      const x = bubble.position.x * rect.width;
-      const y = bubble.position.y * rect.height;
+      // 正規化座標から元画像座標に変換
+      const x = bubble.position.x * naturalWidth;
+      const y = bubble.position.y * naturalHeight;
 
       // 吹き出しグループ
       const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
@@ -395,9 +407,11 @@ window.ComicEditor = {
       g.setAttribute('transform', `translate(${x}, ${y})`);
       g.style.cursor = 'move';
 
-      // 吹き出し背景（サイズはタイプ別）
-      const bubbleWidth = (bubble.type === 'narration' || bubble.type === 'caption') ? 280 : 200;
-      const bubbleHeight = (bubble.type === 'narration' || bubble.type === 'caption') ? 60 : 100;
+      // 吹き出し背景（サイズはタイプ別、スケール適用）
+      const baseBubbleWidth = (bubble.type === 'narration' || bubble.type === 'caption') ? 280 : 200;
+      const baseBubbleHeight = (bubble.type === 'narration' || bubble.type === 'caption') ? 60 : 100;
+      const bubbleWidth = baseBubbleWidth * baseScale;
+      const bubbleHeight = baseBubbleHeight * baseScale;
       const path = this.createBubblePath(bubble.type, bubbleWidth, bubbleHeight);
       
       // caption タイプは吹き出し背景なし（縁取りテキストのみ）
@@ -436,11 +450,12 @@ window.ComicEditor = {
         g.appendChild(pathEl);
       }
 
-      // テキスト（複数行対応）- サイズ拡大
+      // テキスト（複数行対応）- スケール適用
       const isNarrationStyle = bubble.type === 'narration' || bubble.type === 'caption';
       const charsPerLine = isNarrationStyle ? 28 : 20;
       const lines = this.wrapText(text, charsPerLine);
-      const lineHeight = 20;
+      const lineHeight = 20 * baseScale;
+      const fontSize = (isNarrationStyle ? 18 : 14) * baseScale;
       const textStartY = (bubbleHeight - lines.length * lineHeight) / 2 + lineHeight;
 
       lines.forEach((line, i) => {
@@ -448,19 +463,19 @@ window.ComicEditor = {
         textEl.setAttribute('x', bubbleWidth / 2);
         textEl.setAttribute('y', textStartY + i * lineHeight);
         textEl.setAttribute('text-anchor', 'middle');
-        textEl.setAttribute('font-size', isNarrationStyle ? '18' : '14');
+        textEl.setAttribute('font-size', fontSize);
         textEl.setAttribute('font-weight', isNarrationStyle ? 'bold' : 'normal');
         
         // caption: 縁取りテキスト（白文字に黒縁）
         if (bubble.type === 'caption') {
           textEl.setAttribute('fill', '#FFFFFF');
           textEl.setAttribute('stroke', '#000000');
-          textEl.setAttribute('stroke-width', '3');
+          textEl.setAttribute('stroke-width', 3 * baseScale);
           textEl.setAttribute('paint-order', 'stroke');
         } else if (bubble.type === 'narration') {
           textEl.setAttribute('fill', '#FFFFFF');
           textEl.setAttribute('stroke', '#000000');
-          textEl.setAttribute('stroke-width', '0.5');
+          textEl.setAttribute('stroke-width', 0.5 * baseScale);
         } else {
           textEl.setAttribute('fill', '#1F2937');
         }
@@ -468,11 +483,12 @@ window.ComicEditor = {
         g.appendChild(textEl);
       });
 
-      // 削除ボタン
+      // 削除ボタン（スケール適用）
+      const btnRadius = 10 * baseScale;
       const deleteBtn = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-      deleteBtn.setAttribute('cx', bubbleWidth - 5);
-      deleteBtn.setAttribute('cy', '5');
-      deleteBtn.setAttribute('r', '10');
+      deleteBtn.setAttribute('cx', bubbleWidth - 5 * baseScale);
+      deleteBtn.setAttribute('cy', 5 * baseScale);
+      deleteBtn.setAttribute('r', btnRadius);
       deleteBtn.setAttribute('fill', '#EF4444');
       deleteBtn.setAttribute('cursor', 'pointer');
       deleteBtn.onclick = (e) => {
@@ -482,10 +498,10 @@ window.ComicEditor = {
       g.appendChild(deleteBtn);
 
       const deleteIcon = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-      deleteIcon.setAttribute('x', bubbleWidth - 5);
-      deleteIcon.setAttribute('y', '9');
+      deleteIcon.setAttribute('x', bubbleWidth - 5 * baseScale);
+      deleteIcon.setAttribute('y', 9 * baseScale);
       deleteIcon.setAttribute('text-anchor', 'middle');
-      deleteIcon.setAttribute('font-size', '12');
+      deleteIcon.setAttribute('font-size', 12 * baseScale);
       deleteIcon.setAttribute('fill', 'white');
       deleteIcon.setAttribute('pointer-events', 'none');
       deleteIcon.textContent = '×';
@@ -678,7 +694,12 @@ window.ComicEditor = {
     e.preventDefault();
 
     const container = document.getElementById('comicCanvasContainer');
+    const baseImage = document.getElementById('comicBaseImage');
     const rect = container.getBoundingClientRect();
+    
+    // 元画像の実際のサイズ
+    const naturalWidth = baseImage?.naturalWidth || rect.width;
+    const naturalHeight = baseImage?.naturalHeight || rect.height;
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
@@ -697,10 +718,10 @@ window.ComicEditor = {
       bubble.position.x = newX;
       bubble.position.y = newY;
 
-      // SVG要素を直接更新（再描画なし）
+      // SVG要素を直接更新（元画像座標系）
       const g = document.getElementById(`bubble-${bubble.id}`);
       if (g) {
-        g.setAttribute('transform', `translate(${newX * rect.width}, ${newY * rect.height})`);
+        g.setAttribute('transform', `translate(${newX * naturalWidth}, ${newY * naturalHeight})`);
       }
     }
   },
@@ -946,15 +967,8 @@ window.ComicEditor = {
         svgImg.crossOrigin = 'anonymous';
         
         svgImg.onload = () => {
-          // SVGのサイズを調整してcanvasに描画
-          const containerRect = container.getBoundingClientRect();
-          const scaleX = canvas.width / containerRect.width;
-          const scaleY = canvas.height / containerRect.height;
-          
-          ctx.save();
-          ctx.scale(scaleX, scaleY);
-          ctx.drawImage(svgImg, 0, 0, containerRect.width, containerRect.height);
-          ctx.restore();
+          // SVGはviewBoxで元画像サイズに設定済みなので、そのまま描画
+          ctx.drawImage(svgImg, 0, 0, canvas.width, canvas.height);
           
           URL.revokeObjectURL(svgUrl);
           
