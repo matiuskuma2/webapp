@@ -194,6 +194,25 @@ scenes.get('/:id', async (c) => {
           duration_sec: activeVideo.duration_sec,
           created_at: activeVideo.created_at
         } : null,
+        // Phase1.7: display_image SSOT（display_asset_typeに基づく採用素材）
+        display_image: (() => {
+          const displayType = sceneData.display_asset_type || 'image';
+          if (displayType === 'comic' && activeComic) {
+            return {
+              type: 'comic',
+              r2_url: activeComic.r2_url,
+              image_url: activeComic.r2_url
+            };
+          }
+          if (activeImage) {
+            return {
+              type: 'image',
+              r2_url: activeImage.r2_url,
+              image_url: activeImage.r2_url
+            };
+          }
+          return null;
+        })(),
         style_preset: stylePreset || null,
         style_preset_id: stylePreset?.id || null,
         // キャラクター情報追加

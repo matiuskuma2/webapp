@@ -463,6 +463,25 @@ projects.get('/:id/scenes', async (c) => {
               r2_url: activeComicRecord.r2_url,
               image_url: activeComicRecord.r2_url || `/${activeComicRecord.r2_key}`
             } : null,
+            // Phase1.7: display_image SSOT（display_asset_typeに基づく採用素材）
+            display_image: (() => {
+              const displayType = scene.display_asset_type || 'image';
+              if (displayType === 'comic' && activeComicRecord) {
+                return {
+                  type: 'comic',
+                  r2_url: activeComicRecord.r2_url,
+                  image_url: activeComicRecord.r2_url || `/${activeComicRecord.r2_key}`
+                };
+              }
+              if (activeRecord) {
+                return {
+                  type: 'image',
+                  r2_url: activeRecord.r2_url,
+                  image_url: activeRecord.r2_url || `/${activeRecord.r2_key}`
+                };
+              }
+              return null;
+            })(),
             latest_image: latestRecord ? {
               status: latestRecord.status,
               r2_key: latestRecord.r2_key,
