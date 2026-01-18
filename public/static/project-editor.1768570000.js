@@ -2367,8 +2367,9 @@ function renderImageCharacterSection(scene) {
 
   const imageCharList = topImage.map((c) => {
     const name = escapeHtml(String(c.character_name));
+    const starIcon = c.is_primary ? '<i class="fas fa-star text-yellow-500 mr-1" title="音声キャラ"></i>' : '';
     return `<span class="inline-flex items-center px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs border border-blue-200">
-      <i class="fas fa-image mr-1"></i>${name}
+      ${starIcon}<i class="fas fa-image mr-1"></i>${name}
     </span>`;
   }).join(' ');
 
@@ -2387,14 +2388,14 @@ function renderImageCharacterSection(scene) {
           <i class="fas fa-edit mr-1"></i>編集
         </button>
       </div>
-      <div class="flex flex-wrap gap-2">
+      <div class="scene-character-tags flex flex-wrap gap-2" data-scene-id="${scene.id}">
         ${topImage.length > 0 
           ? imageCharList 
           : '<span class="text-sm text-gray-500">未設定（プロンプトのみで生成）</span>'}
       </div>
       <p class="text-xs text-gray-500 mt-2">
         <i class="fas fa-info-circle mr-1"></i>
-        画像生成時にこのキャラクターが登場します
+        画像生成時にこのキャラクターが登場します（★は音声キャラ）
       </p>
     </div>
   `;

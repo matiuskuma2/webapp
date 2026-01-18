@@ -1169,29 +1169,16 @@
       .slice(0, 3);
 
     if (top.length === 0) {
-      return `
-        <span class="inline-flex items-center px-3 py-1 rounded-full bg-gray-100 text-gray-500 text-xs font-semibold">
-          <i class="fas fa-user-slash mr-1"></i>
-          キャラ未割当
-        </span>
-      `;
+      return `<span class="text-sm text-gray-500">未設定（プロンプトのみで生成）</span>`;
     }
 
+    // シーンカード内のタグスタイルに統一（★は音声キャラ表示）
     return top.map((ch) => {
       const name = escapeHtmlLocal(ch.character_name);
-      const key = escapeHtmlLocal(ch.character_key || '');
-      const star = ch.is_primary ? '★ ' : '';
-      return `
-        <button
-          type="button"
-          class="char-tag inline-flex items-center px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold hover:bg-blue-100 transition-colors border border-blue-200"
-          data-action="open-character-assign"
-          data-scene-id="${sceneId}"
-          data-character-key="${key}"
-          title="クリックで割当編集"
-        >
-          ${star}${name}
-        </button>
+      const starIcon = ch.is_primary ? '<i class="fas fa-star text-yellow-500 mr-1" title="音声キャラ"></i>' : '';
+      return `<span class="inline-flex items-center px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs border border-blue-200">
+        ${starIcon}<i class="fas fa-image mr-1"></i>${name}
+      </span>
       `;
     }).join('');
   }
