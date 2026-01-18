@@ -3183,8 +3183,11 @@ async function generateBulkImages(mode) {
   }
 }
 
-// View image history
+// View image history (SSOT Phase3: 漫画画像には「編集再開」ボタンを表示)
 async function viewImageHistory(sceneId) {
+  // sceneIdをモーダル用に保存
+  window._currentHistorySceneId = sceneId;
+  
   try {
     const response = await axios.get(`${API_BASE}/scenes/${sceneId}/images`);
     const images = response.data.images || [];
@@ -3202,28 +3205,55 @@ async function viewImageHistory(sceneId) {
     } else {
       content.innerHTML = `
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          ${images.map(img => `
-            <div class="border-2 ${img.is_active ? 'border-blue-600' : 'border-gray-200'} rounded-lg overflow-hidden">
-              <div class="aspect-video bg-gray-100">
-                <img src="${img.image_url}" alt="Generated image" class="w-full h-full object-cover" />
-              </div>
-              <div class="p-3 space-y-2">
-                <p class="text-xs text-gray-600 line-clamp-2">${escapeHtml(img.prompt)}</p>
-                <div class="flex items-center justify-between text-xs text-gray-500">
-                  <span>${new Date(img.created_at.replace(' ', 'T') + 'Z').toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}</span>
-                  ${img.is_active 
-                    ? '<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded">現在使用中</span>'
-                    : `<button 
-                         onclick="activateImage(${img.id}, ${sceneId})"
-                         class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors"
-                       >
-                         この画像を採用
-                       </button>`
-                  }
+          ${images.map(img => {
+            const isComic = img.asset_type === 'comic';
+            const typeLabel = isComic 
+              ? '<span class="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded"><i class="fas fa-comment-alt mr-1"></i>漫画</span>'
+              : '';
+            
+            // アクションボタン
+            let actionButtons = '';
+            if (img.is_active) {
+              actionButtons = '<span class="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs">現在使用中</span>';
+            } else {
+              actionButtons = `
+                <button 
+                  onclick="activateImage(${img.id}, ${sceneId})"
+                  class="px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 transition-colors text-xs"
+                >
+                  採用
+                </button>
+              `;
+            }
+            
+            // 漫画の場合は「編集再開」ボタンを追加
+            if (isComic) {
+              actionButtons += `
+                <button 
+                  onclick="reopenComicEditor(${sceneId})"
+                  class="px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors text-xs ml-1"
+                >
+                  <i class="fas fa-edit mr-1"></i>編集再開
+                </button>
+              `;
+            }
+            
+            return `
+              <div class="border-2 ${img.is_active ? 'border-blue-600' : 'border-gray-200'} rounded-lg overflow-hidden relative">
+                ${typeLabel}
+                <div class="aspect-video bg-gray-100">
+                  <img src="${img.image_url}" alt="Generated image" class="w-full h-full object-cover" />
+                </div>
+                <div class="p-3 space-y-2">
+                  <p class="text-xs text-gray-600 line-clamp-2">${escapeHtml(img.prompt || (isComic ? '漫画画像' : ''))}</p>
+                  <div class="flex flex-wrap items-center gap-1 text-xs text-gray-500">
+                    <span class="mr-auto">${new Date(img.created_at.replace(' ', 'T') + 'Z').toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })}</span>
+                    ${actionButtons}
+                  </div>
                 </div>
               </div>
-            </div>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
       `;
     }
@@ -3232,6 +3262,25 @@ async function viewImageHistory(sceneId) {
   } catch (error) {
     console.error('Load image history error:', error);
     showToast('画像履歴の読み込みに失敗しました', 'error');
+  }
+}
+
+// 漫画編集を再開（履歴から）
+function reopenComicEditor(sceneId) {
+  // 履歴モーダルを閉じる
+  closeImageHistory();
+  // 漫画エディタを開く
+  if (typeof window.openComicEditor === 'function') {
+    window.openComicEditor(sceneId);
+  } else {
+    showToast('漫画エディタを読み込み中...', 'info');
+    setTimeout(() => {
+      if (typeof window.openComicEditor === 'function') {
+        window.openComicEditor(sceneId);
+      } else {
+        showToast('漫画エディタの読み込みに失敗しました', 'error');
+      }
+    }, 500);
   }
 }
 

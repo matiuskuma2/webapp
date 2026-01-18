@@ -451,9 +451,9 @@ scenes.get('/:id/images', async (c) => {
       }, 404)
     }
 
-    // 画像生成履歴取得（新しい順）
+    // 画像生成履歴取得（新しい順）- asset_typeを含む
     const { results: imageGenerations } = await c.env.DB.prepare(`
-      SELECT id, prompt, r2_key, r2_url, status, is_active, error_message, created_at
+      SELECT id, prompt, r2_key, r2_url, status, is_active, error_message, asset_type, created_at
       FROM image_generations
       WHERE scene_id = ?
       ORDER BY created_at DESC
@@ -470,6 +470,7 @@ scenes.get('/:id/images', async (c) => {
         status: img.status,
         is_active: img.is_active === 1,
         error_message: img.error_message,
+        asset_type: img.asset_type || 'ai', // 'ai' | 'comic'
         created_at: img.created_at
       }))
     })
