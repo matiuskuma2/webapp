@@ -9,9 +9,9 @@ scenes.get('/:id', async (c) => {
     const sceneId = c.req.param('id')
     const view = c.req.query('view') // 'board' 指定時のみ画像情報含む
 
-    // 基本シーン情報取得
+    // 基本シーン情報取得（display_asset_type追加）
     const scene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, created_at, updated_at
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, display_asset_type, created_at, updated_at
       FROM scenes
       WHERE id = ?
     `).bind(sceneId).first()
@@ -51,7 +51,8 @@ scenes.get('/:id', async (c) => {
     const sceneData = {
       ...scene,
       bullets: bulletsArr,
-      comic_data: comicData
+      comic_data: comicData,
+      display_asset_type: scene.display_asset_type || 'image'
     }
 
     // view=board の場合、画像情報とスタイル情報を含める
@@ -74,7 +75,7 @@ scenes.get('/:id', async (c) => {
         LIMIT 1
       `).bind(sceneId).first()
 
-      // アクティブ画像取得
+      // アクティブAI画像取得（asset_type='ai' または asset_type IS NULL）
       const activeImage = await c.env.DB.prepare(`
         SELECT 
           id,
@@ -84,7 +85,21 @@ scenes.get('/:id', async (c) => {
           status,
           created_at
         FROM image_generations
-        WHERE scene_id = ? AND is_active = 1
+        WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+        LIMIT 1
+      `).bind(sceneId).first()
+
+      // アクティブ漫画画像取得（asset_type='comic'）
+      const activeComic = await c.env.DB.prepare(`
+        SELECT 
+          id,
+          scene_id,
+          r2_key,
+          r2_url,
+          status,
+          created_at
+        FROM image_generations
+        WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
         LIMIT 1
       `).bind(sceneId).first()
 
@@ -118,6 +133,16 @@ scenes.get('/:id', async (c) => {
           image_url: activeImage.r2_url, // Alias for compatibility
           status: activeImage.status,
           created_at: activeImage.created_at
+        } : null,
+        // Phase1.5: 漫画画像情報
+        active_comic: activeComic ? {
+          id: activeComic.id,
+          scene_id: activeComic.scene_id,
+          r2_key: activeComic.r2_key,
+          r2_url: activeComic.r2_url,
+          image_url: activeComic.r2_url,
+          status: activeComic.status,
+          created_at: activeComic.created_at
         } : null,
         style_preset: stylePreset || null,
         style_preset_id: stylePreset?.id || null

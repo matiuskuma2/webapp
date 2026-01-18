@@ -1,11 +1,15 @@
-// comic-editor.js - Phase1: 漫画編集ポップアップ
+// comic-editor.js - Phase1.5: 漫画編集ポップアップ（Draft/Published分離対応）
 // 仕様: SVG + vanilla JS / 既存機能に影響なし / 発話最大3 / 吹き出し最大3
+// Draft: 編集状態（シーンに出ない）
+// Published: 公開済み（シーンに出る、動画化対象になれる）
 
 window.ComicEditor = {
   // 状態
   currentSceneId: null,
   currentScene: null,
-  comicData: null,
+  draft: null,
+  published: null,
+  baseImageGenerationId: null,
   isDragging: false,
   dragTarget: null,
   dragOffset: { x: 0, y: 0 },
@@ -34,13 +38,17 @@ window.ComicEditor = {
     }
 
     // 画像がない場合は開けない
-    const imageUrl = this.currentScene.active_image?.r2_url || this.currentScene.active_image?.image_url;
+    const activeImage = this.currentScene.active_image;
+    const imageUrl = activeImage?.r2_url || activeImage?.image_url;
     if (!imageUrl) {
       showToast('画像が生成されていません', 'warning');
       return;
     }
 
-    // comic_data 初期化（NULLの場合はdialogueから生成）
+    // base_image_generation_id を保存（監査用）
+    this.baseImageGenerationId = activeImage?.id || null;
+
+    // comic_data 初期化（Draft/Published分離）
     this.initComicData();
 
     // モーダル表示
@@ -49,14 +57,19 @@ window.ComicEditor = {
   },
 
   /**
-   * comic_data の初期化（SSOT: dialogueが正）
+   * comic_data の初期化（Phase1.5: Draft/Published分離）
    */
   initComicData() {
-    if (this.currentScene.comic_data) {
-      this.comicData = this.currentScene.comic_data;
+    const comicData = this.currentScene.comic_data;
+    
+    if (comicData && comicData.draft) {
+      // 既存Draftがあれば使用
+      this.draft = comicData.draft;
+      this.published = comicData.published || null;
+      this.baseImageGenerationId = comicData.base_image_generation_id || this.baseImageGenerationId;
     } else {
-      // 初期生成: dialogue → utterances[0].text
-      this.comicData = {
+      // 初期生成: dialogue → utterances[0].text（SSOT維持）
+      this.draft = {
         enabled: true,
         utterances: [
           {
@@ -68,8 +81,11 @@ window.ComicEditor = {
         ],
         bubbles: []
       };
+      this.published = comicData?.published || null;
     }
-    console.log('[ComicEditor] Comic data initialized:', this.comicData);
+    
+    console.log('[ComicEditor] Draft initialized:', this.draft);
+    console.log('[ComicEditor] Published:', this.published);
   },
 
   /**
@@ -81,6 +97,11 @@ window.ComicEditor = {
     const existing = document.getElementById('comicEditorModal');
     if (existing) existing.remove();
 
+    const hasPublished = !!this.published?.image_generation_id;
+    const publishedBadge = hasPublished 
+      ? `<span class="ml-2 px-2 py-1 bg-green-500 text-white text-xs rounded-full">公開済み</span>`
+      : `<span class="ml-2 px-2 py-1 bg-yellow-500 text-white text-xs rounded-full">未公開</span>`;
+
     const modalHtml = `
       <div id="comicEditorModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60" style="display: none;">
         <div class="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -89,6 +110,7 @@ window.ComicEditor = {
             <h2 class="text-xl font-bold text-white flex items-center">
               <i class="fas fa-comment-alt mr-2"></i>
               漫画編集 - シーン #${this.currentScene.idx}
+              ${publishedBadge}
             </h2>
             <button onclick="ComicEditor.close()" class="text-white hover:text-gray-200 text-2xl">
               <i class="fas fa-times"></i>
@@ -101,10 +123,10 @@ window.ComicEditor = {
               <!-- 左: 画像 + SVGオーバーレイ -->
               <div class="space-y-4">
                 <h3 class="font-semibold text-gray-700 flex items-center">
-                  <i class="fas fa-image mr-2 text-purple-600"></i>プレビュー
+                  <i class="fas fa-image mr-2 text-purple-600"></i>プレビュー（編集中）
                 </h3>
                 <div id="comicCanvasContainer" class="relative bg-gray-100 rounded-lg overflow-hidden" style="aspect-ratio: 16/9;">
-                  <img id="comicBaseImage" src="${imageUrl}" class="w-full h-full object-contain" alt="Scene image" />
+                  <img id="comicBaseImage" src="${imageUrl}" crossorigin="anonymous" class="w-full h-full object-contain" alt="Scene image" />
                   <svg id="comicSvgOverlay" class="absolute inset-0 w-full h-full pointer-events-none" style="pointer-events: all;">
                     <!-- 吹き出しがここに描画される -->
                   </svg>
@@ -143,20 +165,32 @@ window.ComicEditor = {
             </div>
           </div>
 
-          <!-- Footer -->
-          <div class="bg-gray-100 px-6 py-4 flex justify-end gap-3 border-t border-gray-200">
-            <button 
-              onclick="ComicEditor.close()"
-              class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
-            >
-              <i class="fas fa-times mr-2"></i>キャンセル
-            </button>
-            <button 
-              onclick="ComicEditor.save()"
-              class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold"
-            >
-              <i class="fas fa-save mr-2"></i>保存
-            </button>
+          <!-- Footer（Phase1.5: Draft/Publish分離） -->
+          <div class="bg-gray-100 px-6 py-4 flex justify-between items-center border-t border-gray-200">
+            <div class="text-sm text-gray-600">
+              <i class="fas fa-exclamation-triangle text-yellow-500 mr-1"></i>
+              「公開」するまでシーンには反映されません
+            </div>
+            <div class="flex gap-3">
+              <button 
+                onclick="ComicEditor.close()"
+                class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+              >
+                <i class="fas fa-times mr-2"></i>キャンセル
+              </button>
+              <button 
+                onclick="ComicEditor.saveDraft()"
+                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+              >
+                <i class="fas fa-save mr-2"></i>下書き保存
+              </button>
+              <button 
+                onclick="ComicEditor.publish()"
+                class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold"
+              >
+                <i class="fas fa-upload mr-2"></i>公開
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -179,7 +213,7 @@ window.ComicEditor = {
     const container = document.getElementById('utteranceList');
     if (!container) return;
 
-    const utterances = this.comicData.utterances || [];
+    const utterances = this.draft.utterances || [];
     
     container.innerHTML = utterances.map((ut, index) => `
       <div class="bg-gray-50 rounded-lg p-4 border border-gray-200" data-utterance-id="${ut.id}">
@@ -225,7 +259,7 @@ window.ComicEditor = {
     const svg = document.getElementById('comicSvgOverlay');
     if (!svg) return;
 
-    const bubbles = this.comicData.bubbles || [];
+    const bubbles = this.draft.bubbles || [];
     const container = document.getElementById('comicCanvasContainer');
     const rect = container.getBoundingClientRect();
 
@@ -239,7 +273,7 @@ window.ComicEditor = {
     `;
 
     bubbles.forEach((bubble, index) => {
-      const utterance = this.comicData.utterances.find(u => u.id === bubble.utterance_id);
+      const utterance = this.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = utterance?.text || '';
       
       // 正規化座標からピクセル座標に変換
@@ -405,14 +439,13 @@ window.ComicEditor = {
     this.isDragging = true;
     this.dragTarget = bubbleId;
 
-    const svg = document.getElementById('comicSvgOverlay');
     const container = document.getElementById('comicCanvasContainer');
     const rect = container.getBoundingClientRect();
 
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
 
-    const bubble = this.comicData.bubbles.find(b => b.id === bubbleId);
+    const bubble = this.draft.bubbles.find(b => b.id === bubbleId);
     if (bubble) {
       this.dragOffset = {
         x: clientX - rect.left - bubble.position.x * rect.width,
@@ -443,7 +476,7 @@ window.ComicEditor = {
     newY = Math.max(0, Math.min(0.8, newY));
 
     // データ更新
-    const bubble = this.comicData.bubbles.find(b => b.id === this.dragTarget);
+    const bubble = this.draft.bubbles.find(b => b.id === this.dragTarget);
     if (bubble) {
       bubble.position.x = newX;
       bubble.position.y = newY;
@@ -468,13 +501,13 @@ window.ComicEditor = {
    * 発話を追加
    */
   addUtterance() {
-    if (this.comicData.utterances.length >= this.MAX_UTTERANCES) {
+    if (this.draft.utterances.length >= this.MAX_UTTERANCES) {
       showToast(`発話は最大${this.MAX_UTTERANCES}つまでです`, 'warning');
       return;
     }
 
     const newId = `ut_${Date.now()}`;
-    this.comicData.utterances.push({
+    this.draft.utterances.push({
       id: newId,
       speaker_type: 'narration',
       speaker_id: null,
@@ -488,7 +521,7 @@ window.ComicEditor = {
    * 発話を更新
    */
   updateUtterance(utteranceId, text) {
-    const utterance = this.comicData.utterances.find(u => u.id === utteranceId);
+    const utterance = this.draft.utterances.find(u => u.id === utteranceId);
     if (utterance) {
       utterance.text = text;
       this.renderBubbles(); // 吹き出しのテキストを更新
@@ -499,20 +532,20 @@ window.ComicEditor = {
    * 吹き出しを追加
    */
   addBubble() {
-    if (this.comicData.bubbles.length >= this.MAX_BUBBLES) {
+    if (this.draft.bubbles.length >= this.MAX_BUBBLES) {
       showToast(`吹き出しは最大${this.MAX_BUBBLES}つまでです`, 'warning');
       return;
     }
 
     // 紐付ける発話を選択（最初の発話をデフォルト）
-    const firstUtterance = this.comicData.utterances[0];
+    const firstUtterance = this.draft.utterances[0];
     if (!firstUtterance) {
       showToast('発話を先に追加してください', 'warning');
       return;
     }
 
     const newId = `b_${Date.now()}`;
-    this.comicData.bubbles.push({
+    this.draft.bubbles.push({
       id: newId,
       utterance_id: firstUtterance.id,
       type: 'speech',
@@ -526,29 +559,141 @@ window.ComicEditor = {
    * 吹き出しを削除
    */
   removeBubble(bubbleId) {
-    this.comicData.bubbles = this.comicData.bubbles.filter(b => b.id !== bubbleId);
+    this.draft.bubbles = this.draft.bubbles.filter(b => b.id !== bubbleId);
     this.renderBubbles();
   },
 
   /**
-   * 保存
+   * 下書き保存（Phase1.5）
    */
-  async save() {
+  async saveDraft() {
     try {
-      console.log('[ComicEditor] Saving comic_data:', this.comicData);
+      console.log('[ComicEditor] Saving draft:', this.draft);
 
-      const res = await axios.put(`/api/scenes/${this.currentSceneId}`, {
-        comic_data: this.comicData
+      const res = await axios.post(`/api/scenes/${this.currentSceneId}/comic/draft`, {
+        draft: this.draft,
+        base_image_generation_id: this.baseImageGenerationId
       });
 
-      console.log('[ComicEditor] Save response:', res.data);
-      showToast('漫画データを保存しました', 'success');
-      this.close();
+      console.log('[ComicEditor] Draft saved:', res.data);
+      showToast('下書きを保存しました', 'success');
 
     } catch (err) {
-      console.error('[ComicEditor] Save failed:', err);
-      showToast('保存に失敗しました', 'error');
+      console.error('[ComicEditor] Draft save failed:', err);
+      showToast('下書きの保存に失敗しました', 'error');
     }
+  },
+
+  /**
+   * 公開（Phase1.5: Canvas→PNG変換→アップロード）
+   */
+  async publish() {
+    try {
+      // 吹き出しがない場合は警告
+      if (this.draft.bubbles.length === 0) {
+        const confirmed = confirm('吹き出しがありません。このまま公開しますか？');
+        if (!confirmed) return;
+      }
+
+      showToast('公開準備中...', 'info');
+
+      // Canvas→PNG変換
+      const imageData = await this.renderToCanvas();
+      
+      console.log('[ComicEditor] Publishing comic...');
+
+      const res = await axios.post(`/api/scenes/${this.currentSceneId}/comic/publish`, {
+        image_data: imageData,
+        base_image_generation_id: this.baseImageGenerationId,
+        draft: this.draft
+      });
+
+      console.log('[ComicEditor] Publish response:', res.data);
+      
+      this.published = res.data.comic_data?.published;
+      
+      showToast('漫画を公開しました！「漫画を採用」でシーンに反映できます', 'success');
+      this.close();
+
+      // シーン一覧を更新（もしあれば）
+      if (typeof window.loadScenes === 'function') {
+        window.loadScenes();
+      }
+
+    } catch (err) {
+      console.error('[ComicEditor] Publish failed:', err);
+      showToast('公開に失敗しました', 'error');
+    }
+  },
+
+  /**
+   * Canvas→PNG変換（クライアント側レンダリング）
+   */
+  async renderToCanvas() {
+    return new Promise((resolve, reject) => {
+      const container = document.getElementById('comicCanvasContainer');
+      const baseImage = document.getElementById('comicBaseImage');
+      const svgOverlay = document.getElementById('comicSvgOverlay');
+      
+      if (!container || !baseImage || !svgOverlay) {
+        reject(new Error('Required elements not found'));
+        return;
+      }
+
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      // 元画像のサイズに合わせる
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      
+      img.onload = () => {
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        
+        // 画像を描画
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        
+        // SVGを描画
+        const svgData = new XMLSerializer().serializeToString(svgOverlay);
+        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+        const svgUrl = URL.createObjectURL(svgBlob);
+        
+        const svgImg = new Image();
+        svgImg.crossOrigin = 'anonymous';
+        
+        svgImg.onload = () => {
+          // SVGのサイズを調整してcanvasに描画
+          const containerRect = container.getBoundingClientRect();
+          const scaleX = canvas.width / containerRect.width;
+          const scaleY = canvas.height / containerRect.height;
+          
+          ctx.save();
+          ctx.scale(scaleX, scaleY);
+          ctx.drawImage(svgImg, 0, 0, containerRect.width, containerRect.height);
+          ctx.restore();
+          
+          URL.revokeObjectURL(svgUrl);
+          
+          // PNG base64に変換
+          const dataUrl = canvas.toDataURL('image/png');
+          resolve(dataUrl);
+        };
+        
+        svgImg.onerror = (err) => {
+          URL.revokeObjectURL(svgUrl);
+          reject(new Error('SVG loading failed'));
+        };
+        
+        svgImg.src = svgUrl;
+      };
+      
+      img.onerror = () => {
+        reject(new Error('Base image loading failed'));
+      };
+      
+      img.src = baseImage.src;
+    });
   },
 
   /**
@@ -572,7 +717,9 @@ window.ComicEditor = {
     document.removeEventListener('keydown', this.handleKeyDown);
     this.currentSceneId = null;
     this.currentScene = null;
-    this.comicData = null;
+    this.draft = null;
+    this.published = null;
+    this.baseImageGenerationId = null;
   },
 
   /**
@@ -600,4 +747,4 @@ window.openComicEditor = function(sceneId) {
   window.ComicEditor.open(sceneId);
 };
 
-console.log('[ComicEditor] Loaded successfully');
+console.log('[ComicEditor] Phase1.5 loaded successfully');

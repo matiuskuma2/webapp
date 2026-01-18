@@ -23,6 +23,7 @@ import videoGeneration from './routes/video-generation' // Video I2V
 import settings from './routes/settings' // User settings & API keys
 import auth from './routes/auth' // Authentication
 import admin from './routes/admin' // Admin API routes
+import comic from './routes/comic' // Phase1.5: Comic editor API
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -57,6 +58,7 @@ app.route('/api/projects', scenes) // For /api/projects/:id/scenes/reorder
 app.route('/api', audioGeneration) // For /api/scenes/:id/audio, /api/audio/:audioId/activate (Phase 2-A) - MUST be before generic /api/scenes/:id
 app.route('/api/scenes', sceneCharacters) // For /api/scenes/:sceneId/characters - MUST be before generic /api/scenes/:id
 app.route('/api/scenes', videoGeneration) // For /api/scenes/:sceneId/videos - MUST be before generic /api/scenes/:id
+app.route('/api/scenes', comic) // For /api/scenes/:id/comic/* - Phase1.5 comic editor
 app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate

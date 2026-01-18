@@ -1923,13 +1923,23 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   const activeVideo = scene.active_video || null;
   const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
   
+  // Phase1.5: display_asset_type に基づく表示切替
+  const displayAssetType = scene.display_asset_type || 'image';
+  const activeComic = scene.active_comic || null;
+  const comicUrl = activeComic?.r2_url || activeComic?.image_url || null;
+  const hasPublishedComic = !!comicUrl;
+  
+  // 表示する画像URL（display_asset_typeに応じて切替）
+  const displayUrl = displayAssetType === 'comic' && comicUrl ? comicUrl : imageUrl;
+  const isShowingComic = displayAssetType === 'comic' && comicUrl;
+  
   return `
-    <!-- 画像エリア（常に表示） -->
-    <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
-      ${imageUrl 
+    <!-- 画像/漫画エリア（常に表示） -->
+    <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 ${isShowingComic ? 'border-orange-400' : 'border-gray-300'} overflow-hidden">
+      ${displayUrl 
         ? `<img 
              id="sceneImage-${scene.id}" 
-             src="${imageUrl}" 
+             src="${displayUrl}" 
              alt="Scene ${scene.idx}"
              class="w-full h-full object-cover"
            />`
@@ -1949,20 +1959,48 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
         : ''
       }
       
-      <div class="absolute top-2 left-2 px-2 py-1 bg-blue-600 text-white text-xs rounded-full font-semibold">
-        <i class="fas fa-image mr-1"></i>画像
+      <!-- 左上バッジ: 現在の表示モード -->
+      <div class="absolute top-2 left-2 px-2 py-1 ${isShowingComic ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs rounded-full font-semibold">
+        <i class="fas ${isShowingComic ? 'fa-comment-alt' : 'fa-image'} mr-1"></i>${isShowingComic ? '漫画' : '画像'}
       </div>
       
+      <!-- 右上: 漫画編集ボタン -->
       ${imageUrl ? `
       <button 
         onclick="openComicEditor(${scene.id})"
         class="absolute top-2 right-2 px-2 py-1 bg-orange-500 text-white text-xs rounded-full font-semibold hover:bg-orange-600 transition-colors"
         title="漫画編集"
       >
-        <i class="fas fa-comment-alt mr-1"></i>漫画
+        <i class="fas fa-comment-alt mr-1"></i>編集
       </button>
       ` : ''}
     </div>
+    
+    <!-- Phase1.5: 採用切替ボタン（公開漫画がある場合のみ表示） -->
+    ${hasPublishedComic && imageUrl ? `
+    <div class="flex gap-2 mt-2">
+      <button 
+        onclick="switchDisplayAssetType(${scene.id}, 'image')"
+        class="flex-1 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+          displayAssetType === 'image' 
+            ? 'bg-blue-600 text-white' 
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+        }"
+      >
+        <i class="fas fa-image mr-1"></i>画像を採用
+      </button>
+      <button 
+        onclick="switchDisplayAssetType(${scene.id}, 'comic')"
+        class="flex-1 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+          displayAssetType === 'comic' 
+            ? 'bg-orange-600 text-white' 
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+        }"
+      >
+        <i class="fas fa-comment-alt mr-1"></i>漫画を採用
+      </button>
+    </div>
+    ` : ''}
     
     <!-- 動画エリア（completedの場合のみ表示） -->
     ${hasCompletedVideo 
@@ -1973,7 +2011,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
              class="w-full h-full object-contain"
              controls
              preload="metadata"
-             poster="${imageUrl || ''}"
+             poster="${displayUrl || ''}"
            >
              <source src="${activeVideo.r2_url}" type="video/mp4">
            </video>
@@ -1985,6 +2023,34 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
     }
   `;
 }
+
+/**
+ * Phase1.5: 採用切替（画像 ↔ 漫画）
+ */
+async function switchDisplayAssetType(sceneId, newType) {
+  try {
+    showToast(`${newType === 'comic' ? '漫画' : '画像'}に切り替え中...`, 'info');
+    
+    const res = await axios.put(`/api/scenes/${sceneId}/display-asset-type`, {
+      display_asset_type: newType
+    });
+    
+    if (res.data.success) {
+      showToast(`${newType === 'comic' ? '漫画' : '画像'}を採用しました`, 'success');
+      // シーン一覧を再読み込み
+      if (typeof loadScenes === 'function') {
+        await loadScenes();
+      }
+    }
+  } catch (err) {
+    console.error('[switchDisplayAssetType] Error:', err);
+    const errorMsg = err.response?.data?.error?.message || '切り替えに失敗しました';
+    showToast(errorMsg, 'error');
+  }
+}
+
+// グローバルに公開
+window.switchDisplayAssetType = switchDisplayAssetType;
 
 /**
  * Phase F-6: Render audio section with voice character selection
