@@ -724,7 +724,21 @@
     if (generatedContainer) generatedContainer.classList.add('hidden');
     
     if (character?.reference_image_r2_url) {
-      if (refPreview) refPreview.src = character.reference_image_r2_url;
+      if (refPreview) {
+        refPreview.src = character.reference_image_r2_url;
+        // Add error handler for broken images
+        refPreview.onerror = () => {
+          console.warn('[WorldCharacterModal] Failed to load reference image:', character.reference_image_r2_url);
+          refPreviewContainer?.classList.add('hidden');
+          refUploadContainer?.classList.remove('hidden');
+          updateRefImageStatus();
+          // Clear the broken URL from state
+          state.referenceImageR2Url = null;
+        };
+        refPreview.onload = () => {
+          console.log('[WorldCharacterModal] Reference image loaded successfully');
+        };
+      }
       refPreviewContainer?.classList.remove('hidden');
       refUploadContainer?.classList.add('hidden');
     } else {

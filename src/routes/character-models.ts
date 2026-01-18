@@ -545,11 +545,11 @@ app.post('/projects/:projectId/characters/:characterKey/reference-image', async 
       return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'File size exceeds 5MB limit'), 400);
     }
 
-    // Generate R2 key
+    // Generate R2 key (with images/ prefix for consistency with other images)
     const timestamp = Date.now();
     const random = Math.random().toString(36).substring(7);
     const ext = imageFile.type.split('/')[1];
-    const r2Key = `characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
+    const r2Key = `images/characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
 
     // Upload to R2
     await c.env.R2.put(r2Key, imageFile.stream(), {
@@ -558,8 +558,8 @@ app.post('/projects/:projectId/characters/:characterKey/reference-image', async 
       }
     });
 
-    // Generate URL for the image
-    const r2Url = `/images/${r2Key}`;
+    // Generate URL for the image (r2Key already starts with 'images/')
+    const r2Url = `/${r2Key}`;
 
     // Update character
     await c.env.DB.prepare(`
@@ -681,18 +681,18 @@ app.post('/projects/:projectId/characters/:characterKey/update', async (c) => {
         await c.env.R2.delete(existing.reference_image_r2_key);
       }
 
-      // Generate new R2 key
+      // Generate new R2 key (with images/ prefix for consistency)
       const timestamp = Date.now();
       const random = Math.random().toString(36).substring(7);
       const ext = imageFile.type.split('/')[1];
-      r2Key = `characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
+      r2Key = `images/characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
 
       // Upload to R2
       await c.env.R2.put(r2Key, imageFile.stream(), {
         httpMetadata: { contentType: imageFile.type }
       });
 
-      r2Url = `/images/${r2Key}`;
+      r2Url = `/${r2Key}`;
     } else {
       // Keep existing URL
       const current = await c.env.DB.prepare(`
@@ -934,18 +934,18 @@ app.post('/projects/:projectId/characters/create-with-image', async (c) => {
         return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'File size exceeds 5MB'), 400);
       }
 
-      // Generate R2 key
+      // Generate R2 key (with images/ prefix for consistency)
       const timestamp = Date.now();
       const random = Math.random().toString(36).substring(7);
       const ext = imageFile.type.split('/')[1];
-      r2Key = `characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
+      r2Key = `images/characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
 
       // Upload to R2
       await c.env.R2.put(r2Key, imageFile.stream(), {
         httpMetadata: { contentType: imageFile.type }
       });
 
-      r2Url = `/images/${r2Key}`;
+      r2Url = `/${r2Key}`;
     }
 
     // Create character
