@@ -1361,8 +1361,14 @@ window.generateNarratorVoice = async function(sceneId) {
   }
 };
 
+// Phase1.7: 漫画発話用の音声ポーリングタイマー
+window.comicUtteranceAudioPolling = {};
+
 // Phase1.7: 漫画発話用の音声生成
 window.generateComicUtteranceVoice = async function(sceneId, utteranceIdx) {
+  const btn = document.getElementById(`comicUtteranceVoiceBtn-${sceneId}-${utteranceIdx}`);
+  const previewContainer = document.getElementById(`comicUtteranceAudioPreview-${sceneId}-${utteranceIdx}`);
+  
   try {
     // シーンデータを取得
     const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board`);
@@ -1402,24 +1408,97 @@ window.generateComicUtteranceVoice = async function(sceneId, utteranceIdx) {
       }
     }
     
+    // ボタンを「生成中」状態に
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+      btn.classList.add('bg-yellow-500');
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+    
     showToast(`発話${utteranceIdx + 1}の音声生成を開始...`, 'info');
     
     // 音声生成API呼び出し（テキストを指定して生成）
-    await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
+    const genResponse = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
       voice_preset_id: voicePresetId,
       provider: provider,
-      text_override: text  // 発話テキストを直接指定
+      text_override: text
     });
     
-    showToast(`発話${utteranceIdx + 1}の音声生成を開始しました`, 'success');
+    const audioGeneration = genResponse.data.audio_generation;
+    console.log('[ComicUtteranceVoice] Generation started:', audioGeneration);
     
-    if (window.AudioState) {
-      window.AudioState.startWatch(sceneId);
-      window.AudioState.startPolling(sceneId);
+    // ポーリング開始（この発話専用）
+    const pollingKey = `${sceneId}-${utteranceIdx}`;
+    if (window.comicUtteranceAudioPolling[pollingKey]) {
+      clearInterval(window.comicUtteranceAudioPolling[pollingKey]);
     }
+    
+    window.comicUtteranceAudioPolling[pollingKey] = setInterval(async () => {
+      try {
+        const statusResponse = await axios.get(`${API_BASE}/scenes/${sceneId}/audio`);
+        const latestAudio = statusResponse.data.audio_generations?.[0];
+        
+        if (!latestAudio) return;
+        
+        if (latestAudio.status === 'completed' && latestAudio.r2_url) {
+          // ポーリング停止
+          clearInterval(window.comicUtteranceAudioPolling[pollingKey]);
+          delete window.comicUtteranceAudioPolling[pollingKey];
+          
+          // ボタンを「完了」状態に
+          if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('bg-yellow-500');
+            btn.classList.add('bg-green-600', 'hover:bg-green-700');
+            btn.innerHTML = '<i class="fas fa-redo"></i>';
+            btn.title = '再生成';
+          }
+          
+          // 音声プレビューを表示
+          if (previewContainer) {
+            previewContainer.innerHTML = `
+              <audio controls class="w-full h-8" style="border-radius: 8px;">
+                <source src="${latestAudio.r2_url}" type="audio/mpeg">
+              </audio>
+            `;
+            previewContainer.classList.remove('hidden');
+          }
+          
+          showToast(`発話${utteranceIdx + 1}の音声生成完了！`, 'success');
+          
+        } else if (latestAudio.status === 'failed') {
+          // ポーリング停止
+          clearInterval(window.comicUtteranceAudioPolling[pollingKey]);
+          delete window.comicUtteranceAudioPolling[pollingKey];
+          
+          // ボタンを「エラー」状態に
+          if (btn) {
+            btn.disabled = false;
+            btn.classList.remove('bg-yellow-500');
+            btn.classList.add('bg-red-600', 'hover:bg-red-700');
+            btn.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+            btn.title = '再試行';
+          }
+          
+          showToast(`発話${utteranceIdx + 1}の音声生成に失敗しました`, 'error');
+        }
+      } catch (pollError) {
+        console.error('[ComicUtteranceVoice] Polling error:', pollError);
+      }
+    }, 2000); // 2秒ごとにポーリング
+    
   } catch (error) {
     console.error('[ComicUtteranceVoice] Generation error:', error);
-    showToast('音声生成に失敗しました: ' + (error.response?.data?.message || error.message), 'error');
+    showToast('音声生成に失敗しました: ' + (error.response?.data?.error?.message || error.message), 'error');
+    
+    // ボタンをエラー状態に
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('bg-yellow-500');
+      btn.classList.add('bg-red-600', 'hover:bg-red-700');
+      btn.innerHTML = '<i class="fas fa-exclamation-triangle"></i>';
+    }
   }
 };
 
@@ -1440,13 +1519,13 @@ window.generateAllComicUtteranceVoices = async function(sceneId) {
     
     for (let i = 0; i < utterances.length; i++) {
       await window.generateComicUtteranceVoice(sceneId, i);
-      // 連続生成の間隔を空ける
+      // 連続生成の間隔を空ける（次の生成開始前に1秒待機）
       if (i < utterances.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
     
-    showToast('全発話の音声生成を開始しました', 'success');
+    showToast('全発話の音声生成を開始しました。順次完了します。', 'success');
   } catch (error) {
     console.error('[AllComicUtteranceVoices] Error:', error);
     showToast('一括生成に失敗しました', 'error');
@@ -2159,12 +2238,17 @@ function renderComicAudioSection(scene) {
             </select>
           `}
           <button 
+            id="comicUtteranceVoiceBtn-${scene.id}-${idx}"
             onclick="window.generateComicUtteranceVoice(${scene.id}, ${idx})"
             class="px-3 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700"
             title="この発話の音声を生成"
           >
             <i class="fas fa-volume-up"></i>
           </button>
+        </div>
+        <!-- Phase1.7: 音声プレビュー領域 -->
+        <div id="comicUtteranceAudioPreview-${scene.id}-${idx}" class="mt-2 hidden">
+          <!-- 音声プレーヤーがここに挿入される -->
         </div>
       </div>
     `;
