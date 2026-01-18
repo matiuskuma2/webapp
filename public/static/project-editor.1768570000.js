@@ -2091,6 +2091,12 @@ function setSceneFilter(filter) {
  * @returns {string} HTML
  */
 function renderSceneCardHeader(scene, imageStatus) {
+  // デバッグ: シーンデータの確認
+  if (!scene || !scene.id) {
+    console.error('[renderSceneCardHeader] Invalid scene data:', scene);
+    return '<div class="bg-red-600 px-4 py-3 text-white">シーンデータエラー</div>';
+  }
+  
   const hasImage = imageStatus === 'completed';
   const displayAssetType = scene.display_asset_type || 'image';
   const isComicMode = displayAssetType === 'comic';
@@ -2926,6 +2932,13 @@ function renderSceneAudioPlaceholder(scene) {
  * @returns {string} HTML
  */
 function renderBuilderSceneCard(scene) {
+  // デバッグ: シーンデータの確認
+  if (!scene || !scene.id) {
+    console.error('[renderBuilderSceneCard] Invalid scene data:', scene);
+    return '<div class="bg-red-100 border border-red-400 p-4 rounded">シーンデータが無効です</div>';
+  }
+  console.log(`[renderBuilderSceneCard] Rendering scene #${scene.idx} (id=${scene.id}), display_asset_type=${scene.display_asset_type}`);
+  
   const activeImage = scene.active_image || null;
   const latestImage = scene.latest_image || null;
   // Phase1.7: imageUrl は active_image, または latest_image (fallback) から取得
