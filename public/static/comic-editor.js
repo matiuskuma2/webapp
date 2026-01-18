@@ -876,6 +876,12 @@ window.ComicEditor = {
    * 下書き保存（Phase1.5）
    */
   async saveDraft() {
+    const btn = document.querySelector('[onclick="ComicEditor.saveDraft()"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>保存中...';
+    }
+    
     try {
       console.log('[ComicEditor] Saving draft:', this.draft);
 
@@ -890,6 +896,11 @@ window.ComicEditor = {
     } catch (err) {
       console.error('[ComicEditor] Draft save failed:', err);
       showToast('下書きの保存に失敗しました', 'error');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-save mr-2"></i>下書き保存';
+      }
     }
   },
 
@@ -897,14 +908,26 @@ window.ComicEditor = {
    * 公開（Phase1.5: Canvas→PNG変換→アップロード）
    */
   async publish() {
+    const btn = document.querySelector('[onclick="ComicEditor.publish()"]');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>公開中...';
+    }
+    
     try {
       // 吹き出しがない場合は警告
       if (this.draft.bubbles.length === 0) {
         const confirmed = confirm('吹き出しがありません。このまま公開しますか？');
-        if (!confirmed) return;
+        if (!confirmed) {
+          if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-upload mr-2"></i>公開';
+          }
+          return;
+        }
       }
 
-      showToast('公開準備中...', 'info');
+      showToast('画像を生成中...', 'info');
 
       // Canvas→PNG変換
       const imageData = await this.renderToCanvas();
@@ -921,80 +944,201 @@ window.ComicEditor = {
       
       this.published = res.data.comic_data?.published;
       
-      showToast('漫画を公開しました！「漫画を採用」でシーンに反映できます', 'success');
+      // 自動的に漫画を採用状態にする
+      try {
+        await axios.put(`/api/scenes/${this.currentSceneId}/display-asset-type`, {
+          display_asset_type: 'comic'
+        });
+        console.log('[ComicEditor] Auto-switched to comic display');
+      } catch (e) {
+        console.warn('[ComicEditor] Failed to auto-switch display type:', e);
+      }
+      
+      showToast('漫画を公開しました！', 'success');
       this.close();
 
-      // シーン一覧を更新（もしあれば）
-      if (typeof window.loadScenes === 'function') {
+      // シーン一覧を更新
+      if (typeof window.initBuilderTab === 'function') {
+        window.initBuilderTab();
+      } else if (typeof window.loadScenes === 'function') {
         window.loadScenes();
       }
 
     } catch (err) {
       console.error('[ComicEditor] Publish failed:', err);
-      showToast('公開に失敗しました', 'error');
+      showToast('公開に失敗しました: ' + (err.message || 'エラー'), 'error');
+      
+      const btn = document.querySelector('[onclick="ComicEditor.publish()"]');
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-upload mr-2"></i>公開';
+      }
     }
   },
 
   /**
-   * Canvas→PNG変換（クライアント側レンダリング）
+   * Canvas→PNG変換（直接Canvas描画方式）
    */
   async renderToCanvas() {
-    return new Promise((resolve, reject) => {
-      const container = document.getElementById('comicCanvasContainer');
-      const baseImage = document.getElementById('comicBaseImage');
-      const svgOverlay = document.getElementById('comicSvgOverlay');
-      
-      if (!container || !baseImage || !svgOverlay) {
-        reject(new Error('Required elements not found'));
-        return;
-      }
+    const baseImage = document.getElementById('comicBaseImage');
+    
+    if (!baseImage) {
+      throw new Error('Base image not found');
+    }
 
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    // 元画像のサイズ
+    const width = baseImage.naturalWidth || baseImage.width;
+    const height = baseImage.naturalHeight || baseImage.height;
+    
+    canvas.width = width;
+    canvas.height = height;
+    
+    // 1. ベース画像を描画
+    ctx.drawImage(baseImage, 0, 0, width, height);
+    
+    // 2. 吹き出しを直接Canvasに描画
+    const baseScale = width / 1000;
+    const bubbles = this.draft.bubbles || [];
+    
+    for (const bubble of bubbles) {
+      const utterance = this.draft.utterances.find(u => u.id === bubble.utterance_id);
+      const text = utterance?.text || '';
       
-      // 元画像のサイズに合わせる
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
+      // 正規化座標から実座標に変換
+      const x = bubble.position.x * width;
+      const y = bubble.position.y * height;
       
-      img.onload = () => {
-        canvas.width = img.naturalWidth || img.width;
-        canvas.height = img.naturalHeight || img.height;
-        
-        // 画像を描画
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        
-        // SVGを描画
-        const svgData = new XMLSerializer().serializeToString(svgOverlay);
-        const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-        const svgUrl = URL.createObjectURL(svgBlob);
-        
-        const svgImg = new Image();
-        svgImg.crossOrigin = 'anonymous';
-        
-        svgImg.onload = () => {
-          // SVGはviewBoxで元画像サイズに設定済みなので、そのまま描画
-          ctx.drawImage(svgImg, 0, 0, canvas.width, canvas.height);
-          
-          URL.revokeObjectURL(svgUrl);
-          
-          // PNG base64に変換
-          const dataUrl = canvas.toDataURL('image/png');
-          resolve(dataUrl);
-        };
-        
-        svgImg.onerror = (err) => {
-          URL.revokeObjectURL(svgUrl);
-          reject(new Error('SVG loading failed'));
-        };
-        
-        svgImg.src = svgUrl;
-      };
+      // 吹き出しサイズ
+      const isNarration = bubble.type === 'narration' || bubble.type === 'caption';
+      const bubbleWidth = (isNarration ? 280 : 200) * baseScale;
+      const bubbleHeight = (isNarration ? 60 : 100) * baseScale;
       
-      img.onerror = () => {
-        reject(new Error('Base image loading failed'));
-      };
+      ctx.save();
+      ctx.translate(x, y);
       
-      img.src = baseImage.src;
+      // 吹き出し背景を描画
+      if (bubble.type !== 'caption') {
+        this.drawBubbleBackground(ctx, bubble.type, bubbleWidth, bubbleHeight, baseScale);
+      }
+      
+      // テキストを描画
+      this.drawBubbleText(ctx, text, bubble.type, bubbleWidth, bubbleHeight, baseScale);
+      
+      ctx.restore();
+    }
+    
+    // PNG base64に変換
+    return canvas.toDataURL('image/png');
+  },
+
+  /**
+   * 吹き出し背景をCanvasに描画
+   */
+  drawBubbleBackground(ctx, type, width, height, scale) {
+    ctx.beginPath();
+    
+    switch (type) {
+      case 'thought':
+        // 雲形（簡易版：楕円）
+        ctx.ellipse(width/2, height/2, width/2, height/2, 0, 0, Math.PI * 2);
+        ctx.fillStyle = '#F3F4F6';
+        ctx.strokeStyle = '#9CA3AF';
+        ctx.lineWidth = 2 * scale;
+        break;
+        
+      case 'shout':
+        // ギザギザ（簡易版：角丸矩形）
+        this.drawRoundRect(ctx, 0, 0, width, height, 10 * scale);
+        ctx.fillStyle = '#FEF3C7';
+        ctx.strokeStyle = '#F59E0B';
+        ctx.lineWidth = 3 * scale;
+        break;
+        
+      case 'whisper':
+        this.drawRoundRect(ctx, 0, 0, width, height, 10 * scale);
+        ctx.fillStyle = '#F9FAFB';
+        ctx.strokeStyle = '#9CA3AF';
+        ctx.lineWidth = 1 * scale;
+        ctx.setLineDash([5 * scale, 3 * scale]);
+        break;
+        
+      case 'narration':
+        ctx.rect(0, 0, width, height);
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.strokeStyle = 'transparent';
+        break;
+        
+      default: // speech
+        this.drawRoundRect(ctx, 0, 0, width, height, 10 * scale);
+        ctx.fillStyle = 'white';
+        ctx.strokeStyle = '#374151';
+        ctx.lineWidth = 2 * scale;
+    }
+    
+    ctx.fill();
+    if (ctx.strokeStyle !== 'transparent') {
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  },
+
+  /**
+   * 角丸矩形を描画
+   */
+  drawRoundRect(ctx, x, y, width, height, radius) {
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + width - radius, y);
+    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    ctx.lineTo(x + width, y + height - radius);
+    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    ctx.lineTo(x + radius, y + height);
+    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  },
+
+  /**
+   * 吹き出しテキストをCanvasに描画
+   */
+  drawBubbleText(ctx, text, type, bubbleWidth, bubbleHeight, scale) {
+    const isNarration = type === 'narration' || type === 'caption';
+    const fontSize = (isNarration ? 18 : 14) * scale;
+    const lineHeight = 20 * scale;
+    const charsPerLine = isNarration ? 28 : 20;
+    
+    ctx.font = `${isNarration ? 'bold' : 'normal'} ${fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    // テキストを行に分割
+    const lines = this.wrapText(text, charsPerLine);
+    const textStartY = (bubbleHeight - lines.length * lineHeight) / 2 + lineHeight / 2;
+    
+    lines.forEach((line, i) => {
+      const textX = bubbleWidth / 2;
+      const textY = textStartY + i * lineHeight;
+      
+      if (type === 'caption') {
+        // 縁取りテキスト
+        ctx.strokeStyle = '#000000';
+        ctx.lineWidth = 3 * scale;
+        ctx.strokeText(line, textX, textY);
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(line, textX, textY);
+      } else if (type === 'narration') {
+        // 白文字
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(line, textX, textY);
+      } else {
+        // 黒文字
+        ctx.fillStyle = '#1F2937';
+        ctx.fillText(line, textX, textY);
+      }
     });
   },
 
