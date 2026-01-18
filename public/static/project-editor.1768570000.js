@@ -2483,6 +2483,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
 
 /**
  * Phase1.5: 採用切替（画像 ↔ 漫画）
+ * Phase1.7: リアルタイムUI更新（スクロール位置を維持）
  */
 async function switchDisplayAssetType(sceneId, newType) {
   try {
@@ -2494,15 +2495,86 @@ async function switchDisplayAssetType(sceneId, newType) {
     
     if (res.data.success) {
       showToast(`${newType === 'comic' ? '漫画' : '画像'}を採用しました`, 'success');
-      // シーン一覧を再読み込み
-      if (typeof loadScenes === 'function') {
-        await loadScenes();
+      
+      // Phase1.7: 対象シーンのみを再レンダリング（スクロール位置維持）
+      try {
+        // 最新のシーンデータを取得
+        const sceneRes = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board`);
+        const updatedScene = sceneRes.data;
+        
+        // window.lastLoadedScenes を更新
+        if (window.lastLoadedScenes) {
+          const idx = window.lastLoadedScenes.findIndex(s => s.id === sceneId);
+          if (idx !== -1) {
+            window.lastLoadedScenes[idx] = updatedScene;
+          }
+        }
+        
+        // 対象のシーンカードを取得
+        const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
+        if (sceneCard) {
+          // スクロール位置を保存
+          const scrollY = window.scrollY;
+          
+          // 新しいHTMLを生成して置換
+          const newHtml = renderBuilderSceneCard(updatedScene);
+          sceneCard.outerHTML = newHtml;
+          
+          // スクロール位置を復元
+          window.scrollTo(0, scrollY);
+          
+          // 新しいカードのボタン状態を初期化
+          const newCard = document.getElementById(`builder-scene-${sceneId}`);
+          if (newCard) {
+            initializeSceneCardButtons(updatedScene, newCard);
+          }
+          
+          console.log(`[switchDisplayAssetType] Scene ${sceneId} UI updated to ${newType}`);
+        }
+      } catch (renderErr) {
+        console.warn('[switchDisplayAssetType] Partial update failed, falling back to full reload:', renderErr);
+        // フォールバック: 全体再読み込み
+        if (typeof loadScenes === 'function') {
+          await loadScenes();
+        }
       }
     }
   } catch (err) {
     console.error('[switchDisplayAssetType] Error:', err);
     const errorMsg = err.response?.data?.error?.message || '切り替えに失敗しました';
     showToast(errorMsg, 'error');
+  }
+}
+
+/**
+ * Phase1.7: シーンカードのボタン状態を初期化
+ */
+function initializeSceneCardButtons(scene, cardElement) {
+  const imageStatus = scene.latest_image?.status || 'pending';
+  const displayAssetType = scene.display_asset_type || 'image';
+  const isComicMode = displayAssetType === 'comic';
+  const hasImage = scene.latest_image && imageStatus === 'completed';
+  const isFailed = imageStatus === 'failed';
+  
+  // Primary button (再生成)
+  const primaryBtn = cardElement.querySelector(`#primaryBtn-${scene.id}`);
+  if (primaryBtn && !isComicMode) {
+    if (window.isBulkImageGenerating) {
+      primaryBtn.disabled = true;
+      primaryBtn.innerHTML = '<i class="fas fa-lock mr-2"></i>一括処理中';
+    } else if (isFailed) {
+      setPrimaryButtonState(scene.id, 'failed');
+    } else if (hasImage) {
+      setPrimaryButtonState(scene.id, 'completed');
+    } else {
+      setPrimaryButtonState(scene.id, 'idle');
+    }
+  }
+  
+  // History button
+  const historyBtn = cardElement.querySelector(`#historyBtn-${scene.id}`);
+  if (historyBtn) {
+    historyBtn.disabled = !scene.active_image;
   }
 }
 
