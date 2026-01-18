@@ -400,17 +400,17 @@ projects.get('/:id/scenes', async (c) => {
             LIMIT 1
           `).bind(scene.id).first()
 
-          // キャラクター情報取得（scene_character_map + project_characters）
+          // キャラクター情報取得（scene_character_map + project_character_models）
           const { results: characterMappings } = await c.env.DB.prepare(`
             SELECT 
               scm.character_key,
               scm.is_primary,
-              pc.character_name,
-              pc.voice_preset_id,
-              pc.reference_image_r2_url
+              pcm.character_name,
+              pcm.voice_preset_id,
+              pcm.reference_image_r2_url
             FROM scene_character_map scm
-            LEFT JOIN project_characters pc 
-              ON scm.character_key = pc.character_key AND pc.project_id = ?
+            LEFT JOIN project_character_models pcm 
+              ON scm.character_key = pcm.character_key AND pcm.project_id = ?
             WHERE scm.scene_id = ?
           `).bind(projectId, scene.id).all()
 
