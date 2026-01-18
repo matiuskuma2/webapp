@@ -4231,26 +4231,49 @@ async function clearSceneStyle(sceneId) {
 async function applyBulkStyle() {
   const select = document.getElementById('bulkStyleSelector');
   const styleId = select.value ? parseInt(select.value) : null;
+  const styleName = select.options[select.selectedIndex].text;
   
-  if (!confirm(`すべてのシーンに同じスタイルを適用しますか？\n\n選択したスタイル: ${select.options[select.selectedIndex].text}`)) {
+  // Find the button element
+  const applyBtn = select.parentElement.querySelector('button');
+  const originalBtnHtml = applyBtn ? applyBtn.innerHTML : '';
+  
+  if (!confirm(`すべてのシーンに同じスタイルを適用しますか？\n\n選択したスタイル: ${styleName}`)) {
     return;
   }
   
   try {
+    // Disable button and show initial state
+    if (applyBtn) {
+      applyBtn.disabled = true;
+      applyBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>準備中...';
+    }
+    
     // Get all scenes
     const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
     const scenes = response.data.scenes || [];
     
     if (scenes.length === 0) {
       showToast('シーンがありません', 'warning');
+      if (applyBtn) {
+        applyBtn.disabled = false;
+        applyBtn.innerHTML = originalBtnHtml;
+      }
       return;
     }
     
-    showToast(`${scenes.length}シーンにスタイルを適用中...`, 'info');
-    
-    // Apply style to each scene
+    // Apply style to each scene with progress
     let successCount = 0;
-    for (const scene of scenes) {
+    const total = scenes.length;
+    
+    for (let i = 0; i < scenes.length; i++) {
+      const scene = scenes[i];
+      const progress = Math.round(((i + 1) / total) * 100);
+      
+      // Update button with progress
+      if (applyBtn) {
+        applyBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${progress}% (${i + 1}/${total})`;
+      }
+      
       try {
         await axios.put(`${API_BASE}/scenes/${scene.id}/style`, {
           style_preset_id: styleId
@@ -4261,15 +4284,39 @@ async function applyBulkStyle() {
       }
     }
     
-    console.log(`[BulkStyle] Applied style ${styleId} to ${successCount}/${scenes.length} scenes. Reloading builder...`);
-    showToast(`${successCount}/${scenes.length}シーンにスタイルを適用しました`, 'success');
+    console.log(`[BulkStyle] Applied style ${styleId} to ${successCount}/${total} scenes. Reloading builder...`);
+    
+    // Show completion state
+    if (applyBtn) {
+      applyBtn.innerHTML = `<i class="fas fa-check mr-2"></i>適用完了 (${successCount}/${total})`;
+      applyBtn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
+      applyBtn.classList.add('bg-green-600', 'hover:bg-green-700');
+    }
+    
+    showToast(`${successCount}/${total}シーンにスタイルを適用しました`, 'success');
     
     // Reload builder
     await initBuilderTab();
     
+    // Reset button after reload (with slight delay for visual feedback)
+    setTimeout(() => {
+      if (applyBtn) {
+        applyBtn.disabled = false;
+        applyBtn.innerHTML = originalBtnHtml;
+        applyBtn.classList.remove('bg-green-600', 'hover:bg-green-700');
+        applyBtn.classList.add('bg-purple-600', 'hover:bg-purple-700');
+      }
+    }, 2000);
+    
   } catch (error) {
     console.error('Apply bulk style error:', error);
     showToast('一括スタイル適用に失敗しました', 'error');
+    
+    // Reset button on error
+    if (applyBtn) {
+      applyBtn.disabled = false;
+      applyBtn.innerHTML = originalBtnHtml;
+    }
   }
 }
 
