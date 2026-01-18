@@ -994,12 +994,13 @@
   /**
    * Phase F-6: Populate image character checkboxes and voice character dropdown
    * @param {Array} characters - Available characters in project
-   * @param {Array} assignments - Current scene assignments (with role field)
+   * @param {Array} assignments - Current scene assignments (with is_primary field)
    */
   function populateAssignSlots(characters, assignments) {
-    // Separate current assignments by role
-    const currentImageChars = assignments.filter(a => a.role === 'image').map(a => a.character_key);
-    const currentVoiceChar = assignments.find(a => a.role === 'voice')?.character_key || '';
+    // All assigned characters are image characters
+    // is_primary=1 indicates voice character
+    const currentImageChars = assignments.map(a => a.character_key);
+    const currentVoiceChar = assignments.find(a => a.is_primary === 1)?.character_key || '';
 
     // === Image Characters Section (Checkboxes) ===
     const imageContainer = document.getElementById('wc-image-chars-container');
