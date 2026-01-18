@@ -147,47 +147,42 @@ window.ComicEditor = {
               </div>
 
               <!-- 右: 発話リスト + 吹き出し管理（スクロール可能） -->
-              <div class="flex flex-col h-full max-h-[60vh] lg:max-h-full">
-                <h3 class="font-semibold text-gray-700 flex items-center mb-3 flex-shrink-0">
+              <div class="space-y-4 overflow-y-auto" style="max-height: calc(90vh - 200px);">
+                <h3 class="font-semibold text-gray-700 flex items-center sticky top-0 bg-white pb-2 z-10">
                   <i class="fas fa-list mr-2 text-blue-600"></i>発話・吹き出し設定
                 </h3>
 
-                <!-- スクロール可能エリア -->
-                <div class="flex-1 overflow-y-auto space-y-4 pr-2">
-                  <!-- 発話リスト -->
-                  <div id="utteranceList" class="space-y-3">
-                    <!-- 発話がここに描画される -->
-                  </div>
+                <!-- 発話リスト -->
+                <div id="utteranceList" class="space-y-3">
+                  <!-- 発話がここに描画される -->
+                </div>
 
-                  <!-- 吹き出し追加（種類選択） -->
-                  <div class="pt-4 border-t border-gray-200">
-                    <label class="block text-xs font-semibold text-gray-600 mb-2">吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）</label>
-                    <div class="space-y-2" id="bubbleTypeButtons">
-                      <!-- キャラクター用吹き出し -->
-                      <p class="text-xs text-gray-500 font-semibold">セリフ用</p>
-                      <div class="grid grid-cols-2 gap-2">
-                        <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm">
-                          <i class="fas fa-comment text-gray-700 mr-1"></i>通常
-                        </button>
-                        <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm">
-                          <i class="fas fa-cloud text-gray-500 mr-1"></i>思考
-                        </button>
-                        <button onclick="ComicEditor.addBubble('shout')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-yellow-50 hover:border-yellow-400 transition-colors text-sm">
-                          <i class="fas fa-bolt text-yellow-500 mr-1"></i>叫び
-                        </button>
-                        <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm">
-                          <i class="fas fa-comment-dots text-purple-500 mr-1"></i>ささやき
-                        </button>
-                      </div>
-                      
-                      <!-- ナレーション用 -->
-                      <p class="text-xs text-gray-500 font-semibold mt-3">ナレーション用</p>
-                      <div class="grid grid-cols-1 gap-2">
-                        <button onclick="ComicEditor.addBubble('narration')" class="px-3 py-2 bg-gradient-to-r from-gray-800 to-gray-700 text-white rounded-lg hover:from-gray-700 hover:to-gray-600 transition-all text-sm shadow-md">
-                          <i class="fas fa-tv mr-1"></i>テロップ帯（黒背景）
-                        </button>
-                      </div>
+                <!-- 吹き出し追加（種類選択） -->
+                <div class="pt-4 border-t border-gray-200 pb-4">
+                  <label class="block text-xs font-semibold text-gray-600 mb-2">吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）</label>
+                  <div class="space-y-3" id="bubbleTypeButtons">
+                    <!-- キャラクター用吹き出し -->
+                    <p class="text-xs text-gray-500 font-semibold">セリフ用</p>
+                    <div class="grid grid-cols-2 gap-2">
+                      <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm">
+                        <i class="fas fa-comment text-gray-700 mr-1"></i>通常
+                      </button>
+                      <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm">
+                        <i class="fas fa-cloud text-gray-500 mr-1"></i>思考
+                      </button>
+                      <button onclick="ComicEditor.addBubble('shout')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-yellow-50 hover:border-yellow-400 transition-colors text-sm">
+                        <i class="fas fa-bolt text-yellow-500 mr-1"></i>叫び
+                      </button>
+                      <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm">
+                        <i class="fas fa-comment-dots text-purple-500 mr-1"></i>ささやき
+                      </button>
                     </div>
+                    
+                    <!-- ナレーション用 -->
+                    <p class="text-xs text-gray-500 font-semibold">ナレーション用</p>
+                    <button onclick="ComicEditor.addBubble('narration')" class="w-full px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm">
+                      <i class="fas fa-tv mr-1"></i>テロップ帯（黒背景）
+                    </button>
                   </div>
                 </div>
               </div>
