@@ -141,8 +141,8 @@
                 <i class="fas fa-wand-magic-sparkles mr-1"></i> 画像を生成
               </button>
               <div id="wc-ref-generated-container" class="hidden mt-3">
-                <div class="w-48 h-48 bg-gray-100 rounded-lg overflow-hidden border border-gray-300">
-                  <img id="wc-ref-generated-preview" src="" alt="Generated" class="w-full h-full object-cover" />
+                <div class="w-48 h-48 bg-gray-100 rounded-lg overflow-hidden border border-gray-300 flex items-center justify-center">
+                  <img id="wc-ref-generated-preview" src="" alt="" class="w-full h-full object-cover" style="display: block;" />
                 </div>
                 <div class="flex gap-2 mt-2">
                   <button id="wc-ref-regenerate-btn" class="px-3 py-1 text-sm rounded bg-gray-200 hover:bg-gray-300">
@@ -155,8 +155,8 @@
             <!-- Tab Content: Upload -->
             <div id="wc-ref-content-upload" class="hidden">
               <div id="wc-ref-preview-container" class="hidden mb-3">
-                <div class="w-48 h-48 bg-gray-100 rounded-lg overflow-hidden border border-gray-300">
-                  <img id="wc-ref-preview" src="" alt="Reference" class="w-full h-full object-cover" />
+                <div class="w-48 h-48 bg-gray-100 rounded-lg overflow-hidden border border-gray-300 flex items-center justify-center">
+                  <img id="wc-ref-preview" src="" alt="" class="w-full h-full object-cover" style="display: block;" />
                 </div>
                 <button id="wc-ref-delete" class="mt-2 px-3 py-1 text-sm rounded bg-red-100 text-red-700 hover:bg-red-200 transition-colors">
                   <i class="fas fa-trash mr-1"></i> 削除
@@ -719,13 +719,28 @@
     const refPreviewContainer = document.getElementById('wc-ref-preview-container');
     const refUploadContainer = document.getElementById('wc-ref-upload-container');
     const generatedContainer = document.getElementById('wc-ref-generated-container');
+    const generateTab = document.getElementById('wc-ref-tab-generate');
+    const uploadTab = document.getElementById('wc-ref-tab-upload');
+    const generateContent = document.getElementById('wc-ref-content-generate');
+    const uploadContent = document.getElementById('wc-ref-content-upload');
     
     // Reset generated container
     if (generatedContainer) generatedContainer.classList.add('hidden');
     
     if (character?.reference_image_r2_url) {
+      // Show upload tab when editing with existing image
+      if (uploadTab && generateTab && uploadContent && generateContent) {
+        uploadTab.classList.add('border-blue-600', 'text-blue-600');
+        uploadTab.classList.remove('border-transparent', 'text-gray-600');
+        generateTab.classList.remove('border-blue-600', 'text-blue-600');
+        generateTab.classList.add('border-transparent', 'text-gray-600');
+        uploadContent.classList.remove('hidden');
+        generateContent.classList.add('hidden');
+      }
+      
       if (refPreview) {
         refPreview.src = character.reference_image_r2_url;
+        refPreview.style.display = 'block';
         // Add error handler for broken images
         refPreview.onerror = () => {
           console.warn('[WorldCharacterModal] Failed to load reference image:', character.reference_image_r2_url);
@@ -742,6 +757,15 @@
       refPreviewContainer?.classList.remove('hidden');
       refUploadContainer?.classList.add('hidden');
     } else {
+      // Show generate tab for new characters
+      if (generateTab && uploadTab && generateContent && uploadContent) {
+        generateTab.classList.add('border-blue-600', 'text-blue-600');
+        generateTab.classList.remove('border-transparent', 'text-gray-600');
+        uploadTab.classList.remove('border-blue-600', 'text-blue-600');
+        uploadTab.classList.add('border-transparent', 'text-gray-600');
+        generateContent.classList.remove('hidden');
+        uploadContent.classList.add('hidden');
+      }
       refPreviewContainer?.classList.add('hidden');
       refUploadContainer?.classList.remove('hidden');
     }

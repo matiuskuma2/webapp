@@ -85,28 +85,29 @@
           const flexContainer = document.createElement('div');
           flexContainer.className = 'flex gap-3';
 
-          // Thumbnail (if reference_image exists)
+          // Thumbnail container (always show)
+          const thumbnailContainer = document.createElement('div');
+          thumbnailContainer.className = 'w-16 h-16 flex-shrink-0 overflow-hidden rounded-lg bg-gray-100 border border-gray-300 flex items-center justify-center';
+          thumbnailContainer.style.minWidth = '64px';
+          thumbnailContainer.style.minHeight = '64px';
+          thumbnailContainer.style.width = '64px';
+          thumbnailContainer.style.height = '64px';
+          
           if (c.reference_image_r2_url) {
-            console.log('[WorldCharacterUI] Rendering thumbnail for:', c.character_name);
-            const thumbnailContainer = document.createElement('div');
-            thumbnailContainer.className = 'w-16 h-16 flex-shrink-0 overflow-hidden rounded-lg bg-gray-100 border border-gray-300';
-            thumbnailContainer.style.minWidth = '64px';
-            thumbnailContainer.style.minHeight = '64px';
-            thumbnailContainer.style.width = '64px';
-            thumbnailContainer.style.height = '64px';
-            
+            console.log('[WorldCharacterUI] Rendering thumbnail for:', c.character_name, c.reference_image_r2_url);
             const thumbnail = document.createElement('img');
             thumbnail.src = c.reference_image_r2_url;
-            thumbnail.alt = c.character_name;
+            thumbnail.alt = '';
             thumbnail.className = 'w-full h-full object-cover';
             thumbnail.style.width = '100%';
             thumbnail.style.height = '100%';
             thumbnail.style.objectFit = 'cover';
+            thumbnail.style.display = 'block';
             
-            // Add error handler
+            // Add error handler - show placeholder on load failure
             thumbnail.onerror = () => {
               console.error('[WorldCharacterUI] Failed to load thumbnail:', c.reference_image_r2_url);
-              thumbnailContainer.innerHTML = '<div class="w-full h-full flex items-center justify-center text-gray-400 text-2xl">?</div>';
+              thumbnailContainer.innerHTML = '<div class="w-full h-full flex items-center justify-center text-orange-400"><i class="fas fa-exclamation-triangle text-xl"></i></div>';
             };
             
             thumbnail.onload = () => {
@@ -114,10 +115,12 @@
             };
             
             thumbnailContainer.appendChild(thumbnail);
-            flexContainer.appendChild(thumbnailContainer);
           } else {
             console.log('[WorldCharacterUI] No thumbnail for:', c.character_name, '(reference_image_r2_url is empty)');
+            // Show placeholder icon when no image
+            thumbnailContainer.innerHTML = '<div class="w-full h-full flex items-center justify-center text-gray-400"><i class="fas fa-user text-xl"></i></div>';
           }
+          flexContainer.appendChild(thumbnailContainer);
 
           // Info container
           const infoContainer = document.createElement('div');
@@ -200,10 +203,14 @@
           // F-5: ライブラリに保存ボタン
           const saveToLibBtn = document.createElement('button');
           saveToLibBtn.className = 'px-3 py-1 rounded bg-green-600 hover:bg-green-700 text-white text-sm font-semibold transition-colors';
-          saveToLibBtn.innerHTML = '<i class="fas fa-bookmark mr-1"></i>保存';
-          saveToLibBtn.title = 'ユーザーライブラリに保存（他プロジェクトで再利用可能）';
+          saveToLibBtn.innerHTML = '<i class="fas fa-bookmark mr-1"></i>庫保存';
+          saveToLibBtn.title = 'マイキャラライブラリに保存（他プロジェクトで再利用可能）';
           saveToLibBtn.onclick = async () => {
-            if (!confirm(`「${c.character_name}」をライブラリに保存しますか？\n\n保存すると、他のプロジェクトでも再利用できます。`)) return;
+            if (!confirm(`「${c.character_name}」をマイキャラに保存しますか？\n\n保存すると、他のプロジェクトでも「マイキャラから追加」で再利用できます。\n※同じキーのキャラは上書きされます。`)) return;
+            
+            // Disable button during save
+            saveToLibBtn.disabled = true;
+            saveToLibBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>保存中...';
             
             try {
               const response = await fetch('/api/user/characters/from-project', {
@@ -215,15 +222,25 @@
                 })
               });
               
+              const data = await response.json();
+              
               if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.error || 'ライブラリへの保存に失敗');
+                throw new Error(data.error?.message || data.error || 'ライブラリへの保存に失敗');
               }
               
-              if (window.showToast) window.showToast(`「${c.character_name}」をライブラリに保存しました`, 'success');
+              console.log('[WorldCharacterUI] Saved to library:', data);
+              if (window.showToast) {
+                window.showToast(`「${c.character_name}」をマイキャラに保存しました ✓`, 'success');
+              } else {
+                alert(`「${c.character_name}」をマイキャラに保存しました`);
+              }
             } catch (e) {
+              console.error('[WorldCharacterUI] Library save failed:', e);
               if (window.showToast) window.showToast(e.message || 'ライブラリ保存失敗', 'error');
               else alert(e.message || 'ライブラリ保存失敗');
+            } finally {
+              saveToLibBtn.disabled = false;
+              saveToLibBtn.innerHTML = '<i class="fas fa-bookmark mr-1"></i>庫保存';
             }
           };
 
