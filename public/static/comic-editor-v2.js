@@ -1895,10 +1895,30 @@
     }
     
     const activeImage = state.scene.active_image;
-    const imageUrl = activeImage?.r2_url || activeImage?.image_url;
+    const activeComic = state.scene.active_comic;
+    const latestImage = state.scene.latest_image;
+    const displayAssetType = state.scene.display_asset_type || 'image';
+    
+    // Phase1.7: 画像取得の優先順位
+    // 1. activeImage（アクティブなAI画像）
+    // 2. activeComic（公開済み漫画画像 - 再編集のユースケース）
+    // 3. latestImage（最新の画像 - is_active=0 でも漫画化可能）
+    let imageUrl = activeImage?.r2_url || activeImage?.image_url;
+    
+    // 漫画が公開済みで、かつAI画像がない場合は、公開済み漫画画像で編集を許可
+    if (!imageUrl && activeComic?.r2_url) {
+      imageUrl = activeComic.r2_url;
+      console.log('[ComicEditorV2] Using published comic image as base (no AI image available)');
+    }
+    
+    // 最新画像がある場合はそれを使用（is_active=0 でも漫画化を許可）
+    if (!imageUrl && latestImage?.r2_url && latestImage?.status === 'completed') {
+      imageUrl = latestImage.r2_url;
+      console.log('[ComicEditorV2] Using latest image (not active but completed)');
+    }
     
     if (!imageUrl) {
-      showToast('画像が生成されていません', 'warning');
+      showToast('画像が生成されていません。先にAI画像を生成してください。', 'warning');
       return;
     }
     

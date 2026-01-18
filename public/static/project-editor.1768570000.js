@@ -2092,29 +2092,45 @@ function setSceneFilter(filter) {
  */
 function renderSceneCardHeader(scene, imageStatus) {
   const hasImage = imageStatus === 'completed';
+  const displayAssetType = scene.display_asset_type || 'image';
+  const isComicMode = displayAssetType === 'comic';
+  const hasPublishedComic = !!scene.active_comic?.r2_url;
+  // Phase1.7: latest_image がある場合も漫画化を許可（is_active=0 でも漫画化可能）
+  const hasAnyCompletedImage = hasImage || hasPublishedComic || (scene.latest_image?.status === 'completed' && scene.latest_image?.r2_url);
+  
+  // Phase1.7: 漫画化ボタンの表示条件
+  // - 画像モード: AI画像がある場合のみ表示（latest_image でも可）
+  // - 漫画モード: 常に表示（漫画編集の再開用）
+  const showComicButton = hasAnyCompletedImage;
+  
+  // Phase1.7: 漫画採用中はシーン編集を非活性化（画像プロンプト変更が漫画と矛盾するため）
+  const sceneEditDisabled = isComicMode;
+  
   return `
-    <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+    <div class="bg-gradient-to-r ${isComicMode ? 'from-orange-600 to-purple-600' : 'from-blue-600 to-purple-600'} px-4 py-3 flex items-center justify-between flex-wrap gap-2">
       <div class="flex items-center gap-2">
         <span class="text-white font-bold text-lg">#${scene.idx}</span>
         <span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">
           ${getRoleText(scene.role)}
         </span>
+        ${isComicMode ? `<span class="px-2 py-0.5 bg-orange-400 rounded-full text-white text-xs font-semibold"><i class="fas fa-comment-alt mr-1"></i>漫画</span>` : ''}
       </div>
       <div class="flex items-center gap-2 flex-wrap">
         <button 
-          onclick="openSceneEditModal(${scene.id})"
-          class="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 rounded-lg text-white text-xs font-semibold transition-colors"
-          title="セリフ・要点・プロンプトを編集"
+          onclick="${sceneEditDisabled ? '' : `openSceneEditModal(${scene.id})`}"
+          class="px-3 py-1.5 ${sceneEditDisabled ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-500 hover:bg-blue-400'} rounded-lg text-white text-xs font-semibold transition-colors"
+          title="${sceneEditDisabled ? '漫画採用中はシーン編集できません。「画像を採用」に切り替えるか、漫画化ボタンから編集してください。' : 'セリフ・要点・プロンプトを編集'}"
+          ${sceneEditDisabled ? 'disabled' : ''}
         >
-          <i class="fas fa-pen mr-1"></i>シーン編集
+          <i class="fas fa-${sceneEditDisabled ? 'lock' : 'pen'} mr-1"></i>${sceneEditDisabled ? '編集不可' : 'シーン編集'}
         </button>
-        ${hasImage ? `
+        ${showComicButton ? `
         <button 
           onclick="openComicEditor(${scene.id})"
           class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 rounded-lg text-white text-xs font-semibold transition-colors"
-          title="画像に吹き出しを追加して漫画化"
+          title="${isComicMode ? '漫画を編集' : '画像に吹き出しを追加して漫画化'}"
         >
-          <i class="fas fa-comment-dots mr-1"></i>漫画化
+          <i class="fas fa-comment-dots mr-1"></i>${isComicMode ? '漫画編集' : '漫画化'}
         </button>
         ` : ''}
         <div class="scene-status-badge-container">
@@ -2571,10 +2587,13 @@ function initializeSceneCardButtons(scene, cardElement) {
     }
   }
   
-  // History button
+  // History button - Phase1.7: 漫画採用中も履歴は見れるようにする
   const historyBtn = cardElement.querySelector(`#historyBtn-${scene.id}`);
   if (historyBtn) {
-    historyBtn.disabled = !scene.active_image;
+    // active_image, active_comic, または latest_image があれば履歴ボタンを有効化
+    // latest_image は is_active=0 でも履歴閲覧を許可
+    const hasAnyImage = scene.active_image || scene.active_comic || scene.latest_image;
+    historyBtn.disabled = !hasAnyImage;
   }
 }
 
@@ -3072,12 +3091,14 @@ function renderBuilderScenes(scenes, page = 1) {
       setPrimaryButtonState(scene.id, 'idle', 0);
     }
     
-    // 履歴ボタンを設定
+    // 履歴ボタンを設定 - Phase1.7: 漫画採用中も履歴は見れるようにする
     const historyBtn = document.getElementById(`historyBtn-${scene.id}`);
     if (historyBtn) {
-      historyBtn.disabled = !activeImage;
+      // active_image, active_comic, または latest_image があれば履歴ボタンを有効化
+      const hasAnyImage = activeImage || scene.active_comic || scene.latest_image;
+      historyBtn.disabled = !hasAnyImage;
       historyBtn.className = `px-4 py-2 rounded-lg font-semibold touch-manipulation ${
-        activeImage ? 'bg-gray-600 text-white hover:bg-gray-700 transition-colors' : 'bg-gray-400 text-gray-200 cursor-not-allowed'
+        hasAnyImage ? 'bg-gray-600 text-white hover:bg-gray-700 transition-colors' : 'bg-gray-400 text-gray-200 cursor-not-allowed'
       }`;
       historyBtn.innerHTML = '<i class="fas fa-history mr-2"></i>履歴';
     }
@@ -4353,12 +4374,15 @@ async function updateSingleSceneCard(sceneId) {
           setPrimaryButtonState(sceneId, 'idle', 0);
         }
         
-        // 履歴ボタンを更新
+        // 履歴ボタンを更新 - Phase1.7: 漫画採用中も履歴は見れるようにする
         const historyBtn = document.getElementById(`historyBtn-${sceneId}`);
         if (historyBtn) {
-          historyBtn.disabled = !activeImage;
+          const activeComic = scene.active_comic || null;
+          // active_image, active_comic, または latest_image があれば履歴ボタンを有効化
+          const hasAnyImage = activeImage || activeComic || scene.latest_image;
+          historyBtn.disabled = !hasAnyImage;
           historyBtn.className = `px-4 py-2 rounded-lg font-semibold touch-manipulation ${
-            activeImage ? 'bg-gray-600 text-white hover:bg-gray-700 transition-colors' : 'bg-gray-400 text-gray-200 cursor-not-allowed'
+            hasAnyImage ? 'bg-gray-600 text-white hover:bg-gray-700 transition-colors' : 'bg-gray-400 text-gray-200 cursor-not-allowed'
           }`;
           historyBtn.innerHTML = '<i class="fas fa-history mr-2"></i>履歴';
         }
