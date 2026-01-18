@@ -182,13 +182,18 @@ export async function startVeo3Generation(input: Veo3GenerateInput): Promise<{
 }
 
 /**
- * Poll Veo3 operation until completion
+ * Poll Veo3 operation until completion using fetchPredictOperation
  * 
  * Supports both API key and Service Account JSON authentication.
  * 
+ * IMPORTANT: Uses `fetchPredictOperation` endpoint (POST with operationName in body)
+ * NOT the generic operations.get endpoint which returns 404 for Veo operations.
+ * 
  * @param credential - API key or SA JSON for auth (needed for each poll)
  * @param location - GCP region
- * @param operationName - Operation name from startVeo3Generation
+ * @param operationName - Full operation name from startVeo3Generation
+ * @param projectId - GCP project ID (required for fetchPredictOperation endpoint)
+ * @param model - Model ID used for generation
  * @param timeoutMs - Maximum time to wait (default: 10 minutes)
  * @param intervalMs - Polling interval (default: 5 seconds)
  */
@@ -196,30 +201,30 @@ export async function pollVeo3Operation(
   credential: string,
   location: string,
   operationName: string,
+  projectId: string,
+  model: string,
   timeoutMs: number = POLL_TIMEOUT_MS,
   intervalMs: number = POLL_INTERVAL_MS
 ): Promise<Veo3GenerationResult> {
   const useApiKey = isApiKey(credential);
   const endpoint = getVertexEndpoint(location);
 
-  // Operation name format: projects/.../locations/.../operations/...
-  // We need to use the full name as returned
-  let baseUrl = `${endpoint}/v1/${operationName}`;
+  // Use fetchPredictOperation endpoint (NOT operations.get which returns 404)
+  // Format: POST {endpoint}/v1/projects/{project}/locations/{location}/publishers/google/models/{model}:fetchPredictOperation
+  let baseUrl = `${endpoint}/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeURIComponent(model)}:fetchPredictOperation`;
   
-  let authHeader: Record<string, string> = {};
-  
+  // Add API key as query parameter if using API key auth
   if (useApiKey) {
     baseUrl += `?key=${encodeURIComponent(credential)}`;
-  } else {
-    const { accessToken } = await getVertexAccessToken(credential);
-    authHeader = { 'Authorization': `Bearer ${accessToken}` };
   }
 
   const startTime = Date.now();
   let pollCount = 0;
 
-  logger.info('Starting Veo3 operation polling', {
+  logger.info('Starting Veo3 operation polling with fetchPredictOperation', {
     operationName,
+    projectId,
+    model,
     timeoutMs,
     intervalMs,
     authMethod: useApiKey ? 'api_key' : 'service_account',
@@ -228,26 +233,34 @@ export async function pollVeo3Operation(
   while (Date.now() - startTime < timeoutMs) {
     pollCount++;
 
-    // Refresh access token for SA auth on each poll (tokens expire)
-    let url = baseUrl;
-    let headers = authHeader;
+    // Build request headers
+    let headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
     
     if (!useApiKey) {
       // Refresh token for long-running operations
       const { accessToken } = await getVertexAccessToken(credential);
-      headers = { 'Authorization': `Bearer ${accessToken}` };
+      headers['Authorization'] = `Bearer ${accessToken}`;
     }
 
-    const res = await fetch(url, {
-      method: 'GET',
+    // fetchPredictOperation uses POST with operationName in body
+    const requestBody = {
+      operationName: operationName,
+    };
+
+    const res = await fetch(baseUrl, {
+      method: 'POST',
       headers,
+      body: JSON.stringify(requestBody),
     });
 
     if (!res.ok) {
       const text = await res.text();
-      logger.error('Veo3 operations.get failed', {
+      logger.error('Veo3 fetchPredictOperation failed', {
         status: res.status,
         pollCount,
+        url: baseUrl.replace(/key=[^&]+/, 'key=***'),  // Hide API key in logs
         errorPreview: text.substring(0, 200),
       });
       
@@ -291,7 +304,10 @@ export async function pollVeo3Operation(
       let mimeType: string = 'video/mp4';
 
       // Check for direct bytes (less common for video)
+      // Veo3 API returns `videos` array (not `generatedVideos`)
       const bytesBase64 = 
+        response?.videos?.[0]?.video?.bytesBase64Encoded ||
+        response?.videos?.[0]?.bytesBase64Encoded ||
         response?.generatedVideos?.[0]?.video?.bytesBase64Encoded ||
         response?.predictions?.[0]?.bytesBase64Encoded ||
         response?.bytesBase64Encoded;
@@ -304,7 +320,10 @@ export async function pollVeo3Operation(
       }
 
       // Check for GCS URI (more common for video)
+      // Veo3 API returns `videos` array with nested structure
       gcsUri = 
+        response?.videos?.[0]?.video?.gcsUri ||
+        response?.videos?.[0]?.gcsUri ||
         response?.generatedVideos?.[0]?.video?.gcsUri ||
         response?.generatedVideos?.[0]?.gcsUri ||
         response?.predictions?.[0]?.gcsUri ||
@@ -319,13 +338,19 @@ export async function pollVeo3Operation(
 
       // Get mime type if available
       mimeType = 
+        response?.videos?.[0]?.video?.mimeType ||
+        response?.videos?.[0]?.mimeType ||
         response?.generatedVideos?.[0]?.video?.mimeType ||
         response?.mimeType ||
         'video/mp4';
 
       if (!videoBytes && !gcsUri) {
+        // Log more detail to diagnose response structure
         logger.error('Veo3: No video data in response', {
           responseKeys: Object.keys(response || {}),
+          videosLength: response?.videos?.length,
+          firstVideo: response?.videos?.[0] ? Object.keys(response.videos[0]) : null,
+          raiFilteredCount: response?.raiMediaFilteredCount,
         });
         return {
           success: false,
@@ -381,13 +406,15 @@ export async function pollVeo3Operation(
 export async function generateVeo3Video(input: Veo3GenerateInput): Promise<Veo3GenerationResult> {
   try {
     // Start generation
-    const { operationName } = await startVeo3Generation(input);
+    const { operationName, projectId } = await startVeo3Generation(input);
 
-    // Poll until completion
+    // Poll until completion using fetchPredictOperation
     const result = await pollVeo3Operation(
       input.serviceAccountJson,
       input.location,
-      operationName
+      operationName,
+      projectId,
+      input.model
     );
 
     return result;
