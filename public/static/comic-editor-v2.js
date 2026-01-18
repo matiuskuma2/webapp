@@ -1,10 +1,11 @@
-// comic-editor-v2.js - Phase1.6 SSOT漫画編集（完全再構築版）
+// comic-editor-v2.js - Phase1.7 吹き出し実用化
 // ============================================================
 // SSOT原則:
 // 1. 座標系: 正規化(0-1) + containRect補正
 // 2. スケール: publishScale = naturalWidth/1000（プレビュー/公開で統一）
-// 3. 吹き出し: 実用5種のみ（speech/whisper/thought/telop/caption）
+// 3. 吹き出し: 実用6種（speech_round/speech_oval/thought_oval/mono_box_v/caption/telop_bar）
 // 4. UIルール: ボタン常時表示、Footer固定、hover非表示禁止
+// 5. Tail: tip座標はドラッグ可能、enabled=false で丸形のみ可
 // ============================================================
 
 (function() {
@@ -14,22 +15,24 @@
   const MAX_UTTERANCES = 3;
   const MAX_BUBBLES = 5;
   
-  // 吹き出し5種（SSOT）
+  // Phase1.7: 吹き出し6種（実運用ベース）
   const BUBBLE_TYPES = {
-    speech:  { name: '通常', icon: 'fa-comment', hasTail: true, category: 'serif' },
-    whisper: { name: '小声', icon: 'fa-comment-dots', hasTail: true, category: 'serif' },
-    thought: { name: '思考', icon: 'fa-cloud', hasTail: true, category: 'serif' },
-    telop:   { name: 'テロップ', icon: 'fa-square', hasTail: false, category: 'narration' },
-    caption: { name: '字幕', icon: 'fa-font', hasTail: false, category: 'narration' }
+    speech_round:  { name: '通常（丸角）', icon: 'fa-comment', hasTail: true, category: 'serif', writingMode: 'horizontal' },
+    speech_oval:   { name: '楕円', icon: 'fa-comment-dots', hasTail: true, category: 'serif', writingMode: 'horizontal' },
+    thought_oval:  { name: '思考（楕円）', icon: 'fa-cloud', hasTail: true, category: 'serif', writingMode: 'horizontal' },
+    mono_box_v:    { name: 'モノローグ', icon: 'fa-align-left', hasTail: false, category: 'serif', writingMode: 'vertical' },
+    caption:       { name: '字幕', icon: 'fa-font', hasTail: false, category: 'narration', writingMode: 'horizontal' },
+    telop_bar:     { name: 'テロップ', icon: 'fa-square', hasTail: false, category: 'narration', writingMode: 'horizontal' }
   };
 
-  // サイズ定義（1000px基準）- デフォルト
+  // サイズ定義（1000px基準）
   const BUBBLE_SIZES = {
-    speech:  { w: 360, h: 180 },
-    whisper: { w: 360, h: 180 },
-    thought: { w: 340, h: 170 },
-    telop:   { w: 720, h: 120 },
-    caption: { w: 720, h: 100 }
+    speech_round:  { w: 360, h: 180 },
+    speech_oval:   { w: 380, h: 170 },
+    thought_oval:  { w: 340, h: 170 },
+    mono_box_v:    { w: 120, h: 280 },  // 縦長
+    caption:       { w: 720, h: 100 },
+    telop_bar:     { w: 720, h: 120 }
   };
 
   // サイズプリセット（S/M/L）
@@ -41,53 +44,66 @@
 
   // スタイル定義
   const BUBBLE_STYLES = {
-    speech: {
+    speech_round: {
       fill: '#FFFFFF',
-      stroke: 'rgba(0,0,0,0.70)',
+      stroke: '#222222',
       strokeWidth: 2.5,
       radius: 20,
       fontSize: 18,
       lineHeight: 26,
       padding: 16,
-      textColor: '#111827'
+      textColor: '#111827',
+      shadow: { color: 'rgba(0,0,0,0.12)', blur: 10, offsetY: 4 }
     },
-    whisper: {
+    speech_oval: {
       fill: '#FFFFFF',
-      stroke: 'rgba(0,0,0,0.45)',
-      strokeWidth: 2.0,
-      strokeDash: [6, 4],
-      radius: 20,
+      stroke: '#222222',
+      strokeWidth: 2.5,
       fontSize: 18,
       lineHeight: 26,
-      padding: 16,
-      textColor: '#111827'
+      padding: 20,
+      textColor: '#111827',
+      shadow: { color: 'rgba(0,0,0,0.12)', blur: 10, offsetY: 4 }
     },
-    thought: {
+    thought_oval: {
       fill: '#FFFFFF',
-      stroke: 'rgba(0,0,0,0.55)',
+      stroke: '#333333',
       strokeWidth: 2.0,
       fontSize: 18,
       lineHeight: 26,
-      padding: 16,
-      textColor: '#111827'
+      padding: 20,
+      textColor: '#111827',
+      shadow: { color: 'rgba(0,0,0,0.10)', blur: 8, offsetY: 3 }
     },
-    telop: {
-      fill: 'rgba(0,0,0,0.45)',
-      radius: 12,
-      fontSize: 22,
-      lineHeight: 30,
-      padding: 16,
-      textColor: '#FFFFFF',
-      textStroke: 'rgba(0,0,0,0.6)',
-      textStrokeWidth: 2.0
+    mono_box_v: {
+      fill: '#FFFFFF',
+      stroke: '#111111',
+      strokeWidth: 2.5,
+      radius: 6,
+      fontSize: 18,
+      lineHeight: 24,
+      padding: 14,
+      textColor: '#111827',
+      shadow: { color: 'rgba(0,0,0,0.08)', blur: 6, offsetY: 2 }
     },
     caption: {
       fontSize: 24,
       lineHeight: 32,
       padding: 12,
       textColor: '#FFFFFF',
-      textStroke: 'rgba(0,0,0,0.85)',
+      textStroke: '#000000',
       textStrokeWidth: 4.0
+    },
+    telop_bar: {
+      fill: 'rgba(0,0,0,0.50)',
+      radius: 12,
+      fontSize: 22,
+      lineHeight: 30,
+      padding: 16,
+      textColor: '#FFFFFF',
+      textStroke: 'rgba(0,0,0,0.4)',
+      textStrokeWidth: 2.0,
+      shadow: { color: 'rgba(0,0,0,0.15)', blur: 8, offsetY: 3 }
     }
   };
 
@@ -103,15 +119,13 @@
     isDragging: false,
     dragTarget: null,
     dragOffset: { x: 0, y: 0 },
+    dragMode: null, // 'bubble' | 'tail'
     isPublishing: false,
     isSaving: false
   };
 
   // ============== SSOT: 座標系変換 ==============
 
-  /**
-   * containRect を計算（object-contain による画像表示領域）
-   */
   function getContainRect() {
     const container = document.getElementById('comicCanvasContainer');
     const baseImage = document.getElementById('comicBaseImage');
@@ -154,9 +168,6 @@
     return state.containRect;
   }
 
-  /**
-   * 正規化座標(0-1) → コンテナ座標（プレビュー用）
-   */
   function normalizedToContainer(normX, normY) {
     const rect = getContainRect();
     if (!rect) return { x: 0, y: 0 };
@@ -166,9 +177,6 @@
     };
   }
 
-  /**
-   * コンテナ座標 → 正規化座標(0-1)（ドラッグ用）
-   */
   function containerToNormalized(containerX, containerY) {
     const rect = getContainRect();
     if (!rect) return { x: 0, y: 0 };
@@ -178,15 +186,9 @@
     };
   }
 
-  /**
-   * 吹き出しサイズ（公開画像ピクセル）
-   * @param {string} type - 吹き出しタイプ
-   * @param {number} naturalW - 元画像の幅
-   * @param {string} sizePreset - サイズプリセット (S/M/L)
-   */
   function getBubbleSizePx(type, naturalW, sizePreset = 'M') {
     const scale = naturalW / 1000;
-    const base = BUBBLE_SIZES[type] || BUBBLE_SIZES.speech;
+    const base = BUBBLE_SIZES[type] || BUBBLE_SIZES.speech_round;
     const preset = SIZE_PRESETS[sizePreset] || SIZE_PRESETS.M;
     return { 
       w: base.w * scale * preset.multiplier, 
@@ -194,12 +196,8 @@
     };
   }
 
-  /**
-   * 画面内クランプ（サイズ込み、端まで移動可能）
-   */
   function clampPosition(pos, type, naturalW, naturalH, sizePreset = 'M') {
     const size = getBubbleSizePx(type, naturalW, sizePreset);
-    // マージンを最小化（端まで移動可能に）
     const marginPx = 2;
     
     const mx = marginPx / naturalW;
@@ -213,11 +211,22 @@
     };
   }
 
+  // Tail先端のクランプ（画面内に収める）
+  function clampTailTip(tip, bubblePos, type, naturalW, naturalH, sizePreset = 'M') {
+    const size = getBubbleSizePx(type, naturalW, sizePreset);
+    const bw = size.w / naturalW;
+    const bh = size.h / naturalH;
+    
+    // Tail先端は吹き出し外側で画面内に
+    const margin = 0.02;
+    return {
+      x: Math.min(Math.max(tip.x, margin), 1 - margin),
+      y: Math.min(Math.max(tip.y, margin), 1 - margin)
+    };
+  }
+
   // ============== 描画ユーティリティ ==============
 
-  /**
-   * 角丸長方形パス
-   */
   function pathRoundRect(ctx, x, y, w, h, r) {
     const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
     ctx.beginPath();
@@ -233,39 +242,30 @@
     ctx.closePath();
   }
 
-  /**
-   * Tail付き長方形パス（speech/whisper用）
-   */
-  function pathSpeechWithTail(ctx, w, h, r, tailTip, scale) {
-    const tailBaseX = w * 0.55;
-    const tailBaseW = 40 * scale;
-    const half = Math.max(8 * scale, tailBaseW / 2);
+  // ベジェ曲線でなめらかなTailを描画
+  function drawTailBezier(ctx, baseX, baseY, tipX, tipY, width, scale) {
+    const half = width / 2;
+    const angle = Math.atan2(tipY - baseY, tipX - baseX);
+    const perpAngle = angle + Math.PI / 2;
     
-    const tipX = tailTip?.x ?? tailBaseX;
-    const tipY = tailTip?.y ?? (h + 24 * scale);
+    const leftX = baseX + Math.cos(perpAngle) * half;
+    const leftY = baseY + Math.sin(perpAngle) * half;
+    const rightX = baseX - Math.cos(perpAngle) * half;
+    const rightY = baseY - Math.sin(perpAngle) * half;
     
-    const left = Math.max(r + 6 * scale, tailBaseX - half);
-    const right = Math.min(w - r - 6 * scale, tailBaseX + half);
+    // コントロールポイント
+    const dist = Math.sqrt((tipX - baseX) ** 2 + (tipY - baseY) ** 2);
+    const ctrlDist = dist * 0.4;
+    const ctrlX = baseX + Math.cos(angle) * ctrlDist;
+    const ctrlY = baseY + Math.sin(angle) * ctrlDist;
     
     ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.lineTo(w - r, 0);
-    ctx.quadraticCurveTo(w, 0, w, r);
-    ctx.lineTo(w, h - r);
-    ctx.quadraticCurveTo(w, h, w - r, h);
-    ctx.lineTo(right, h);
-    ctx.lineTo(tipX, tipY);
-    ctx.lineTo(left, h);
-    ctx.lineTo(r, h);
-    ctx.quadraticCurveTo(0, h, 0, h - r);
-    ctx.lineTo(0, r);
-    ctx.quadraticCurveTo(0, 0, r, 0);
+    ctx.moveTo(leftX, leftY);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, tipX, tipY);
+    ctx.quadraticCurveTo(ctrlX, ctrlY, rightX, rightY);
     ctx.closePath();
   }
 
-  /**
-   * テキスト自動改行
-   */
   function wrapText(ctx, text, maxW) {
     if (!text) return [''];
     const lines = [];
@@ -288,9 +288,32 @@
     return lines.slice(0, 6);
   }
 
-  /**
-   * テキストフィット検証＋自動縮小
-   */
+  // 縦書きテキストのラップ（1文字ずつ縦に）
+  function wrapTextVertical(ctx, text, maxH, lineH) {
+    if (!text) return [['']];
+    const columns = [];
+    let column = [];
+    let currentH = 0;
+    
+    for (const ch of text) {
+      if (ch === '\n') {
+        if (column.length > 0) columns.push(column);
+        column = [];
+        currentH = 0;
+        continue;
+      }
+      if (currentH + lineH > maxH && column.length > 0) {
+        columns.push(column);
+        column = [];
+        currentH = 0;
+      }
+      column.push(ch);
+      currentH += lineH;
+    }
+    if (column.length > 0) columns.push(column);
+    return columns.slice(0, 6);
+  }
+
   function fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isBold) {
     const minFont = 12;
     for (let font = baseFontPx; font >= minFont; font -= 1) {
@@ -305,57 +328,121 @@
     return { ok: false };
   }
 
+  function fitTextVertical(ctx, text, innerW, innerH, baseFontPx, baseLineH) {
+    const minFont = 12;
+    for (let font = baseFontPx; font >= minFont; font -= 1) {
+      ctx.font = `700 ${font}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
+      const lineH = font * 1.2;
+      const colW = font * 1.4;
+      const columns = wrapTextVertical(ctx, text, innerH, lineH);
+      const neededW = columns.length * colW;
+      if (neededW <= innerW) {
+        return { ok: true, fontPx: font, lineH, colW, columns };
+      }
+    }
+    return { ok: false };
+  }
+
   // ============== 吹き出し描画 ==============
 
-  function drawSpeechBubble(ctx, w, h, scale, tailTip) {
-    const style = BUBBLE_STYLES.speech;
+  function drawSpeechRoundBubble(ctx, w, h, scale, tailTip, tailEnabled) {
+    const style = BUBBLE_STYLES.speech_round;
     const r = style.radius * scale;
     
+    // 影
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.15)';
-    ctx.shadowBlur = 8 * scale;
-    ctx.shadowOffsetY = 3 * scale;
+    ctx.shadowColor = style.shadow.color;
+    ctx.shadowBlur = style.shadow.blur * scale;
+    ctx.shadowOffsetY = style.shadow.offsetY * scale;
     
-    pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    if (tailEnabled && tailTip) {
+      pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    } else {
+      pathRoundRect(ctx, 0, 0, w, h, r);
+    }
     ctx.fillStyle = style.fill;
     ctx.fill();
     ctx.restore();
     
-    pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    // 枠線
+    if (tailEnabled && tailTip) {
+      pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    } else {
+      pathRoundRect(ctx, 0, 0, w, h, r);
+    }
     ctx.strokeStyle = style.stroke;
     ctx.lineWidth = style.strokeWidth * scale;
     ctx.stroke();
   }
 
-  function drawWhisperBubble(ctx, w, h, scale, tailTip) {
-    const style = BUBBLE_STYLES.whisper;
-    const r = style.radius * scale;
+  function pathSpeechWithTail(ctx, w, h, r, tailTip, scale) {
+    const tailBaseW = 36 * scale;
+    const half = tailBaseW / 2;
+    
+    // Tail根元は吹き出し下辺の中央付近
+    const tailBaseX = w * 0.5;
+    const left = Math.max(r + 4 * scale, tailBaseX - half);
+    const right = Math.min(w - r - 4 * scale, tailBaseX + half);
+    
+    ctx.beginPath();
+    ctx.moveTo(r, 0);
+    ctx.lineTo(w - r, 0);
+    ctx.quadraticCurveTo(w, 0, w, r);
+    ctx.lineTo(w, h - r);
+    ctx.quadraticCurveTo(w, h, w - r, h);
+    
+    // Tail
+    ctx.lineTo(right, h);
+    ctx.lineTo(tailTip.x, tailTip.y);
+    ctx.lineTo(left, h);
+    
+    ctx.lineTo(r, h);
+    ctx.quadraticCurveTo(0, h, 0, h - r);
+    ctx.lineTo(0, r);
+    ctx.quadraticCurveTo(0, 0, r, 0);
+    ctx.closePath();
+  }
+
+  function drawSpeechOvalBubble(ctx, w, h, scale, tailTip, tailEnabled) {
+    const style = BUBBLE_STYLES.speech_oval;
     
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.12)';
-    ctx.shadowBlur = 6 * scale;
-    ctx.shadowOffsetY = 2 * scale;
+    ctx.shadowColor = style.shadow.color;
+    ctx.shadowBlur = style.shadow.blur * scale;
+    ctx.shadowOffsetY = style.shadow.offsetY * scale;
     
-    pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    ctx.beginPath();
+    ctx.ellipse(w/2, h/2, w/2, h/2, 0, 0, Math.PI * 2);
     ctx.fillStyle = style.fill;
     ctx.fill();
     ctx.restore();
     
-    pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    ctx.beginPath();
+    ctx.ellipse(w/2, h/2, w/2, h/2, 0, 0, Math.PI * 2);
     ctx.strokeStyle = style.stroke;
     ctx.lineWidth = style.strokeWidth * scale;
-    ctx.setLineDash(style.strokeDash.map(d => d * scale));
     ctx.stroke();
-    ctx.setLineDash([]);
+    
+    // Tail
+    if (tailEnabled && tailTip) {
+      const baseX = w * 0.5;
+      const baseY = h;
+      ctx.fillStyle = style.fill;
+      ctx.strokeStyle = style.stroke;
+      ctx.lineWidth = style.strokeWidth * scale;
+      drawTailBezier(ctx, baseX, baseY, tailTip.x, tailTip.y, 30 * scale, scale);
+      ctx.fill();
+      ctx.stroke();
+    }
   }
 
-  function drawThoughtBubble(ctx, w, h, scale, tailTip) {
-    const style = BUBBLE_STYLES.thought;
+  function drawThoughtOvalBubble(ctx, w, h, scale, tailTip, tailEnabled) {
+    const style = BUBBLE_STYLES.thought_oval;
     
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.15)';
-    ctx.shadowBlur = 8 * scale;
-    ctx.shadowOffsetY = 3 * scale;
+    ctx.shadowColor = style.shadow.color;
+    ctx.shadowBlur = style.shadow.blur * scale;
+    ctx.shadowOffsetY = style.shadow.offsetY * scale;
     
     ctx.beginPath();
     ctx.ellipse(w/2, h/2, w/2, h/2, 0, 0, Math.PI * 2);
@@ -370,37 +457,59 @@
     ctx.stroke();
     
     // ぽこぽこTail
-    const sx = w * 0.5;
-    const sy = h + 4 * scale;
-    const tx = tailTip?.x ?? (w * 0.58);
-    const ty = tailTip?.y ?? (h + 45 * scale);
-    
-    const points = [
-      { x: sx + (tx - sx) * 0.25, y: sy + (ty - sy) * 0.25, r: 7 * scale },
-      { x: sx + (tx - sx) * 0.55, y: sy + (ty - sy) * 0.55, r: 5 * scale },
-      { x: sx + (tx - sx) * 0.85, y: sy + (ty - sy) * 0.85, r: 3 * scale }
-    ];
-    
-    ctx.fillStyle = style.fill;
-    ctx.strokeStyle = style.stroke;
-    ctx.lineWidth = style.strokeWidth * scale;
-    
-    for (const p of points) {
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
+    if (tailEnabled && tailTip) {
+      const sx = w * 0.5;
+      const sy = h + 2 * scale;
+      const tx = tailTip.x;
+      const ty = tailTip.y;
+      
+      const points = [
+        { x: sx + (tx - sx) * 0.25, y: sy + (ty - sy) * 0.25, r: 8 * scale },
+        { x: sx + (tx - sx) * 0.55, y: sy + (ty - sy) * 0.55, r: 6 * scale },
+        { x: sx + (tx - sx) * 0.85, y: sy + (ty - sy) * 0.85, r: 4 * scale }
+      ];
+      
+      ctx.fillStyle = style.fill;
+      ctx.strokeStyle = style.stroke;
+      ctx.lineWidth = style.strokeWidth * scale;
+      
+      for (const p of points) {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+      }
     }
   }
 
-  function drawTelopBubble(ctx, w, h, scale) {
-    const style = BUBBLE_STYLES.telop;
+  function drawMonoBoxVBubble(ctx, w, h, scale) {
+    const style = BUBBLE_STYLES.mono_box_v;
     const r = style.radius * scale;
     
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.12)';
-    ctx.shadowBlur = 6 * scale;
-    ctx.shadowOffsetY = 3 * scale;
+    ctx.shadowColor = style.shadow.color;
+    ctx.shadowBlur = style.shadow.blur * scale;
+    ctx.shadowOffsetY = style.shadow.offsetY * scale;
+    
+    pathRoundRect(ctx, 0, 0, w, h, r);
+    ctx.fillStyle = style.fill;
+    ctx.fill();
+    ctx.restore();
+    
+    pathRoundRect(ctx, 0, 0, w, h, r);
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.strokeWidth * scale;
+    ctx.stroke();
+  }
+
+  function drawTelopBarBubble(ctx, w, h, scale) {
+    const style = BUBBLE_STYLES.telop_bar;
+    const r = style.radius * scale;
+    
+    ctx.save();
+    ctx.shadowColor = style.shadow.color;
+    ctx.shadowBlur = style.shadow.blur * scale;
+    ctx.shadowOffsetY = style.shadow.offsetY * scale;
     
     pathRoundRect(ctx, 0, 0, w, h, r);
     ctx.fillStyle = style.fill;
@@ -409,17 +518,46 @@
   }
 
   function drawBubbleText(ctx, text, type, w, h, scale) {
-    const style = BUBBLE_STYLES[type] || BUBBLE_STYLES.speech;
+    const style = BUBBLE_STYLES[type] || BUBBLE_STYLES.speech_round;
     const padding = style.padding * scale;
     const innerW = w - padding * 2;
     const innerH = h - padding * 2;
     
-    const isNarration = type === 'telop' || type === 'caption';
+    const isNarration = type === 'telop_bar' || type === 'caption';
+    const isVertical = BUBBLE_TYPES[type]?.writingMode === 'vertical';
     const baseFontPx = style.fontSize * scale;
     const baseLineH = style.lineHeight * scale;
     
-    const fit = fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
+    if (isVertical) {
+      // 縦書き
+      const fit = fitTextVertical(ctx, text, innerW, innerH, baseFontPx, baseLineH);
+      if (!fit.ok) return { ok: false };
+      
+      ctx.font = `700 ${fit.fontPx}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = style.textColor;
+      
+      // 右から左へ列を描画
+      const totalColW = fit.columns.length * fit.colW;
+      const startX = padding + innerW - (innerW - totalColW) / 2 - fit.colW / 2;
+      
+      for (let col = 0; col < fit.columns.length; col++) {
+        const column = fit.columns[col];
+        const x = startX - col * fit.colW;
+        const totalH = column.length * fit.lineH;
+        const startY = padding + (innerH - totalH) / 2 + fit.lineH / 2;
+        
+        for (let row = 0; row < column.length; row++) {
+          ctx.fillText(column[row], x, startY + row * fit.lineH);
+        }
+      }
+      
+      return { ok: true };
+    }
     
+    // 横書き
+    const fit = fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
     if (!fit.ok) return { ok: false };
     
     ctx.font = `${isNarration ? '700' : '400'} ${fit.fontPx}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
@@ -432,7 +570,7 @@
       const lx = w / 2;
       const ly = startY + i * fit.lineH;
       
-      if (type === 'caption' || type === 'telop') {
+      if (type === 'caption' || type === 'telop_bar') {
         ctx.lineWidth = style.textStrokeWidth * scale;
         ctx.strokeStyle = style.textStroke;
         ctx.lineJoin = 'round';
@@ -448,31 +586,32 @@
     return { ok: true };
   }
 
-  /**
-   * 1つの吹き出しを描画（SSOT統合関数）
-   */
   function drawOneBubble(ctx, bubble, text, scale, options = {}) {
-    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
     const sizePreset = SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M;
     const w = baseSize.w * scale * sizePreset.multiplier;
     const h = baseSize.h * scale * sizePreset.multiplier;
     
-    const tailTip = bubble.tail?.enabled
-      ? { x: (bubble.tail.tip?.x ?? 0.55) * w, y: (bubble.tail.tip?.y ?? 1.15) * h }
+    const tailEnabled = bubble.tail?.enabled ?? false;
+    const tailTip = tailEnabled && bubble.tail?.tip
+      ? { x: bubble.tail.tip.x * w, y: bubble.tail.tip.y * h }
       : null;
     
     switch (bubble.type) {
-      case 'speech':
-        drawSpeechBubble(ctx, w, h, scale, tailTip);
+      case 'speech_round':
+        drawSpeechRoundBubble(ctx, w, h, scale, tailTip, tailEnabled);
         break;
-      case 'whisper':
-        drawWhisperBubble(ctx, w, h, scale, tailTip);
+      case 'speech_oval':
+        drawSpeechOvalBubble(ctx, w, h, scale, tailTip, tailEnabled);
         break;
-      case 'thought':
-        drawThoughtBubble(ctx, w, h, scale, tailTip);
+      case 'thought_oval':
+        drawThoughtOvalBubble(ctx, w, h, scale, tailTip, tailEnabled);
         break;
-      case 'telop':
-        drawTelopBubble(ctx, w, h, scale);
+      case 'mono_box_v':
+        drawMonoBoxVBubble(ctx, w, h, scale);
+        break;
+      case 'telop_bar':
+        drawTelopBarBubble(ctx, w, h, scale);
         break;
       case 'caption':
         // 背景なし
@@ -483,6 +622,11 @@
     
     if (options.showDeleteButton) {
       drawDeleteButton(ctx, w, scale);
+    }
+    
+    // Tail先端ハンドル表示（プレビュー時）
+    if (options.showTailHandle && tailEnabled && tailTip) {
+      drawTailHandle(ctx, tailTip.x, tailTip.y, scale);
     }
     
     return { ok: result.ok, w, h };
@@ -503,6 +647,28 @@
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('×', btnX, btnY);
+  }
+
+  function drawTailHandle(ctx, x, y, scale) {
+    const r = 8 * scale;
+    
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = '#3B82F6';
+    ctx.fill();
+    
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 2 * scale;
+    ctx.stroke();
+    
+    // ドラッグアイコン
+    ctx.fillStyle = 'white';
+    ctx.font = `bold ${8 * scale}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('⊕', x, y);
   }
 
   // ============== バリデーション ==============
@@ -529,8 +695,8 @@
       
       // 文字溢れチェック
       if (text) {
-        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
-        const style = BUBBLE_STYLES[bubble.type] || BUBBLE_STYLES.speech;
+        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+        const style = BUBBLE_STYLES[bubble.type] || BUBBLE_STYLES.speech_round;
         const w = baseSize.w * scale * sizeMultiplier;
         const h = baseSize.h * scale * sizeMultiplier;
         const padding = style.padding * scale * sizeMultiplier;
@@ -539,9 +705,13 @@
         
         const baseFontPx = style.fontSize * scale * sizeMultiplier;
         const baseLineH = style.lineHeight * scale * sizeMultiplier;
-        const isNarration = bubble.type === 'telop' || bubble.type === 'caption';
+        const isNarration = bubble.type === 'telop_bar' || bubble.type === 'caption';
+        const isVertical = BUBBLE_TYPES[bubble.type]?.writingMode === 'vertical';
         
-        const fit = fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
+        const fit = isVertical
+          ? fitTextVertical(ctx, text, innerW, innerH, baseFontPx, baseLineH)
+          : fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
+        
         if (!fit.ok) {
           errors.push({ type: 'TEXT_OVERFLOW', bubbleId: bubble.id, message: 'テキストが収まりません' });
         }
@@ -566,7 +736,6 @@
     
     const bubbles = state.draft?.bubbles || [];
     
-    // SSOT: 公開と同じスケール
     const publishScale = rect.naturalWidth / 1000;
     const displayScale = rect.scale;
     
@@ -583,9 +752,8 @@
       ctx.translate(containerPos.x, containerPos.y);
       ctx.scale(displayScale, displayScale);
       
-      // エラー表示
       if (errorBubbleIds.has(bubble.id)) {
-        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
         const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
         const w = baseSize.w * publishScale * sizeMultiplier;
         const h = baseSize.h * publishScale * sizeMultiplier;
@@ -594,7 +762,10 @@
         ctx.strokeRect(-2 * publishScale, -2 * publishScale, w + 4 * publishScale, h + 4 * publishScale);
       }
       
-      drawOneBubble(ctx, bubble, text, publishScale, { showDeleteButton: true });
+      drawOneBubble(ctx, bubble, text, publishScale, { 
+        showDeleteButton: true,
+        showTailHandle: bubble.tail?.enabled
+      });
       
       ctx.restore();
     });
@@ -631,7 +802,7 @@
       
       ctx.save();
       ctx.translate(x, y);
-      drawOneBubble(ctx, bubble, text, scale, { showDeleteButton: false });
+      drawOneBubble(ctx, bubble, text, scale, { showDeleteButton: false, showTailHandle: false });
       ctx.restore();
     }
     
@@ -661,7 +832,7 @@
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const bubble = bubbles[i];
       const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
       const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
       const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
       const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
@@ -675,13 +846,45 @@
     return null;
   }
 
+  function findTailHandleAt(canvasX, canvasY) {
+    const rect = getContainRect();
+    if (!rect) return null;
+    
+    const bubbles = state.draft?.bubbles || [];
+    const displayBubbleScale = rect.width / 1000;
+    
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const bubble = bubbles[i];
+      if (!bubble.tail?.enabled || !bubble.tail?.tip) continue;
+      
+      const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
+      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+      const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
+      const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
+      
+      const tipX = containerPos.x + bubble.tail.tip.x * bubbleWidth;
+      const tipY = containerPos.y + bubble.tail.tip.y * bubbleHeight;
+      
+      const handleRadius = 12 * displayBubbleScale;
+      const dx = canvasX - tipX;
+      const dy = canvasY - tipY;
+      
+      if (dx * dx + dy * dy <= handleRadius * handleRadius) {
+        return bubble;
+      }
+    }
+    
+    return null;
+  }
+
   function isDeleteButtonClick(canvasX, canvasY, bubble) {
     const rect = getContainRect();
     if (!rect) return false;
     
     const displayBubbleScale = rect.width / 1000;
     const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech;
+    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
     const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
     const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
     
@@ -707,6 +910,15 @@
     const canvasX = clientX - canvasRect.left;
     const canvasY = clientY - canvasRect.top;
     
+    // Tail先端ハンドルをチェック
+    const tailBubble = findTailHandleAt(canvasX, canvasY);
+    if (tailBubble) {
+      state.isDragging = true;
+      state.dragTarget = tailBubble.id;
+      state.dragMode = 'tail';
+      return;
+    }
+    
     const bubble = findBubbleAt(canvasX, canvasY);
     
     if (bubble) {
@@ -717,6 +929,7 @@
       
       state.isDragging = true;
       state.dragTarget = bubble.id;
+      state.dragMode = 'bubble';
       
       const bubbleContainerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
       state.dragOffset = {
@@ -741,14 +954,36 @@
     const canvasX = clientX - canvasRect.left;
     const canvasY = clientY - canvasRect.top;
     
-    const adjustedX = canvasX - state.dragOffset.x;
-    const adjustedY = canvasY - state.dragOffset.y;
-    
-    let normalized = containerToNormalized(adjustedX, adjustedY);
-    
     const bubble = state.draft.bubbles.find(b => b.id === state.dragTarget);
-    if (bubble) {
-      normalized = clampPosition(normalized, bubble.type, rect.naturalWidth, rect.naturalHeight);
+    if (!bubble) return;
+    
+    if (state.dragMode === 'tail') {
+      // Tail先端をドラッグ
+      const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
+      const displayBubbleScale = rect.width / 1000;
+      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+      const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
+      const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
+      
+      // 吹き出し座標系でのTail位置
+      const localX = (canvasX - containerPos.x) / bubbleWidth;
+      const localY = (canvasY - containerPos.y) / bubbleHeight;
+      
+      // 正規化してクランプ
+      bubble.tail.tip = {
+        x: Math.min(Math.max(localX, -0.3), 1.3),
+        y: Math.min(Math.max(localY, -0.3), 1.5)
+      };
+      
+      renderPreview();
+    } else {
+      // 吹き出し本体をドラッグ
+      const adjustedX = canvasX - state.dragOffset.x;
+      const adjustedY = canvasY - state.dragOffset.y;
+      
+      let normalized = containerToNormalized(adjustedX, adjustedY);
+      normalized = clampPosition(normalized, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size);
       bubble.position.x = normalized.x;
       bubble.position.y = normalized.y;
       renderPreview();
@@ -758,6 +993,7 @@
   function handleMouseUp() {
     state.isDragging = false;
     state.dragTarget = null;
+    state.dragMode = null;
   }
 
   function setupDragEvents() {
@@ -837,6 +1073,7 @@
     
     state.draft.utterances.push(newUtterance);
     renderUtterances();
+    updateBubbleUtteranceSelect();
   }
 
   function removeUtterance(utteranceId) {
@@ -852,6 +1089,7 @@
     renderUtterances();
     renderBubbles();
     renderPreview();
+    updateBubbleUtteranceSelect();
   }
 
   function updateUtteranceText(utteranceId, text) {
@@ -888,7 +1126,7 @@
     }
   }
 
-  function addBubble(utteranceId, type = 'speech') {
+  function addBubble(utteranceId, type = 'speech_round') {
     if (!state.draft) return;
     if (state.draft.bubbles.length >= MAX_BUBBLES) {
       showToast(`吹き出しは最大${MAX_BUBBLES}個までです`, 'warning');
@@ -911,9 +1149,11 @@
       id: generateId(),
       utterance_id: utteranceId,
       type: type,
-      size: 'M',  // デフォルトサイズ
+      size: 'M',
       position: pos,
-      tail: hasTail ? { enabled: true, tip: { x: 0.55, y: 1.15 } } : { enabled: false }
+      tail: hasTail 
+        ? { enabled: true, tip: { x: 0.5, y: 1.3 } }  // デフォルト下向き
+        : { enabled: false }
     };
     
     state.draft.bubbles.push(newBubble);
@@ -933,8 +1173,9 @@
     const bubble = state.draft.bubbles.find(b => b.id === bubbleId);
     if (bubble) {
       bubble.type = type;
-      bubble.tail = BUBBLE_TYPES[type]?.hasTail 
-        ? { enabled: true, tip: { x: 0.55, y: 1.15 } } 
+      const hasTail = BUBBLE_TYPES[type]?.hasTail || false;
+      bubble.tail = hasTail 
+        ? { enabled: true, tip: { x: 0.5, y: 1.3 } }
         : { enabled: false };
       
       const rect = getContainRect();
@@ -958,6 +1199,19 @@
         bubble.position = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, size);
       }
       
+      renderBubbles();
+      renderPreview();
+    }
+  }
+
+  function toggleBubbleTail(bubbleId) {
+    if (!state.draft) return;
+    const bubble = state.draft.bubbles.find(b => b.id === bubbleId);
+    if (bubble && BUBBLE_TYPES[bubble.type]?.hasTail) {
+      bubble.tail.enabled = !bubble.tail.enabled;
+      if (bubble.tail.enabled && !bubble.tail.tip) {
+        bubble.tail.tip = { x: 0.5, y: 1.3 };
+      }
       renderBubbles();
       renderPreview();
     }
@@ -1062,15 +1316,16 @@
     const bubbles = state.draft?.bubbles || [];
     const utterances = state.draft?.utterances || [];
     
-    // 発話ごとの色（紐付け表示用）
     const utteranceColors = ['bg-purple-100 border-purple-300', 'bg-green-100 border-green-300', 'bg-blue-100 border-blue-300'];
     
     container.innerHTML = bubbles.map((bubble, index) => {
       const utterance = utterances.find(u => u.id === bubble.utterance_id);
       const utteranceIndex = utterances.findIndex(u => u.id === bubble.utterance_id);
-      const bubbleType = BUBBLE_TYPES[bubble.type] || BUBBLE_TYPES.speech;
+      const bubbleType = BUBBLE_TYPES[bubble.type] || BUBBLE_TYPES.speech_round;
       const colorClass = utteranceColors[utteranceIndex] || 'bg-gray-100 border-gray-300';
       const currentSize = bubble.size || 'M';
+      const hasTailOption = bubbleType.hasTail;
+      const tailEnabled = bubble.tail?.enabled ?? false;
       
       const typeOptions = Object.entries(BUBBLE_TYPES).map(([key, val]) => 
         `<option value="${key}" ${bubble.type === key ? 'selected' : ''}>${val.name}</option>`
@@ -1094,7 +1349,7 @@
             <i class="fas fa-times"></i>
           </button>
         </div>
-        <div class="flex gap-1">
+        <div class="flex gap-1 items-center">
           <select 
             class="flex-1 px-1 py-1 text-xs border border-gray-300 rounded"
             onchange="window.ComicEditorV2.updateBubbleType('${bubble.id}', this.value)"
@@ -1108,7 +1363,21 @@
           >
             ${sizeOptions}
           </select>
+          ${hasTailOption ? `
+          <button 
+            onclick="window.ComicEditorV2.toggleBubbleTail('${bubble.id}')"
+            class="px-2 py-1 text-xs border rounded ${tailEnabled ? 'bg-blue-500 text-white border-blue-500' : 'bg-white text-gray-600 border-gray-300'}"
+            title="尾(Tail)"
+          >
+            <i class="fas fa-location-arrow"></i>
+          </button>
+          ` : ''}
         </div>
+        ${hasTailOption && tailEnabled ? `
+        <div class="mt-1 text-gray-500 text-[10px]">
+          <i class="fas fa-info-circle mr-1"></i>青い●をドラッグして尾の先端を調整
+        </div>
+        ` : ''}
       </div>
       `;
     }).join('');
@@ -1176,7 +1445,6 @@
         base_image_generation_id: state.baseImageGenerationId
       });
       
-      // display_asset_type を comic に切替
       try {
         await axios.patch(`/api/scenes/${state.sceneId}`, {
           display_asset_type: 'comic'
@@ -1218,11 +1486,11 @@
     modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50';
     modal.innerHTML = `
       <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl mx-4 max-h-[90vh] flex flex-col">
-        <!-- Header（固定） -->
+        <!-- Header -->
         <div class="flex items-center justify-between px-6 py-4 border-b border-gray-200 flex-shrink-0">
           <div class="flex items-center gap-3">
             <h2 class="text-xl font-bold text-gray-800">
-              <i class="fas fa-pencil-alt mr-2 text-purple-500"></i>漫画編集
+              <i class="fas fa-pencil-alt mr-2 text-purple-500"></i>漫画編集 <span class="text-sm font-normal text-gray-500">v2</span>
             </h2>
             ${statusBadge}
           </div>
@@ -1231,10 +1499,10 @@
           </button>
         </div>
         
-        <!-- Body（スクロール可能） -->
+        <!-- Body -->
         <div class="flex-1 overflow-y-auto p-6">
           <div class="flex gap-6">
-            <!-- 左: プレビュー（画像のアスペクト比に合わせる） -->
+            <!-- 左: プレビュー -->
             <div class="flex-1 flex items-center justify-center">
               <div id="comicCanvasContainer" class="relative bg-gray-100 rounded-lg" style="max-height: 70vh; width: 100%;">
                 <img id="comicBaseImage" 
@@ -1275,7 +1543,6 @@
                   </h3>
                   <div class="flex gap-1">
                     <select id="addBubbleUtteranceSelect" class="text-xs border rounded px-1 py-0.5">
-                      <!-- 発話リストで埋められる -->
                     </select>
                     <select id="addBubbleTypeSelect" class="text-xs border rounded px-1 py-0.5">
                       ${Object.entries(BUBBLE_TYPES).map(([key, val]) => 
@@ -1290,7 +1557,17 @@
                     </button>
                   </div>
                 </div>
-                <div id="bubbleList" class="space-y-2 max-h-32 overflow-y-auto"></div>
+                <div id="bubbleList" class="space-y-2 max-h-40 overflow-y-auto"></div>
+              </div>
+              
+              <!-- 操作ヒント -->
+              <div class="bg-blue-50 rounded-lg p-3 text-xs text-blue-700">
+                <p class="font-semibold mb-1"><i class="fas fa-lightbulb mr-1"></i>操作ヒント</p>
+                <ul class="space-y-0.5 text-blue-600">
+                  <li>• 吹き出しをドラッグして移動</li>
+                  <li>• 青い●で尾の方向を調整</li>
+                  <li>• 赤い×で吹き出しを削除</li>
+                </ul>
               </div>
               
               <!-- バリデーションエラー -->
@@ -1299,7 +1576,7 @@
           </div>
         </div>
         
-        <!-- Footer（固定・常時表示） -->
+        <!-- Footer -->
         <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 bg-gray-50 flex-shrink-0">
           <button 
             onclick="window.ComicEditorV2.close()"
@@ -1327,12 +1604,10 @@
     
     document.body.appendChild(modal);
     
-    // 背景クリックで閉じる
     modal.addEventListener('click', (e) => {
       if (e.target === modal) close();
     });
     
-    // ESCで閉じる
     document.addEventListener('keydown', handleKeyDown);
   }
 
@@ -1420,6 +1695,7 @@
     state.baseImageLoaded = false;
     state.isDragging = false;
     state.dragTarget = null;
+    state.dragMode = null;
   }
 
   function showToast(message, type = 'info') {
@@ -1466,7 +1742,6 @@
     state.published = comicData.published || null;
     state.draft = comicData.draft ? JSON.parse(JSON.stringify(comicData.draft)) : null;
     
-    // 下書きがなければ初期化
     if (!state.draft) {
       const initialText = state.scene?.dialogue || '';
       state.draft = {
@@ -1481,6 +1756,28 @@
         ],
         bubbles: []
       };
+    }
+    
+    // 旧タイプから新タイプへの移行
+    if (state.draft.bubbles) {
+      state.draft.bubbles = state.draft.bubbles.map(b => {
+        // 旧タイプを新タイプに変換
+        const typeMapping = {
+          'speech': 'speech_round',
+          'whisper': 'speech_oval',
+          'thought': 'thought_oval',
+          'telop': 'telop_bar'
+          // caption はそのまま
+        };
+        if (typeMapping[b.type]) {
+          b.type = typeMapping[b.type];
+        }
+        // 新しいタイプが存在しない場合はデフォルト
+        if (!BUBBLE_TYPES[b.type]) {
+          b.type = 'speech_round';
+        }
+        return b;
+      });
     }
   }
 
@@ -1497,7 +1794,8 @@
     updateUtteranceSpeakerType,
     updateUtteranceCharacter,
     updateUtteranceNarratorPreset: (id, preset) => {
-      const ut = state.draft?.utterances.find(u => u.id === id);
+      if (!state.draft) return;
+      const ut = state.draft.utterances.find(u => u.id === id);
       if (ut) ut.narrator_voice_preset_id = preset;
     },
     addBubble,
@@ -1505,14 +1803,16 @@
     removeBubble,
     updateBubbleType,
     updateBubbleSize,
+    toggleBubbleTail,
     saveDraft,
     publish
   };
 
-  // 互換性: 旧 openComicEditor 関数名での呼び出しに対応
+  // 互換性: openComicEditor
   window.openComicEditor = function(sceneId) {
     window.ComicEditorV2.open(sceneId);
   };
 
-  console.log('[ComicEditorV2] SSOT v2 loaded');
+  console.log('[ComicEditorV2] Phase1.7 SSOT v2 loaded - 6 bubble types with tail drag');
+
 })();
