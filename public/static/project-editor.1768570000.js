@@ -4255,7 +4255,8 @@ function pollVideoGeneration(sceneId, videoId) {
 async function viewVideoHistory(sceneId) {
   try {
     const response = await axios.get(`${API_BASE}/scenes/${sceneId}/videos`);
-    const videos = response.data.videos || [];
+    // Backend returns video_generations (not videos)
+    const videos = response.data.video_generations || response.data.videos || [];
     
     // Create modal
     const modalId = 'videoHistoryModal';
