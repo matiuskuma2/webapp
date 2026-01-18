@@ -1590,9 +1590,9 @@ app.get('/projects/:id', (c) => {
     </div>
 
     <!-- Phase 2-3: Scene Edit Modal -->
-    <div id="scene-edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto">
-        <div class="min-h-screen px-4 flex items-center justify-center">
-            <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl my-8">
+    <div id="scene-edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50" style="overflow-y: auto;">
+        <div class="min-h-screen px-4 py-8 flex items-start justify-center">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-4xl">
                 <!-- Header -->
                 <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-4 rounded-t-xl">
                     <h2 class="text-2xl font-bold text-white">
@@ -1601,7 +1601,7 @@ app.get('/projects/:id', (c) => {
                 </div>
                 
                 <!-- Content -->
-                <div class="p-6 space-y-6 max-h-[70vh] overflow-y-auto">
+                <div class="p-6 space-y-6" style="max-height: 70vh; overflow-y: auto;">
                     <!-- Scene ID (hidden) -->
                     <input type="hidden" id="edit-scene-id" />
                     
