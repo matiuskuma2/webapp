@@ -2408,8 +2408,19 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   const comicUrl = activeComic?.r2_url || activeComic?.image_url || null;
   const hasPublishedComic = !!comicUrl;
   
-  // 表示する画像URL（display_asset_typeに応じて切替）
-  const displayUrl = displayAssetType === 'comic' && comicUrl ? comicUrl : imageUrl;
+  // Phase1.7: latest_image からもフォールバック
+  const latestImage = scene.latest_image || null;
+  const latestImageUrl = (latestImage?.status === 'completed') ? (latestImage?.r2_url || latestImage?.image_url) : null;
+  
+  // 表示する画像URL（display_asset_typeに応じて切替、フォールバック付き）
+  let displayUrl = null;
+  if (displayAssetType === 'comic' && comicUrl) {
+    displayUrl = comicUrl;
+  } else if (imageUrl) {
+    displayUrl = imageUrl;
+  } else if (latestImageUrl) {
+    displayUrl = latestImageUrl;
+  }
   const isShowingComic = displayAssetType === 'comic' && comicUrl;
   
   return `
@@ -2916,7 +2927,9 @@ function renderSceneAudioPlaceholder(scene) {
 function renderBuilderSceneCard(scene) {
   const activeImage = scene.active_image || null;
   const latestImage = scene.latest_image || null;
-  const imageUrl = activeImage?.image_url || activeImage?.r2_url || null;
+  // Phase1.7: imageUrl は active_image, または latest_image (fallback) から取得
+  const imageUrl = activeImage?.image_url || activeImage?.r2_url 
+    || (latestImage?.status === 'completed' ? (latestImage?.image_url || latestImage?.r2_url) : null);
   const imageStatus = latestImage ? latestImage.status : 'pending';
   const errorMessage = latestImage?.error_message || null;
   const isFailed = imageStatus === 'failed';
