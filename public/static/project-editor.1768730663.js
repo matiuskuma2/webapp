@@ -1955,8 +1955,11 @@ window.initBuilderTab = async function initBuilderTab() {
           `<option value="${s.id}">${escapeHtml(s.name)}</option>`
         ).join('');
       
-      // Set project default style as selected
-      if (window.builderProjectDefaultStyle) {
+      // Set selected style: prefer applied bulk style, then project default
+      if (window.appliedBulkStyleId !== undefined && window.appliedBulkStyleId !== null) {
+        bulkStyleSelector.value = window.appliedBulkStyleId;
+        console.log('[Builder] Set dropdown to applied bulk style:', window.appliedBulkStyleId);
+      } else if (window.builderProjectDefaultStyle) {
         bulkStyleSelector.value = window.builderProjectDefaultStyle;
       }
     }
@@ -4295,17 +4298,12 @@ async function applyBulkStyle() {
     
     showToast(`${successCount}/${total}シーンにスタイルを適用しました`, 'success');
     
-    // Save the applied style to restore after reload
-    const appliedStyleId = styleId;
+    // Save the applied style to window for restoration after reload
+    window.appliedBulkStyleId = styleId;
+    console.log('[BulkStyle] Saved applied style ID:', styleId);
     
-    // Reload builder
+    // Reload builder (will use window.appliedBulkStyleId for dropdown)
     await initBuilderTab();
-    
-    // Restore the applied style selection in dropdown
-    const newSelect = document.getElementById('bulkStyleSelector');
-    if (newSelect && appliedStyleId !== null) {
-      newSelect.value = appliedStyleId;
-    }
     
     // Reset button after reload (with slight delay for visual feedback)
     setTimeout(() => {

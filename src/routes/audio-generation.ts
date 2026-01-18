@@ -422,10 +422,16 @@ audioGeneration.post('/tts/preview', async (c) => {
       }
       
       const referenceId = voice_id.replace('fish:', '');
-      const audioBuffer = await generateFishTTS(sampleText, referenceId, c.env.FISH_AUDIO_API_TOKEN);
+      const fishResult = await generateFishTTS(c.env.FISH_AUDIO_API_TOKEN, {
+        text: sampleText,
+        reference_id: referenceId,
+        format: 'mp3',
+        sample_rate: 44100,
+        mp3_bitrate: 128,
+      });
       
       // Return as base64 data URL
-      const base64 = btoa(String.fromCharCode(...new Uint8Array(audioBuffer)));
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(fishResult.audio)));
       return c.json({
         success: true,
         audio_url: `data:audio/mpeg;base64,${base64}`

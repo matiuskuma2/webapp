@@ -47,7 +47,8 @@ export async function generateFishTTS(
     temperature: request.temperature ?? 0.7,
     top_p: request.top_p ?? 0.7,
     format: request.format || 'mp3',
-    sample_rate: request.sample_rate ?? null,
+    // Fish Audio mp3 only supports 32000 or 44100 Hz (default to 44100)
+    sample_rate: request.sample_rate ?? 44100,
     mp3_bitrate: request.mp3_bitrate ?? 128,
     normalize: request.normalize ?? true,
     chunk_length: request.chunk_length ?? 300,
