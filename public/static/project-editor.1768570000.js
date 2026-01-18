@@ -1924,44 +1924,55 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
   
   return `
+    <!-- 画像エリア（常に表示） -->
     <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
-      ${hasCompletedVideo 
-        ? `<video 
-             id="sceneVideo-${scene.id}" 
-             src="${activeVideo.r2_url}" 
+      ${imageUrl 
+        ? `<img 
+             id="sceneImage-${scene.id}" 
+             src="${imageUrl}" 
+             alt="Scene ${scene.idx}"
              class="w-full h-full object-cover"
-             controls
-             preload="metadata"
-             poster="${imageUrl || ''}"
-           >
-             <source src="${activeVideo.r2_url}" type="video/mp4">
-           </video>
-           <div class="absolute top-2 right-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
-             <i class="fas fa-video mr-1"></i>動画
+           />`
+        : `<div class="flex items-center justify-center h-full text-gray-400">
+             <i class="fas fa-image text-4xl"></i>
+             <span class="ml-2">画像未生成</span>
            </div>`
-        : (imageUrl 
-          ? `<img 
-               id="sceneImage-${scene.id}" 
-               src="${imageUrl}" 
-               alt="Scene ${scene.idx}"
-               class="w-full h-full object-cover"
-             />`
-          : `<div class="flex items-center justify-center h-full text-gray-400">
-               <i class="fas fa-image text-4xl"></i>
-               <span class="ml-2">画像未生成</span>
-             </div>`)
       }
       
       ${isGenerating 
         ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
              <div class="text-white text-center">
                <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
-               <p>生成中...</p>
+               <p>画像生成中...</p>
              </div>
            </div>`
         : ''
       }
+      
+      <div class="absolute top-2 left-2 px-2 py-1 bg-blue-600 text-white text-xs rounded-full font-semibold">
+        <i class="fas fa-image mr-1"></i>画像
+      </div>
     </div>
+    
+    <!-- 動画エリア（completedの場合のみ表示） -->
+    ${hasCompletedVideo 
+      ? `<div class="scene-video-container relative aspect-video bg-gray-900 rounded-lg border-2 border-purple-400 overflow-hidden mt-3">
+           <video 
+             id="sceneVideo-${scene.id}" 
+             src="${activeVideo.r2_url}" 
+             class="w-full h-full object-contain"
+             controls
+             preload="metadata"
+             poster="${imageUrl || ''}"
+           >
+             <source src="${activeVideo.r2_url}" type="video/mp4">
+           </video>
+           <div class="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
+             <i class="fas fa-video mr-1"></i>動画 (${activeVideo.duration_sec || 5}秒)
+           </div>
+         </div>`
+      : ''
+    }
   `;
 }
 
