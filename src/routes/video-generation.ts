@@ -1091,6 +1091,115 @@ videoGeneration.get('/video-builds/usage', async (c) => {
 });
 
 /**
+ * GET /api/projects/:projectId/video-builds/preflight
+ * Preflight check for video build (素材検証)
+ * 
+ * ビルド開始前にUIがこのエンドポイントを呼び出して、
+ * 素材が揃っているかを確認する
+ */
+videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => {
+  const { validateProjectAssets } = await import('../utils/video-build-helpers');
+  
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    
+    // シーンデータ取得
+    const { results: rawScenes } = await c.env.DB.prepare(`
+      SELECT id, idx, role, title, dialogue, display_asset_type, comic_data
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY idx ASC
+    `).bind(projectId).all();
+    
+    if (!rawScenes || rawScenes.length === 0) {
+      return c.json({
+        is_ready: false,
+        ready_count: 0,
+        total_count: 0,
+        missing: [],
+        warnings: [],
+        message: 'プロジェクトにシーンがありません',
+      });
+    }
+    
+    // シーンごとに素材情報を取得
+    const scenesWithAssets = await Promise.all(
+      rawScenes.map(async (scene: any) => {
+        // アクティブAI画像
+        const activeImage = await c.env.DB.prepare(`
+          SELECT r2_key, r2_url FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+          LIMIT 1
+        `).bind(scene.id).first();
+        
+        // アクティブ漫画画像
+        const activeComic = await c.env.DB.prepare(`
+          SELECT id, r2_key, r2_url FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+          LIMIT 1
+        `).bind(scene.id).first();
+        
+        // アクティブ動画
+        const activeVideo = await c.env.DB.prepare(`
+          SELECT id, status, r2_url, model, duration_sec
+          FROM video_generations
+          WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+          LIMIT 1
+        `).bind(scene.id).first();
+        
+        // comic_dataのパース
+        let comicData = null;
+        try {
+          if (scene.comic_data) {
+            comicData = JSON.parse(scene.comic_data);
+          }
+        } catch (e) {
+          // ignore
+        }
+        
+        return {
+          id: scene.id,
+          idx: scene.idx,
+          role: scene.role || '',
+          title: scene.title || '',
+          dialogue: scene.dialogue || '',
+          display_asset_type: scene.display_asset_type || 'image',
+          active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: activeImage.r2_url } : null,
+          active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: activeComic.r2_url } : null,
+          active_video: activeVideo ? { 
+            id: activeVideo.id, 
+            status: activeVideo.status, 
+            r2_url: activeVideo.r2_url,
+            model: activeVideo.model,
+            duration_sec: activeVideo.duration_sec
+          } : null,
+          active_audio: null,
+          comic_data: comicData,
+        };
+      })
+    );
+    
+    // Preflight検証
+    const validation = validateProjectAssets(scenesWithAssets);
+    
+    return c.json({
+      is_ready: validation.is_ready,
+      ready_count: validation.ready_count,
+      total_count: validation.total_count,
+      missing: validation.missing,
+      warnings: validation.warnings,
+    });
+    
+  } catch (error) {
+    console.error('[VideoBuild] Preflight error:', error);
+    return c.json({ 
+      is_ready: false,
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to run preflight check' }
+    }, 500);
+  }
+});
+
+/**
  * GET /api/projects/:projectId/video-builds
  * List video builds for a project
  */
@@ -1137,13 +1246,30 @@ videoGeneration.get('/projects/:projectId/video-builds', async (c) => {
 /**
  * POST /api/projects/:projectId/video-builds
  * Create a new video build
+ * 
+ * フロー:
+ * 1. 認証確認
+ * 2. 二重実行防止（同一プロジェクトでアクティブなビルドがある場合は拒否）
+ * 3. シーンデータ取得（display_asset_type + 素材情報）
+ * 4. Preflight検証（validateProjectAssets）
+ * 5. project.json生成（buildProjectJson）
+ * 6. R2にproject.jsonを保存
+ * 7. video_buildsレコード作成（status='validating'）
+ * 8. AWS Orchestratorへstart呼び出し
+ * 9. レスポンス更新（status='submitted', aws_job_id等）
  */
 videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
+  const { getCookie } = await import('hono/cookie');
+  
+  // Helper imports
+  const { validateProjectAssets, buildProjectJson, hashProjectJson } = await import('../utils/video-build-helpers');
+  const { startVideoBuild, DEFAULT_OUTPUT_BUCKET, getDefaultOutputKey } = await import('../utils/aws-video-build-client');
+  
   try {
     const projectId = parseInt(c.req.param('projectId'), 10);
     const body = await c.req.json();
     
-    const { getCookie } = await import('hono/cookie');
+    // 1. 認証確認
     const sessionId = getCookie(c, 'session');
     if (!sessionId) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
@@ -1159,7 +1285,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     
     const userId = session.user_id;
     
-    // Get project owner
+    // Get project info
     const project = await c.env.DB.prepare(`
       SELECT id, user_id, title FROM projects WHERE id = ?
     `).bind(projectId).first<{ id: number; user_id: number; title: string }>();
@@ -1168,71 +1294,483 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
     }
     
-    // Settings
-    const settings = {
-      include_captions: body.include_captions ?? true,
-      include_bgm: body.include_bgm ?? true,
-      include_motion: body.include_motion ?? false,
-      resolution: body.resolution || '1080p',
-      aspect_ratio: body.aspect_ratio || '9:16'
+    // 2. 二重実行防止（アクティブなビルドがある場合は拒否）
+    const activeStatuses = ['queued', 'validating', 'submitted', 'rendering', 'uploading'];
+    const activeBuild = await c.env.DB.prepare(`
+      SELECT id, status FROM video_builds
+      WHERE project_id = ? AND status IN (${activeStatuses.map(() => '?').join(',')})
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).bind(projectId, ...activeStatuses).first<{ id: number; status: string }>();
+    
+    if (activeBuild) {
+      return c.json({
+        error: {
+          code: 'BUILD_IN_PROGRESS',
+          message: `このプロジェクトには既にビルドが進行中です（ID: ${activeBuild.id}, ステータス: ${activeBuild.status}）`,
+          details: { active_build_id: activeBuild.id, active_build_status: activeBuild.status }
+        }
+      }, 409);
+    }
+    
+    // 3. シーンデータ取得（display_asset_type + 素材情報）
+    const { results: rawScenes } = await c.env.DB.prepare(`
+      SELECT id, idx, role, title, dialogue, display_asset_type, comic_data
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY idx ASC
+    `).bind(projectId).all();
+    
+    if (!rawScenes || rawScenes.length === 0) {
+      return c.json({
+        error: { code: 'NO_SCENES', message: 'プロジェクトにシーンがありません' }
+      }, 400);
+    }
+    
+    // シーンごとに素材情報を取得
+    const scenesWithAssets = await Promise.all(
+      rawScenes.map(async (scene: any) => {
+        // アクティブAI画像
+        const activeImage = await c.env.DB.prepare(`
+          SELECT r2_key, r2_url FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+          LIMIT 1
+        `).bind(scene.id).first();
+        
+        // アクティブ漫画画像
+        const activeComic = await c.env.DB.prepare(`
+          SELECT id, r2_key, r2_url FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+          LIMIT 1
+        `).bind(scene.id).first();
+        
+        // アクティブ動画
+        const activeVideo = await c.env.DB.prepare(`
+          SELECT id, status, r2_url, model, duration_sec
+          FROM video_generations
+          WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+          LIMIT 1
+        `).bind(scene.id).first();
+        
+        // アクティブ音声（シーン単位）- TODO: audio_generationsテーブルがある場合
+        // 現状は null として扱う
+        const activeAudio = null;
+        
+        // comic_dataのパース
+        let comicData = null;
+        try {
+          if (scene.comic_data) {
+            comicData = JSON.parse(scene.comic_data);
+          }
+        } catch (e) {
+          console.warn(`Failed to parse comic_data for scene ${scene.id}:`, e);
+        }
+        
+        return {
+          id: scene.id,
+          idx: scene.idx,
+          role: scene.role || '',
+          title: scene.title || '',
+          dialogue: scene.dialogue || '',
+          display_asset_type: scene.display_asset_type || 'image',
+          active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: activeImage.r2_url } : null,
+          active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: activeComic.r2_url } : null,
+          active_video: activeVideo ? { 
+            id: activeVideo.id, 
+            status: activeVideo.status, 
+            r2_url: activeVideo.r2_url,
+            model: activeVideo.model,
+            duration_sec: activeVideo.duration_sec
+          } : null,
+          active_audio: activeAudio,
+          comic_data: comicData,
+        };
+      })
+    );
+    
+    // 4. Preflight検証
+    const validation = validateProjectAssets(scenesWithAssets);
+    
+    if (!validation.is_ready) {
+      return c.json({
+        error: {
+          code: 'PREFLIGHT_FAILED',
+          message: `素材が不足しています（${validation.ready_count}/${validation.total_count}シーン準備完了）`,
+          details: {
+            ready_count: validation.ready_count,
+            total_count: validation.total_count,
+            missing: validation.missing,
+            warnings: validation.warnings,
+          }
+        }
+      }, 400);
+    }
+    
+    // 5. Settings構築
+    const buildSettings = {
+      captions: {
+        enabled: body.captions?.enabled ?? body.include_captions ?? true,
+        position: body.captions?.position || 'bottom',
+        show_speaker: body.captions?.show_speaker ?? true,
+      },
+      bgm: {
+        enabled: body.bgm?.enabled ?? body.include_bgm ?? false,
+        track: body.bgm?.track,
+        volume: body.bgm?.volume ?? 0.5,
+      },
+      motion: {
+        preset: body.motion?.preset ?? (body.include_motion ? 'gentle-zoom' : 'none'),
+        transition: body.motion?.transition || 'crossfade',
+      },
     };
     
-    // Create build record
-    const result = await c.env.DB.prepare(`
+    // 6. project.json生成
+    const projectJson = buildProjectJson(
+      { id: project.id, title: project.title, user_id: project.user_id },
+      scenesWithAssets,
+      buildSettings,
+      {
+        aspectRatio: body.aspect_ratio || '9:16',
+        resolution: body.resolution || '1080p',
+        fps: body.fps || 30,
+      }
+    );
+    
+    const projectJsonHash = await hashProjectJson(projectJson);
+    const projectJsonString = JSON.stringify(projectJson);
+    
+    // 7. video_buildsレコード作成（status='validating'）
+    const insertResult = await c.env.DB.prepare(`
       INSERT INTO video_builds (
         project_id, owner_user_id, executor_user_id, 
-        settings_json, status
-      ) VALUES (?, ?, ?, ?, 'queued')
+        settings_json, status, progress_stage, progress_message,
+        total_scenes, total_duration_ms, project_json_version, project_json_hash
+      ) VALUES (?, ?, ?, ?, 'validating', 'Preparing', '素材検証完了、ビルド準備中...', ?, ?, '1.1', ?)
     `).bind(
       projectId,
       project.user_id,
       userId,
-      JSON.stringify(settings)
+      JSON.stringify(buildSettings),
+      scenesWithAssets.length,
+      projectJson.total_duration_ms,
+      projectJsonHash
     ).run();
     
+    const videoBuildId = insertResult.meta.last_row_id as number;
+    
+    // 8. R2にproject.jsonを保存
+    const r2Key = `video-builds/${videoBuildId}/project.json`;
+    try {
+      await c.env.R2.put(r2Key, projectJsonString, {
+        httpMetadata: { contentType: 'application/json' },
+      });
+      
+      // Update with R2 key
+      await c.env.DB.prepare(`
+        UPDATE video_builds SET project_json_r2_key = ? WHERE id = ?
+      `).bind(r2Key, videoBuildId).run();
+    } catch (r2Error) {
+      console.error('[VideoBuild] R2 save error:', r2Error);
+      // Continue even if R2 save fails - the JSON is in settings_json
+    }
+    
+    // 9. AWS Orchestrator呼び出し
+    const baseUrl = c.env.AWS_ORCH_BASE_URL;
+    
+    if (!baseUrl) {
+      // AWS not configured - leave as validating
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = 'failed', error_code = 'AWS_NOT_CONFIGURED', error_message = 'AWS Orchestrator URL not configured'
+        WHERE id = ?
+      `).bind(videoBuildId).run();
+      
+      return c.json({
+        error: {
+          code: 'AWS_NOT_CONFIGURED',
+          message: 'Video Build サービスが設定されていません'
+        }
+      }, 500);
+    }
+    
+    // Call AWS Orchestrator
+    const awsResponse = await startVideoBuild(baseUrl, {
+      video_build_id: videoBuildId,
+      project_id: projectId,
+      owner_user_id: project.user_id,
+      executor_user_id: userId,
+      is_delegation: project.user_id !== userId,
+      project_json: projectJson,
+      build_settings: buildSettings,
+    });
+    
+    if (!awsResponse.success) {
+      // AWS call failed
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = 'failed', 
+            error_code = ?, 
+            error_message = ?,
+            error_details_json = ?
+        WHERE id = ?
+      `).bind(
+        awsResponse.error?.code || 'AWS_START_FAILED',
+        awsResponse.error?.message || awsResponse.message || 'Failed to start video build',
+        JSON.stringify(awsResponse.error || {}),
+        videoBuildId
+      ).run();
+      
+      return c.json({
+        error: {
+          code: awsResponse.error?.code || 'AWS_START_FAILED',
+          message: awsResponse.error?.message || 'Video Build の開始に失敗しました',
+        }
+      }, 500);
+    }
+    
+    // 10. Update with AWS response
+    const s3Bucket = awsResponse.output?.bucket || DEFAULT_OUTPUT_BUCKET;
+    const s3OutputKey = awsResponse.output?.key || getDefaultOutputKey(project.user_id, videoBuildId);
+    
+    await c.env.DB.prepare(`
+      UPDATE video_builds 
+      SET status = 'submitted',
+          aws_job_id = ?,
+          remotion_render_id = ?,
+          remotion_site_name = ?,
+          s3_bucket = ?,
+          s3_output_key = ?,
+          progress_stage = 'Submitted',
+          progress_message = 'AWS に送信しました',
+          render_started_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      awsResponse.aws_job_id || null,
+      awsResponse.remotion?.render_id || null,
+      awsResponse.remotion?.site_name || null,
+      s3Bucket,
+      s3OutputKey,
+      videoBuildId
+    ).run();
+    
+    // api_usage_logs 記録
+    await c.env.DB.prepare(`
+      INSERT INTO api_usage_logs (
+        user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json
+      ) VALUES (?, ?, 'video_build', 'remotion-lambda', 'remotion', 0.0001, ?)
+    `).bind(
+      userId,
+      projectId,
+      JSON.stringify({
+        billing_source: 'platform',
+        video_build_id: videoBuildId,
+        owner_user_id: project.user_id,
+        executor_user_id: userId,
+        is_delegation: project.user_id !== userId,
+        status: 'submitted',
+      })
+    ).run();
+    
+    // Fetch final build record
     const build = await c.env.DB.prepare(`
       SELECT * FROM video_builds WHERE id = ?
-    `).bind(result.meta.last_row_id).first();
+    `).bind(videoBuildId).first();
     
-    // TODO: Trigger AWS Lambda for actual video build
-    // This would normally call AWS to start the rendering process
+    return c.json({
+      success: true,
+      build,
+      preflight: {
+        ready_count: validation.ready_count,
+        total_count: validation.total_count,
+        warnings: validation.warnings,
+      }
+    }, 201);
     
-    return c.json({ build }, 201);
   } catch (error) {
     console.error('[VideoBuild] Create error:', error);
-    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create build' } }, 500);
+    return c.json({ 
+      error: { 
+        code: 'INTERNAL_ERROR', 
+        message: error instanceof Error ? error.message : 'Failed to create build' 
+      } 
+    }, 500);
   }
 });
 
 /**
  * POST /api/video-builds/:buildId/refresh
  * Refresh video build status from AWS
+ * 
+ * フロー:
+ * 1. 認証確認
+ * 2. ビルドレコード取得
+ * 3. AWS Orchestrator に status 問い合わせ（aws_job_id または remotion_render_id を使用）
+ * 4. ステータス更新（completed の場合は download_url も更新）
  */
 videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
+  const { getCookie } = await import('hono/cookie');
+  const { getVideoBuildStatus } = await import('../utils/aws-video-build-client');
+  
   try {
     const buildId = parseInt(c.req.param('buildId'), 10);
     
-    const { getCookie } = await import('hono/cookie');
+    // 1. 認証確認
     const sessionId = getCookie(c, 'session');
     if (!sessionId) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
     
+    // 2. ビルドレコード取得
     const build = await c.env.DB.prepare(`
       SELECT * FROM video_builds WHERE id = ?
-    `).bind(buildId).first();
+    `).bind(buildId).first<{
+      id: number;
+      status: string;
+      aws_job_id: string | null;
+      remotion_render_id: string | null;
+      s3_output_key: string | null;
+      project_id: number;
+    }>();
     
     if (!build) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Build not found' } }, 404);
     }
     
-    // TODO: Actually query AWS for status update
-    // For now, just return current status
+    // 完了済み/失敗済みのビルドはAWS問い合わせ不要（presigned URL再取得のみ）
+    const skipAwsStatuses = ['completed', 'failed', 'cancelled'];
+    const shouldQueryAws = !skipAwsStatuses.includes(build.status);
     
-    return c.json({ build });
+    // 3. AWS Orchestrator に status 問い合わせ
+    const baseUrl = c.env.AWS_ORCH_BASE_URL;
+    
+    if (!baseUrl) {
+      return c.json({
+        build,
+        warning: 'AWS Orchestrator URL not configured'
+      });
+    }
+    
+    if (!build.aws_job_id && !build.remotion_render_id) {
+      return c.json({
+        build,
+        warning: 'No AWS job ID or Remotion render ID available'
+      });
+    }
+    
+    const awsResponse = await getVideoBuildStatus(
+      baseUrl,
+      build.aws_job_id || buildId,
+      {
+        render_id: build.remotion_render_id || undefined,
+        output_key: build.s3_output_key || undefined,
+      }
+    );
+    
+    if (!awsResponse.success) {
+      console.warn('[VideoBuild] AWS status check failed:', awsResponse.error);
+      return c.json({
+        build,
+        warning: awsResponse.error?.message || 'Failed to get status from AWS'
+      });
+    }
+    
+    // 4. ステータス更新
+    const awsStatus = awsResponse.status;
+    const progressPercent = awsResponse.progress?.percent ?? 0;
+    const progressStage = awsResponse.progress?.stage || '';
+    const progressMessage = awsResponse.progress?.message || '';
+    
+    // ステータスマッピング（AWS → D1）
+    const statusMap: Record<string, string> = {
+      'queued': 'queued',
+      'rendering': 'rendering',
+      'completed': 'completed',
+      'failed': 'failed',
+    };
+    const newStatus = statusMap[awsStatus || ''] || build.status;
+    
+    if (awsStatus === 'completed' && awsResponse.output?.presigned_url) {
+      // 完了: download_url を更新
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = 'completed',
+            progress_percent = 100,
+            progress_stage = 'Completed',
+            progress_message = '動画生成完了',
+            download_url = ?,
+            s3_output_size_bytes = ?,
+            total_duration_ms = ?,
+            render_completed_at = CURRENT_TIMESTAMP,
+            render_duration_sec = CAST((julianday(CURRENT_TIMESTAMP) - julianday(render_started_at)) * 86400 AS INTEGER),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(
+        awsResponse.output.presigned_url,
+        awsResponse.output.size_bytes || null,
+        awsResponse.output.duration_ms || null,
+        buildId
+      ).run();
+      
+    } else if (awsStatus === 'failed') {
+      // 失敗: エラー情報を更新
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = 'failed',
+            progress_stage = 'Failed',
+            progress_message = ?,
+            error_code = ?,
+            error_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(
+        awsResponse.error?.message || 'Build failed',
+        awsResponse.error?.code || 'RENDER_FAILED',
+        awsResponse.error?.message || 'Video rendering failed',
+        buildId
+      ).run();
+      
+    } else if (shouldQueryAws) {
+      // 進行中: プログレス更新
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = ?,
+            progress_percent = ?,
+            progress_stage = ?,
+            progress_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(
+        newStatus,
+        progressPercent,
+        progressStage,
+        progressMessage,
+        buildId
+      ).run();
+    }
+    
+    // 更新後のビルドを取得
+    const updatedBuild = await c.env.DB.prepare(`
+      SELECT * FROM video_builds WHERE id = ?
+    `).bind(buildId).first();
+    
+    return c.json({
+      success: true,
+      build: updatedBuild,
+      aws_response: {
+        status: awsStatus,
+        progress: awsResponse.progress,
+        has_download_url: !!awsResponse.output?.presigned_url,
+      }
+    });
+    
   } catch (error) {
     console.error('[VideoBuild] Refresh error:', error);
-    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to refresh build' } }, 500);
+    return c.json({ 
+      error: { 
+        code: 'INTERNAL_ERROR', 
+        message: error instanceof Error ? error.message : 'Failed to refresh build' 
+      } 
+    }, 500);
   }
 });
 
