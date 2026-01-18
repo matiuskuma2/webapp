@@ -1,8 +1,7 @@
-// comic-editor.js - Phase1.5 SSOT: 漫画編集ポップアップ（座標系統一・描画SSOT）
-// 仕様: Canvas直接描画 SSOT / 既存機能に影響なし / 発話最大3 / 吹き出し最大5
-// Draft: 編集状態（シーンに出ない）
-// Published: 公開済み（シーンに出る、動画化対象になれる）
-// SSOT原則: プレビューと公開画像は同一の描画ロジック（Canvas）で生成
+// comic-editor.js - Phase1.6: 漫画編集ポップアップ（SSOT統合・実用5種）
+// 吹き出し5種: speech / whisper / thought / telop / caption
+// SSOT原則: プレビューと公開画像は同一のCanvas描画ロジック
+// 座標系: 正規化(0-1) + containRect補正
 
 window.ComicEditor = {
   // 状態
@@ -19,25 +18,87 @@ window.ComicEditor = {
 
   // 定数
   MAX_UTTERANCES: 3,
-  MAX_BUBBLES: 5,
+  MAX_BUBBLES: 3, // 画面破綻防止のため3に制限
   
   // キャッシュ
   _containRect: null,
   _baseImageLoaded: false,
   
-  // 吹き出しタイプ
-  BUBBLE_TYPES: [
-    { id: 'speech', name: '通常吹き出し', icon: 'fa-comment' },
-    { id: 'thought', name: '思考吹き出し', icon: 'fa-cloud' },
-    { id: 'shout', name: '叫び吹き出し', icon: 'fa-bolt' },
-    { id: 'whisper', name: 'ささやき吹き出し', icon: 'fa-comment-dots' },
-    { id: 'narration', name: 'ナレーション（テロップ）', icon: 'fa-quote-right' },
-    { id: 'caption', name: '字幕（枠なし）', icon: 'fa-font' }
-  ],
+  // Phase1.6: 実用5種のみ
+  BUBBLE_TYPES: {
+    speech:  { name: '通常', icon: 'fa-comment', hasTail: true, category: 'serif' },
+    whisper: { name: '小声', icon: 'fa-comment-dots', hasTail: true, category: 'serif' },
+    thought: { name: '思考', icon: 'fa-cloud', hasTail: true, category: 'serif' },
+    telop:   { name: 'テロップ帯', icon: 'fa-square', hasTail: false, category: 'narration' },
+    caption: { name: '字幕', icon: 'fa-font', hasTail: false, category: 'narration' }
+  },
+
+  // Phase1.6: サイズ定義（1000px基準）
+  BUBBLE_SIZES: {
+    speech:  { w: 380, h: 200 },
+    whisper: { w: 380, h: 200 },
+    thought: { w: 360, h: 190 },
+    telop:   { w: 760, h: 140 },
+    caption: { w: 760, h: 120 }
+  },
+
+  // Phase1.6: スタイル定義
+  BUBBLE_STYLES: {
+    speech: {
+      fill: '#FFFFFF',
+      stroke: 'rgba(0,0,0,0.70)',
+      strokeWidth: 2.5,
+      radius: 22,
+      fontSize: 18,
+      lineHeight: 26,
+      padding: 18,
+      textColor: '#111827'
+    },
+    whisper: {
+      fill: '#FFFFFF',
+      stroke: 'rgba(0,0,0,0.45)',
+      strokeWidth: 2.0,
+      strokeDash: [6, 5],
+      radius: 22,
+      fontSize: 18,
+      lineHeight: 26,
+      padding: 18,
+      textColor: '#111827'
+    },
+    thought: {
+      fill: '#FFFFFF',
+      stroke: 'rgba(0,0,0,0.55)',
+      strokeWidth: 2.0,
+      fontSize: 18,
+      lineHeight: 26,
+      padding: 18,
+      textColor: '#111827'
+    },
+    telop: {
+      fill: 'rgba(0,0,0,0.50)', // 半透明（真っ黒禁止）
+      radius: 16,
+      fontSize: 24,
+      lineHeight: 32,
+      padding: 20,
+      textColor: '#FFFFFF',
+      textStroke: 'rgba(0,0,0,0.65)',
+      textStrokeWidth: 2.0
+    },
+    caption: {
+      // 背景なし
+      fontSize: 26,
+      lineHeight: 34,
+      padding: 16,
+      textColor: '#FFFFFF',
+      textStroke: 'rgba(0,0,0,0.85)',
+      textStrokeWidth: 4.0
+    }
+  },
+
+  // ============== SSOT: 座標系変換 ==============
 
   /**
    * SSOT: containRect を計算（object-contain による画像表示領域）
-   * プレビュー座標変換の基準となる
    */
   getContainRect() {
     const container = document.getElementById('comicCanvasContainer');
@@ -49,20 +110,17 @@ window.ComicEditor = {
     const naturalWidth = baseImage.naturalWidth || containerRect.width;
     const naturalHeight = baseImage.naturalHeight || containerRect.height;
     
-    // object-contain による実際の表示領域を計算
     const containerAspect = containerRect.width / containerRect.height;
     const imageAspect = naturalWidth / naturalHeight;
     
     let displayWidth, displayHeight, offsetX, offsetY;
     
     if (containerAspect > imageAspect) {
-      // コンテナが横長 → 画像は高さに合わせ、左右に余白
       displayHeight = containerRect.height;
       displayWidth = displayHeight * imageAspect;
       offsetX = (containerRect.width - displayWidth) / 2;
       offsetY = 0;
     } else {
-      // コンテナが縦長 → 画像は幅に合わせ、上下に余白
       displayWidth = containerRect.width;
       displayHeight = displayWidth / imageAspect;
       offsetX = 0;
@@ -83,12 +141,11 @@ window.ComicEditor = {
   },
 
   /**
-   * SSOT: 正規化座標(0-1) → コンテナ座標（プレビュー表示用）
+   * 正規化座標(0-1) → コンテナ座標（プレビュー表示用）
    */
   normalizedToContainer(normX, normY) {
     const rect = this.getContainRect();
     if (!rect) return { x: 0, y: 0 };
-    
     return {
       x: rect.x + normX * rect.width,
       y: rect.y + normY * rect.height
@@ -96,30 +153,413 @@ window.ComicEditor = {
   },
 
   /**
-   * SSOT: コンテナ座標 → 正規化座標(0-1)（ドラッグ用）
+   * コンテナ座標 → 正規化座標(0-1)（ドラッグ用）
    */
   containerToNormalized(containerX, containerY) {
     const rect = this.getContainRect();
     if (!rect) return { x: 0, y: 0 };
-    
     return {
-      x: Math.max(0, Math.min(1, (containerX - rect.x) / rect.width)),
-      y: Math.max(0, Math.min(1, (containerY - rect.y) / rect.height))
+      x: (containerX - rect.x) / rect.width,
+      y: (containerY - rect.y) / rect.height
     };
   },
 
   /**
-   * SSOT: 正規化座標(0-1) → 元画像座標（Canvas出力用）
+   * bubbleサイズをピクセルで取得
    */
-  normalizedToNatural(normX, normY) {
-    const rect = this.getContainRect();
-    if (!rect) return { x: 0, y: 0 };
+  getBubbleSizePx(type, naturalW) {
+    const scale = naturalW / 1000;
+    const base = this.BUBBLE_SIZES[type] || this.BUBBLE_SIZES.speech;
+    return { w: base.w * scale, h: base.h * scale };
+  },
+
+  /**
+   * SSOT: 画面内に収まるようクランプ（bubbleサイズ込み）
+   */
+  clampBubblePosition(pos, type, naturalW, naturalH) {
+    const size = this.getBubbleSizePx(type, naturalW);
+    const marginPx = 16;
+    
+    const mx = marginPx / naturalW;
+    const my = marginPx / naturalH;
+    const bw = size.w / naturalW;
+    const bh = size.h / naturalH;
     
     return {
-      x: normX * rect.naturalWidth,
-      y: normY * rect.naturalHeight
+      x: Math.min(Math.max(pos.x, mx), 1 - bw - mx),
+      y: Math.min(Math.max(pos.y, my), 1 - bh - my)
     };
   },
+
+  // ============== 描画ユーティリティ ==============
+
+  /**
+   * 角丸長方形パス
+   */
+  pathRoundRect(ctx, x, y, w, h, r) {
+    const rr = Math.max(0, Math.min(r, Math.min(w, h) / 2));
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.lineTo(x + w - rr, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+    ctx.lineTo(x + w, y + h - rr);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+    ctx.lineTo(x + rr, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+    ctx.lineTo(x, y + rr);
+    ctx.quadraticCurveTo(x, y, x + rr, y);
+    ctx.closePath();
+  },
+
+  /**
+   * Tail付き長方形パス（speech/whisper用）
+   */
+  pathSpeechWithTail(ctx, w, h, r, tailTip, scale) {
+    const tailBaseX = w * 0.55;
+    const tailBaseW = 44 * scale;
+    const half = Math.max(10 * scale, tailBaseW / 2);
+    
+    // Tail先端（デフォルトは下方向）
+    const tipX = tailTip?.x ?? tailBaseX;
+    const tipY = tailTip?.y ?? (h + 26 * scale);
+    
+    const left = Math.max(r + 8 * scale, tailBaseX - half);
+    const right = Math.min(w - r - 8 * scale, tailBaseX + half);
+    
+    ctx.beginPath();
+    ctx.moveTo(r, 0);
+    ctx.lineTo(w - r, 0);
+    ctx.quadraticCurveTo(w, 0, w, r);
+    ctx.lineTo(w, h - r);
+    ctx.quadraticCurveTo(w, h, w - r, h);
+    
+    // 下辺（Tail部分）
+    ctx.lineTo(right, h);
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(left, h);
+    
+    ctx.lineTo(r, h);
+    ctx.quadraticCurveTo(0, h, 0, h - r);
+    ctx.lineTo(0, r);
+    ctx.quadraticCurveTo(0, 0, r, 0);
+    ctx.closePath();
+  },
+
+  /**
+   * テキスト自動改行（measureText使用）
+   */
+  wrapTextByMeasure(ctx, text, maxW) {
+    if (!text) return [''];
+    const lines = [];
+    let line = '';
+    for (const ch of text) {
+      if (ch === '\n') {
+        lines.push(line);
+        line = '';
+        continue;
+      }
+      const test = line + ch;
+      if (ctx.measureText(test).width > maxW && line.length > 0) {
+        lines.push(line);
+        line = ch;
+      } else {
+        line = test;
+      }
+    }
+    if (line) lines.push(line);
+    return lines.slice(0, 6); // 最大6行
+  },
+
+  /**
+   * テキストがフィットするか検証＋自動縮小
+   */
+  fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isBold) {
+    const minFont = 12;
+    for (let font = baseFontPx; font >= minFont; font -= 1) {
+      ctx.font = `${isBold ? '700' : '400'} ${font}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
+      const lineH = Math.round(baseLineH * (font / baseFontPx));
+      const lines = this.wrapTextByMeasure(ctx, text, innerW);
+      const neededH = lines.length * lineH;
+      if (neededH <= innerH) {
+        return { ok: true, fontPx: font, lineH, lines };
+      }
+    }
+    return { ok: false };
+  },
+
+  // ============== 吹き出し描画（SSOT） ==============
+
+  /**
+   * speech吹き出しを描画（丸角長方形＋Tail）
+   */
+  drawSpeechBubble(ctx, w, h, scale, tailTip) {
+    const style = this.BUBBLE_STYLES.speech;
+    const r = style.radius * scale;
+    
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.18)';
+    ctx.shadowBlur = 10 * scale;
+    ctx.shadowOffsetY = 4 * scale;
+    
+    this.pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    ctx.fillStyle = style.fill;
+    ctx.fill();
+    ctx.restore();
+    
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.strokeWidth * scale;
+    ctx.stroke();
+  },
+
+  /**
+   * whisper吹き出しを描画（点線枠＋Tail）
+   */
+  drawWhisperBubble(ctx, w, h, scale, tailTip) {
+    const style = this.BUBBLE_STYLES.whisper;
+    const r = style.radius * scale;
+    
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.14)';
+    ctx.shadowBlur = 8 * scale;
+    ctx.shadowOffsetY = 3 * scale;
+    
+    this.pathSpeechWithTail(ctx, w, h, r, tailTip, scale);
+    ctx.fillStyle = style.fill;
+    ctx.fill();
+    ctx.restore();
+    
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.strokeWidth * scale;
+    ctx.setLineDash(style.strokeDash.map(d => d * scale));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  },
+
+  /**
+   * thought吹き出しを描画（楕円＋ぽこぽこTail）
+   */
+  drawThoughtBubble(ctx, w, h, scale, tailTip) {
+    const style = this.BUBBLE_STYLES.thought;
+    
+    // 楕円本体
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.18)';
+    ctx.shadowBlur = 10 * scale;
+    ctx.shadowOffsetY = 4 * scale;
+    
+    ctx.beginPath();
+    ctx.ellipse(w/2, h/2, w/2, h/2, 0, 0, Math.PI * 2);
+    ctx.fillStyle = style.fill;
+    ctx.fill();
+    ctx.restore();
+    
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.strokeWidth * scale;
+    ctx.stroke();
+    
+    // ぽこぽこTail（3つの円）
+    const sx = w * 0.50;
+    const sy = h + 6 * scale;
+    const tx = tailTip?.x ?? (w * 0.58);
+    const ty = tailTip?.y ?? (h + 50 * scale);
+    
+    const points = [
+      { x: sx + (tx - sx) * 0.25, y: sy + (ty - sy) * 0.25, r: 8 * scale },
+      { x: sx + (tx - sx) * 0.55, y: sy + (ty - sy) * 0.55, r: 6 * scale },
+      { x: sx + (tx - sx) * 0.85, y: sy + (ty - sy) * 0.85, r: 4 * scale }
+    ];
+    
+    ctx.fillStyle = style.fill;
+    ctx.strokeStyle = style.stroke;
+    ctx.lineWidth = style.strokeWidth * scale;
+    
+    for (const p of points) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  },
+
+  /**
+   * telop（帯テロップ）を描画
+   */
+  drawTelopBubble(ctx, w, h, scale) {
+    const style = this.BUBBLE_STYLES.telop;
+    const r = style.radius * scale;
+    
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.14)';
+    ctx.shadowBlur = 8 * scale;
+    ctx.shadowOffsetY = 4 * scale;
+    
+    this.pathRoundRect(ctx, 0, 0, w, h, r);
+    ctx.fillStyle = style.fill;
+    ctx.fill();
+    ctx.restore();
+  },
+
+  /**
+   * 吹き出しテキストを描画
+   * @returns {object} { ok: boolean } - falseなら文字溢れ
+   */
+  drawBubbleText(ctx, text, type, w, h, scale) {
+    const style = this.BUBBLE_STYLES[type] || this.BUBBLE_STYLES.speech;
+    const padding = style.padding * scale;
+    const innerW = w - padding * 2;
+    const innerH = h - padding * 2;
+    
+    const isNarration = type === 'telop' || type === 'caption';
+    const baseFontPx = style.fontSize * scale;
+    const baseLineH = style.lineHeight * scale;
+    
+    const fit = this.fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
+    
+    if (!fit.ok) {
+      return { ok: false };
+    }
+    
+    ctx.font = `${isNarration ? '700' : '400'} ${fit.fontPx}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    
+    const startY = padding + (innerH - fit.lines.length * fit.lineH) / 2 + fit.lineH / 2;
+    
+    for (let i = 0; i < fit.lines.length; i++) {
+      const lx = w / 2;
+      const ly = startY + i * fit.lineH;
+      
+      if (type === 'caption' || type === 'telop') {
+        // 白文字＋黒縁
+        ctx.lineWidth = style.textStrokeWidth * scale;
+        ctx.strokeStyle = style.textStroke;
+        ctx.lineJoin = 'round';
+        ctx.strokeText(fit.lines[i], lx, ly);
+        ctx.fillStyle = style.textColor;
+        ctx.fillText(fit.lines[i], lx, ly);
+      } else {
+        // 通常セリフは黒文字
+        ctx.fillStyle = style.textColor;
+        ctx.fillText(fit.lines[i], lx, ly);
+      }
+    }
+    
+    return { ok: true };
+  },
+
+  /**
+   * 1つの吹き出しを描画（統合関数）
+   */
+  drawOneBubble(ctx, bubble, text, scale, options = {}) {
+    const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
+    const w = size.w * scale;
+    const h = size.h * scale;
+    
+    // Tail先端（bubbleローカル座標）
+    const tailTip = bubble.tail?.enabled 
+      ? { x: (bubble.tail.tip?.x ?? 0.55) * w, y: (bubble.tail.tip?.y ?? 1.15) * h }
+      : null;
+    
+    // 背景描画
+    switch (bubble.type) {
+      case 'speech':
+        this.drawSpeechBubble(ctx, w, h, scale, tailTip);
+        break;
+      case 'whisper':
+        this.drawWhisperBubble(ctx, w, h, scale, tailTip);
+        break;
+      case 'thought':
+        this.drawThoughtBubble(ctx, w, h, scale, tailTip);
+        break;
+      case 'telop':
+        this.drawTelopBubble(ctx, w, h, scale);
+        break;
+      case 'caption':
+        // 背景なし
+        break;
+    }
+    
+    // テキスト描画
+    const result = this.drawBubbleText(ctx, text, bubble.type, w, h, scale);
+    
+    // 削除ボタン（プレビュー時のみ）
+    if (options.showDeleteButton) {
+      this.drawDeleteButton(ctx, w, scale);
+    }
+    
+    return { ok: result.ok, w, h };
+  },
+
+  /**
+   * 削除ボタンを描画
+   */
+  drawDeleteButton(ctx, bubbleWidth, scale) {
+    const btnRadius = 12 * scale;
+    const btnX = bubbleWidth - 8 * scale;
+    const btnY = 8 * scale;
+    
+    ctx.beginPath();
+    ctx.arc(btnX, btnY, btnRadius, 0, Math.PI * 2);
+    ctx.fillStyle = '#EF4444';
+    ctx.fill();
+    
+    ctx.fillStyle = 'white';
+    ctx.font = `bold ${14 * scale}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('×', btnX, btnY);
+  },
+
+  // ============== バリデーション ==============
+
+  /**
+   * draft全体をバリデート（文字溢れ・画面外チェック）
+   * @returns {object} { ok: boolean, errors: [] }
+   */
+  validateDraft() {
+    const errors = [];
+    const rect = this.getContainRect();
+    if (!rect) return { ok: true, errors: [] };
+    
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const scale = rect.naturalWidth / 1000;
+    
+    for (const bubble of this.draft.bubbles || []) {
+      const ut = this.draft.utterances.find(u => u.id === bubble.utterance_id);
+      const text = (ut?.text || '').trim();
+      
+      // 画面外チェック
+      const clamped = this.clampBubblePosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight);
+      if (Math.abs(clamped.x - bubble.position.x) > 0.001 || Math.abs(clamped.y - bubble.position.y) > 0.001) {
+        errors.push({ type: 'OUT_OF_BOUNDS', bubbleId: bubble.id, message: '吹き出しが画面外にはみ出しています' });
+      }
+      
+      // 文字溢れチェック（テキストがある場合のみ）
+      if (text) {
+        const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
+        const style = this.BUBBLE_STYLES[bubble.type] || this.BUBBLE_STYLES.speech;
+        const w = size.w * scale;
+        const h = size.h * scale;
+        const padding = style.padding * scale;
+        const innerW = w - padding * 2;
+        const innerH = h - padding * 2;
+        
+        const baseFontPx = style.fontSize * scale;
+        const baseLineH = style.lineHeight * scale;
+        const isNarration = bubble.type === 'telop' || bubble.type === 'caption';
+        
+        const fit = this.fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
+        if (!fit.ok) {
+          errors.push({ type: 'TEXT_OVERFLOW', bubbleId: bubble.id, message: 'テキストが収まりません。短くしてください' });
+        }
+      }
+    }
+    
+    return { ok: errors.length === 0, errors };
+  },
+
+  // ============== UI関連 ==============
 
   /**
    * 漫画編集ポップアップを開く
@@ -130,7 +570,6 @@ window.ComicEditor = {
     this._containRect = null;
     this._baseImageLoaded = false;
 
-    // シーンデータ取得
     try {
       const res = await axios.get(`/api/scenes/${sceneId}?view=board`);
       this.currentScene = res.data;
@@ -141,7 +580,6 @@ window.ComicEditor = {
       return;
     }
 
-    // 画像がない場合は開けない
     const activeImage = this.currentScene.active_image;
     const imageUrl = activeImage?.r2_url || activeImage?.image_url;
     if (!imageUrl) {
@@ -149,59 +587,55 @@ window.ComicEditor = {
       return;
     }
 
-    // base_image_generation_id を保存（監査用）
     this.baseImageGenerationId = activeImage?.id || null;
-
-    // comic_data 初期化（Draft/Published分離）
     this.initComicData();
-
-    // モーダル表示
     this.renderModal(imageUrl);
     this.showModal();
   },
 
   /**
-   * comic_data の初期化（Phase1.5: Draft/Published分離）
+   * comic_data の初期化
    */
   initComicData() {
     const comicData = this.currentScene.comic_data;
     
     if (comicData && comicData.draft) {
-      // 既存Draftがあれば使用
       this.draft = comicData.draft;
       this.published = comicData.published || null;
       this.baseImageGenerationId = comicData.base_image_generation_id || this.baseImageGenerationId;
     } else if (comicData && comicData.published) {
-      // Publishedがあれば、そこからdraftを復元
       this.draft = JSON.parse(JSON.stringify(comicData.published));
       this.published = comicData.published;
       this.baseImageGenerationId = comicData.base_image_generation_id || this.baseImageGenerationId;
     } else {
-      // 初期生成: dialogue → utterances[0].text（SSOT維持）
       this.draft = {
         enabled: true,
-        utterances: [
-          {
-            id: 'ut_1',
-            speaker_type: 'narration',
-            speaker_id: null,
-            text: this.currentScene.dialogue || ''
-          }
-        ],
+        utterances: [{
+          id: 'ut_1',
+          speaker_type: 'narration',
+          speaker_id: null,
+          text: this.currentScene.dialogue || ''
+        }],
         bubbles: []
       };
       this.published = null;
     }
     
+    // 既存データのtail初期化
+    for (const bubble of this.draft.bubbles || []) {
+      const typeInfo = this.BUBBLE_TYPES[bubble.type];
+      if (!bubble.tail && typeInfo?.hasTail) {
+        bubble.tail = { enabled: true, tip: { x: 0.55, y: 1.15 } };
+      }
+    }
+    
     console.log('[ComicEditor] Draft initialized:', this.draft);
-    console.log('[ComicEditor] Published:', this.published);
   },
 
   /**
    * モーダルHTMLを生成・挿入
    */
   renderModal(imageUrl) {
-    // 既存モーダルがあれば削除
     const existing = document.getElementById('comicEditorModal');
     if (existing) existing.remove();
 
@@ -210,7 +644,7 @@ window.ComicEditor = {
     
     let statusBadge = '';
     if (hasPublished && hasDraftChanges) {
-      statusBadge = `<span class="ml-2 px-2 py-1 bg-orange-500 text-white text-xs rounded-full">未公開の変更あり</span>`;
+      statusBadge = `<span class="ml-2 px-2 py-1 bg-orange-500 text-white text-xs rounded-full">未公開の変更</span>`;
     } else if (hasPublished) {
       statusBadge = `<span class="ml-2 px-2 py-1 bg-green-500 text-white text-xs rounded-full">公開済み</span>`;
     } else {
@@ -219,9 +653,9 @@ window.ComicEditor = {
 
     const modalHtml = `
       <div id="comicEditorModal" class="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60" style="display: none;">
-        <div class="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] overflow-hidden flex flex-col">
-          <!-- Header -->
-          <div class="bg-gradient-to-r from-purple-600 to-blue-600 px-6 py-4 flex items-center justify-between">
+        <div class="bg-white rounded-xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
+          <!-- Header（固定） -->
+          <div class="bg-gradient-to-r from-purple-600 to-blue-600 px-6 py-4 flex items-center justify-between flex-shrink-0">
             <h2 class="text-xl font-bold text-white flex items-center">
               <i class="fas fa-comment-alt mr-2"></i>
               漫画編集 - シーン #${this.currentScene.idx}
@@ -232,15 +666,15 @@ window.ComicEditor = {
             </button>
           </div>
 
-          <!-- Content -->
+          <!-- Body（スクロール可） -->
           <div class="flex-1 overflow-hidden p-6">
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
-              <!-- 左: Canvas プレビュー（SSOT: Canvas直接描画） -->
-              <div class="space-y-4">
-                <h3 class="font-semibold text-gray-700 flex items-center">
-                  <i class="fas fa-image mr-2 text-purple-600"></i>プレビュー（編集中）
+              <!-- 左: プレビュー -->
+              <div class="flex flex-col space-y-3">
+                <h3 class="font-semibold text-gray-700 flex items-center flex-shrink-0">
+                  <i class="fas fa-image mr-2 text-purple-600"></i>プレビュー
                 </h3>
-                <div id="comicCanvasContainer" class="relative bg-gray-900 rounded-lg overflow-hidden" style="aspect-ratio: 16/9;">
+                <div id="comicCanvasContainer" class="relative bg-gray-900 rounded-lg overflow-hidden flex-1" style="min-height: 300px;">
                   <img 
                     id="comicBaseImage" 
                     src="${imageUrl}" 
@@ -249,93 +683,94 @@ window.ComicEditor = {
                     alt="Scene image" 
                     onload="ComicEditor.onBaseImageLoad()"
                   />
-                  <!-- Canvas オーバーレイ（プレビュー用） -->
                   <canvas 
                     id="comicPreviewCanvas" 
                     class="absolute inset-0 w-full h-full" 
                     style="pointer-events: auto;"
                   ></canvas>
                 </div>
-                <p class="text-xs text-gray-500">
-                  <i class="fas fa-info-circle mr-1"></i>
-                  吹き出しをドラッグして位置を調整できます
+                <p class="text-xs text-gray-500 flex-shrink-0">
+                  <i class="fas fa-arrows-alt mr-1"></i>吹き出しをドラッグで移動
                 </p>
               </div>
 
-              <!-- 右: 発話リスト + 吹き出し管理（スクロール可能） -->
-              <div class="space-y-4 overflow-y-auto" style="max-height: calc(90vh - 200px);">
-                <h3 class="font-semibold text-gray-700 flex items-center sticky top-0 bg-white pb-2 z-10">
-                  <i class="fas fa-list mr-2 text-blue-600"></i>発話・吹き出し設定
+              <!-- 右: 発話＋吹き出し（スクロール可） -->
+              <div class="flex flex-col h-full overflow-hidden">
+                <h3 class="font-semibold text-gray-700 flex items-center flex-shrink-0 pb-2">
+                  <i class="fas fa-list mr-2 text-blue-600"></i>発話・吹き出し
                 </h3>
 
-                <!-- 発話リスト -->
-                <div id="utteranceList" class="space-y-3">
-                  <!-- 発話がここに描画される -->
-                </div>
+                <!-- スクロール領域 -->
+                <div class="flex-1 overflow-y-auto space-y-4 pr-2">
+                  <!-- 発話リスト -->
+                  <div id="utteranceList" class="space-y-3"></div>
 
-                <!-- 吹き出し追加（種類選択） -->
-                <div class="pt-4 border-t border-gray-200 pb-4">
-                  <label class="block text-xs font-semibold text-gray-600 mb-2">吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）</label>
-                  <div class="space-y-3" id="bubbleTypeButtons">
-                    <!-- キャラクター用吹き出し -->
-                    <p class="text-xs text-gray-500 font-semibold">セリフ用</p>
-                    <div class="grid grid-cols-2 gap-2">
-                      <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm">
-                        <i class="fas fa-comment text-gray-700 mr-1"></i>通常
-                      </button>
-                      <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm">
-                        <i class="fas fa-cloud text-gray-500 mr-1"></i>思考
-                      </button>
-                      <button onclick="ComicEditor.addBubble('shout')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-yellow-50 hover:border-yellow-400 transition-colors text-sm">
-                        <i class="fas fa-bolt text-yellow-500 mr-1"></i>叫び
-                      </button>
-                      <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm">
-                        <i class="fas fa-comment-dots text-purple-500 mr-1"></i>ささやき
-                      </button>
-                    </div>
-                    
-                    <!-- ナレーション用 -->
-                    <p class="text-xs text-gray-500 font-semibold mt-3">ナレーション用</p>
-                    <div class="grid grid-cols-2 gap-2">
-                      <button onclick="ComicEditor.addBubble('narration')" class="px-3 py-2 bg-gray-800 text-white border-2 border-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium">
-                        <i class="fas fa-square mr-1"></i>テロップ帯
-                      </button>
-                      <button onclick="ComicEditor.addBubble('caption')" class="px-3 py-2 bg-white text-gray-800 border-2 border-gray-400 rounded-lg hover:bg-gray-100 transition-colors text-sm font-medium">
-                        <i class="fas fa-font mr-1"></i>字幕（枠なし）
-                      </button>
+                  <!-- 吹き出し追加 -->
+                  <div class="pt-4 border-t border-gray-200">
+                    <label class="block text-xs font-semibold text-gray-600 mb-3">
+                      吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）
+                    </label>
+                    <div class="space-y-3" id="bubbleTypeButtons">
+                      <!-- セリフ用 -->
+                      <p class="text-xs text-gray-500 font-semibold">セリフ用（Tailあり）</p>
+                      <div class="grid grid-cols-3 gap-2">
+                        <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm font-medium">
+                          <i class="fas fa-comment text-blue-600 mr-1"></i>通常
+                        </button>
+                        <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm font-medium">
+                          <i class="fas fa-comment-dots text-gray-500 mr-1"></i>小声
+                        </button>
+                        <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm font-medium">
+                          <i class="fas fa-cloud text-purple-500 mr-1"></i>思考
+                        </button>
+                      </div>
+                      
+                      <!-- ナレーション用 -->
+                      <p class="text-xs text-gray-500 font-semibold mt-3">ナレーション用（Tailなし）</p>
+                      <div class="grid grid-cols-2 gap-2">
+                        <button onclick="ComicEditor.addBubble('telop')" class="px-3 py-2 bg-gray-800 text-white border-2 border-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium">
+                          <i class="fas fa-square mr-1"></i>テロップ帯
+                        </button>
+                        <button onclick="ComicEditor.addBubble('caption')" class="px-3 py-2 bg-white text-gray-800 border-2 border-gray-400 rounded-lg hover:bg-gray-100 transition-colors text-sm font-medium">
+                          <i class="fas fa-font mr-1"></i>字幕（枠なし）
+                        </button>
+                      </div>
                     </div>
                   </div>
+                  
+                  <!-- エラー表示エリア -->
+                  <div id="comicValidationErrors" class="hidden pt-3"></div>
                 </div>
               </div>
             </div>
           </div>
 
-          <!-- Footer（Phase1.5: Draft/Publish分離） -->
-          <div class="bg-gray-100 px-6 py-4 flex justify-between items-center border-t border-gray-200">
+          <!-- Footer（固定） -->
+          <div class="bg-gray-100 px-6 py-4 flex justify-between items-center border-t border-gray-200 flex-shrink-0">
             <div class="text-sm text-gray-600">
-              <i class="fas fa-exclamation-triangle text-yellow-500 mr-1"></i>
-              「公開」するまでシーンには反映されません
+              <i class="fas fa-info-circle text-blue-500 mr-1"></i>
+              「公開」でシーンに反映
             </div>
             <div class="flex gap-3">
               <button 
                 onclick="ComicEditor.close()"
-                class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+                class="px-5 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
               >
-                <i class="fas fa-times mr-2"></i>キャンセル
+                <i class="fas fa-times mr-1"></i>閉じる
               </button>
               <button 
                 id="comicSaveBtn"
                 onclick="ComicEditor.saveDraft()"
-                class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                class="px-5 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <i class="fas fa-save mr-2"></i>下書き保存
+                <i class="fas fa-save mr-1"></i>下書き
               </button>
               <button 
                 id="comicPublishBtn"
                 onclick="ComicEditor.publish()"
-                class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                class="px-5 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <i class="fas fa-upload mr-2"></i>公開
+                <i class="fas fa-upload mr-1"></i>公開
               </button>
             </div>
           </div>
@@ -344,40 +779,31 @@ window.ComicEditor = {
     `;
 
     document.body.insertAdjacentHTML('beforeend', modalHtml);
-
-    // ESCキーで閉じる
     document.addEventListener('keydown', this.handleKeyDown);
-
-    // 発話リストと吹き出しを描画
     this.renderUtterances();
   },
 
   /**
-   * ベース画像のロード完了時
+   * ベース画像ロード完了
    */
   onBaseImageLoad() {
     console.log('[ComicEditor] Base image loaded');
     this._baseImageLoaded = true;
-    this._containRect = null; // キャッシュをクリア
+    this._containRect = null;
     
-    // プレビューCanvasを初期化
     this.initPreviewCanvas();
     this.renderPreview();
-    
-    // ドラッグイベントを設定
     this.setupDragEvents();
   },
 
   /**
-   * プレビューCanvasを初期化
+   * プレビューCanvas初期化
    */
   initPreviewCanvas() {
     const canvas = document.getElementById('comicPreviewCanvas');
     const container = document.getElementById('comicCanvasContainer');
-    
     if (!canvas || !container) return;
     
-    // Canvasのサイズをコンテナに合わせる（Retina対応）
     const rect = container.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     
@@ -391,7 +817,7 @@ window.ComicEditor = {
   },
 
   /**
-   * ドラッグイベントを設定
+   * ドラッグイベント設定
    */
   setupDragEvents() {
     const canvas = document.getElementById('comicPreviewCanvas');
@@ -410,7 +836,7 @@ window.ComicEditor = {
   },
 
   /**
-   * マウスダウンハンドラ（吹き出し選択・ドラッグ開始）
+   * マウスダウン（吹き出し選択・ドラッグ開始）
    */
   handleMouseDown(e) {
     e.preventDefault();
@@ -424,23 +850,18 @@ window.ComicEditor = {
     const canvasX = clientX - canvasRect.left;
     const canvasY = clientY - canvasRect.top;
     
-    // クリック位置に吹き出しがあるか確認
     const bubble = this.findBubbleAt(canvasX, canvasY);
     
     if (bubble) {
-      // 削除ボタンの判定
       if (this.isDeleteButtonClick(canvasX, canvasY, bubble)) {
         this.removeBubble(bubble.id);
         return;
       }
       
-      // ドラッグ開始
       this.isDragging = true;
       this.dragTarget = bubble.id;
       
-      const containRect = this.getContainRect();
       const bubbleContainerPos = this.normalizedToContainer(bubble.position.x, bubble.position.y);
-      
       this.dragOffset = {
         x: canvasX - bubbleContainerPos.x,
         y: canvasY - bubbleContainerPos.y
@@ -449,7 +870,7 @@ window.ComicEditor = {
   },
 
   /**
-   * マウス移動ハンドラ（ドラッグ中）
+   * マウス移動（ドラッグ中）
    */
   handleMouseMove(e) {
     if (!this.isDragging || !this.dragTarget) return;
@@ -457,6 +878,8 @@ window.ComicEditor = {
     
     const canvas = document.getElementById('comicPreviewCanvas');
     const canvasRect = canvas.getBoundingClientRect();
+    const rect = this.getContainRect();
+    if (!rect) return;
     
     const clientX = e.touches ? e.touches[0].clientX : e.clientX;
     const clientY = e.touches ? e.touches[0].clientY : e.clientY;
@@ -464,20 +887,15 @@ window.ComicEditor = {
     const canvasX = clientX - canvasRect.left;
     const canvasY = clientY - canvasRect.top;
     
-    // オフセットを考慮した位置
     const adjustedX = canvasX - this.dragOffset.x;
     const adjustedY = canvasY - this.dragOffset.y;
     
-    // コンテナ座標 → 正規化座標
-    const normalized = this.containerToNormalized(adjustedX, adjustedY);
+    let normalized = this.containerToNormalized(adjustedX, adjustedY);
     
-    // 範囲制限（0.8まで: 吹き出しが画像からはみ出さないように）
-    normalized.x = Math.max(0, Math.min(0.8, normalized.x));
-    normalized.y = Math.max(0, Math.min(0.8, normalized.y));
-    
-    // データ更新
+    // クランプ（画面外に出ない）
     const bubble = this.draft.bubbles.find(b => b.id === this.dragTarget);
     if (bubble) {
+      normalized = this.clampBubblePosition(normalized, bubble.type, rect.naturalWidth, rect.naturalHeight);
       bubble.position.x = normalized.x;
       bubble.position.y = normalized.y;
       this.renderPreview();
@@ -485,31 +903,31 @@ window.ComicEditor = {
   },
 
   /**
-   * マウスアップハンドラ（ドラッグ終了）
+   * マウスアップ（ドラッグ終了）
    */
   handleMouseUp() {
     this.isDragging = false;
     this.dragTarget = null;
+    // バリデーション更新
+    this.updateValidationUI();
   },
 
   /**
-   * 指定座標にある吹き出しを探す
+   * 指定座標の吹き出しを探す
    */
   findBubbleAt(canvasX, canvasY) {
     const containRect = this.getContainRect();
     if (!containRect) return null;
     
     const bubbles = this.draft.bubbles || [];
-    const baseScale = containRect.width / 1000;
+    const scale = containRect.width / 1000;
     
-    // 逆順でチェック（後から描画されたものが上）
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const bubble = bubbles[i];
       const containerPos = this.normalizedToContainer(bubble.position.x, bubble.position.y);
-      
-      const isNarration = bubble.type === 'narration' || bubble.type === 'caption';
-      const bubbleWidth = (isNarration ? 280 : 200) * baseScale;
-      const bubbleHeight = (isNarration ? 60 : 100) * baseScale;
+      const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
+      const bubbleWidth = size.w * scale;
+      const bubbleHeight = size.h * scale;
       
       if (canvasX >= containerPos.x && canvasX <= containerPos.x + bubbleWidth &&
           canvasY >= containerPos.y && canvasY <= containerPos.y + bubbleHeight) {
@@ -521,22 +939,20 @@ window.ComicEditor = {
   },
 
   /**
-   * 削除ボタンがクリックされたか判定
+   * 削除ボタンクリック判定
    */
   isDeleteButtonClick(canvasX, canvasY, bubble) {
     const containRect = this.getContainRect();
     if (!containRect) return false;
     
-    const baseScale = containRect.width / 1000;
+    const scale = containRect.width / 1000;
     const containerPos = this.normalizedToContainer(bubble.position.x, bubble.position.y);
+    const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
+    const bubbleWidth = size.w * scale;
     
-    const isNarration = bubble.type === 'narration' || bubble.type === 'caption';
-    const bubbleWidth = (isNarration ? 280 : 200) * baseScale;
-    
-    // 削除ボタンの位置
-    const btnX = containerPos.x + bubbleWidth - 5 * baseScale;
-    const btnY = containerPos.y + 5 * baseScale;
-    const btnRadius = 12 * baseScale;
+    const btnX = containerPos.x + bubbleWidth - 8 * scale;
+    const btnY = containerPos.y + 8 * scale;
+    const btnRadius = 14 * scale;
     
     const dx = canvasX - btnX;
     const dy = canvasY - btnY;
@@ -545,7 +961,7 @@ window.ComicEditor = {
   },
 
   /**
-   * プレビューを描画（SSOT: Canvasに直接描画）
+   * プレビュー描画（SSOT）
    */
   renderPreview() {
     const canvas = document.getElementById('comicPreviewCanvas');
@@ -555,100 +971,98 @@ window.ComicEditor = {
     const containRect = this.getContainRect();
     if (!containRect) return;
     
-    // クリア
-    ctx.clearRect(0, 0, canvas.width / (window.devicePixelRatio || 1), canvas.height / (window.devicePixelRatio || 1));
+    const dpr = window.devicePixelRatio || 1;
+    ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
     
-    // 吹き出しを描画
     const bubbles = this.draft.bubbles || [];
-    const baseScale = containRect.width / 1000; // プレビュー用スケール
+    const scale = containRect.width / 1000;
+    
+    // バリデーション結果を取得
+    const validation = this.validateDraft();
+    const errorBubbleIds = new Set(validation.errors.map(e => e.bubbleId));
     
     bubbles.forEach((bubble) => {
       const utterance = this.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = utterance?.text || '';
       
-      // 正規化座標 → コンテナ座標
       const containerPos = this.normalizedToContainer(bubble.position.x, bubble.position.y);
-      
-      // 吹き出しサイズ
-      const isNarration = bubble.type === 'narration' || bubble.type === 'caption';
-      const bubbleWidth = (isNarration ? 280 : 200) * baseScale;
-      const bubbleHeight = (isNarration ? 60 : 100) * baseScale;
       
       ctx.save();
       ctx.translate(containerPos.x, containerPos.y);
       
-      // 吹き出し背景を描画
-      if (bubble.type !== 'caption') {
-        this.drawBubbleBackground(ctx, bubble.type, bubbleWidth, bubbleHeight, baseScale);
+      // エラーの吹き出しは赤枠で囲む
+      if (errorBubbleIds.has(bubble.id)) {
+        const size = this.BUBBLE_SIZES[bubble.type] || this.BUBBLE_SIZES.speech;
+        ctx.strokeStyle = '#EF4444';
+        ctx.lineWidth = 4 * scale;
+        ctx.strokeRect(-2 * scale, -2 * scale, size.w * scale + 4 * scale, size.h * scale + 4 * scale);
       }
       
-      // テキストを描画
-      this.drawBubbleText(ctx, text, bubble.type, bubbleWidth, bubbleHeight, baseScale);
-      
-      // 削除ボタンを描画
-      this.drawDeleteButton(ctx, bubbleWidth, baseScale);
+      this.drawOneBubble(ctx, bubble, text, scale, { showDeleteButton: true });
       
       ctx.restore();
     });
     
-    // ボタン状態を更新
     this.updateBubbleButtons();
+    this.updateValidationUI();
   },
 
   /**
-   * 削除ボタンを描画
+   * バリデーションUIを更新
    */
-  drawDeleteButton(ctx, bubbleWidth, scale) {
-    const btnRadius = 10 * scale;
-    const btnX = bubbleWidth - 5 * scale;
-    const btnY = 5 * scale;
+  updateValidationUI() {
+    const validation = this.validateDraft();
+    const errorsDiv = document.getElementById('comicValidationErrors');
+    const publishBtn = document.getElementById('comicPublishBtn');
     
-    // 赤丸
-    ctx.beginPath();
-    ctx.arc(btnX, btnY, btnRadius, 0, Math.PI * 2);
-    ctx.fillStyle = '#EF4444';
-    ctx.fill();
-    
-    // ×アイコン
-    ctx.fillStyle = 'white';
-    ctx.font = `bold ${12 * scale}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('×', btnX, btnY);
+    if (validation.errors.length > 0) {
+      errorsDiv.innerHTML = `
+        <div class="bg-red-50 border border-red-200 rounded-lg p-3">
+          <p class="text-red-700 text-sm font-semibold mb-2">
+            <i class="fas fa-exclamation-triangle mr-1"></i>公開できません
+          </p>
+          <ul class="text-red-600 text-xs space-y-1">
+            ${validation.errors.map(e => `<li>• ${e.message}</li>`).join('')}
+          </ul>
+        </div>
+      `;
+      errorsDiv.classList.remove('hidden');
+      publishBtn.disabled = true;
+    } else {
+      errorsDiv.classList.add('hidden');
+      errorsDiv.innerHTML = '';
+      publishBtn.disabled = false;
+    }
   },
 
   /**
-   * 発話リストを描画（SSOT: シーンのキャラクターから選択）
+   * 発話リスト描画
    */
   renderUtterances() {
     const container = document.getElementById('utteranceList');
     if (!container) return;
 
     const utterances = this.draft.utterances || [];
-    // シーンに割り当てられたキャラクター（最大3人）
     const sceneCharacters = this.currentScene.characters || [];
-    // 音声プリセット（ナレーション用）
     const voicePresets = [
-      { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）' },
-      { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）' },
-      { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）' },
-      { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）' },
-      { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）' },
-      { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）' }
+      { id: 'ja-JP-Neural2-B', name: '女性A' },
+      { id: 'ja-JP-Neural2-C', name: '男性A' },
+      { id: 'ja-JP-Neural2-D', name: '男性B' },
+      { id: 'ja-JP-Wavenet-A', name: '女性B' },
+      { id: 'ja-JP-Wavenet-B', name: '女性C' },
+      { id: 'ja-JP-Wavenet-C', name: '男性C' }
     ];
     
     container.innerHTML = utterances.map((ut, index) => {
       const isNarration = ut.speaker_type === 'narration';
       const isCharacter = ut.speaker_type === 'character';
       
-      // キャラクター選択オプション
       const charOptions = sceneCharacters.length > 0 
         ? sceneCharacters.map(c => 
             `<option value="${c.character_key}" ${ut.speaker_character_key === c.character_key ? 'selected' : ''}>${this.escapeHtml(c.character_name)}</option>`
           ).join('')
-        : '<option value="" disabled>キャラクター未割当</option>';
+        : '<option value="" disabled>キャラ未割当</option>';
       
-      // 音声プリセットオプション
       const presetOptions = voicePresets.map(p => 
         `<option value="${p.id}" ${ut.narrator_voice_preset_id === p.id ? 'selected' : ''}>${p.name}</option>`
       ).join('');
@@ -663,79 +1077,62 @@ window.ComicEditor = {
           <button 
             onclick="ComicEditor.removeUtterance('${ut.id}')"
             class="text-red-500 hover:text-red-700 text-sm px-2 py-1 rounded hover:bg-red-50"
-            title="この発話を削除"
           >
             <i class="fas fa-trash"></i>
           </button>
           ` : ''}
         </div>
         
-        <!-- 話者タイプ選択 -->
         <div class="flex gap-2 mb-3">
           <button 
             onclick="ComicEditor.updateUtteranceSpeakerType('${ut.id}', 'narration')"
             class="flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${isNarration ? 'bg-purple-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-purple-50'}"
           >
-            <i class="fas fa-microphone mr-1"></i>ナレーション
+            <i class="fas fa-microphone mr-1"></i>ナレ
           </button>
           <button 
             onclick="ComicEditor.updateUtteranceSpeakerType('${ut.id}', 'character')"
             class="flex-1 px-3 py-2 rounded-lg text-sm font-semibold transition-colors ${isCharacter ? 'bg-green-600 text-white' : 'bg-white border border-gray-300 text-gray-700 hover:bg-green-50'} ${sceneCharacters.length === 0 ? 'opacity-50 cursor-not-allowed' : ''}"
-            ${sceneCharacters.length === 0 ? 'disabled title="シーンにキャラクターを割り当ててください"' : ''}
+            ${sceneCharacters.length === 0 ? 'disabled' : ''}
           >
-            <i class="fas fa-user mr-1"></i>キャラクター
+            <i class="fas fa-user mr-1"></i>キャラ
           </button>
         </div>
         
-        <!-- ナレーション用：音声プリセット選択 -->
         ${isNarration ? `
         <div class="mb-3">
-          <label class="block text-xs font-semibold text-gray-600 mb-1">
-            <i class="fas fa-sliders-h mr-1"></i>音声プリセット
-          </label>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">音声</label>
           <select 
             onchange="ComicEditor.updateUtteranceNarratorVoice('${ut.id}', this.value)"
-            class="w-full text-sm px-3 py-2 rounded-lg border border-purple-300 bg-purple-50 focus:border-purple-500"
+            class="w-full text-sm px-3 py-2 rounded-lg border border-purple-300 bg-purple-50"
           >
             ${presetOptions}
           </select>
         </div>
         ` : ''}
         
-        <!-- キャラクター用：シーン内キャラから選択 -->
         ${isCharacter ? `
         <div class="mb-3">
-          <label class="block text-xs font-semibold text-gray-600 mb-1">
-            <i class="fas fa-users mr-1"></i>話すキャラクター
-          </label>
+          <label class="block text-xs font-semibold text-gray-600 mb-1">話者</label>
           <select 
             onchange="ComicEditor.updateUtteranceCharacter('${ut.id}', this.value)"
-            class="w-full text-sm px-3 py-2 rounded-lg border border-green-300 bg-green-50 focus:border-green-500"
+            class="w-full text-sm px-3 py-2 rounded-lg border border-green-300 bg-green-50"
           >
             ${charOptions}
           </select>
-          ${sceneCharacters.length === 0 ? `
-          <p class="text-xs text-orange-600 mt-1">
-            <i class="fas fa-exclamation-triangle mr-1"></i>
-            シーンにキャラクターが割り当てられていません
-          </p>
-          ` : ''}
         </div>
         ` : ''}
         
-        <!-- セリフ入力 -->
         <textarea
           id="utteranceText-${ut.id}"
           class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm resize-none"
           rows="3"
-          placeholder="${isNarration ? 'ナレーションテキストを入力...' : 'セリフを入力...'}"
-          onchange="ComicEditor.updateUtterance('${ut.id}', this.value)"
+          placeholder="${isNarration ? 'ナレーション...' : 'セリフ...'}"
           oninput="ComicEditor.updateUtterance('${ut.id}', this.value)"
         >${this.escapeHtml(ut.text)}</textarea>
       </div>
     `}).join('');
 
-    // 発話追加ボタン（最大3まで）
     if (utterances.length < this.MAX_UTTERANCES) {
       container.insertAdjacentHTML('beforeend', `
         <button 
@@ -749,7 +1146,7 @@ window.ComicEditor = {
   },
 
   /**
-   * 吹き出しボタンの状態を更新
+   * 吹き出しボタン状態更新
    */
   updateBubbleButtons() {
     const bubbleTypeButtons = document.getElementById('bubbleTypeButtons');
@@ -769,228 +1166,16 @@ window.ComicEditor = {
     });
   },
 
-  /**
-   * 吹き出し背景をCanvasに描画
-   */
-  drawBubbleBackground(ctx, type, width, height, scale) {
-    ctx.beginPath();
-    
-    // 影を追加
-    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-    ctx.shadowBlur = 4 * scale;
-    ctx.shadowOffsetX = 2 * scale;
-    ctx.shadowOffsetY = 2 * scale;
-    
-    switch (type) {
-      case 'thought':
-        // 雲形
-        this.drawThoughtBubble(ctx, width, height, scale);
-        ctx.fillStyle = '#F3F4F6';
-        ctx.strokeStyle = '#9CA3AF';
-        ctx.lineWidth = 2 * scale;
-        break;
-        
-      case 'shout':
-        // ギザギザ
-        this.drawShoutBubble(ctx, width, height, scale);
-        ctx.fillStyle = '#FEF3C7';
-        ctx.strokeStyle = '#F59E0B';
-        ctx.lineWidth = 3 * scale;
-        break;
-        
-      case 'whisper':
-        this.drawRoundRect(ctx, 0, 0, width, height, 10 * scale);
-        ctx.fillStyle = '#F9FAFB';
-        ctx.strokeStyle = '#9CA3AF';
-        ctx.lineWidth = 1 * scale;
-        ctx.setLineDash([5 * scale, 3 * scale]);
-        break;
-        
-      case 'narration':
-        ctx.rect(0, 0, width, height);
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
-        ctx.strokeStyle = 'transparent';
-        break;
-        
-      default: // speech
-        this.drawSpeechBubble(ctx, width, height, scale);
-        ctx.fillStyle = 'white';
-        ctx.strokeStyle = '#374151';
-        ctx.lineWidth = 2 * scale;
-    }
-    
-    ctx.fill();
-    if (ctx.strokeStyle !== 'transparent') {
-      ctx.stroke();
-    }
-    
-    // 影をリセット
-    ctx.shadowColor = 'transparent';
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.setLineDash([]);
-  },
+  // ============== 発話・吹き出し操作 ==============
 
-  /**
-   * 通常吹き出しを描画（しっぽ付き）
-   */
-  drawSpeechBubble(ctx, width, height, scale) {
-    const r = 10 * scale;
-    const tailSize = 12 * scale;
-    
-    ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.lineTo(width - r, 0);
-    ctx.quadraticCurveTo(width, 0, width, r);
-    ctx.lineTo(width, height - r);
-    ctx.quadraticCurveTo(width, height, width - r, height);
-    ctx.lineTo(width / 2 + tailSize, height);
-    ctx.lineTo(width / 2, height + tailSize);
-    ctx.lineTo(width / 2 - tailSize, height);
-    ctx.lineTo(r, height);
-    ctx.quadraticCurveTo(0, height, 0, height - r);
-    ctx.lineTo(0, r);
-    ctx.quadraticCurveTo(0, 0, r, 0);
-    ctx.closePath();
-  },
-
-  /**
-   * 思考吹き出しを描画（雲形）
-   */
-  drawThoughtBubble(ctx, width, height, scale) {
-    // 楕円ベースの雲
-    ctx.beginPath();
-    ctx.ellipse(width / 2, height / 2, width / 2 - 5 * scale, height / 2 - 5 * scale, 0, 0, Math.PI * 2);
-    
-    // 小さな円（しっぽ）
-    ctx.moveTo(width / 4 + 8 * scale, height + 5 * scale);
-    ctx.arc(width / 4, height + 5 * scale, 6 * scale, 0, Math.PI * 2);
-    ctx.moveTo(width / 4 - 5 * scale + 4 * scale, height + 16 * scale);
-    ctx.arc(width / 4 - 5 * scale, height + 16 * scale, 4 * scale, 0, Math.PI * 2);
-  },
-
-  /**
-   * 叫び吹き出しを描画（ギザギザ）
-   */
-  drawShoutBubble(ctx, width, height, scale) {
-    const spikes = 8;
-    const spikeDepth = 8 * scale;
-    const cx = width / 2;
-    const cy = height / 2;
-    const rx = width / 2 - spikeDepth;
-    const ry = height / 2 - spikeDepth;
-    
-    ctx.beginPath();
-    for (let i = 0; i < spikes * 2; i++) {
-      const angle = (i / (spikes * 2)) * Math.PI * 2 - Math.PI / 2;
-      const r = i % 2 === 0 ? 1 : 0.7;
-      const x = cx + Math.cos(angle) * rx * r + (i % 2 === 0 ? Math.cos(angle) * spikeDepth : 0);
-      const y = cy + Math.sin(angle) * ry * r + (i % 2 === 0 ? Math.sin(angle) * spikeDepth : 0);
-      
-      if (i === 0) {
-        ctx.moveTo(x, y);
-      } else {
-        ctx.lineTo(x, y);
-      }
-    }
-    ctx.closePath();
-  },
-
-  /**
-   * 角丸矩形を描画
-   */
-  drawRoundRect(ctx, x, y, width, height, radius) {
-    ctx.beginPath();
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + width - radius, y);
-    ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
-    ctx.lineTo(x + width, y + height - radius);
-    ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-    ctx.lineTo(x + radius, y + height);
-    ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
-  },
-
-  /**
-   * 吹き出しテキストをCanvasに描画
-   */
-  drawBubbleText(ctx, text, type, bubbleWidth, bubbleHeight, scale) {
-    const isNarration = type === 'narration' || type === 'caption';
-    const fontSize = (isNarration ? 18 : 14) * scale;
-    const lineHeight = 20 * scale;
-    const charsPerLine = isNarration ? 28 : 20;
-    
-    ctx.font = `${isNarration ? 'bold' : 'normal'} ${fontSize}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    
-    // テキストを行に分割
-    const lines = this.wrapText(text, charsPerLine);
-    const textStartY = (bubbleHeight - lines.length * lineHeight) / 2 + lineHeight / 2;
-    
-    lines.forEach((line, i) => {
-      const textX = bubbleWidth / 2;
-      const textY = textStartY + i * lineHeight;
-      
-      if (type === 'caption') {
-        // 縁取りテキスト（白文字に黒縁）
-        ctx.strokeStyle = '#000000';
-        ctx.lineWidth = 4 * scale;
-        ctx.lineJoin = 'round';
-        ctx.strokeText(line, textX, textY);
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(line, textX, textY);
-      } else if (type === 'narration') {
-        // 白文字（影付き）
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillText(line, textX, textY);
-      } else {
-        // 黒文字
-        ctx.fillStyle = '#1F2937';
-        ctx.fillText(line, textX, textY);
-      }
-    });
-  },
-
-  /**
-   * テキストを折り返す
-   */
-  wrapText(text, maxChars) {
-    if (!text) return [''];
-    const lines = [];
-    let current = '';
-    
-    for (const char of text) {
-      if (char === '\n') {
-        lines.push(current);
-        current = '';
-      } else if (current.length >= maxChars) {
-        lines.push(current);
-        current = char;
-      } else {
-        current += char;
-      }
-    }
-    if (current) lines.push(current);
-    
-    return lines.slice(0, 5); // 最大5行
-  },
-
-  /**
-   * 発話を追加
-   */
   addUtterance() {
     if (this.draft.utterances.length >= this.MAX_UTTERANCES) {
-      showToast(`発話は最大${this.MAX_UTTERANCES}つまでです`, 'warning');
+      showToast(`発話は最大${this.MAX_UTTERANCES}つ`, 'warning');
       return;
     }
 
-    const newId = `ut_${Date.now()}`;
     this.draft.utterances.push({
-      id: newId,
+      id: `ut_${Date.now()}`,
       speaker_type: 'narration',
       speaker_id: null,
       speaker_character_key: null,
@@ -1001,25 +1186,18 @@ window.ComicEditor = {
     this.renderUtterances();
   },
 
-  /**
-   * 発話を更新
-   */
   updateUtterance(utteranceId, text) {
     const utterance = this.draft.utterances.find(u => u.id === utteranceId);
     if (utterance) {
       utterance.text = text;
-      this.renderPreview(); // プレビューを更新
+      this.renderPreview();
     }
   },
 
-  /**
-   * 発話のspeaker_typeを更新（UI再描画あり）
-   */
   updateUtteranceSpeakerType(utteranceId, speakerType) {
     const utterance = this.draft.utterances.find(u => u.id === utteranceId);
     if (utterance) {
       utterance.speaker_type = speakerType;
-      // キャラクターに変更した場合、シーンの最初のキャラを自動選択
       if (speakerType === 'character') {
         const sceneCharacters = this.currentScene.characters || [];
         if (sceneCharacters.length > 0 && !utterance.speaker_character_key) {
@@ -1031,9 +1209,6 @@ window.ComicEditor = {
     }
   },
 
-  /**
-   * 発話のナレーター音声プリセットを更新
-   */
   updateUtteranceNarratorVoice(utteranceId, presetId) {
     const utterance = this.draft.utterances.find(u => u.id === utteranceId);
     if (utterance) {
@@ -1041,9 +1216,6 @@ window.ComicEditor = {
     }
   },
 
-  /**
-   * 発話のキャラクターを更新
-   */
   updateUtteranceCharacter(utteranceId, characterKey) {
     const utterance = this.draft.utterances.find(u => u.id === utteranceId);
     if (utterance) {
@@ -1052,70 +1224,64 @@ window.ComicEditor = {
     }
   },
 
-  /**
-   * @deprecated Use updateUtteranceSpeakerType instead
-   */
-  updateUtteranceSpeaker(utteranceId, speakerType) {
-    this.updateUtteranceSpeakerType(utteranceId, speakerType);
-  },
-
-  /**
-   * 発話を削除
-   */
   removeUtterance(utteranceId) {
-    // 紐付いている吹き出しも削除
     this.draft.bubbles = this.draft.bubbles.filter(b => b.utterance_id !== utteranceId);
-    // 発話を削除
     this.draft.utterances = this.draft.utterances.filter(u => u.id !== utteranceId);
     this.renderUtterances();
     this.renderPreview();
   },
 
-  /**
-   * 吹き出しを追加（種類指定対応）
-   */
   addBubble(type = 'speech') {
     if (this.draft.bubbles.length >= this.MAX_BUBBLES) {
-      showToast(`吹き出しは最大${this.MAX_BUBBLES}つまでです`, 'warning');
+      showToast(`吹き出しは最大${this.MAX_BUBBLES}つ`, 'warning');
       return;
     }
 
-    // 紐付ける発話を選択（最初の発話をデフォルト）
     const firstUtterance = this.draft.utterances[0];
     if (!firstUtterance) {
-      showToast('発話を先に追加してください', 'warning');
+      showToast('発話を先に追加', 'warning');
       return;
     }
 
-    const newId = `b_${Date.now()}`;
-    // ナレーション系は下の方、それ以外はランダムな位置
-    const isNarration = type === 'narration' || type === 'caption';
-    const position = isNarration 
-      ? { x: 0.1 + Math.random() * 0.1, y: 0.7 + Math.random() * 0.1 }
-      : { x: 0.2 + Math.random() * 0.3, y: 0.1 + Math.random() * 0.3 };
+    const rect = this.getContainRect();
+    const typeInfo = this.BUBBLE_TYPES[type];
+    const isNarration = typeInfo?.category === 'narration';
     
-    this.draft.bubbles.push({
-      id: newId,
+    // 初期位置（ナレーション系は下、セリフ系は上寄り）
+    let position = isNarration 
+      ? { x: 0.12 + Math.random() * 0.05, y: 0.70 + Math.random() * 0.05 }
+      : { x: 0.15 + Math.random() * 0.2, y: 0.08 + Math.random() * 0.15 };
+    
+    // クランプ
+    if (rect) {
+      position = this.clampBubblePosition(position, type, rect.naturalWidth, rect.naturalHeight);
+    }
+    
+    const newBubble = {
+      id: `b_${Date.now()}`,
       utterance_id: firstUtterance.id,
       type: type,
       position: position
-    });
+    };
+    
+    // Tail付きの場合
+    if (typeInfo?.hasTail) {
+      newBubble.tail = { enabled: true, tip: { x: 0.55, y: 1.15 } };
+    }
+    
+    this.draft.bubbles.push(newBubble);
 
     this.renderPreview();
-    showToast('吹き出しを追加しました', 'success');
+    showToast(`${typeInfo?.name || '吹き出し'}を追加`, 'success');
   },
 
-  /**
-   * 吹き出しを削除
-   */
   removeBubble(bubbleId) {
     this.draft.bubbles = this.draft.bubbles.filter(b => b.id !== bubbleId);
     this.renderPreview();
   },
 
-  /**
-   * 下書き保存（Phase1.5）- 二重押し防止 + finally復帰
-   */
+  // ============== 保存・公開 ==============
+
   async saveDraft() {
     if (this.isSaving) return;
     this.isSaving = true;
@@ -1123,60 +1289,77 @@ window.ComicEditor = {
     const btn = document.getElementById('comicSaveBtn');
     if (btn) {
       btn.disabled = true;
-      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>保存中...';
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>保存中...';
     }
     
     try {
-      console.log('[ComicEditor] Saving draft:', this.draft);
-
+      // 位置をクランプして修正
+      const rect = this.getContainRect();
+      if (rect) {
+        for (const bubble of this.draft.bubbles) {
+          const clamped = this.clampBubblePosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight);
+          bubble.position = clamped;
+        }
+      }
+      
       const res = await axios.post(`/api/scenes/${this.currentSceneId}/comic/draft`, {
         draft: this.draft,
         base_image_generation_id: this.baseImageGenerationId
       });
 
       console.log('[ComicEditor] Draft saved:', res.data);
-      showToast('下書きを保存しました', 'success');
+      showToast('下書き保存しました', 'success');
 
     } catch (err) {
       console.error('[ComicEditor] Draft save failed:', err);
-      showToast('下書きの保存に失敗しました', 'error');
+      showToast('保存に失敗しました', 'error');
     } finally {
       this.isSaving = false;
       if (btn) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-save mr-2"></i>下書き保存';
+        btn.innerHTML = '<i class="fas fa-save mr-1"></i>下書き';
       }
     }
   },
 
-  /**
-   * 公開（SSOT: Canvas→PNG変換→アップロード）- toBlob非同期 + 二重押し防止
-   */
   async publish() {
     if (this.isPublishing) return;
+    
+    // バリデーション
+    const validation = this.validateDraft();
+    if (!validation.ok) {
+      showToast('エラーを修正してください', 'error');
+      return;
+    }
+    
     this.isPublishing = true;
     
     const btn = document.getElementById('comicPublishBtn');
     if (btn) {
       btn.disabled = true;
-      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>公開中...';
+      btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>公開中...';
     }
     
     try {
-      // 吹き出しがない場合は警告
       if (this.draft.bubbles.length === 0) {
-        const confirmed = confirm('吹き出しがありません。このまま公開しますか？');
-        if (!confirmed) {
-          return;
+        const confirmed = confirm('吹き出しがありません。公開しますか？');
+        if (!confirmed) return;
+      }
+
+      showToast('画像生成中...', 'info');
+
+      // 位置をクランプ
+      const rect = this.getContainRect();
+      if (rect) {
+        for (const bubble of this.draft.bubbles) {
+          const clamped = this.clampBubblePosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight);
+          bubble.position = clamped;
         }
       }
 
-      showToast('画像を生成中...', 'info');
-
-      // Canvas→PNG変換（非同期toBlob）
       const imageData = await this.renderToCanvasAsync();
       
-      console.log('[ComicEditor] Publishing comic...');
+      console.log('[ComicEditor] Publishing...');
 
       const res = await axios.post(`/api/scenes/${this.currentSceneId}/comic/publish`, {
         image_data: imageData,
@@ -1188,20 +1371,18 @@ window.ComicEditor = {
       
       this.published = res.data.comic_data?.published;
       
-      // 自動的に漫画を採用状態にする
+      // 自動で漫画表示に切替
       try {
         await axios.put(`/api/scenes/${this.currentSceneId}/display-asset-type`, {
           display_asset_type: 'comic'
         });
-        console.log('[ComicEditor] Auto-switched to comic display');
       } catch (e) {
-        console.warn('[ComicEditor] Failed to auto-switch display type:', e);
+        console.warn('[ComicEditor] Auto-switch failed:', e);
       }
       
-      showToast('漫画を公開しました！', 'success');
+      showToast('公開しました！', 'success');
       this.close();
 
-      // シーン一覧を更新
       if (typeof window.initBuilderTab === 'function') {
         window.initBuilderTab();
       } else if (typeof window.loadScenes === 'function') {
@@ -1210,109 +1391,80 @@ window.ComicEditor = {
 
     } catch (err) {
       console.error('[ComicEditor] Publish failed:', err);
-      showToast('公開に失敗しました: ' + (err.message || 'エラー'), 'error');
+      showToast('公開に失敗: ' + (err.message || 'エラー'), 'error');
     } finally {
       this.isPublishing = false;
       if (btn) {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-upload mr-2"></i>公開';
+        btn.innerHTML = '<i class="fas fa-upload mr-1"></i>公開';
       }
     }
   },
 
   /**
-   * SSOT: Canvas出力（非同期toBlob使用）
-   * プレビューと同一の描画ロジックで最終画像を生成
+   * Canvas出力（非同期toBlob）
    */
   async renderToCanvasAsync() {
     const baseImage = document.getElementById('comicBaseImage');
-    
-    if (!baseImage) {
-      throw new Error('Base image not found');
-    }
+    if (!baseImage) throw new Error('Base image not found');
 
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
     
-    // 元画像のサイズ（出力サイズ）
     const width = baseImage.naturalWidth || baseImage.width;
     const height = baseImage.naturalHeight || baseImage.height;
     
     canvas.width = width;
     canvas.height = height;
     
-    // 1. ベース画像を描画
+    // ベース画像
     ctx.drawImage(baseImage, 0, 0, width, height);
     
-    // 2. 吹き出しを直接Canvasに描画（プレビューと同じロジック）
-    const baseScale = width / 1000; // 出力用スケール
+    // 吹き出し描画
+    const scale = width / 1000;
     const bubbles = this.draft.bubbles || [];
     
     for (const bubble of bubbles) {
       const utterance = this.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = utterance?.text || '';
       
-      // 正規化座標 → 元画像座標
       const x = bubble.position.x * width;
       const y = bubble.position.y * height;
-      
-      // 吹き出しサイズ
-      const isNarration = bubble.type === 'narration' || bubble.type === 'caption';
-      const bubbleWidth = (isNarration ? 280 : 200) * baseScale;
-      const bubbleHeight = (isNarration ? 60 : 100) * baseScale;
       
       ctx.save();
       ctx.translate(x, y);
       
-      // 吹き出し背景を描画
-      if (bubble.type !== 'caption') {
-        this.drawBubbleBackground(ctx, bubble.type, bubbleWidth, bubbleHeight, baseScale);
-      }
-      
-      // テキストを描画
-      this.drawBubbleText(ctx, text, bubble.type, bubbleWidth, bubbleHeight, baseScale);
+      this.drawOneBubble(ctx, bubble, text, scale, { showDeleteButton: false });
       
       ctx.restore();
     }
     
-    // 非同期でBlobに変換し、base64に
+    // 非同期Blob変換
     return new Promise((resolve, reject) => {
       canvas.toBlob((blob) => {
         if (!blob) {
-          reject(new Error('Failed to create blob'));
+          reject(new Error('Blob作成失敗'));
           return;
         }
         
         const reader = new FileReader();
-        reader.onloadend = () => {
-          resolve(reader.result);
-        };
-        reader.onerror = () => {
-          reject(new Error('Failed to read blob'));
-        };
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('Blob読み込み失敗'));
         reader.readAsDataURL(blob);
       }, 'image/png', 1.0);
     });
   },
 
-  /**
-   * モーダルを表示
-   */
+  // ============== ユーティリティ ==============
+
   showModal() {
     const modal = document.getElementById('comicEditorModal');
-    if (modal) {
-      modal.style.display = 'flex';
-    }
+    if (modal) modal.style.display = 'flex';
   },
 
-  /**
-   * モーダルを閉じる
-   */
   close() {
     const modal = document.getElementById('comicEditorModal');
-    if (modal) {
-      modal.remove();
-    }
+    if (modal) modal.remove();
     document.removeEventListener('keydown', this.handleKeyDown);
     this.currentSceneId = null;
     this.currentScene = null;
@@ -1323,18 +1475,12 @@ window.ComicEditor = {
     this._baseImageLoaded = false;
   },
 
-  /**
-   * キーダウンハンドラ（ESCで閉じる）
-   */
   handleKeyDown(e) {
     if (e.key === 'Escape') {
       window.ComicEditor.close();
     }
   },
 
-  /**
-   * HTMLエスケープ
-   */
   escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -1343,9 +1489,9 @@ window.ComicEditor = {
   }
 };
 
-// グローバル関数として公開
+// グローバル公開
 window.openComicEditor = function(sceneId) {
   window.ComicEditor.open(sceneId);
 };
 
-console.log('[ComicEditor] SSOT Phase1.5 loaded successfully');
+console.log('[ComicEditor] Phase1.6 SSOT loaded');
