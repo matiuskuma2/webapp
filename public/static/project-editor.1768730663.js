@@ -2829,6 +2829,11 @@ function renderSceneAudioSection(scene) {
         
         <!-- Character Voice Generate Button (shown when "character" is selected) -->
         <div id="charVoiceSettings-${scene.id}" class="${!hasCharVoice ? 'hidden' : ''}">
+          <!-- Audio Preview (will be populated when audio is generated) -->
+          <div id="charAudioPreview-${scene.id}" class="mb-3 hidden">
+            <!-- Audio player will be inserted here -->
+          </div>
+          
           <button
             id="charAudioBtn-${scene.id}"
             onclick="window.generateCharacterVoice(${scene.id})"
@@ -3143,6 +3148,15 @@ function renderBuilderScenes(scenes, page = 1) {
     // Fallback to old method if new method not available
     console.log('[Builder] Initializing Audio UI for all scenes (fallback)');
     window.AudioUI.initForScenes(filteredScenes);
+  }
+  
+  // Load existing audio for character voice sections (show preview if audio exists)
+  if (window.AudioState && typeof window.AudioState.loadExistingAudioForScenes === 'function') {
+    const sceneIds = filteredScenes.map(s => s.id);
+    // Run async without blocking
+    window.AudioState.loadExistingAudioForScenes(sceneIds).catch(err => {
+      console.warn('[Builder] Failed to load existing audio:', err);
+    });
   }
   
   // ⚠️ PHASE X-5: WorldCharacterUI.init() moved to initStylesTab()

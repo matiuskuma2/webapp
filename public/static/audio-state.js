@@ -123,8 +123,8 @@ window.AudioState = {
           window.AudioUI.setButtonState(sceneId, 'generating', 100);
         }
         
-        // Also update character voice button if exists
-        this.updateCharAudioButton(sceneId, 'completed');
+        // Also update character voice button if exists (pass audio data for preview)
+        this.updateCharAudioButton(sceneId, 'completed', null, latest);
         
         // Wait 500ms, then update preview and button
         setTimeout(() => {
@@ -185,29 +185,25 @@ window.AudioState = {
    * @param {number} sceneId 
    * @param {string} state - 'completed' | 'failed'
    * @param {string} errorMessage - optional error message
+   * @param {object} audioData - audio generation data (for completed state)
    */
-  updateCharAudioButton(sceneId, state, errorMessage) {
+  updateCharAudioButton(sceneId, state, errorMessage, audioData) {
     const btn = document.getElementById(`charAudioBtn-${sceneId}`);
     if (!btn) return;
     
     btn.disabled = false;
     
     if (state === 'completed') {
-      btn.innerHTML = '<i class="fas fa-check mr-2"></i>完了 - 再生成';
+      btn.innerHTML = '<i class="fas fa-redo mr-2"></i>再生成';
       btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
-      btn.classList.add('bg-green-500', 'hover:bg-green-600');
+      btn.classList.add('bg-green-600', 'hover:bg-green-700');
       
-      // Reset to normal state after 3 seconds
-      setTimeout(() => {
-        if (btn) {
-          btn.innerHTML = '<i class="fas fa-volume-up mr-2"></i>キャラ音声で生成';
-          btn.classList.remove('bg-green-500', 'hover:bg-green-600');
-          btn.classList.add('bg-orange-500', 'hover:bg-orange-600');
-        }
-      }, 3000);
+      // Update audio preview
+      this.updateCharAudioPreview(sceneId, audioData);
+      
     } else if (state === 'failed') {
       btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>失敗 - 再試行';
-      btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
+      btn.classList.remove('bg-green-600', 'hover:bg-green-700');
       btn.classList.add('bg-red-500', 'hover:bg-red-600');
       
       // Reset to normal state after 5 seconds
@@ -215,9 +211,81 @@ window.AudioState = {
         if (btn) {
           btn.innerHTML = '<i class="fas fa-volume-up mr-2"></i>キャラ音声で生成';
           btn.classList.remove('bg-red-500', 'hover:bg-red-600');
-          btn.classList.add('bg-orange-500', 'hover:bg-orange-600');
+          btn.classList.add('bg-green-600', 'hover:bg-green-700');
         }
       }, 5000);
+    }
+  },
+
+  /**
+   * Update character audio preview player
+   * @param {number} sceneId 
+   * @param {object} audioData - audio generation data with r2_url
+   */
+  updateCharAudioPreview(sceneId, audioData) {
+    const container = document.getElementById(`charAudioPreview-${sceneId}`);
+    if (!container) return;
+    
+    if (audioData && audioData.r2_url) {
+      container.innerHTML = `
+        <div class="bg-green-50 border border-green-200 rounded-lg p-3">
+          <div class="flex items-center gap-2 mb-2">
+            <i class="fas fa-check-circle text-green-600"></i>
+            <span class="text-sm font-semibold text-green-800">音声生成完了</span>
+          </div>
+          <audio controls class="w-full">
+            <source src="${audioData.r2_url}" type="audio/mpeg">
+            お使いのブラウザは音声再生に対応していません。
+          </audio>
+        </div>
+      `;
+      container.classList.remove('hidden');
+      
+      // Also update the char audio button to show "再生成"
+      const btn = document.getElementById(`charAudioBtn-${sceneId}`);
+      if (btn) {
+        btn.innerHTML = '<i class="fas fa-redo mr-2"></i>再生成';
+        btn.classList.remove('bg-orange-500', 'hover:bg-orange-600');
+        btn.classList.add('bg-green-600', 'hover:bg-green-700');
+      }
+    } else {
+      container.innerHTML = '';
+      container.classList.add('hidden');
+    }
+  },
+
+  /**
+   * Load and display existing audio for a scene (called on page load)
+   * @param {number} sceneId 
+   */
+  async loadExistingAudio(sceneId) {
+    try {
+      const data = await window.AudioClient.list(sceneId);
+      const activeAudio = data.active_audio;
+      const latestCompleted = data.audio_generations?.find(a => a.status === 'completed');
+      
+      // If there's active audio or at least one completed, show preview
+      const audioToShow = activeAudio || latestCompleted;
+      if (audioToShow && audioToShow.r2_url) {
+        this.updateCharAudioPreview(sceneId, audioToShow);
+      }
+    } catch (error) {
+      console.warn(`[AudioState] Failed to load existing audio for scene ${sceneId}:`, error);
+    }
+  },
+
+  /**
+   * Load existing audio for multiple scenes (called after scene cards are rendered)
+   * @param {Array<number>} sceneIds 
+   */
+  async loadExistingAudioForScenes(sceneIds) {
+    console.log('[AudioState] Loading existing audio for', sceneIds.length, 'scenes');
+    
+    // Load in parallel with a small delay between batches to avoid overwhelming the API
+    const batchSize = 5;
+    for (let i = 0; i < sceneIds.length; i += batchSize) {
+      const batch = sceneIds.slice(i, i + batchSize);
+      await Promise.all(batch.map(id => this.loadExistingAudio(id)));
     }
   },
 
