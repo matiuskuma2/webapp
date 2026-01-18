@@ -414,9 +414,10 @@ projects.get('/:id/scenes', async (c) => {
             WHERE scm.scene_id = ?
           `).bind(projectId, scene.id).all()
 
-          // 音声キャラクター（is_primary=1 のキャラ、またはvoice_preset_idがあるキャラ）
-          const voiceCharacter = characterMappings.find((c: any) => c.is_primary === 1 && c.voice_preset_id)
-            || characterMappings.find((c: any) => c.voice_preset_id)
+          // SSOT: voice_character = is_primary=1 のキャラクター
+          // voice_preset_id がなくても、is_primary=1 なら voice_character として返す
+          const voiceCharacter = characterMappings.find((c: any) => c.is_primary === 1)
+            || (characterMappings.length > 0 ? characterMappings[0] : null)
             || null
 
           return {
