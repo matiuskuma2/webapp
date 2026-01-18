@@ -4,8 +4,8 @@
  * Video Build（プロジェクト全体の合算レンダリング）用のAWS API クライアント
  * 
  * エンドポイント:
- * - POST /start  → Video Build開始（project.jsonを送信）
- * - GET /status/{buildId} → ビルドステータス確認
+ * - POST /video/build/start  → Video Build開始（project.jsonを送信）
+ * - GET /video/build/status/{buildId} → ビルドステータス確認
  * 
  * 認証: SigV4 署名（aws-video-client.ts と同じ API Gateway を使用）
  * 
@@ -303,7 +303,7 @@ export function normalizeOrchestratorUrl(baseUrl: string, path: string): string 
 
 /**
  * Video Build を開始する
- * POST /start
+ * POST /video/build/start
  * 
  * @param config - クライアント設定（認証情報含む）
  * @param request - リクエストボディ
@@ -314,7 +314,7 @@ export async function startVideoBuild(
   request: StartVideoBuildRequest,
   options?: { timeout?: number }
 ): Promise<StartVideoBuildResponse> {
-  const url = normalizeOrchestratorUrl(config.baseUrl, '/start');
+  const url = normalizeOrchestratorUrl(config.baseUrl, '/video/build/start');
   const body = JSON.stringify(request);
   const timeout = options?.timeout || 25000;  // API Gateway 29秒制限を考慮
   
@@ -393,7 +393,7 @@ export async function startVideoBuild(
 
 /**
  * Video Build のステータスを取得する
- * GET /status/{buildId}
+ * GET /video/build/status/{buildId}
  * 
  * @param config - クライアント設定（認証情報含む）
  * @param buildId - ビルドID（aws_job_id または video_build_id）
@@ -419,7 +419,7 @@ export async function getVideoBuildStatus(
   }
   
   const queryString = queryParams.toString();
-  const path = `/status/${buildId}${queryString ? `?${queryString}` : ''}`;
+  const path = `/video/build/status/${buildId}${queryString ? `?${queryString}` : ''}`;
   const url = normalizeOrchestratorUrl(config.baseUrl, path);
   const timeout = options?.timeout || 25000;
   

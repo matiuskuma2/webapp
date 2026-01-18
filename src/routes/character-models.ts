@@ -506,4 +506,442 @@ app.post('/projects/:projectId/characters/auto-assign', async (c) => {
   }
 });
 
+/**
+ * POST /api/projects/:projectId/characters/:characterKey/reference-image
+ * Upload reference image for a character
+ */
+app.post('/projects/:projectId/characters/:characterKey/reference-image', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    const characterKey = c.req.param('characterKey');
+
+    // Verify character exists
+    const character = await c.env.DB.prepare(`
+      SELECT id FROM project_character_models
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).first();
+
+    if (!character) {
+      return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Character not found'), 404);
+    }
+
+    // Parse form data
+    const formData = await c.req.formData();
+    const imageFile = formData.get('image') as File;
+
+    if (!imageFile) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Image file is required'), 400);
+    }
+
+    // Validate file type
+    const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+    if (!allowedTypes.includes(imageFile.type)) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Invalid image type. Allowed: PNG, JPEG, WEBP'), 400);
+    }
+
+    // Validate file size (5MB max)
+    const maxSize = 5 * 1024 * 1024;
+    if (imageFile.size > maxSize) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'File size exceeds 5MB limit'), 400);
+    }
+
+    // Generate R2 key
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(7);
+    const ext = imageFile.type.split('/')[1];
+    const r2Key = `characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
+
+    // Upload to R2
+    await c.env.R2.put(r2Key, imageFile.stream(), {
+      httpMetadata: {
+        contentType: imageFile.type
+      }
+    });
+
+    // Generate URL for the image
+    const r2Url = `/images/${r2Key}`;
+
+    // Update character
+    await c.env.DB.prepare(`
+      UPDATE project_character_models
+      SET reference_image_r2_key = ?,
+          reference_image_r2_url = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND character_key = ?
+    `).bind(r2Key, r2Url, projectId, characterKey).run();
+
+    return c.json({
+      success: true,
+      r2_key: r2Key,
+      r2_url: r2Url
+    });
+  } catch (error) {
+    console.error('[Characters] Reference image upload error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to upload reference image'), 500);
+  }
+});
+
+/**
+ * DELETE /api/projects/:projectId/characters/:characterKey/reference-image
+ * Delete reference image for a character
+ */
+app.delete('/projects/:projectId/characters/:characterKey/reference-image', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    const characterKey = c.req.param('characterKey');
+
+    // Get character with current reference image
+    const character = await c.env.DB.prepare(`
+      SELECT reference_image_r2_key FROM project_character_models
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).first<{ reference_image_r2_key: string | null }>();
+
+    if (!character) {
+      return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Character not found'), 404);
+    }
+
+    // Delete from R2 if exists
+    if (character.reference_image_r2_key) {
+      await c.env.R2.delete(character.reference_image_r2_key);
+    }
+
+    // Update character
+    await c.env.DB.prepare(`
+      UPDATE project_character_models
+      SET reference_image_r2_key = NULL,
+          reference_image_r2_url = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).run();
+
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('[Characters] Reference image delete error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to delete reference image'), 500);
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/characters/:characterKey/update
+ * Update character with optional image (unified endpoint for FormData)
+ */
+app.post('/projects/:projectId/characters/:characterKey/update', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    const characterKey = c.req.param('characterKey');
+
+    // Verify character exists
+    const existing = await c.env.DB.prepare(`
+      SELECT id, reference_image_r2_key FROM project_character_models
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).first<{ id: number; reference_image_r2_key: string | null }>();
+
+    if (!existing) {
+      return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Character not found'), 404);
+    }
+
+    // Parse form data
+    const formData = await c.req.formData();
+    const characterName = formData.get('character_name') as string || '';
+    const aliasesJsonStr = formData.get('aliases_json') as string || '[]';
+    const appearanceDescription = formData.get('appearance_description') as string || '';
+    const voicePresetId = formData.get('voice_preset_id') as string || '';
+    const imageFile = formData.get('image') as File | null;
+
+    // Parse aliases
+    let aliasesJson = null;
+    try {
+      const aliases = JSON.parse(aliasesJsonStr);
+      if (Array.isArray(aliases) && aliases.length > 0) {
+        aliasesJson = JSON.stringify(aliases);
+      }
+    } catch (_) {
+      // Keep null
+    }
+
+    // Handle image upload if provided
+    let r2Key = existing.reference_image_r2_key;
+    let r2Url = null;
+
+    if (imageFile && imageFile.size > 0) {
+      // Validate file type
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+      if (!allowedTypes.includes(imageFile.type)) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Invalid image type'), 400);
+      }
+
+      // Validate file size (5MB max)
+      const maxSize = 5 * 1024 * 1024;
+      if (imageFile.size > maxSize) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'File size exceeds 5MB'), 400);
+      }
+
+      // Delete old image if exists
+      if (existing.reference_image_r2_key) {
+        await c.env.R2.delete(existing.reference_image_r2_key);
+      }
+
+      // Generate new R2 key
+      const timestamp = Date.now();
+      const random = Math.random().toString(36).substring(7);
+      const ext = imageFile.type.split('/')[1];
+      r2Key = `characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
+
+      // Upload to R2
+      await c.env.R2.put(r2Key, imageFile.stream(), {
+        httpMetadata: { contentType: imageFile.type }
+      });
+
+      r2Url = `/images/${r2Key}`;
+    } else {
+      // Keep existing URL
+      const current = await c.env.DB.prepare(`
+        SELECT reference_image_r2_url FROM project_character_models
+        WHERE project_id = ? AND character_key = ?
+      `).bind(projectId, characterKey).first<{ reference_image_r2_url: string | null }>();
+      r2Url = current?.reference_image_r2_url || null;
+    }
+
+    // Update character
+    await c.env.DB.prepare(`
+      UPDATE project_character_models
+      SET character_name = ?,
+          aliases_json = ?,
+          appearance_description = ?,
+          voice_preset_id = ?,
+          reference_image_r2_key = ?,
+          reference_image_r2_url = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND character_key = ?
+    `).bind(
+      characterName || null,
+      aliasesJson,
+      appearanceDescription || null,
+      voicePresetId || null,
+      r2Key,
+      r2Url,
+      projectId,
+      characterKey
+    ).run();
+
+    const character = await c.env.DB.prepare(`
+      SELECT * FROM project_character_models
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).first();
+
+    return c.json({ character });
+  } catch (error) {
+    console.error('[Characters] Update with image error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to update character'), 500);
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/characters/generate-preview
+ * Generate a preview image for character (AI generation)
+ */
+app.post('/projects/:projectId/characters/generate-preview', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    const { prompt } = await c.req.json();
+
+    if (!prompt || prompt.trim() === '') {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Prompt is required'), 400);
+    }
+
+    // Get API key from user settings
+    const { getCookie } = await import('hono/cookie');
+    const sessionId = getCookie(c, 'session');
+    
+    let apiKey: string | null = null;
+    
+    // Try to get from user settings
+    if (sessionId) {
+      const session = await c.env.DB.prepare(`
+        SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
+      `).bind(sessionId).first<{ user_id: number }>();
+      
+      if (session) {
+        const keyRecord = await c.env.DB.prepare(`
+          SELECT encrypted_key FROM user_api_keys
+          WHERE user_id = ? AND provider = 'google'
+        `).bind(session.user_id).first<{ encrypted_key: string }>();
+        
+        if (keyRecord?.encrypted_key) {
+          try {
+            // Import key utilities
+            const { decryptApiKey } = await import('../utils/crypto');
+            apiKey = await decryptApiKey(keyRecord.encrypted_key, c.env.ENCRYPTION_KEY);
+          } catch (decryptError) {
+            console.warn('[Characters] Failed to decrypt API key:', decryptError);
+          }
+        }
+      }
+    }
+    
+    // Fallback to environment variable
+    if (!apiKey) {
+      apiKey = c.env.GOOGLE_API_KEY || c.env.GEMINI_API_KEY;
+    }
+    
+    if (!apiKey) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'No API key configured for image generation'), 400);
+    }
+
+    // Build full prompt for character portrait
+    const fullPrompt = `A detailed portrait of a character: ${prompt}. High quality, professional illustration, clear face, upper body portrait, neutral background.`;
+
+    // Call Imagen API
+    const imagenUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+    
+    const response = await fetch(imagenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instances: [{ prompt: fullPrompt }],
+        parameters: {
+          sampleCount: 1,
+          aspectRatio: '1:1',
+          personGeneration: 'allow_adult'
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('[Characters] Imagen API error:', errorText);
+      return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Image generation failed'), 500);
+    }
+
+    const result = await response.json() as { predictions?: Array<{ bytesBase64Encoded?: string }> };
+    const base64Image = result?.predictions?.[0]?.bytesBase64Encoded;
+    
+    if (!base64Image) {
+      return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'No image generated'), 500);
+    }
+
+    // Convert base64 to binary
+    const binaryData = Uint8Array.from(atob(base64Image), c => c.charCodeAt(0));
+
+    // Return as PNG image
+    return new Response(binaryData, {
+      headers: {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'no-cache'
+      }
+    });
+  } catch (error) {
+    console.error('[Characters] Generate preview error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to generate preview'), 500);
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/characters/create-with-image
+ * Create a new character with image in one request (FormData)
+ */
+app.post('/projects/:projectId/characters/create-with-image', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+
+    // Parse form data
+    const formData = await c.req.formData();
+    const characterKey = formData.get('character_key') as string || '';
+    const characterName = formData.get('character_name') as string || '';
+    const aliasesJsonStr = formData.get('aliases_json') as string || '[]';
+    const appearanceDescription = formData.get('appearance_description') as string || '';
+    const voicePresetId = formData.get('voice_preset_id') as string || '';
+    const imageFile = formData.get('image') as File | null;
+
+    // Validation
+    if (!characterKey || !characterName) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'character_key and character_name are required'), 400);
+    }
+
+    if (!/^[a-zA-Z0-9_]+$/.test(characterKey)) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'character_key must be alphanumeric with underscores only'), 400);
+    }
+
+    // Check for duplicate
+    const existing = await c.env.DB.prepare(`
+      SELECT id FROM project_character_models
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).first();
+
+    if (existing) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Character key already exists'), 400);
+    }
+
+    // Parse aliases
+    let aliasesJson = null;
+    try {
+      const aliases = JSON.parse(aliasesJsonStr);
+      if (Array.isArray(aliases) && aliases.length > 0) {
+        const validAliases = aliases.filter(a => typeof a === 'string' && a.trim().length > 0);
+        aliasesJson = validAliases.length > 0 ? JSON.stringify(validAliases) : null;
+      }
+    } catch (_) {
+      // Keep null
+    }
+
+    // Handle image upload
+    let r2Key: string | null = null;
+    let r2Url: string | null = null;
+
+    if (imageFile && imageFile.size > 0) {
+      // Validate file type
+      const allowedTypes = ['image/png', 'image/jpeg', 'image/webp'];
+      if (!allowedTypes.includes(imageFile.type)) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Invalid image type'), 400);
+      }
+
+      // Validate file size (5MB max)
+      const maxSize = 5 * 1024 * 1024;
+      if (imageFile.size > maxSize) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'File size exceeds 5MB'), 400);
+      }
+
+      // Generate R2 key
+      const timestamp = Date.now();
+      const random = Math.random().toString(36).substring(7);
+      const ext = imageFile.type.split('/')[1];
+      r2Key = `characters/${projectId}/${characterKey}_${timestamp}_${random}.${ext}`;
+
+      // Upload to R2
+      await c.env.R2.put(r2Key, imageFile.stream(), {
+        httpMetadata: { contentType: imageFile.type }
+      });
+
+      r2Url = `/images/${r2Key}`;
+    }
+
+    // Create character
+    const result = await c.env.DB.prepare(`
+      INSERT INTO project_character_models
+        (project_id, character_key, character_name, description, appearance_description,
+         reference_image_r2_key, reference_image_r2_url, voice_preset_id, aliases_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      projectId,
+      characterKey,
+      characterName,
+      null,
+      appearanceDescription || null,
+      r2Key,
+      r2Url,
+      voicePresetId || null,
+      aliasesJson
+    ).run();
+
+    const character = await c.env.DB.prepare(`
+      SELECT * FROM project_character_models WHERE id = ?
+    `).bind(result.meta.last_row_id).first();
+
+    return c.json({ character }, 201);
+  } catch (error) {
+    console.error('[Characters] Create with image error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to create character'), 500);
+  }
+});
+
 export default app;

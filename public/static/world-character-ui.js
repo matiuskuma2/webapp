@@ -260,9 +260,10 @@
             const projectId = window.PROJECT_ID;
             if (!projectId) throw new Error('PROJECT_ID not found');
 
+            const imageFile = window.WorldCharacterModal.getPendingImageFile?.() || null;
+
             if (st.mode === 'edit') {
               // Use unified update API with optional image
-              const imageFile = window.WorldCharacterModal.getPendingImageFile?.() || null;
               await window.WorldCharacterClient.updateCharacterWithOptionalImage(
                 projectId,
                 st.originalKey,
@@ -271,11 +272,13 @@
               );
               if (window.showToast) window.showToast('更新しました', 'success');
             } else {
-              // Create mode: no image support (set image in edit mode)
-              await window.WorldCharacterClient.createCharacter(projectId, payload);
-              if (window.showToast) window.showToast('追加しました（画像は編集で設定）', 'success');
+              // Create mode: now supports image
+              await window.WorldCharacterClient.createCharacterWithImage(projectId, payload, imageFile);
+              if (window.showToast) window.showToast('キャラクターを追加しました', 'success');
             }
 
+            // Clear pending image
+            window.WorldCharacterModal.clearPendingImage?.();
             window.WorldCharacterModal.close();
             this.loadCharactersList();
           } catch (e) {

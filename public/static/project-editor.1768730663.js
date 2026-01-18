@@ -5448,38 +5448,90 @@ async function refreshVideoBuildUsage() {
 
 /**
  * Check and update video build requirements
+ * Phase R1: 新しい preflight API を使用
  */
-function updateVideoBuildRequirements() {
+async function updateVideoBuildRequirements() {
   const reqEl = document.getElementById('videoBuildRequirements');
   if (!reqEl) return;
   
-  const scenes = window.lastLoadedScenes || [];
-  const hasScenes = scenes.length > 0;
-  const scenesWithImages = scenes.filter(s => s.active_image).length;
-  const allScenesHaveImages = hasScenes && scenesWithImages === scenes.length;
-  
+  // Usage info
   const usage = window.videoBuildUsageCache || {};
   const isAtLimit = (usage.monthly_builds || 0) >= 30;
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
   let html = '<div class="space-y-1">';
   
-  // Scenes check
-  if (!hasScenes) {
-    html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>シーンがありません</div>';
-  } else if (!allScenesHaveImages) {
-    html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>すべてのシーンに画像が必要です（' + scenesWithImages + '/' + scenes.length + '）</div>';
-  } else {
-    html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + scenes.length + 'シーン準備完了</div>';
-  }
-  
-  // Scene count warning (Phase 1: warn for large videos)
-  const SCENE_WARN_THRESHOLD = 50;
-  const SCENE_LIMIT_THRESHOLD = 100;
-  if (scenes.length > SCENE_LIMIT_THRESHOLD) {
-    html += '<div class="flex items-center text-red-600 mt-2"><i class="fas fa-exclamation-circle mr-2"></i><span>' + scenes.length + 'シーンは現在の上限（' + SCENE_LIMIT_THRESHOLD + '）を超えています。分割ビルド機能は近日実装予定です。</span></div>';
-  } else if (scenes.length > SCENE_WARN_THRESHOLD) {
-    html += '<div class="flex items-center text-amber-600 mt-2"><i class="fas fa-clock mr-2"></i><span>' + scenes.length + 'シーン: レンダリングに時間がかかる場合があります（推定: ' + Math.ceil(scenes.length * 0.3) + '〜' + Math.ceil(scenes.length * 0.5) + '分）</span></div>';
+  // Call preflight API for accurate check
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/video-builds/preflight`);
+    const preflight = response.data;
+    
+    // Store preflight result for button state
+    window.videoBuildPreflightCache = preflight;
+    
+    if (preflight.total_count === 0) {
+      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>シーンがありません</div>';
+    } else if (!preflight.is_ready) {
+      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>素材が不足しています（' + preflight.ready_count + '/' + preflight.total_count + '）</div>';
+      
+      // Show missing details
+      if (preflight.missing && preflight.missing.length > 0) {
+        html += '<div class="ml-4 mt-1 text-sm text-gray-500">';
+        preflight.missing.slice(0, 3).forEach(m => {
+          html += '<div>• シーン' + m.scene_idx + ': ' + m.reason + '</div>';
+        });
+        if (preflight.missing.length > 3) {
+          html += '<div>• 他 ' + (preflight.missing.length - 3) + ' 件...</div>';
+        }
+        html += '</div>';
+      }
+    } else {
+      html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + preflight.total_count + 'シーン準備完了</div>';
+    }
+    
+    // Show warnings (audio missing etc)
+    if (preflight.warnings && preflight.warnings.length > 0) {
+      html += '<div class="flex items-center text-amber-500 mt-1"><i class="fas fa-info-circle mr-2"></i>音声未生成: ' + preflight.warnings.length + 'シーン（動画生成は可能）</div>';
+    }
+    
+    // Scene count warning (Phase 1: warn for large videos)
+    const SCENE_WARN_THRESHOLD = 50;
+    const SCENE_LIMIT_THRESHOLD = 100;
+    if (preflight.total_count > SCENE_LIMIT_THRESHOLD) {
+      html += '<div class="flex items-center text-red-600 mt-2"><i class="fas fa-exclamation-circle mr-2"></i><span>' + preflight.total_count + 'シーンは現在の上限（' + SCENE_LIMIT_THRESHOLD + '）を超えています。</span></div>';
+    } else if (preflight.total_count > SCENE_WARN_THRESHOLD) {
+      html += '<div class="flex items-center text-amber-600 mt-2"><i class="fas fa-clock mr-2"></i><span>' + preflight.total_count + 'シーン: レンダリングに時間がかかる場合があります</span></div>';
+    }
+    
+  } catch (error) {
+    console.error('[VideoBuild] Preflight error:', error);
+    // Fallback to local check
+    const scenes = window.lastLoadedScenes || [];
+    const hasScenes = scenes.length > 0;
+    
+    // SSOT: display_asset_type に応じたチェック
+    const scenesReady = scenes.filter(s => {
+      const displayType = s.display_asset_type || 'image';
+      if (displayType === 'comic') return s.active_comic?.r2_url;
+      if (displayType === 'video') return s.active_video?.status === 'completed' && s.active_video?.r2_url;
+      return s.active_image?.r2_url;
+    }).length;
+    
+    window.videoBuildPreflightCache = {
+      is_ready: hasScenes && scenesReady === scenes.length,
+      ready_count: scenesReady,
+      total_count: scenes.length,
+      missing: [],
+      warnings: []
+    };
+    
+    if (!hasScenes) {
+      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>シーンがありません</div>';
+    } else if (scenesReady < scenes.length) {
+      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>素材が不足しています（' + scenesReady + '/' + scenes.length + '）</div>';
+    } else {
+      html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + scenes.length + 'シーン準備完了</div>';
+    }
   }
   
   // Usage check
@@ -5494,19 +5546,23 @@ function updateVideoBuildRequirements() {
   
   html += '</div>';
   reqEl.innerHTML = html;
+  
+  // Update button state
+  updateVideoBuildButtonState();
 }
 
 /**
  * Update video build button state
+ * Phase R1: Use preflight cache from updateVideoBuildRequirements()
  */
 function updateVideoBuildButtonState() {
   const btn = document.getElementById('btnStartVideoBuild');
   if (!btn) return;
   
-  const scenes = window.lastLoadedScenes || [];
-  const hasScenes = scenes.length > 0;
-  const scenesWithImages = scenes.filter(s => s.active_image).length;
-  const allScenesHaveImages = hasScenes && scenesWithImages === scenes.length;
+  // Use preflight cache (SSOT-based validation)
+  const preflight = window.videoBuildPreflightCache || {};
+  const hasScenes = (preflight.total_count || 0) > 0;
+  const allScenesReady = preflight.is_ready === true;
   
   const usage = window.videoBuildUsageCache || {};
   const isAtLimit = (usage.monthly_builds || 0) >= 30;
@@ -5514,10 +5570,16 @@ function updateVideoBuildButtonState() {
   
   // Phase 1: Limit to 100 scenes until segment rendering is implemented
   const SCENE_LIMIT_THRESHOLD = 100;
-  const exceedsSceneLimit = scenes.length > SCENE_LIMIT_THRESHOLD;
+  const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
   
-  const canStart = allScenesHaveImages && !isAtLimit && !hasConcurrent && !exceedsSceneLimit;
+  const canStart = allScenesReady && !isAtLimit && !hasConcurrent && !exceedsSceneLimit;
   btn.disabled = !canStart;
+  
+  console.log('[VideoBuild] Button state:', { 
+    canStart, allScenesReady, isAtLimit, hasConcurrent, exceedsSceneLimit,
+    preflight_ready: preflight.is_ready,
+    preflight_count: preflight.ready_count + '/' + preflight.total_count
+  });
   
   // Also enable/disable Video Build tab
   const tabBtn = document.getElementById('tabVideoBuild');

@@ -109,12 +109,8 @@
    * @returns {Promise<{voice_presets: Array}>}
    */
   async function fetchVoicePresets() {
-    // TODO: 要確認 - Fish Audio API integration pending
-    // Current: Static file fallback (character-voice-presets.json)
-    // Note: Separate from audio-ui.js voice-presets.json (Google TTS presets)
-    // Future: Replace with Fish Audio API endpoint when spec is confirmed
-    // Example: return requestJson(`${FISH_API_BASE}/voices`, { headers: { 'Authorization': `Bearer ${token}` } });
-    return requestJson(`/static/character-voice-presets.json`, { method: 'GET' });
+    // Use shared voice presets file
+    return requestJson(`/static/voice-presets.json`, { method: 'GET' });
   }
 
   /**
@@ -264,6 +260,37 @@
     return data;
   }
 
+  /**
+   * Create a new character with optional image (FormData)
+   * @param {number} projectId - Project ID
+   * @param {object} payload - Character data
+   * @param {File|null} imageFileOrNull - Optional image file
+   * @returns {Promise<object>}
+   */
+  async function createCharacterWithImage(projectId, payload, imageFileOrNull) {
+    const fd = new FormData();
+    fd.append('character_key', payload.character_key || '');
+    fd.append('character_name', payload.character_name || '');
+    fd.append('aliases_json', JSON.stringify(payload.aliases || []));
+    fd.append('appearance_description', payload.appearance_description || '');
+    fd.append('voice_preset_id', payload.voice_preset_id || '');
+
+    if (imageFileOrNull) {
+      fd.append('image', imageFileOrNull);
+    }
+
+    const res = await fetch(`${API_BASE}/projects/${projectId}/characters/create-with-image`, {
+      method: 'POST',
+      body: fd
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data?.error?.message || `Create failed: ${res.status}`);
+    }
+    return data;
+  }
+
   // Expose API client to global scope
   window.WorldCharacterClient = {
     fetchCharacters,
@@ -280,6 +307,7 @@
     deleteCharacterReferenceImage, // Phase X-4
     generateCharacterPreviewImage, // New: Preview generation
     updateCharacterWithOptionalImage, // New: Unified update
+    createCharacterWithImage, // New: Create with image
   };
 
   console.log('[WorldCharacterClient] Loaded');
