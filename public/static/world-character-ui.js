@@ -59,6 +59,10 @@
       try {
         const data = await window.WorldCharacterClient.fetchCharacters(projectId);
         const chars = data.characters || [];
+        
+        // Phase F-7: キャラクターリストをグローバルに保存（音声生成UIで使用）
+        window.lastLoadedCharacters = chars;
+        console.log('[WorldCharacterUI] Stored lastLoadedCharacters:', chars.length);
 
         if (chars.length === 0) {
           listEl.innerHTML = '<div class="text-gray-500 text-sm">キャラクター未登録</div>';

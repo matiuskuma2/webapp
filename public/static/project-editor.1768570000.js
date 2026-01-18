@@ -1262,6 +1262,105 @@ window.generateCharacterVoice = async function(sceneId) {
   }
 };
 
+// Phase F-7: Select character voice from dropdown
+window.selectCharacterVoice = function(sceneId, characterKey) {
+  console.log(`[Audio] Selected character ${characterKey} for scene ${sceneId}`);
+  // キャラクター選択時の処理（音声プレビューなど今後拡張可能）
+};
+
+// Phase F-7: Generate audio using selected character's voice
+window.generateSelectedCharVoice = async function(sceneId) {
+  const select = document.getElementById(`charVoiceSelect-${sceneId}`);
+  if (!select || !select.value) {
+    showToast('キャラクターを選択してください', 'warning');
+    return;
+  }
+  
+  const charKey = select.value;
+  const option = select.querySelector(`option[value="${charKey}"]`);
+  const voicePresetId = option?.dataset.voice;
+  
+  if (!voicePresetId) {
+    showToast('選択したキャラクターに音声が設定されていません。Styles > Characters で設定してください。', 'error');
+    return;
+  }
+  
+  const provider = voicePresetId.startsWith('fish:') ? 'fish' : 'google';
+  
+  if (provider === 'fish') {
+    const confirmed = confirm('⚠️ Fish Audio を使用します。読み間違いが多いため、本番運用では Google TTS を推奨します。続けますか？');
+    if (!confirmed) return;
+  }
+  
+  const btn = select.nextElementSibling;
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  }
+  
+  try {
+    await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
+      voice_preset_id: voicePresetId,
+      provider: provider
+    });
+    
+    showToast('音声生成を開始しました', 'success');
+    
+    if (window.AudioState) {
+      window.AudioState.startWatch(sceneId);
+      window.AudioState.startPolling(sceneId);
+    }
+  } catch (error) {
+    console.error('[CharacterVoice] Generation error:', error);
+    showToast('音声生成に失敗しました: ' + (error.response?.data?.message || error.message), 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+    }
+  }
+};
+
+// Phase F-7: Generate audio using narrator voice preset
+window.generateNarratorVoice = async function(sceneId) {
+  const select = document.getElementById(`voicePreset-${sceneId}`);
+  if (!select || !select.value) {
+    showToast('音声タイプを選択してください', 'warning');
+    return;
+  }
+  
+  const voicePresetId = select.value;
+  const provider = 'google'; // インライン定義のプリセットはすべてGoogle
+  
+  const btn = select.nextElementSibling;
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  }
+  
+  try {
+    await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
+      voice_preset_id: voicePresetId,
+      provider: provider
+    });
+    
+    showToast('音声生成を開始しました', 'success');
+    
+    if (window.AudioState) {
+      window.AudioState.startWatch(sceneId);
+      window.AudioState.startPolling(sceneId);
+    }
+  } catch (error) {
+    console.error('[NarratorVoice] Generation error:', error);
+    showToast('音声生成に失敗しました: ' + (error.response?.data?.message || error.message), 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-volume-up"></i>';
+    }
+  }
+};
+
 // Load scenes (Scene Split tab)
 // Uses view=board to include character information
 // Exposed to window for cross-module access (e.g., WorldCharacterModal)
@@ -1651,14 +1750,19 @@ window.initBuilderTab = async function initBuilderTab() {
   `;
   
   try {
-    // Load style presets and scenes in parallel
+    // Load style presets, scenes, and characters in parallel
     // Add cache buster to force fresh data
     const cacheBuster = Date.now();
-    const [scenesResponse, stylesResponse, projectStyleResponse] = await Promise.all([
+    const [scenesResponse, stylesResponse, projectStyleResponse, charactersResponse] = await Promise.all([
       axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board&_t=${cacheBuster}`),
       axios.get(`${API_BASE}/style-presets?_t=${cacheBuster}`),
-      axios.get(`${API_BASE}/projects/${PROJECT_ID}/style-settings?_t=${cacheBuster}`)
+      axios.get(`${API_BASE}/projects/${PROJECT_ID}/style-settings?_t=${cacheBuster}`),
+      axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters?_t=${cacheBuster}`)
     ]);
+    
+    // Phase F-7: Store characters globally for audio UI
+    window.lastLoadedCharacters = charactersResponse.data.characters || [];
+    console.log('[Builder] Loaded characters:', window.lastLoadedCharacters.length);
     
     const scenes = scenesResponse.data.scenes || [];
     window.builderStylePresets = stylesResponse.data.style_presets || [];
@@ -2066,6 +2170,36 @@ function renderSceneAudioSection(scene) {
   const hasVoiceChar = voiceChar && voiceChar.character_name;
   const hasCharVoice = hasVoiceChar && voiceChar.voice_preset_id;
   
+  // 音声プリセットリスト（インライン定義で確実に表示）
+  const voicePresets = [
+    { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）', gender: 'female' },
+    { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）', gender: 'male' },
+    { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）', gender: 'male' },
+    { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）', gender: 'female' },
+    { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）', gender: 'female' },
+    { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）', gender: 'male' },
+    { id: 'ja-JP-Wavenet-D', name: '男性B（WaveNet）', gender: 'male' },
+    { id: 'ja-JP-Standard-A', name: '女性A（Standard）', gender: 'female' },
+    { id: 'ja-JP-Standard-B', name: '女性B（Standard）', gender: 'female' },
+    { id: 'ja-JP-Standard-C', name: '男性A（Standard）', gender: 'male' },
+    { id: 'ja-JP-Standard-D', name: '男性B（Standard）', gender: 'male' }
+  ];
+  
+  const voiceOptions = voicePresets.map(preset => 
+    `<option value="${preset.id}">${preset.name}</option>`
+  ).join('');
+  
+  // プロジェクトのキャラクターリスト（マイキャラクター）
+  const projectCharacters = window.lastLoadedCharacters || [];
+  const charOptions = projectCharacters.length > 0 
+    ? projectCharacters.map(char => {
+        const voiceLabel = char.voice_preset_id 
+          ? (char.voice_preset_id.startsWith('fish:') ? 'Fish Audio' : 'Google TTS')
+          : '音声未設定';
+        return `<option value="${char.character_key}" data-voice="${char.voice_preset_id || ''}">${escapeHtml(char.character_name)}（${voiceLabel}）</option>`;
+      }).join('')
+    : '';
+  
   // Format voice preset for display
   const formatVoicePreset = (presetId) => {
     if (!presetId) return null;
@@ -2141,11 +2275,63 @@ function renderSceneAudioSection(scene) {
         
         <!-- Scene Voice Settings (shown when "scene" is selected) -->
         <div id="sceneVoiceSettings-${scene.id}" class="${hasCharVoice ? 'hidden' : ''}">
-          <div class="audio-section-content">
-            <div class="flex items-center justify-center py-4 text-gray-400">
-              <i class="fas fa-spinner fa-spin text-purple-600 mr-2"></i>
-              <span class="text-gray-600 text-sm">読み込み中...</span>
+          <div class="audio-section-content space-y-3">
+            <!-- プロジェクトキャラクター選択 -->
+            ${projectCharacters.length > 0 ? `
+              <div>
+                <label class="block text-sm font-semibold text-gray-700 mb-2">
+                  <i class="fas fa-users mr-1 text-green-600"></i>マイキャラクターの音声
+                </label>
+                <div class="flex gap-2">
+                  <select 
+                    id="charVoiceSelect-${scene.id}"
+                    class="flex-1 px-3 py-2 border-2 border-green-300 rounded-lg focus:border-green-500 text-sm bg-green-50"
+                    onchange="window.selectCharacterVoice(${scene.id}, this.value)"
+                  >
+                    <option value="">-- キャラクターを選択 --</option>
+                    ${charOptions}
+                  </select>
+                  <button 
+                    onclick="window.generateSelectedCharVoice(${scene.id})"
+                    class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold text-sm"
+                  >
+                    <i class="fas fa-volume-up"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="border-t border-gray-200 pt-3">
+                <p class="text-xs text-gray-500 mb-2 text-center">または</p>
+              </div>
+            ` : ''}
+            
+            <!-- ナレーター音声選択 -->
+            <div>
+              <label class="block text-sm font-semibold text-gray-700 mb-2">
+                <i class="fas fa-microphone mr-1 text-purple-600"></i>ナレーター音声
+              </label>
+              <div class="flex gap-2">
+                <select 
+                  id="voicePreset-${scene.id}"
+                  class="flex-1 px-3 py-2 border-2 border-purple-300 rounded-lg focus:border-purple-500 text-sm bg-purple-50"
+                >
+                  ${voiceOptions}
+                </select>
+                <button 
+                  onclick="window.generateNarratorVoice(${scene.id})"
+                  class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold text-sm"
+                >
+                  <i class="fas fa-volume-up"></i>
+                </button>
+              </div>
             </div>
+            
+            <!-- 音声履歴 -->
+            <button
+              onclick="window.AudioUI && window.AudioUI.viewHistory(${scene.id})"
+              class="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm"
+            >
+              <i class="fas fa-history mr-2"></i>音声履歴
+            </button>
           </div>
         </div>
         

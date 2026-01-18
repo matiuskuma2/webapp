@@ -16,7 +16,16 @@ window.ComicEditor = {
 
   // 定数
   MAX_UTTERANCES: 3,
-  MAX_BUBBLES: 3,
+  MAX_BUBBLES: 5,
+  
+  // 吹き出しタイプ
+  BUBBLE_TYPES: [
+    { id: 'speech', name: '通常吹き出し', icon: 'fa-comment' },
+    { id: 'thought', name: '思考吹き出し', icon: 'fa-cloud' },
+    { id: 'shout', name: '叫び吹き出し', icon: 'fa-bolt' },
+    { id: 'whisper', name: 'ささやき吹き出し', icon: 'fa-comment-dots' },
+    { id: 'narration', name: 'ナレーション（テロップ）', icon: 'fa-quote-right' }
+  ],
 
   /**
    * 漫画編集ポップアップを開く
@@ -148,18 +157,26 @@ window.ComicEditor = {
                   <!-- 発話がここに描画される -->
                 </div>
 
-                <!-- 吹き出し追加ボタン -->
+                <!-- 吹き出し追加（種類選択） -->
                 <div class="pt-4 border-t border-gray-200">
-                  <button 
-                    id="addBubbleBtn"
-                    onclick="ComicEditor.addBubble()"
-                    class="w-full px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold"
-                  >
-                    <i class="fas fa-plus mr-2"></i>吹き出しを追加
-                  </button>
-                  <p class="text-xs text-gray-500 mt-2 text-center">
-                    最大 ${this.MAX_BUBBLES} 個まで
-                  </p>
+                  <label class="block text-xs font-semibold text-gray-600 mb-2">吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）</label>
+                  <div class="grid grid-cols-2 gap-2" id="bubbleTypeButtons">
+                    <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm">
+                      <i class="fas fa-comment text-gray-700 mr-1"></i>通常
+                    </button>
+                    <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm">
+                      <i class="fas fa-cloud text-gray-500 mr-1"></i>思考
+                    </button>
+                    <button onclick="ComicEditor.addBubble('shout')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-yellow-50 hover:border-yellow-400 transition-colors text-sm">
+                      <i class="fas fa-bolt text-yellow-500 mr-1"></i>叫び
+                    </button>
+                    <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm">
+                      <i class="fas fa-comment-dots text-purple-500 mr-1"></i>ささやき
+                    </button>
+                    <button onclick="ComicEditor.addBubble('narration')" class="col-span-2 px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-700 transition-colors text-sm">
+                      <i class="fas fa-quote-right mr-1"></i>ナレーション（テロップ風）
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -298,22 +315,48 @@ window.ComicEditor = {
       g.setAttribute('transform', `translate(${x}, ${y})`);
       g.style.cursor = 'move';
 
-      // 吹き出し背景
-      const bubbleWidth = 160;
-      const bubbleHeight = 80;
+      // 吹き出し背景（サイズ拡大）
+      const bubbleWidth = bubble.type === 'narration' ? 280 : 200;
+      const bubbleHeight = bubble.type === 'narration' ? 60 : 100;
       const path = this.createBubblePath(bubble.type, bubbleWidth, bubbleHeight);
       
       const pathEl = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       pathEl.setAttribute('d', path);
-      pathEl.setAttribute('fill', 'white');
-      pathEl.setAttribute('stroke', bubble.type === 'thought' ? '#9CA3AF' : '#374151');
-      pathEl.setAttribute('stroke-width', '2');
+      
+      // 種類別スタイル
+      switch (bubble.type) {
+        case 'thought':
+          pathEl.setAttribute('fill', '#F3F4F6');
+          pathEl.setAttribute('stroke', '#9CA3AF');
+          pathEl.setAttribute('stroke-width', '2');
+          break;
+        case 'shout':
+          pathEl.setAttribute('fill', '#FEF3C7');
+          pathEl.setAttribute('stroke', '#F59E0B');
+          pathEl.setAttribute('stroke-width', '3');
+          break;
+        case 'whisper':
+          pathEl.setAttribute('fill', '#F9FAFB');
+          pathEl.setAttribute('stroke', '#9CA3AF');
+          pathEl.setAttribute('stroke-width', '1');
+          pathEl.setAttribute('stroke-dasharray', '5,3');
+          break;
+        case 'narration':
+          pathEl.setAttribute('fill', 'rgba(0,0,0,0.7)');
+          pathEl.setAttribute('stroke', 'none');
+          break;
+        default:
+          pathEl.setAttribute('fill', 'white');
+          pathEl.setAttribute('stroke', '#374151');
+          pathEl.setAttribute('stroke-width', '2');
+      }
       pathEl.setAttribute('filter', 'url(#bubbleShadow)');
       g.appendChild(pathEl);
 
-      // テキスト（複数行対応）
-      const lines = this.wrapText(text, 18);
-      const lineHeight = 16;
+      // テキスト（複数行対応）- サイズ拡大
+      const charsPerLine = bubble.type === 'narration' ? 28 : 20;
+      const lines = this.wrapText(text, charsPerLine);
+      const lineHeight = 20;
       const textStartY = (bubbleHeight - lines.length * lineHeight) / 2 + lineHeight;
 
       lines.forEach((line, i) => {
@@ -321,8 +364,13 @@ window.ComicEditor = {
         textEl.setAttribute('x', bubbleWidth / 2);
         textEl.setAttribute('y', textStartY + i * lineHeight);
         textEl.setAttribute('text-anchor', 'middle');
-        textEl.setAttribute('font-size', '12');
-        textEl.setAttribute('fill', '#1F2937');
+        textEl.setAttribute('font-size', bubble.type === 'narration' ? '16' : '14');
+        textEl.setAttribute('font-weight', bubble.type === 'narration' ? 'bold' : 'normal');
+        textEl.setAttribute('fill', bubble.type === 'narration' ? '#FFFFFF' : '#1F2937');
+        if (bubble.type === 'narration') {
+          textEl.setAttribute('stroke', '#000000');
+          textEl.setAttribute('stroke-width', '0.5');
+        }
         textEl.textContent = line;
         g.appendChild(textEl);
       });
@@ -367,57 +415,113 @@ window.ComicEditor = {
       svg.dataset.listenersAttached = 'true';
     }
 
-    // 追加ボタンの状態更新
-    const addBtn = document.getElementById('addBubbleBtn');
-    if (addBtn) {
-      if (bubbles.length >= this.MAX_BUBBLES) {
-        addBtn.disabled = true;
-        addBtn.classList.add('opacity-50', 'cursor-not-allowed');
-      } else {
-        addBtn.disabled = false;
-        addBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-      }
+    // 追加ボタンの状態更新（複数ボタン対応）
+    const bubbleTypeButtons = document.getElementById('bubbleTypeButtons');
+    if (bubbleTypeButtons) {
+      const buttons = bubbleTypeButtons.querySelectorAll('button');
+      buttons.forEach(btn => {
+        if (bubbles.length >= this.MAX_BUBBLES) {
+          btn.disabled = true;
+          btn.classList.add('opacity-50', 'cursor-not-allowed');
+        } else {
+          btn.disabled = false;
+          btn.classList.remove('opacity-50', 'cursor-not-allowed');
+        }
+      });
     }
   },
 
   /**
-   * 吹き出しのSVGパスを生成
+   * 吹き出しのSVGパスを生成（種類拡張）
    */
   createBubblePath(type, width, height) {
     const tailSize = 15;
+    const r = 10;
     
-    if (type === 'thought') {
-      // 雲形（楕円で近似）
-      return `M 10,${height/2} 
-              Q 0,${height/4} 10,10 
-              Q ${width/4},0 ${width/2},10 
-              Q ${width*3/4},0 ${width-10},10 
-              Q ${width},${height/4} ${width-10},${height/2}
-              Q ${width},${height*3/4} ${width-10},${height-10}
-              Q ${width*3/4},${height} ${width/2},${height-10}
-              Q ${width/4},${height} 10,${height-10}
-              Q 0,${height*3/4} 10,${height/2}
-              Z
-              M ${width/4},${height+5} 
-              A 6,6 0 1,1 ${width/4+12},${height+5}
-              M ${width/4-5},${height+18} 
-              A 4,4 0 1,1 ${width/4+3},${height+18}`;
-    } else {
-      // 通常の吹き出し（角丸矩形 + しっぽ）
-      const r = 10;
-      return `M ${r},0 
-              H ${width-r} 
-              Q ${width},0 ${width},${r} 
-              V ${height-r} 
-              Q ${width},${height} ${width-r},${height}
-              H ${width/2 + tailSize}
-              L ${width/2},${height + tailSize}
-              L ${width/2 - tailSize},${height}
-              H ${r}
-              Q 0,${height} 0,${height-r}
-              V ${r}
-              Q 0,0 ${r},0
-              Z`;
+    switch (type) {
+      case 'thought':
+        // 雲形（楕円で近似）
+        return `M 10,${height/2} 
+                Q 0,${height/4} 10,10 
+                Q ${width/4},0 ${width/2},10 
+                Q ${width*3/4},0 ${width-10},10 
+                Q ${width},${height/4} ${width-10},${height/2}
+                Q ${width},${height*3/4} ${width-10},${height-10}
+                Q ${width*3/4},${height} ${width/2},${height-10}
+                Q ${width/4},${height} 10,${height-10}
+                Q 0,${height*3/4} 10,${height/2}
+                Z
+                M ${width/4},${height+5} 
+                A 6,6 0 1,1 ${width/4+12},${height+5}
+                M ${width/4-5},${height+18} 
+                A 4,4 0 1,1 ${width/4+3},${height+18}`;
+      
+      case 'shout':
+        // 叫び吹き出し（ギザギザ）
+        const spikes = 8;
+        const spikeDepth = 8;
+        let path = `M 0,${height/2}`;
+        for (let i = 0; i < spikes; i++) {
+          const angle1 = (i / spikes) * Math.PI;
+          const angle2 = ((i + 0.5) / spikes) * Math.PI;
+          const x1 = (width/2) + (width/2 + spikeDepth) * Math.cos(angle1);
+          const y1 = (height/2) - (height/2 + spikeDepth) * Math.sin(angle1);
+          const x2 = (width/2) + (width/2 - spikeDepth) * Math.cos(angle2);
+          const y2 = (height/2) - (height/2 - spikeDepth) * Math.sin(angle2);
+          path += ` L ${x1},${y1} L ${x2},${y2}`;
+        }
+        path += ` L ${width},${height/2}`;
+        for (let i = 0; i < spikes; i++) {
+          const angle1 = Math.PI + (i / spikes) * Math.PI;
+          const angle2 = Math.PI + ((i + 0.5) / spikes) * Math.PI;
+          const x1 = (width/2) + (width/2 + spikeDepth) * Math.cos(angle1);
+          const y1 = (height/2) - (height/2 + spikeDepth) * Math.sin(angle1);
+          const x2 = (width/2) + (width/2 - spikeDepth) * Math.cos(angle2);
+          const y2 = (height/2) - (height/2 - spikeDepth) * Math.sin(angle2);
+          path += ` L ${x1},${y1} L ${x2},${y2}`;
+        }
+        path += ' Z';
+        return path;
+      
+      case 'whisper':
+        // ささやき吹き出し（点線角丸）- パスは通常と同じ、strokeで点線にする
+        return `M ${r},0 
+                H ${width-r} 
+                Q ${width},0 ${width},${r} 
+                V ${height-r} 
+                Q ${width},${height} ${width-r},${height}
+                H ${width/2 + tailSize}
+                L ${width/2},${height + tailSize}
+                L ${width/2 - tailSize},${height}
+                H ${r}
+                Q 0,${height} 0,${height-r}
+                V ${r}
+                Q 0,0 ${r},0
+                Z`;
+      
+      case 'narration':
+        // ナレーション（テロップ風 - 半透明黒背景）
+        return `M 0,0 
+                H ${width} 
+                V ${height}
+                H 0
+                Z`;
+      
+      default:
+        // 通常の吹き出し（角丸矩形 + しっぽ）
+        return `M ${r},0 
+                H ${width-r} 
+                Q ${width},0 ${width},${r} 
+                V ${height-r} 
+                Q ${width},${height} ${width-r},${height}
+                H ${width/2 + tailSize}
+                L ${width/2},${height + tailSize}
+                L ${width/2 - tailSize},${height}
+                H ${r}
+                Q 0,${height} 0,${height-r}
+                V ${r}
+                Q 0,0 ${r},0
+                Z`;
     }
   },
 
@@ -565,9 +669,9 @@ window.ComicEditor = {
   },
 
   /**
-   * 吹き出しを追加
+   * 吹き出しを追加（種類指定対応）
    */
-  addBubble() {
+  addBubble(type = 'speech') {
     if (this.draft.bubbles.length >= this.MAX_BUBBLES) {
       showToast(`吹き出しは最大${this.MAX_BUBBLES}つまでです`, 'warning');
       return;
@@ -581,14 +685,20 @@ window.ComicEditor = {
     }
 
     const newId = `b_${Date.now()}`;
+    // ナレーションは下の方、それ以外はランダムな位置
+    const position = type === 'narration' 
+      ? { x: 0.1 + Math.random() * 0.1, y: 0.75 + Math.random() * 0.1 }
+      : { x: 0.3 + Math.random() * 0.2, y: 0.2 + Math.random() * 0.2 };
+    
     this.draft.bubbles.push({
       id: newId,
       utterance_id: firstUtterance.id,
-      type: 'speech',
-      position: { x: 0.3 + Math.random() * 0.2, y: 0.2 + Math.random() * 0.2 }
+      type: type,
+      position: position
     });
 
     this.renderBubbles();
+    showToast('吹き出しを追加しました', 'success');
   },
 
   /**
