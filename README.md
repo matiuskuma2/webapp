@@ -1,13 +1,13 @@
 # RILARC Scenario Generator - webapp
 
 ## プロジェクト概要
-音声・テキスト入力から、YouTube/TikTok向けの構造化シナリオ（タイトル・セリフ・画像）を自動生成するWebアプリケーション。
+音声・テキスト入力から、YouTube/TikTok向けの構造化シナリオ（タイトル・セリフ・画像・漫画・動画）を自動生成するWebアプリケーション。
 
 - **プロジェクト名**: webapp
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
-- **本番URL**: https://152567a4.webapp-c7n.pages.dev
+- **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最新デプロイ待ち**: commit 3491812（一括スタイル適用UI修正）
+- **最終更新**: 2026-01-18（Phase1.7: 漫画機能のUI/UX整合性完成）
 
 ---
 
@@ -271,7 +271,26 @@ Proprietary - All rights reserved
 
 ---
 
-最終更新: 2025-01-19
+最終更新: 2026-01-18
+
+---
+
+## Phase1.7 漫画機能（最新）
+
+### 主要機能
+- **漫画エディタ**: 6種類の吹き出し（speech_round, speech_oval, thought_oval, telop_bar, caption, whisper）
+- **採用切替**: シーンカードで「画像を採用」「漫画を採用」をリアルタイム切替
+- **発話ごとの音声**: 漫画モードでは最大3発話、それぞれに音声設定
+- **display_image SSOT**: API/UI/エクスポートで採用素材を統一
+
+### SSOT設計
+- `scenes.display_asset_type`: 'image' | 'comic'（将来的に 'video' も追加予定）
+- `scenes.comic_data`: { draft: {...}, published: {...} }
+- `image_generations.asset_type`: 'ai' | 'comic'
+
+### 詳細ドキュメント
+- `docs/PHASE17_IMPLEMENTATION_STATUS.md` - 実装状況
+- `docs/PHASE17_NEXT_STEPS_ANALYSIS.md` - 次ステップ分析
 
 ---
 
