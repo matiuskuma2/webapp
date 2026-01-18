@@ -119,7 +119,7 @@
     isDragging: false,
     dragTarget: null,
     dragOffset: { x: 0, y: 0 },
-    dragMode: null, // 'bubble' | 'tail'
+    dragMode: null, // 'bubble' | 'tail' | 'resize'
     isPublishing: false,
     isSaving: false
   };
@@ -186,7 +186,22 @@
     };
   }
 
-  function getBubbleSizePx(type, naturalW, sizePreset = 'M') {
+  /**
+   * 吹き出しサイズ（公開画像ピクセル）
+   * @param {string} type - 吹き出しタイプ
+   * @param {number} naturalW - 元画像の幅
+   * @param {string} sizePreset - サイズプリセット (S/M/L)
+   * @param {object} sizeRect - カスタムサイズ (正規化座標) { w: 0.3, h: 0.2 }
+   */
+  function getBubbleSizePx(type, naturalW, sizePreset = 'M', sizeRect = null) {
+    // カスタムサイズが指定されている場合
+    if (sizeRect && sizeRect.w && sizeRect.h) {
+      return {
+        w: sizeRect.w * naturalW,
+        h: sizeRect.h * naturalW  // アスペクト比を保つため naturalW を使用
+      };
+    }
+    
     const scale = naturalW / 1000;
     const base = BUBBLE_SIZES[type] || BUBBLE_SIZES.speech_round;
     const preset = SIZE_PRESETS[sizePreset] || SIZE_PRESETS.M;
@@ -196,8 +211,15 @@
     };
   }
 
-  function clampPosition(pos, type, naturalW, naturalH, sizePreset = 'M') {
-    const size = getBubbleSizePx(type, naturalW, sizePreset);
+  /**
+   * bubble オブジェクトからサイズを取得
+   */
+  function getBubbleSizeFromBubble(bubble, naturalW) {
+    return getBubbleSizePx(bubble.type, naturalW, bubble.size, bubble.sizeRect);
+  }
+
+  function clampPosition(pos, type, naturalW, naturalH, sizePreset = 'M', sizeRect = null) {
+    const size = getBubbleSizePx(type, naturalW, sizePreset, sizeRect);
     const marginPx = 2;
     
     const mx = marginPx / naturalW;
@@ -212,8 +234,8 @@
   }
 
   // Tail先端のクランプ（画面内に収める）
-  function clampTailTip(tip, bubblePos, type, naturalW, naturalH, sizePreset = 'M') {
-    const size = getBubbleSizePx(type, naturalW, sizePreset);
+  function clampTailTip(tip, bubblePos, type, naturalW, naturalH, sizePreset = 'M', sizeRect = null) {
+    const size = getBubbleSizePx(type, naturalW, sizePreset, sizeRect);
     const bw = size.w / naturalW;
     const bh = size.h / naturalH;
     
@@ -587,10 +609,18 @@
   }
 
   function drawOneBubble(ctx, bubble, text, scale, options = {}) {
-    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
-    const sizePreset = SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M;
-    const w = baseSize.w * scale * sizePreset.multiplier;
-    const h = baseSize.h * scale * sizePreset.multiplier;
+    // カスタムサイズ（sizeRect）をサポート
+    let w, h;
+    if (bubble.sizeRect && bubble.sizeRect.w && bubble.sizeRect.h) {
+      // sizeRect は 1000px 基準の正規化値
+      w = bubble.sizeRect.w * scale * 1000;
+      h = bubble.sizeRect.h * scale * 1000;
+    } else {
+      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+      const sizePreset = SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M;
+      w = baseSize.w * scale * sizePreset.multiplier;
+      h = baseSize.h * scale * sizePreset.multiplier;
+    }
     
     const tailEnabled = bubble.tail?.enabled ?? false;
     const tailTip = tailEnabled && bubble.tail?.tip
@@ -627,6 +657,11 @@
     // Tail先端ハンドル表示（プレビュー時）
     if (options.showTailHandle && tailEnabled && tailTip) {
       drawTailHandle(ctx, tailTip.x, tailTip.y, scale);
+    }
+    
+    // リサイズハンドル表示（プレビュー時）
+    if (options.showResizeHandle) {
+      drawResizeHandle(ctx, w, h, scale);
     }
     
     return { ok: result.ok, w, h };
@@ -671,6 +706,39 @@
     ctx.fillText('⊕', x, y);
   }
 
+  function drawResizeHandle(ctx, w, h, scale) {
+    const size = 12 * scale;
+    const x = w - size / 2;
+    const y = h - size / 2;
+    
+    // 三角形のリサイズハンドル（右下角）
+    ctx.beginPath();
+    ctx.moveTo(w, h - size);
+    ctx.lineTo(w, h);
+    ctx.lineTo(w - size, h);
+    ctx.closePath();
+    ctx.fillStyle = '#10B981';
+    ctx.fill();
+    
+    // 枠線
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.5 * scale;
+    ctx.stroke();
+    
+    // 斜め線（リサイズ感を出す）
+    ctx.beginPath();
+    ctx.moveTo(w - size * 0.7, h);
+    ctx.lineTo(w, h - size * 0.7);
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1 * scale;
+    ctx.stroke();
+    
+    ctx.beginPath();
+    ctx.moveTo(w - size * 0.4, h);
+    ctx.lineTo(w, h - size * 0.4);
+    ctx.stroke();
+  }
+
   // ============== バリデーション ==============
 
   function validateDraft() {
@@ -685,26 +753,33 @@
     for (const bubble of state.draft.bubbles || []) {
       const ut = state.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = (ut?.text || '').trim();
-      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
       
-      // 画面外チェック
-      const clamped = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size);
+      // 画面外チェック（カスタムサイズ対応）
+      const clamped = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size, bubble.sizeRect);
       if (Math.abs(clamped.x - bubble.position.x) > 0.001 || Math.abs(clamped.y - bubble.position.y) > 0.001) {
         errors.push({ type: 'OUT_OF_BOUNDS', bubbleId: bubble.id, message: '吹き出しが画面外です' });
       }
       
-      // 文字溢れチェック
+      // 文字溢れチェック（カスタムサイズ対応）
       if (text) {
-        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+        let w, h;
+        if (bubble.sizeRect && bubble.sizeRect.w && bubble.sizeRect.h) {
+          w = bubble.sizeRect.w * scale * 1000;
+          h = bubble.sizeRect.h * scale * 1000;
+        } else {
+          const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+          const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+          w = baseSize.w * scale * sizeMultiplier;
+          h = baseSize.h * scale * sizeMultiplier;
+        }
+        
         const style = BUBBLE_STYLES[bubble.type] || BUBBLE_STYLES.speech_round;
-        const w = baseSize.w * scale * sizeMultiplier;
-        const h = baseSize.h * scale * sizeMultiplier;
-        const padding = style.padding * scale * sizeMultiplier;
+        const padding = style.padding * scale;
         const innerW = w - padding * 2;
         const innerH = h - padding * 2;
         
-        const baseFontPx = style.fontSize * scale * sizeMultiplier;
-        const baseLineH = style.lineHeight * scale * sizeMultiplier;
+        const baseFontPx = style.fontSize * scale;
+        const baseLineH = style.lineHeight * scale;
         const isNarration = bubble.type === 'telop_bar' || bubble.type === 'caption';
         const isVertical = BUBBLE_TYPES[bubble.type]?.writingMode === 'vertical';
         
@@ -753,10 +828,17 @@
       ctx.scale(displayScale, displayScale);
       
       if (errorBubbleIds.has(bubble.id)) {
-        const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
-        const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
-        const w = baseSize.w * publishScale * sizeMultiplier;
-        const h = baseSize.h * publishScale * sizeMultiplier;
+        // エラー表示: カスタムサイズ対応
+        let w, h;
+        if (bubble.sizeRect && bubble.sizeRect.w && bubble.sizeRect.h) {
+          w = bubble.sizeRect.w * publishScale * 1000;
+          h = bubble.sizeRect.h * publishScale * 1000;
+        } else {
+          const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+          const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+          w = baseSize.w * publishScale * sizeMultiplier;
+          h = baseSize.h * publishScale * sizeMultiplier;
+        }
         ctx.strokeStyle = '#EF4444';
         ctx.lineWidth = 3 * publishScale;
         ctx.strokeRect(-2 * publishScale, -2 * publishScale, w + 4 * publishScale, h + 4 * publishScale);
@@ -764,7 +846,8 @@
       
       drawOneBubble(ctx, bubble, text, publishScale, { 
         showDeleteButton: true,
-        showTailHandle: bubble.tail?.enabled
+        showTailHandle: bubble.tail?.enabled,
+        showResizeHandle: true
       });
       
       ctx.restore();
@@ -822,6 +905,24 @@
 
   // ============== ドラッグ操作 ==============
 
+  /**
+   * 吹き出しの表示サイズを取得（カスタムサイズ対応）
+   */
+  function getDisplayBubbleSize(bubble, displayBubbleScale) {
+    if (bubble.sizeRect && bubble.sizeRect.w && bubble.sizeRect.h) {
+      return {
+        w: bubble.sizeRect.w * displayBubbleScale * 1000,
+        h: bubble.sizeRect.h * displayBubbleScale * 1000
+      };
+    }
+    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
+    const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
+    return {
+      w: baseSize.w * displayBubbleScale * sizeMultiplier,
+      h: baseSize.h * displayBubbleScale * sizeMultiplier
+    };
+  }
+
   function findBubbleAt(canvasX, canvasY) {
     const rect = getContainRect();
     if (!rect) return null;
@@ -832,10 +933,7 @@
     for (let i = bubbles.length - 1; i >= 0; i--) {
       const bubble = bubbles[i];
       const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
-      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
-      const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
-      const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
+      const { w: bubbleWidth, h: bubbleHeight } = getDisplayBubbleSize(bubble, displayBubbleScale);
       
       if (canvasX >= containerPos.x && canvasX <= containerPos.x + bubbleWidth &&
           canvasY >= containerPos.y && canvasY <= containerPos.y + bubbleHeight) {
@@ -858,10 +956,7 @@
       if (!bubble.tail?.enabled || !bubble.tail?.tip) continue;
       
       const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
-      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
-      const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
-      const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
+      const { w: bubbleWidth, h: bubbleHeight } = getDisplayBubbleSize(bubble, displayBubbleScale);
       
       const tipX = containerPos.x + bubble.tail.tip.x * bubbleWidth;
       const tipY = containerPos.y + bubble.tail.tip.y * bubbleHeight;
@@ -878,15 +973,39 @@
     return null;
   }
 
+  function findResizeHandleAt(canvasX, canvasY) {
+    const rect = getContainRect();
+    if (!rect) return null;
+    
+    const bubbles = state.draft?.bubbles || [];
+    const displayBubbleScale = rect.width / 1000;
+    
+    for (let i = bubbles.length - 1; i >= 0; i--) {
+      const bubble = bubbles[i];
+      const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
+      const { w: bubbleWidth, h: bubbleHeight } = getDisplayBubbleSize(bubble, displayBubbleScale);
+      
+      // 右下角のハンドル領域（三角形の当たり判定を矩形で近似）
+      const handleSize = 16 * displayBubbleScale;
+      const handleX = containerPos.x + bubbleWidth - handleSize;
+      const handleY = containerPos.y + bubbleHeight - handleSize;
+      
+      if (canvasX >= handleX && canvasX <= containerPos.x + bubbleWidth &&
+          canvasY >= handleY && canvasY <= containerPos.y + bubbleHeight) {
+        return bubble;
+      }
+    }
+    
+    return null;
+  }
+
   function isDeleteButtonClick(canvasX, canvasY, bubble) {
     const rect = getContainRect();
     if (!rect) return false;
     
     const displayBubbleScale = rect.width / 1000;
     const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-    const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
-    const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
-    const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
+    const { w: bubbleWidth } = getDisplayBubbleSize(bubble, displayBubbleScale);
     
     const btnX = containerPos.x + bubbleWidth - 6 * displayBubbleScale;
     const btnY = containerPos.y + 6 * displayBubbleScale;
@@ -909,6 +1028,15 @@
     
     const canvasX = clientX - canvasRect.left;
     const canvasY = clientY - canvasRect.top;
+    
+    // リサイズハンドルをチェック（最優先）
+    const resizeBubble = findResizeHandleAt(canvasX, canvasY);
+    if (resizeBubble) {
+      state.isDragging = true;
+      state.dragTarget = resizeBubble.id;
+      state.dragMode = 'resize';
+      return;
+    }
     
     // Tail先端ハンドルをチェック
     const tailBubble = findTailHandleAt(canvasX, canvasY);
@@ -957,14 +1085,42 @@
     const bubble = state.draft.bubbles.find(b => b.id === state.dragTarget);
     if (!bubble) return;
     
-    if (state.dragMode === 'tail') {
+    const displayBubbleScale = rect.width / 1000;
+    
+    if (state.dragMode === 'resize') {
+      // リサイズ操作
+      const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
+      
+      // 新しいサイズを計算（ピクセル単位）
+      let newWidth = canvasX - containerPos.x;
+      let newHeight = canvasY - containerPos.y;
+      
+      // 最小サイズ制限（100px @ 1000px基準）
+      const minSize = 80 * displayBubbleScale;
+      newWidth = Math.max(newWidth, minSize);
+      newHeight = Math.max(newHeight, minSize);
+      
+      // 最大サイズ制限（画面をはみ出さないように）
+      const maxWidth = rect.width - (bubble.position.x * rect.width);
+      const maxHeight = rect.height - (bubble.position.y * rect.height);
+      newWidth = Math.min(newWidth, maxWidth - 4);
+      newHeight = Math.min(newHeight, maxHeight - 4);
+      
+      // sizeRect として保存（1000px 基準の正規化値）
+      bubble.sizeRect = {
+        w: newWidth / (displayBubbleScale * 1000),
+        h: newHeight / (displayBubbleScale * 1000)
+      };
+      
+      // プリセットサイズをクリア（カスタムサイズを使用）
+      bubble.size = 'custom';
+      
+      renderPreview();
+      renderBubbles();  // UIも更新
+    } else if (state.dragMode === 'tail') {
       // Tail先端をドラッグ
       const containerPos = normalizedToContainer(bubble.position.x, bubble.position.y);
-      const displayBubbleScale = rect.width / 1000;
-      const baseSize = BUBBLE_SIZES[bubble.type] || BUBBLE_SIZES.speech_round;
-      const sizeMultiplier = (SIZE_PRESETS[bubble.size] || SIZE_PRESETS.M).multiplier;
-      const bubbleWidth = baseSize.w * displayBubbleScale * sizeMultiplier;
-      const bubbleHeight = baseSize.h * displayBubbleScale * sizeMultiplier;
+      const { w: bubbleWidth, h: bubbleHeight } = getDisplayBubbleSize(bubble, displayBubbleScale);
       
       // 吹き出し座標系でのTail位置
       const localX = (canvasX - containerPos.x) / bubbleWidth;
@@ -983,7 +1139,7 @@
       const adjustedY = canvasY - state.dragOffset.y;
       
       let normalized = containerToNormalized(adjustedX, adjustedY);
-      normalized = clampPosition(normalized, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size);
+      normalized = clampPosition(normalized, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size, bubble.sizeRect);
       bubble.position.x = normalized.x;
       bubble.position.y = normalized.y;
       renderPreview();
@@ -1192,11 +1348,16 @@
     if (!state.draft) return;
     const bubble = state.draft.bubbles.find(b => b.id === bubbleId);
     if (bubble) {
-      bubble.size = size;
+      // プリセットサイズを選択した場合、カスタムサイズをクリア
+      if (size !== 'custom' && SIZE_PRESETS[size]) {
+        bubble.size = size;
+        delete bubble.sizeRect;  // カスタムサイズをクリア
+      }
+      // 'custom' を選択した場合は何もしない（現在のサイズを維持）
       
       const rect = getContainRect();
       if (rect) {
-        bubble.position = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, size);
+        bubble.position = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size, bubble.sizeRect);
       }
       
       renderBubbles();
@@ -1324,6 +1485,7 @@
       const bubbleType = BUBBLE_TYPES[bubble.type] || BUBBLE_TYPES.speech_round;
       const colorClass = utteranceColors[utteranceIndex] || 'bg-gray-100 border-gray-300';
       const currentSize = bubble.size || 'M';
+      const isCustomSize = bubble.sizeRect && bubble.sizeRect.w && bubble.sizeRect.h;
       const hasTailOption = bubbleType.hasTail;
       const tailEnabled = bubble.tail?.enabled ?? false;
       
@@ -1331,9 +1493,13 @@
         `<option value="${key}" ${bubble.type === key ? 'selected' : ''}>${val.name}</option>`
       ).join('');
       
-      const sizeOptions = Object.entries(SIZE_PRESETS).map(([key, val]) =>
-        `<option value="${key}" ${currentSize === key ? 'selected' : ''}>${val.name}</option>`
+      // カスタムサイズの場合は「カスタム」を追加
+      let sizeOptions = Object.entries(SIZE_PRESETS).map(([key, val]) =>
+        `<option value="${key}" ${!isCustomSize && currentSize === key ? 'selected' : ''}>${val.name}</option>`
       ).join('');
+      if (isCustomSize) {
+        sizeOptions += `<option value="custom" selected>カスタム</option>`;
+      }
       
       return `
       <div class="rounded-lg p-2 border text-xs ${colorClass}" data-bubble-id="${bubble.id}">
@@ -1357,9 +1523,9 @@
             ${typeOptions}
           </select>
           <select 
-            class="w-12 px-1 py-1 text-xs border border-gray-300 rounded"
+            class="w-14 px-1 py-1 text-xs border border-gray-300 rounded ${isCustomSize ? 'bg-green-50 border-green-300' : ''}"
             onchange="window.ComicEditorV2.updateBubbleSize('${bubble.id}', this.value)"
-            title="サイズ"
+            title="サイズ（右下の緑●でドラッグ調整可）"
           >
             ${sizeOptions}
           </select>
@@ -1375,9 +1541,13 @@
         </div>
         ${hasTailOption && tailEnabled ? `
         <div class="mt-1 text-gray-500 text-[10px]">
-          <i class="fas fa-info-circle mr-1"></i>青い●をドラッグして尾の先端を調整
+          <i class="fas fa-info-circle mr-1"></i>青●=尾の先端、緑▲=サイズ調整
         </div>
-        ` : ''}
+        ` : `
+        <div class="mt-1 text-gray-500 text-[10px]">
+          <i class="fas fa-info-circle mr-1"></i>右下の緑▲でサイズ調整
+        </div>
+        `}
       </div>
       `;
     }).join('');
@@ -1565,8 +1735,9 @@
                 <p class="font-semibold mb-1"><i class="fas fa-lightbulb mr-1"></i>操作ヒント</p>
                 <ul class="space-y-0.5 text-blue-600">
                   <li>• 吹き出しをドラッグして移動</li>
-                  <li>• 青い●で尾の方向を調整</li>
-                  <li>• 赤い×で吹き出しを削除</li>
+                  <li>• <span class="text-blue-500 font-bold">青●</span> で尾の方向を調整</li>
+                  <li>• <span class="text-green-600 font-bold">緑▲</span> でサイズを調整</li>
+                  <li>• <span class="text-red-500 font-bold">赤×</span> で吹き出しを削除</li>
                 </ul>
               </div>
               
