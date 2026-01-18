@@ -1950,19 +1950,70 @@ function renderSceneCardHeader(scene, imageStatus) {
 }
 
 /**
+ * Phase1.7: 漫画採用時の発話表示を生成
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderComicUtterances(scene) {
+  const comicData = scene.comic_data;
+  const utterances = comicData?.published?.utterances || comicData?.draft?.utterances || [];
+  
+  if (utterances.length === 0) {
+    return `<div class="text-gray-400 text-sm italic">発話なし</div>`;
+  }
+  
+  // 話者タイプの表示ラベル
+  const speakerTypeLabels = {
+    'narration': 'ナレーション',
+    'character': 'キャラクター'
+  };
+  
+  return utterances.map((u, idx) => {
+    const speakerLabel = u.speaker_type === 'character' && u.speaker_character_key 
+      ? `キャラ: ${u.speaker_character_key}`
+      : speakerTypeLabels[u.speaker_type] || 'ナレーション';
+    
+    return `
+      <div class="p-2 bg-white border border-orange-200 rounded-lg mb-2">
+        <div class="flex items-center gap-2 mb-1">
+          <span class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded-full font-semibold">発話${idx + 1}</span>
+          <span class="text-xs text-gray-500">${escapeHtml(speakerLabel)}</span>
+        </div>
+        <div class="text-sm text-gray-800 whitespace-pre-wrap">${escapeHtml(u.text || '')}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
  * Render scene text content (dialogue, bullets, prompt, style)
  * @param {object} scene 
  * @returns {string} HTML
  */
 function renderSceneTextContent(scene) {
+  // Phase1.7: display_asset_type に応じてセリフ表示を切替
+  const displayAssetType = scene.display_asset_type || 'image';
+  const isComicMode = displayAssetType === 'comic';
+  const hasComicUtterances = scene.comic_data?.published?.utterances?.length > 0 || scene.comic_data?.draft?.utterances?.length > 0;
+  
   return `
     <div class="space-y-4">
       <!-- セリフ -->
       <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-2">セリフ</label>
-        <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
+        <label class="block text-sm font-semibold text-gray-700 mb-2">
+          ${isComicMode && hasComicUtterances 
+            ? '<i class="fas fa-comment-alt mr-1 text-orange-500"></i>発話（漫画用・最大3件）'
+            : 'セリフ'
+          }
+        </label>
+        ${isComicMode && hasComicUtterances
+          ? `<div class="p-3 bg-orange-50 rounded-lg border border-orange-200">
+               ${renderComicUtterances(scene)}
+             </div>`
+          : `<div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
 ${escapeHtml(scene.dialogue)}
-        </div>
+             </div>`
+        }
       </div>
       
       <!-- ★ Phase F-7: Audio section moved directly under dialogue -->

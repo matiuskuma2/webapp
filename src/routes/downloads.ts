@@ -37,34 +37,68 @@ downloads.get('/:id/download/images', async (c) => {
       }, 400)
     }
 
-    // 3. アクティブな画像を取得（idx順）
-    const { results: images } = await c.env.DB.prepare(`
-      SELECT ig.r2_key, s.idx
-      FROM image_generations ig
-      JOIN scenes s ON ig.scene_id = s.id
-      WHERE s.project_id = ? AND ig.is_active = 1
-      ORDER BY s.idx ASC
+    // 3. シーンと画像を取得（Phase1.7: display_asset_type に応じて画像を選択）
+    const { results: scenes } = await c.env.DB.prepare(`
+      SELECT id, idx, display_asset_type
+      FROM scenes
+      WHERE project_id = ?
+      ORDER BY idx ASC
     `).bind(projectId).all()
 
-    if (images.length === 0) {
+    if (scenes.length === 0) {
+      return c.json({
+        error: {
+          code: 'NO_SCENES',
+          message: 'No scenes found for this project'
+        }
+      }, 404)
+    }
+
+    // 4. ZIP生成（display_asset_type に応じて画像を選択）
+    const zip = new JSZip()
+    let imageCount = 0
+
+    for (const scene of scenes) {
+      const displayAssetType = (scene.display_asset_type as string) || 'image'
+      
+      let imageRecord: any = null
+      
+      if (displayAssetType === 'comic') {
+        // 漫画画像を優先
+        imageRecord = await c.env.DB.prepare(`
+          SELECT r2_key FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+          LIMIT 1
+        `).bind(scene.id).first()
+      }
+      
+      // 漫画画像がない場合、またはdisplay_asset_type='image'の場合はAI画像
+      if (!imageRecord) {
+        imageRecord = await c.env.DB.prepare(`
+          SELECT r2_key FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+          LIMIT 1
+        `).bind(scene.id).first()
+      }
+      
+      if (imageRecord?.r2_key) {
+        const r2Object = await c.env.R2.get(imageRecord.r2_key as string)
+        if (r2Object) {
+          const imageData = await r2Object.arrayBuffer()
+          const fileName = `scene_${String(scene.idx).padStart(3, '0')}.png`
+          zip.file(fileName, imageData)
+          imageCount++
+        }
+      }
+    }
+
+    if (imageCount === 0) {
       return c.json({
         error: {
           code: 'NO_IMAGES',
           message: 'No active images found for this project'
         }
       }, 404)
-    }
-
-    // 4. ZIP生成
-    const zip = new JSZip()
-
-    for (const img of images) {
-      const r2Object = await c.env.R2.get(img.r2_key as string)
-      if (r2Object) {
-        const imageData = await r2Object.arrayBuffer()
-        const fileName = `scene_${String(img.idx).padStart(3, '0')}.png`
-        zip.file(fileName, imageData)
-      }
     }
 
     // 5. ZIP出力
@@ -219,9 +253,9 @@ downloads.get('/:id/download/all', async (c) => {
       }, 400)
     }
 
-    // 3. シーン取得
+    // 3. シーン取得（Phase1.7: display_asset_type を追加）
     const { results: scenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, bullets
+      SELECT id, idx, role, title, dialogue, bullets, display_asset_type
       FROM scenes
       WHERE project_id = ?
       ORDER BY idx ASC
@@ -236,14 +270,35 @@ downloads.get('/:id/download/all', async (c) => {
       }, 404)
     }
 
-    // 4. アクティブな画像を取得
-    const { results: images } = await c.env.DB.prepare(`
-      SELECT ig.r2_key, s.idx
-      FROM image_generations ig
-      JOIN scenes s ON ig.scene_id = s.id
-      WHERE s.project_id = ? AND ig.is_active = 1
-      ORDER BY s.idx ASC
-    `).bind(projectId).all()
+    // 4. Phase1.7: display_asset_type に応じて画像を取得
+    const images: Array<{ r2_key: string, idx: number }> = []
+    
+    for (const scene of scenes) {
+      const displayAssetType = (scene.display_asset_type as string) || 'image'
+      let imageRecord: any = null
+      
+      if (displayAssetType === 'comic') {
+        // 漫画画像を優先
+        imageRecord = await c.env.DB.prepare(`
+          SELECT r2_key FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+          LIMIT 1
+        `).bind(scene.id).first()
+      }
+      
+      // 漫画画像がない場合、またはdisplay_asset_type='image'の場合はAI画像
+      if (!imageRecord) {
+        imageRecord = await c.env.DB.prepare(`
+          SELECT r2_key FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+          LIMIT 1
+        `).bind(scene.id).first()
+      }
+      
+      if (imageRecord?.r2_key) {
+        images.push({ r2_key: imageRecord.r2_key, idx: scene.idx as number })
+      }
+    }
 
     // 4-A. アクティブな音声を取得（Phase 4）
     const sceneIds = (scenes as any[]).map(s => s.id)

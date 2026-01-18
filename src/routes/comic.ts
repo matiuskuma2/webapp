@@ -87,12 +87,18 @@ comic.post('/:id/comic/publish', async (c) => {
     `).bind(imageGenerationId).run()
 
     // comic_dataを更新（draft + published）
+    // Phase1.7: published に utterances と bubbles も保存
     const existingComicData = scene.comic_data ? JSON.parse(scene.comic_data as string) : {}
+    const publishedUtterances = draft?.utterances || existingComicData.draft?.utterances || []
+    const publishedBubbles = draft?.bubbles || existingComicData.draft?.bubbles || []
+    
     const newComicData = {
       draft: draft || existingComicData.draft || null,
       published: {
         image_generation_id: imageGenerationId,
-        published_at: new Date().toISOString()
+        published_at: new Date().toISOString(),
+        utterances: publishedUtterances,  // 最大3発話を保存
+        bubbles: publishedBubbles         // 吹き出し情報も保存
       },
       base_image_generation_id: base_image_generation_id || existingComicData.base_image_generation_id || null
     }

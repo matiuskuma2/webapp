@@ -342,10 +342,11 @@ projects.get('/:id/scenes', async (c) => {
     }
 
     // シーン一覧取得（idx順、スタイル設定含む）
+    // Phase1.7: display_asset_type, comic_data を追加
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT 
         s.id, s.idx, s.role, s.title, s.dialogue, s.bullets, s.image_prompt, 
-        s.chunk_id, s.created_at, s.updated_at,
+        s.chunk_id, s.created_at, s.updated_at, s.display_asset_type, s.comic_data,
         sss.style_preset_id
       FROM scenes s
       LEFT JOIN scene_style_settings sss ON s.id = sss.scene_id
@@ -372,21 +373,29 @@ projects.get('/:id/scenes', async (c) => {
     }
 
     // view=board: 最小画像情報のみ（Builder用、軽量）+ キャラクター情報
+    // Phase1.7: display_asset_type と active_comic を追加
     if (view === 'board') {
       const scenesWithMinimalImages = await Promise.all(
         scenes.map(async (scene: any) => {
-          // アクティブ画像（r2_key, r2_url含む）
+          // アクティブAI画像（asset_type='ai' または NULL）
           const activeRecord = await c.env.DB.prepare(`
             SELECT r2_key, r2_url FROM image_generations
-            WHERE scene_id = ? AND is_active = 1
+            WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
             LIMIT 1
           `).bind(scene.id).first()
 
-          // 最新ステータス＋エラーメッセージ＋r2情報
+          // アクティブ漫画画像（asset_type='comic'）
+          const activeComicRecord = await c.env.DB.prepare(`
+            SELECT id, r2_key, r2_url FROM image_generations
+            WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+            LIMIT 1
+          `).bind(scene.id).first()
+
+          // 最新ステータス＋エラーメッセージ＋r2情報（AI画像のみ）
           const latestRecord = await c.env.DB.prepare(`
             SELECT status, r2_key, r2_url, substr(error_message, 1, 80) as error_message
             FROM image_generations
-            WHERE scene_id = ?
+            WHERE scene_id = ? AND (asset_type = 'ai' OR asset_type IS NULL)
             ORDER BY created_at DESC
             LIMIT 1
           `).bind(scene.id).first()
@@ -399,6 +408,16 @@ projects.get('/:id/scenes', async (c) => {
             ORDER BY is_active DESC, created_at DESC
             LIMIT 1
           `).bind(scene.id).first()
+
+          // comic_dataのパース
+          let comicData = null
+          try {
+            if (scene.comic_data) {
+              comicData = JSON.parse(scene.comic_data)
+            }
+          } catch (e) {
+            console.warn(`Failed to parse comic_data for scene ${scene.id}:`, e)
+          }
 
           // キャラクター情報取得（scene_character_map + project_character_models）
           const { results: characterMappings } = await c.env.DB.prepare(`
@@ -429,10 +448,20 @@ projects.get('/:id/scenes', async (c) => {
             bullets: JSON.parse(scene.bullets),
             image_prompt: scene.image_prompt.substring(0, 100), // 最初の100文字のみ
             style_preset_id: scene.style_preset_id || null,
+            // Phase1.7: display_asset_type と active_comic を追加
+            display_asset_type: scene.display_asset_type || 'image',
+            comic_data: comicData,
             active_image: activeRecord ? { 
               r2_key: activeRecord.r2_key,
               r2_url: activeRecord.r2_url,
               image_url: activeRecord.r2_url || `/${activeRecord.r2_key}` 
+            } : null,
+            // Phase1.7: 漫画画像情報
+            active_comic: activeComicRecord ? {
+              id: activeComicRecord.id,
+              r2_key: activeComicRecord.r2_key,
+              r2_url: activeComicRecord.r2_url,
+              image_url: activeComicRecord.r2_url || `/${activeComicRecord.r2_key}`
             } : null,
             latest_image: latestRecord ? {
               status: latestRecord.status,

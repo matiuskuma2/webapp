@@ -494,11 +494,12 @@ runsV2.get('/:runId/scenes', async (c) => {
     }
 
     // viewに応じて取得カラムを変更
+    // Phase1.7: display_asset_type を全viewで取得
     let selectFields = '*'
     if (view === 'edit') {
-      selectFields = 'id, idx, role, title, dialogue, bullets, image_prompt, chunk_id'
+      selectFields = 'id, idx, role, title, dialogue, bullets, image_prompt, chunk_id, display_asset_type'
     } else if (view === 'board') {
-      selectFields = 'id, idx, role, SUBSTR(dialogue, 1, 80) as dialogue, SUBSTR(bullets, 1, 80) as bullets, SUBSTR(image_prompt, 1, 80) as image_prompt'
+      selectFields = 'id, idx, role, SUBSTR(dialogue, 1, 80) as dialogue, SUBSTR(bullets, 1, 80) as bullets, SUBSTR(image_prompt, 1, 80) as image_prompt, display_asset_type'
     }
 
     const { results: scenes } = await c.env.DB.prepare(`
@@ -509,18 +510,40 @@ runsV2.get('/:runId/scenes', async (c) => {
     `).bind(runId).all()
 
     // board viewの場合、画像情報も取得
+    // Phase1.7: display_asset_type に応じて active_image または active_comic を取得
     if (view === 'board') {
       for (const scene of scenes) {
+        const displayAssetType = (scene as any).display_asset_type || 'image'
+        
+        // AI画像（asset_type='ai' または NULL）
         const activeImage = await c.env.DB.prepare(`
           SELECT id, status, r2_url, error_message
           FROM image_generations
-          WHERE scene_id = ? AND is_active = 1
+          WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+          ORDER BY id DESC
+          LIMIT 1
+        `).bind(scene.id).first()
+
+        // 漫画画像（asset_type='comic'）
+        const activeComic = await c.env.DB.prepare(`
+          SELECT id, status, r2_url, error_message
+          FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
           ORDER BY id DESC
           LIMIT 1
         `).bind(scene.id).first()
 
         ;(scene as any).active_image = activeImage || null
+        ;(scene as any).active_comic = activeComic || null
         ;(scene as any).latest_image = activeImage || null
+        
+        // Phase1.7: display_asset_type に応じて表示用画像を決定
+        // Remotion合算やエクスポートで使用する画像
+        if (displayAssetType === 'comic' && activeComic?.r2_url) {
+          ;(scene as any).display_image = activeComic
+        } else {
+          ;(scene as any).display_image = activeImage
+        }
       }
     }
 
