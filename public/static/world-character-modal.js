@@ -569,7 +569,7 @@
   }
 
   /**
-   * Bind image generation button
+   * Bind image generation button (with deduplication)
    */
   function bindImageGeneration() {
     const generateBtn = document.getElementById('wc-ref-generate-btn');
@@ -580,7 +580,14 @@
 
     if (!generateBtn) return;
 
+    // Remove existing listener to prevent duplicates
+    const newGenerateBtn = generateBtn.cloneNode(true);
+    generateBtn.parentNode.replaceChild(newGenerateBtn, generateBtn);
+
     const generateImage = async () => {
+      // Prevent double-click
+      if (newGenerateBtn.disabled) return;
+      
       const prompt = promptEl?.value?.trim();
       if (!prompt) {
         toast('外見プロンプトを入力してください', 'warning');
@@ -595,8 +602,8 @@
 
       try {
         toast('画像生成中...（30秒ほどかかります）', 'info');
-        generateBtn.disabled = true;
-        generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> 生成中...';
+        newGenerateBtn.disabled = true;
+        newGenerateBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> 生成中...';
         if (regenerateBtn) regenerateBtn.disabled = true;
 
         const blob = await window.WorldCharacterClient.generateCharacterPreviewImage(projectId, prompt);
@@ -618,15 +625,19 @@
         console.error('[WorldCharacterModal] Image generation failed:', err);
         toast(`生成失敗: ${err.message}`, 'error');
       } finally {
-        generateBtn.disabled = false;
-        generateBtn.innerHTML = '<i class="fas fa-wand-magic-sparkles mr-1"></i> 画像を生成';
+        newGenerateBtn.disabled = false;
+        newGenerateBtn.innerHTML = '<i class="fas fa-wand-magic-sparkles mr-1"></i> 画像を生成';
         if (regenerateBtn) regenerateBtn.disabled = false;
       }
     };
 
-    generateBtn.addEventListener('click', generateImage);
+    newGenerateBtn.addEventListener('click', generateImage);
+    
+    // Also handle regenerate button
     if (regenerateBtn) {
-      regenerateBtn.addEventListener('click', generateImage);
+      const newRegenerateBtn = regenerateBtn.cloneNode(true);
+      regenerateBtn.parentNode.replaceChild(newRegenerateBtn, regenerateBtn);
+      newRegenerateBtn.addEventListener('click', generateImage);
     }
   }
 

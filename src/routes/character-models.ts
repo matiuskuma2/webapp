@@ -789,34 +789,67 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
     }
 
     // Build full prompt for character portrait
-    const fullPrompt = `A detailed portrait of a character: ${prompt}. High quality, professional illustration, clear face, upper body portrait, neutral background.`;
+    const fullPrompt = `Create a detailed portrait of a character: ${prompt}. High quality, professional illustration style, clear face visible, upper body portrait, neutral or simple background, anime/illustration style preferred for character consistency.`;
 
-    // Call Imagen API
-    const imagenUrl = `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict?key=${apiKey}`;
+    // Call Gemini API (same endpoint as image-generation.ts)
+    const geminiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent';
     
-    const response = await fetch(imagenUrl, {
+    const response = await fetch(geminiUrl, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'x-goog-api-key': apiKey,
+        'Content-Type': 'application/json'
+      },
       body: JSON.stringify({
-        instances: [{ prompt: fullPrompt }],
-        parameters: {
-          sampleCount: 1,
-          aspectRatio: '1:1',
-          personGeneration: 'allow_adult'
+        contents: [
+          {
+            parts: [
+              { text: fullPrompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseModalities: ['Image'],
+          imageConfig: {
+            aspectRatio: '1:1',
+            imageSize: '1K'
+          }
         }
       })
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
-      console.error('[Characters] Imagen API error:', errorText);
-      return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Image generation failed'), 500);
+      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string } };
+      console.error('[Characters] Gemini API error:', response.status, JSON.stringify(errorData));
+      
+      const errorMessage = errorData?.error?.message || `Image generation failed (HTTP ${response.status})`;
+      return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, errorMessage), 500);
     }
 
-    const result = await response.json() as { predictions?: Array<{ bytesBase64Encoded?: string }> };
-    const base64Image = result?.predictions?.[0]?.bytesBase64Encoded;
+    const result = await response.json() as {
+      candidates?: Array<{
+        content?: {
+          parts?: Array<{
+            inlineData?: { data?: string; mimeType?: string }
+          }>
+        }
+      }>
+    };
+    
+    // Extract image from Gemini response format
+    let base64Image: string | undefined;
+    if (result.candidates && result.candidates.length > 0) {
+      const parts = result.candidates[0].content?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData?.data) {
+          base64Image = part.inlineData.data;
+          break;
+        }
+      }
+    }
     
     if (!base64Image) {
+      console.error('[Characters] No image in response:', JSON.stringify(result).substring(0, 500));
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'No image generated'), 500);
     }
 
