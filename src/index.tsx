@@ -1769,6 +1769,7 @@ app.get('/projects/:id', (c) => {
     <script src="/static/world-character-ui.js"></script>
     <script src="/static/character-library.js"></script>
     <script src="/static/scene-edit-modal.js"></script>
+    <script src="/static/comic-editor.js"></script>
     <script src="/static/project-editor.1768570000.js"></script>
 </body>
 </html>

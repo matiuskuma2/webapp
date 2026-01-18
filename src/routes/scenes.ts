@@ -11,7 +11,7 @@ scenes.get('/:id', async (c) => {
 
     // 基本シーン情報取得
     const scene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, created_at, updated_at
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, created_at, updated_at
       FROM scenes
       WHERE id = ?
     `).bind(sceneId).first()
@@ -38,9 +38,20 @@ scenes.get('/:id', async (c) => {
       bulletsArr = [];
     }
 
+    // Parse comic_data JSON (safe parsing)
+    let comicData = null;
+    try {
+      if (scene.comic_data) {
+        comicData = JSON.parse(String(scene.comic_data));
+      }
+    } catch (err) {
+      console.warn(`Failed to parse comic_data for scene ${sceneId}:`, err);
+    }
+
     const sceneData = {
       ...scene,
-      bullets: bulletsArr
+      bullets: bulletsArr,
+      comic_data: comicData
     }
 
     // view=board の場合、画像情報とスタイル情報を含める
@@ -131,7 +142,7 @@ scenes.get('/:id', async (c) => {
 scenes.put('/:id', async (c) => {
   try {
     const sceneId = c.req.param('id')
-    const { title, dialogue, bullets, image_prompt } = await c.req.json()
+    const { title, dialogue, bullets, image_prompt, comic_data } = await c.req.json()
 
     // シーン存在確認
     const scene = await c.env.DB.prepare(`
@@ -167,6 +178,11 @@ scenes.put('/:id', async (c) => {
       updates.push('image_prompt = ?')
       values.push(image_prompt)
     }
+    // Phase1: 漫画編集データ対応
+    if (comic_data !== undefined) {
+      updates.push('comic_data = ?')
+      values.push(comic_data === null ? null : JSON.stringify(comic_data))
+    }
 
     if (updates.length === 0) {
       return c.json({
@@ -189,14 +205,25 @@ scenes.put('/:id', async (c) => {
 
     // 更新後のシーン取得
     const updatedScene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, updated_at
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, updated_at
       FROM scenes
       WHERE id = ?
     `).bind(sceneId).first()
 
+    // comic_data のパース
+    let parsedComicData = null
+    if (updatedScene.comic_data) {
+      try {
+        parsedComicData = JSON.parse(updatedScene.comic_data as string)
+      } catch (e) {
+        console.warn('Failed to parse comic_data:', e)
+      }
+    }
+
     return c.json({
       ...updatedScene,
-      bullets: JSON.parse(updatedScene.bullets as string)
+      bullets: JSON.parse(updatedScene.bullets as string),
+      comic_data: parsedComicData
     })
   } catch (error) {
     console.error('Error updating scene:', error)

@@ -1952,6 +1952,16 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
       <div class="absolute top-2 left-2 px-2 py-1 bg-blue-600 text-white text-xs rounded-full font-semibold">
         <i class="fas fa-image mr-1"></i>画像
       </div>
+      
+      ${imageUrl ? `
+      <button 
+        onclick="openComicEditor(${scene.id})"
+        class="absolute top-2 right-2 px-2 py-1 bg-orange-500 text-white text-xs rounded-full font-semibold hover:bg-orange-600 transition-colors"
+        title="漫画編集"
+      >
+        <i class="fas fa-comment-alt mr-1"></i>漫画
+      </button>
+      ` : ''}
     </div>
     
     <!-- 動画エリア（completedの場合のみ表示） -->
