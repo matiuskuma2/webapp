@@ -1920,20 +1920,36 @@ ${escapeHtml(scene.dialogue)}
  */
 function renderSceneImageSection(scene, imageUrl, imageStatus) {
   const isGenerating = imageStatus === 'generating';
+  const activeVideo = scene.active_video || null;
+  const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
   
   return `
     <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 border-gray-300 overflow-hidden">
-      ${imageUrl 
-        ? `<img 
-             id="sceneImage-${scene.id}" 
-             src="${imageUrl}" 
-             alt="Scene ${scene.idx}"
+      ${hasCompletedVideo 
+        ? `<video 
+             id="sceneVideo-${scene.id}" 
+             src="${activeVideo.r2_url}" 
              class="w-full h-full object-cover"
-           />`
-        : `<div class="flex items-center justify-center h-full text-gray-400">
-             <i class="fas fa-image text-4xl"></i>
-             <span class="ml-2">画像未生成</span>
+             controls
+             preload="metadata"
+             poster="${imageUrl || ''}"
+           >
+             <source src="${activeVideo.r2_url}" type="video/mp4">
+           </video>
+           <div class="absolute top-2 right-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
+             <i class="fas fa-video mr-1"></i>動画
            </div>`
+        : (imageUrl 
+          ? `<img 
+               id="sceneImage-${scene.id}" 
+               src="${imageUrl}" 
+               alt="Scene ${scene.idx}"
+               class="w-full h-full object-cover"
+             />`
+          : `<div class="flex items-center justify-center h-full text-gray-400">
+               <i class="fas fa-image text-4xl"></i>
+               <span class="ml-2">画像未生成</span>
+             </div>`)
       }
       
       ${isGenerating 

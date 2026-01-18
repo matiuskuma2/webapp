@@ -152,7 +152,7 @@ async function processJob(jobId: string): Promise<void> {
   if (videoEngine === 'veo3' && !job.vertex_sa_json) {
     await jobStore.markFailed(jobId, {
       code: 'MISSING_DATA',
-      message: 'Veo3 job is missing required Vertex SA JSON',
+      message: 'Veo3 job is missing required Vertex credentials (API Key or SA JSON)',
     });
     return;
   }

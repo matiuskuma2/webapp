@@ -87,24 +87,31 @@ function validateApiKey(apiKey: unknown): ValidationResult | null {
 /**
  * Validate Veo3 Vertex AI credentials
  * Required for video_engine === 'veo3'
+ * 
+ * Supports two authentication methods:
+ * 1. API Key: Simple string (starts with 'A' typically)
+ * 2. Service Account JSON: JSON string containing service account credentials
  */
 function validateVeo3Credentials(
   vertexSaJson: unknown,
   vertexLocation: unknown
 ): ValidationResult | null {
-  // vertex_sa_json is required
+  // vertex_sa_json is required (can be API Key or SA JSON)
   if (!vertexSaJson || typeof vertexSaJson !== 'string') {
     return {
       valid: false,
-      error: { code: 'INVALID_REQUEST', message: 'vertex_sa_json is required for Veo3' },
+      error: { code: 'INVALID_REQUEST', message: 'vertex_sa_json (API Key or SA JSON) is required for Veo3' },
     };
   }
   
-  // Basic JSON validation (don't parse fully for security)
-  if (!vertexSaJson.includes('"type"') || !vertexSaJson.includes('service_account')) {
+  // Detect authentication type
+  const isServiceAccountJson = vertexSaJson.includes('"type"') && vertexSaJson.includes('service_account');
+  const isApiKey = !isServiceAccountJson && vertexSaJson.length >= 10;
+  
+  if (!isServiceAccountJson && !isApiKey) {
     return {
       valid: false,
-      error: { code: 'INVALID_REQUEST', message: 'vertex_sa_json must be a valid service account JSON' },
+      error: { code: 'INVALID_REQUEST', message: 'vertex_sa_json must be a valid API Key or Service Account JSON' },
     };
   }
   

@@ -391,6 +391,15 @@ projects.get('/:id/scenes', async (c) => {
             LIMIT 1
           `).bind(scene.id).first()
 
+          // アクティブ動画（is_active=1 または 最新の completed）
+          const activeVideo = await c.env.DB.prepare(`
+            SELECT id, status, r2_url, model, duration_sec
+            FROM video_generations
+            WHERE scene_id = ? AND (is_active = 1 OR (status = 'completed' AND r2_url IS NOT NULL))
+            ORDER BY is_active DESC, created_at DESC
+            LIMIT 1
+          `).bind(scene.id).first()
+
           return {
             id: scene.id,
             idx: scene.idx,
@@ -411,6 +420,13 @@ projects.get('/:id/scenes', async (c) => {
               r2_url: latestRecord.r2_url,
               image_url: latestRecord.r2_url || (latestRecord.r2_key ? `/${latestRecord.r2_key}` : null),
               error_message: latestRecord.error_message
+            } : null,
+            active_video: activeVideo ? {
+              id: activeVideo.id,
+              status: activeVideo.status,
+              r2_url: activeVideo.r2_url,
+              model: activeVideo.model,
+              duration_sec: activeVideo.duration_sec
             } : null
           }
         })
