@@ -1811,22 +1811,32 @@ function setSceneFilter(filter) {
  * @returns {string} HTML
  */
 function renderSceneCardHeader(scene, imageStatus) {
+  const hasImage = imageStatus === 'completed';
   return `
-    <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-6 py-3 flex items-center justify-between">
-      <div class="flex items-center gap-3">
-        <span class="text-white font-bold text-xl">#${scene.idx}</span>
-        <span class="px-3 py-1 bg-white bg-opacity-20 rounded-full text-white text-sm font-semibold">
+    <div class="bg-gradient-to-r from-blue-600 to-purple-600 px-4 py-3 flex items-center justify-between flex-wrap gap-2">
+      <div class="flex items-center gap-2">
+        <span class="text-white font-bold text-lg">#${scene.idx}</span>
+        <span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">
           ${getRoleText(scene.role)}
         </span>
       </div>
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-2 flex-wrap">
         <button 
           onclick="openSceneEditModal(${scene.id})"
-          class="px-3 py-1 bg-white bg-opacity-20 hover:bg-opacity-30 rounded-lg text-white text-sm font-semibold transition-colors"
+          class="px-3 py-1.5 bg-blue-500 hover:bg-blue-400 rounded-lg text-white text-xs font-semibold transition-colors"
           title="セリフ・要点・プロンプトを編集"
         >
-          <i class="fas fa-pen mr-1"></i>内容編集
+          <i class="fas fa-pen mr-1"></i>シーン編集
         </button>
+        ${hasImage ? `
+        <button 
+          onclick="openComicEditor(${scene.id})"
+          class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 rounded-lg text-white text-xs font-semibold transition-colors"
+          title="画像に吹き出しを追加して漫画化"
+        >
+          <i class="fas fa-comment-dots mr-1"></i>漫画化
+        </button>
+        ` : ''}
         <div class="scene-status-badge-container">
           ${getSceneStatusBadge(imageStatus)}
         </div>
@@ -1966,18 +1976,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
       
     </div>
     
-    <!-- 漫画化ボタン（画像の下に配置） -->
-    ${imageUrl ? `
-    <div class="mt-2">
-      <button 
-        onclick="openComicEditor(${scene.id})"
-        class="w-full px-4 py-2 bg-orange-500 text-white rounded-lg font-semibold hover:bg-orange-600 transition-colors shadow-md"
-        title="画像に吹き出しを追加して漫画化"
-      >
-        <i class="fas fa-comment-dots mr-2"></i>漫画化（吹き出し追加）
-      </button>
-    </div>
-    ` : ''}
+
     
     <!-- Phase1.5: 採用切替ボタン（公開漫画がある場合のみ表示） -->
     ${hasPublishedComic && imageUrl ? `

@@ -221,13 +221,24 @@ window.ComicEditor = {
           <span class="font-semibold text-sm text-gray-700">
             発話 ${index + 1}
           </span>
-          <span class="text-xs px-2 py-1 rounded-full ${
-            ut.speaker_type === 'narration' 
-              ? 'bg-gray-200 text-gray-700' 
-              : 'bg-blue-100 text-blue-700'
-          }">
-            ${ut.speaker_type === 'narration' ? 'ナレーション' : 'キャラクター'}
-          </span>
+          <div class="flex items-center gap-2">
+            <select 
+              onchange="ComicEditor.updateUtteranceSpeaker('${ut.id}', this.value)"
+              class="text-xs px-2 py-1 rounded border border-gray-300"
+            >
+              <option value="narration" ${ut.speaker_type === 'narration' ? 'selected' : ''}>ナレーション</option>
+              <option value="character" ${ut.speaker_type === 'character' ? 'selected' : ''}>キャラクター</option>
+            </select>
+            ${utterances.length > 1 ? `
+            <button 
+              onclick="ComicEditor.removeUtterance('${ut.id}')"
+              class="text-red-500 hover:text-red-700 text-sm"
+              title="この発話を削除"
+            >
+              <i class="fas fa-trash"></i>
+            </button>
+            ` : ''}
+          </div>
         </div>
         <textarea
           id="utteranceText-${ut.id}"
@@ -526,6 +537,28 @@ window.ComicEditor = {
       utterance.text = text;
       this.renderBubbles(); // 吹き出しのテキストを更新
     }
+  },
+
+  /**
+   * 発話のspeaker_typeを更新
+   */
+  updateUtteranceSpeaker(utteranceId, speakerType) {
+    const utterance = this.draft.utterances.find(u => u.id === utteranceId);
+    if (utterance) {
+      utterance.speaker_type = speakerType;
+    }
+  },
+
+  /**
+   * 発話を削除
+   */
+  removeUtterance(utteranceId) {
+    // 紐付いている吹き出しも削除
+    this.draft.bubbles = this.draft.bubbles.filter(b => b.utterance_id !== utteranceId);
+    // 発話を削除
+    this.draft.utterances = this.draft.utterances.filter(u => u.id !== utteranceId);
+    this.renderUtterances();
+    this.renderBubbles();
   },
 
   /**
