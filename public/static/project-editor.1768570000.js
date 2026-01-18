@@ -2734,6 +2734,7 @@ function renderSceneAudioPlaceholder(scene) {
  * Render complete scene card (Phase F-6: Improved layout)
  * - セリフの直下に音声設定
  * - 画像キャラと音声キャラを分離
+ * - Phase1.7: 漫画モード時のボタン制御追加
  * @param {object} scene 
  * @returns {string} HTML
  */
@@ -2745,8 +2746,18 @@ function renderBuilderSceneCard(scene) {
   const errorMessage = latestImage?.error_message || null;
   const isFailed = imageStatus === 'failed';
   
+  // Phase1.7: 漫画モード判定
+  const displayAssetType = scene.display_asset_type || 'image';
+  const isComicMode = displayAssetType === 'comic';
+  const activeVideo = scene.active_video || null;
+  const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
+  
+  // Phase1.7: 漫画モード時は再生成・動画化を非活性化
+  const disableRegenerate = isComicMode;
+  const disableVideoGen = isComicMode;
+  
   return `
-    <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}" data-scene-id="${scene.id}" data-status="${imageStatus}">
+    <div class="bg-white rounded-lg border-2 border-gray-200 shadow-md overflow-hidden" id="builder-scene-${scene.id}" data-scene-id="${scene.id}" data-status="${imageStatus}" data-display-asset-type="${displayAssetType}">
       ${renderSceneCardHeader(scene, imageStatus)}
       
       <!-- Content: Left-Right Split (PC) / Top-Bottom (Mobile) -->
@@ -2760,36 +2771,56 @@ function renderBuilderSceneCard(scene) {
         <div class="space-y-4">
           ${renderSceneImageSection(scene, imageUrl, imageStatus)}
           
-          <!-- Action Buttons (Fixed DOM for state-driven updates) -->
+          <!-- 画像アクションボタン（画像の直下） -->
           <div class="flex gap-2">
-            <button id="primaryBtn-${scene.id}" class="flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation">
-              読み込み中...
+            <button 
+              id="primaryBtn-${scene.id}" 
+              class="flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation ${disableRegenerate ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : ''}"
+              ${disableRegenerate ? 'disabled' : ''}
+              title="${disableRegenerate ? '漫画採用中は画像を再生成できません。画像モードに切り替えてください。' : ''}"
+            >
+              ${disableRegenerate ? '<i class="fas fa-lock mr-2"></i>再生成不可' : '読み込み中...'}
             </button>
-            <button id="historyBtn-${scene.id}" onclick="viewImageHistory(${scene.id})" class="px-4 py-2 rounded-lg font-semibold touch-manipulation">
-              <i class="fas fa-history"></i>
+            <button 
+              id="historyBtn-${scene.id}" 
+              onclick="viewImageHistory(${scene.id})" 
+              class="px-4 py-2 rounded-lg font-semibold touch-manipulation"
+            >
+              <i class="fas fa-history mr-2"></i>履歴
             </button>
           </div>
           
-          <!-- Phase D-1: Video Generation Button -->
-          <div class="flex gap-2 mt-2">
+          ${disableRegenerate ? `
+          <p class="text-xs text-orange-600 bg-orange-50 rounded px-3 py-2">
+            <i class="fas fa-info-circle mr-1"></i>
+            漫画採用中は画像の再生成ができません。画像を変更するには「画像を採用」に切り替えてください。
+          </p>
+          ` : ''}
+          
+          <!-- 動画エリア（completedの場合のみ表示）の後に動画化ボタン -->
+          <div class="flex gap-2">
             <button 
               id="videoBtn-${scene.id}"
               onclick="openVideoModal(${scene.id})"
               class="flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation ${
-                (window.videoGenerating && window.videoGenerating[scene.id])
-                  ? 'bg-yellow-500 text-white opacity-75 cursor-not-allowed'
-                  : (imageStatus === 'completed' 
-                    ? 'bg-purple-600 text-white hover:bg-purple-700 transition-colors' 
-                    : 'bg-gray-300 text-gray-500 cursor-not-allowed')
+                disableVideoGen
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : (window.videoGenerating && window.videoGenerating[scene.id])
+                    ? 'bg-yellow-500 text-white opacity-75 cursor-not-allowed'
+                    : (imageStatus === 'completed' 
+                      ? 'bg-purple-600 text-white hover:bg-purple-700 transition-colors' 
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed')
               }"
-              ${(imageStatus !== 'completed' || (window.videoGenerating && window.videoGenerating[scene.id])) ? 'disabled' : ''}
+              ${disableVideoGen || (imageStatus !== 'completed') || (window.videoGenerating && window.videoGenerating[scene.id]) ? 'disabled' : ''}
               title="${
-                (window.videoGenerating && window.videoGenerating[scene.id]) 
-                  ? '動画生成中...' 
-                  : (imageStatus !== 'completed' ? '画像生成完了後に利用可能' : '動画を生成')
+                disableVideoGen 
+                  ? '漫画採用中は動画化できません。漫画の動画化はRemotionで行います。'
+                  : (window.videoGenerating && window.videoGenerating[scene.id]) 
+                    ? '動画生成中...' 
+                    : (imageStatus !== 'completed' ? '画像生成完了後に利用可能' : '動画を生成')
               }"
             >
-              <i class="fas fa-video mr-2"></i>動画化
+              <i class="fas fa-video mr-2"></i>${disableVideoGen ? '動画化不可' : '動画化'}
             </button>
             <button 
               id="videoHistoryBtn-${scene.id}"
@@ -2860,8 +2891,16 @@ function renderBuilderScenes(scenes, page = 1) {
     const isFailed = imageStatus === 'failed';
     const hasImage = latestImage && imageStatus === 'completed';
     
+    // Phase1.7: 漫画モード判定
+    const displayAssetType = scene.display_asset_type || 'image';
+    const isComicMode = displayAssetType === 'comic';
+    
     // 状態に応じて初期ボタンを設定
-    if (window.isBulkImageGenerating) {
+    // Phase1.7: 漫画モード時はボタン状態を変更しない（HTMLで既に設定済み）
+    if (isComicMode) {
+      // 漫画モード時はスキップ（renderBuilderSceneCardで既に無効化済み）
+      console.log(`[Builder] Scene ${scene.id}: Comic mode - keeping disabled state`);
+    } else if (window.isBulkImageGenerating) {
       // 一括処理中は無効化
       const primaryBtn = document.getElementById(`primaryBtn-${scene.id}`);
       if (primaryBtn) {
