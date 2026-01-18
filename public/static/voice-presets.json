@@ -2,19 +2,27 @@
   "voice_presets": [
     {
       "id": "ja-JP-Neural2-B",
-      "name": "男性（Neural2）",
+      "name": "女性A（Neural2）",
+      "language": "ja-JP",
+      "gender": "female",
+      "provider": "google",
+      "description": "Google TTS Neural2 - 自然な女性の声"
+    },
+    {
+      "id": "ja-JP-Neural2-C",
+      "name": "男性A（Neural2）",
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
       "description": "Google TTS Neural2 - 自然な男性の声"
     },
     {
-      "id": "ja-JP-Neural2-C",
-      "name": "女性（Neural2）",
+      "id": "ja-JP-Neural2-D",
+      "name": "男性B（Neural2）",
       "language": "ja-JP",
-      "gender": "female",
+      "gender": "male",
       "provider": "google",
-      "description": "Google TTS Neural2 - 自然な女性の声"
+      "description": "Google TTS Neural2 - 自然な男性の声"
     },
     {
       "id": "ja-JP-Wavenet-A",
@@ -26,6 +34,14 @@
     },
     {
       "id": "ja-JP-Wavenet-B",
+      "name": "女性B（WaveNet）",
+      "language": "ja-JP",
+      "gender": "female",
+      "provider": "google",
+      "description": "WaveNet技術を使用した女性の声"
+    },
+    {
+      "id": "ja-JP-Wavenet-C",
       "name": "男性A（WaveNet）",
       "language": "ja-JP",
       "gender": "male",
@@ -33,20 +49,12 @@
       "description": "WaveNet技術を使用した男性の声"
     },
     {
-      "id": "ja-JP-Wavenet-C",
+      "id": "ja-JP-Wavenet-D",
       "name": "男性B（WaveNet）",
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
-      "description": "WaveNet技術を使用した低めの男性の声"
-    },
-    {
-      "id": "ja-JP-Wavenet-D",
-      "name": "女性B（WaveNet）",
-      "language": "ja-JP",
-      "gender": "female",
-      "provider": "google",
-      "description": "WaveNet技術を使用した高めの女性の声"
+      "description": "WaveNet技術を使用した男性の声"
     },
     {
       "id": "ja-JP-Standard-A",
@@ -58,6 +66,14 @@
     },
     {
       "id": "ja-JP-Standard-B",
+      "name": "女性B（Standard）",
+      "language": "ja-JP",
+      "gender": "female",
+      "provider": "google",
+      "description": "標準的な女性の声"
+    },
+    {
+      "id": "ja-JP-Standard-C",
       "name": "男性A（Standard）",
       "language": "ja-JP",
       "gender": "male",
@@ -65,20 +81,12 @@
       "description": "標準的な男性の声"
     },
     {
-      "id": "ja-JP-Standard-C",
+      "id": "ja-JP-Standard-D",
       "name": "男性B（Standard）",
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
-      "description": "低めの男性の声"
-    },
-    {
-      "id": "ja-JP-Standard-D",
-      "name": "女性B（Standard）",
-      "language": "ja-JP",
-      "gender": "female",
-      "provider": "google",
-      "description": "高めの女性の声"
+      "description": "標準的な男性の声"
     },
     {
       "id": "fish:71bf4cb71cd44df6aa603d51db8f92ff",
