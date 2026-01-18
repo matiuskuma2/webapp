@@ -353,10 +353,13 @@ async function updateCharacterWarning() {
   if (!warningSection) return;
   
   try {
-    // Fetch registered characters count
-    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters`);
+    // Fetch registered characters count (with cache busting)
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters`, {
+      params: { _t: Date.now() }
+    });
     const characters = response.data.characters || [];
     const count = characters.length;
+    console.log('[SceneSplit] Fetched characters:', count, characters.map(c => c.character_name));
     
     // Update count display
     if (countBadge) {
