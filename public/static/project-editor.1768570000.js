@@ -1361,6 +1361,103 @@ window.generateNarratorVoice = async function(sceneId) {
   }
 };
 
+// Phase1.7: 漫画発話用の音声生成
+window.generateComicUtteranceVoice = async function(sceneId, utteranceIdx) {
+  try {
+    // シーンデータを取得
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board`);
+    const scene = response.data;
+    const comicData = scene.comic_data;
+    const utterances = comicData?.published?.utterances || comicData?.draft?.utterances || [];
+    
+    if (!utterances[utteranceIdx]) {
+      showToast('発話が見つかりません', 'error');
+      return;
+    }
+    
+    const utterance = utterances[utteranceIdx];
+    const text = utterance.text || '';
+    
+    if (!text.trim()) {
+      showToast('発話テキストが空です', 'warning');
+      return;
+    }
+    
+    // 音声設定を取得
+    const select = document.getElementById(`comicUtteranceVoice-${sceneId}-${utteranceIdx}`);
+    let voicePresetId = select?.value || 'ja-JP-Neural2-B';
+    let provider = 'google';
+    
+    // キャラクターが選択されている場合、そのキャラの音声を使用
+    if (select?.value && !select.value.startsWith('ja-JP-')) {
+      const charKey = select.value;
+      const projectCharacters = window.lastLoadedCharacters || [];
+      const char = projectCharacters.find(c => c.character_key === charKey);
+      if (char?.voice_preset_id) {
+        voicePresetId = char.voice_preset_id;
+        provider = voicePresetId.startsWith('fish:') ? 'fish' : 'google';
+      } else {
+        showToast('選択したキャラクターに音声が設定されていません', 'warning');
+        return;
+      }
+    }
+    
+    showToast(`発話${utteranceIdx + 1}の音声生成を開始...`, 'info');
+    
+    // 音声生成API呼び出し（テキストを指定して生成）
+    await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
+      voice_preset_id: voicePresetId,
+      provider: provider,
+      text_override: text  // 発話テキストを直接指定
+    });
+    
+    showToast(`発話${utteranceIdx + 1}の音声生成を開始しました`, 'success');
+    
+    if (window.AudioState) {
+      window.AudioState.startWatch(sceneId);
+      window.AudioState.startPolling(sceneId);
+    }
+  } catch (error) {
+    console.error('[ComicUtteranceVoice] Generation error:', error);
+    showToast('音声生成に失敗しました: ' + (error.response?.data?.message || error.message), 'error');
+  }
+};
+
+// Phase1.7: 漫画発話の音声を一括生成
+window.generateAllComicUtteranceVoices = async function(sceneId) {
+  try {
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board`);
+    const scene = response.data;
+    const comicData = scene.comic_data;
+    const utterances = comicData?.published?.utterances || comicData?.draft?.utterances || [];
+    
+    if (utterances.length === 0) {
+      showToast('発話がありません', 'warning');
+      return;
+    }
+    
+    showToast(`${utterances.length}件の発話音声を順次生成します...`, 'info');
+    
+    for (let i = 0; i < utterances.length; i++) {
+      await window.generateComicUtteranceVoice(sceneId, i);
+      // 連続生成の間隔を空ける
+      if (i < utterances.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    showToast('全発話の音声生成を開始しました', 'success');
+  } catch (error) {
+    console.error('[AllComicUtteranceVoices] Error:', error);
+    showToast('一括生成に失敗しました', 'error');
+  }
+};
+
+// Phase1.7: 漫画発話の音声タイプ選択
+window.selectComicUtteranceVoice = function(sceneId, utteranceIdx, value) {
+  console.log(`[ComicUtteranceVoice] Selected: scene=${sceneId}, idx=${utteranceIdx}, value=${value}`);
+};
+
 // Load scenes (Scene Split tab)
 // Uses view=board to include character information
 // Exposed to window for cross-module access (e.g., WorldCharacterModal)
@@ -1986,6 +2083,119 @@ function renderComicUtterances(scene) {
 }
 
 /**
+ * Phase1.7: 漫画モード時の音声セクション（発話ごとに設定）
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderComicAudioSection(scene) {
+  const comicData = scene.comic_data;
+  const utterances = comicData?.published?.utterances || comicData?.draft?.utterances || [];
+  
+  if (utterances.length === 0) {
+    return `
+      <div class="bg-gray-100 rounded-lg p-4 text-center text-gray-500">
+        <i class="fas fa-info-circle mr-2"></i>発話がありません
+      </div>
+    `;
+  }
+  
+  // 音声プリセットリスト
+  const voicePresets = [
+    { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）' },
+    { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）' },
+    { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）' },
+    { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）' },
+    { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）' },
+    { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）' },
+    { id: 'ja-JP-Wavenet-D', name: '男性B（WaveNet）' }
+  ];
+  
+  const voiceOptions = voicePresets.map(preset => 
+    `<option value="${preset.id}">${preset.name}</option>`
+  ).join('');
+  
+  // プロジェクトのキャラクターリスト
+  const projectCharacters = window.lastLoadedCharacters || [];
+  
+  const utteranceRows = utterances.map((u, idx) => {
+    const speakerLabel = u.speaker_type === 'character' && u.speaker_character_key 
+      ? u.speaker_character_key
+      : 'ナレーション';
+    const textPreview = (u.text || '').substring(0, 30) + ((u.text || '').length > 30 ? '...' : '');
+    
+    // キャラクター選択肢
+    const charOptions = projectCharacters.length > 0 
+      ? projectCharacters.map(char => {
+          const voiceLabel = char.voice_preset_id ? '✓' : '×';
+          const selected = u.speaker_character_key === char.character_key ? 'selected' : '';
+          return `<option value="${char.character_key}" ${selected}>${escapeHtml(char.character_name)}（${voiceLabel}）</option>`;
+        }).join('')
+      : '';
+    
+    return `
+      <div class="p-3 bg-white border border-orange-200 rounded-lg">
+        <div class="flex items-center gap-2 mb-2">
+          <span class="px-2 py-0.5 bg-orange-100 text-orange-700 text-xs rounded-full font-semibold">発話${idx + 1}</span>
+          <span class="text-xs text-gray-500 truncate flex-1">${escapeHtml(textPreview)}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          ${projectCharacters.length > 0 ? `
+            <select 
+              id="comicUtteranceVoice-${scene.id}-${idx}"
+              class="flex-1 px-2 py-1.5 border border-gray-300 rounded text-xs"
+              onchange="window.selectComicUtteranceVoice(${scene.id}, ${idx}, this.value)"
+            >
+              <option value="">ナレーター音声</option>
+              <optgroup label="キャラクター">
+                ${charOptions}
+              </optgroup>
+            </select>
+          ` : `
+            <select 
+              id="comicUtteranceVoice-${scene.id}-${idx}"
+              class="flex-1 px-2 py-1.5 border border-gray-300 rounded text-xs"
+            >
+              ${voiceOptions}
+            </select>
+          `}
+          <button 
+            onclick="window.generateComicUtteranceVoice(${scene.id}, ${idx})"
+            class="px-3 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700"
+            title="この発話の音声を生成"
+          >
+            <i class="fas fa-volume-up"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+  
+  return `
+    <div class="bg-gradient-to-br from-orange-50 to-purple-50 rounded-lg border-2 border-orange-200 overflow-hidden">
+      <div class="bg-gradient-to-r from-orange-500 to-purple-500 px-4 py-2">
+        <h4 class="text-white font-semibold text-sm flex items-center">
+          <i class="fas fa-microphone mr-2"></i>
+          発話ごとの音声（漫画用）
+        </h4>
+      </div>
+      <div class="p-3 space-y-2">
+        ${utteranceRows}
+        <button
+          onclick="window.generateAllComicUtteranceVoices(${scene.id})"
+          class="w-full px-4 py-2 bg-gradient-to-r from-orange-500 to-purple-500 text-white rounded-lg hover:from-orange-600 hover:to-purple-600 transition-colors font-semibold text-sm"
+        >
+          <i class="fas fa-play-circle mr-2"></i>全発話の音声を一括生成
+        </button>
+        <p class="text-xs text-gray-500 text-center">
+          <i class="fas fa-info-circle mr-1"></i>
+          漫画の発話設定は「漫画化」ボタンから編集できます
+        </p>
+      </div>
+    </div>
+  `;
+}
+
+/**
  * Render scene text content (dialogue, bullets, prompt, style)
  * @param {object} scene 
  * @returns {string} HTML
@@ -2017,7 +2227,11 @@ ${escapeHtml(scene.dialogue)}
       </div>
       
       <!-- ★ Phase F-7: Audio section moved directly under dialogue -->
-      ${renderSceneAudioSection(scene)}
+      <!-- Phase1.7: 漫画モード時は音声セクションを発話ごとの形式に変更 -->
+      ${isComicMode && hasComicUtterances
+        ? renderComicAudioSection(scene)
+        : renderSceneAudioSection(scene)
+      }
       
       ${scene.bullets && scene.bullets.length > 0 ? `
       <div>
@@ -2160,6 +2374,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
     ` : ''}
     
     <!-- 動画エリア（completedの場合のみ表示） -->
+    <!-- Phase1.7: 動画サムネイルは常にAI画像を使用（動画は元画像から生成されたため） -->
     ${hasCompletedVideo 
       ? `<div class="scene-video-container relative aspect-video bg-gray-900 rounded-lg border-2 border-purple-400 overflow-hidden mt-3">
            <video 
@@ -2168,7 +2383,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
              class="w-full h-full object-contain"
              controls
              preload="metadata"
-             poster="${displayUrl || ''}"
+             poster="${imageUrl || ''}"
              onerror="refreshVideoUrl(${activeVideo.id}, ${scene.id})"
            >
              <source src="${activeVideo.r2_url}" type="video/mp4">

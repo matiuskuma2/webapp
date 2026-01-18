@@ -139,6 +139,55 @@
       document.getElementById('edit-bullets').value = (scene.bullets || []).join('\n');
       document.getElementById('edit-image-prompt').value = scene.image_prompt || '';
       
+      // Phase1.7: 漫画モード時のセリフ編集を制御
+      const displayAssetType = scene.display_asset_type || 'image';
+      const isComicMode = displayAssetType === 'comic';
+      const hasComicUtterances = scene.comic_data?.published?.utterances?.length > 0;
+      
+      const dialogueTextarea = document.getElementById('edit-dialogue');
+      const dialogueLabel = dialogueTextarea?.previousElementSibling;
+      
+      if (isComicMode && hasComicUtterances) {
+        // 漫画モード時: セリフ欄を読み取り専用にし、警告を表示
+        if (dialogueTextarea) {
+          dialogueTextarea.disabled = true;
+          dialogueTextarea.classList.add('bg-gray-100', 'cursor-not-allowed');
+          dialogueTextarea.title = '漫画モードでは発話は漫画エディタで編集してください';
+        }
+        
+        // 警告メッセージを追加
+        const warningId = 'comic-mode-dialogue-warning';
+        let warningEl = document.getElementById(warningId);
+        if (!warningEl && dialogueTextarea) {
+          warningEl = document.createElement('div');
+          warningEl.id = warningId;
+          warningEl.className = 'mt-2 p-3 bg-orange-50 border border-orange-200 rounded-lg';
+          warningEl.innerHTML = `
+            <p class="text-orange-700 text-sm">
+              <i class="fas fa-info-circle mr-2"></i>
+              <strong>漫画モード:</strong> 発話は「漫画化」ボタンから編集してください。
+            </p>
+            <p class="text-orange-600 text-xs mt-1">
+              現在 ${scene.comic_data?.published?.utterances?.length || 0} 件の発話が設定されています。
+            </p>
+          `;
+          dialogueTextarea.parentNode.appendChild(warningEl);
+        }
+      } else {
+        // 画像モード時: 通常編集可能
+        if (dialogueTextarea) {
+          dialogueTextarea.disabled = false;
+          dialogueTextarea.classList.remove('bg-gray-100', 'cursor-not-allowed');
+          dialogueTextarea.title = '';
+        }
+        
+        // 警告メッセージを削除
+        const warningEl = document.getElementById('comic-mode-dialogue-warning');
+        if (warningEl) {
+          warningEl.remove();
+        }
+      }
+      
       // Character assignment
       this.renderImageCharacters(scene.characters || []);
       this.renderVoiceCharacter(scene.voice_character);
