@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-19（Video Build SSOT整備完了）
+- **最終更新**: 2026-01-19（Scene Split無限待ちゼロ化・設計書追加）
 
 ---
 
@@ -385,6 +385,35 @@ npx wrangler d1 migrations apply webapp-production --remote
 - **Git履歴の整合性維持**: ファイル削除は環境間の不整合を生む
 - **べき等性**: `IF NOT EXISTS` により何度実行しても安全
 - **ドキュメント化**: 意図的な設計であることを明示
+
+---
+
+## 2026-01-19 追加機能
+
+### Phase 1: Scene Split無限待ちゼロ化
+- **タイムアウト**: 10分でポーリング停止
+- **失敗検出**: status='failed' を検出してUI表示
+- **ネットワークエラー**: 3回リトライ後にエラー表示
+- **LogID表示**: サポート用ログID生成
+- **再試行ボタン**: タイムアウト/エラー後の復帰導線
+- **ドキュメント**: `docs/SCENE_SPLIT_SSOT.md`
+
+### Phase 2: voice-presets.json更新
+- **provider階層化**: Google / Fish / ElevenLabs をグループ化
+- **ElevenLabs準備中**: 8ボイスを `status: 'coming_soon'` で追加
+- **tier追加**: basic / standard / premium
+
+### Phase 3: 漫画吹き出し設計書
+- **textStyle**: 縦書き/横書き、フォント、太字、サイズ
+- **timing**: 表示タイミング制御、アニメーション
+- **Remotion統合案**: BuildRequest v1.1 拡張
+- **ドキュメント**: `docs/BUBBLE_TEXTSTYLE_SPEC.md`
+
+### Phase 4: TTS計測・上限・キャッシュ設計書
+- **tts_usage_logs**: 使用量ログテーブル設計
+- **上限制御**: 段階警告（70/85/95/100%）
+- **キャッシュ**: 同一テキストの再利用
+- **ドキュメント**: `docs/TTS_USAGE_LIMITS_SPEC.md`
 
 ---
 
