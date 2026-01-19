@@ -42,6 +42,38 @@
     L: { multiplier: 1.4, name: '大' }
   };
 
+  // ===== Phase 3: テキストスタイル設定 =====
+  // SSOT: docs/BUBBLE_TEXTSTYLE_SPEC.md
+  const TEXT_STYLE_OPTIONS = {
+    writingMode: [
+      { value: 'horizontal', name: '横書き', icon: 'fa-align-left' },
+      { value: 'vertical', name: '縦書き', icon: 'fa-align-justify fa-rotate-90' }
+    ],
+    fontFamily: [
+      { value: 'gothic', name: 'ゴシック', css: '"Noto Sans JP", sans-serif' },
+      { value: 'mincho', name: '明朝', css: '"Noto Serif JP", serif' },
+      { value: 'rounded', name: '丸ゴ', css: '"M PLUS Rounded 1c", sans-serif' },
+      { value: 'handwritten', name: '手書き', css: '"Yomogi", cursive' }
+    ],
+    fontWeight: [
+      { value: 'normal', name: '通常' },
+      { value: 'bold', name: '太字' }
+    ],
+    fontScale: [
+      { value: 0.7, name: '小' },
+      { value: 1.0, name: '標準' },
+      { value: 1.3, name: '大' },
+      { value: 1.6, name: '特大' }
+    ]
+  };
+
+  const DEFAULT_TEXT_STYLE = {
+    writingMode: 'horizontal',
+    fontFamily: 'gothic',
+    fontWeight: 'normal',
+    fontScale: 1.0
+  };
+
   // スタイル定義
   const BUBBLE_STYLES = {
     speech_round: {
@@ -539,23 +571,36 @@
     ctx.restore();
   }
 
-  function drawBubbleText(ctx, text, type, w, h, scale) {
+  function drawBubbleText(ctx, text, type, w, h, scale, textStyle = null) {
     const style = BUBBLE_STYLES[type] || BUBBLE_STYLES.speech_round;
     const padding = style.padding * scale;
     const innerW = w - padding * 2;
     const innerH = h - padding * 2;
     
     const isNarration = type === 'telop_bar' || type === 'caption';
-    const isVertical = BUBBLE_TYPES[type]?.writingMode === 'vertical';
-    const baseFontPx = style.fontSize * scale;
-    const baseLineH = style.lineHeight * scale;
+    
+    // Phase 3: textStyle から書字方向を取得（優先）、なければ BUBBLE_TYPES から
+    const isVertical = textStyle?.writingMode === 'vertical' || 
+                       (!textStyle && BUBBLE_TYPES[type]?.writingMode === 'vertical');
+    
+    // Phase 3: fontScale を適用
+    const fontScale = textStyle?.fontScale || 1.0;
+    const baseFontPx = style.fontSize * scale * fontScale;
+    const baseLineH = style.lineHeight * scale * fontScale;
+    
+    // Phase 3: fontFamily と fontWeight を適用
+    const fontFamily = textStyle?.fontFamily || 'gothic';
+    const fontFamilyCSS = TEXT_STYLE_OPTIONS.fontFamily.find(f => f.value === fontFamily)?.css 
+                          || '"Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif';
+    const fontWeight = textStyle?.fontWeight === 'bold' ? '700' : '400';
     
     if (isVertical) {
       // 縦書き
       const fit = fitTextVertical(ctx, text, innerW, innerH, baseFontPx, baseLineH);
       if (!fit.ok) return { ok: false };
       
-      ctx.font = `700 ${fit.fontPx}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
+      // Phase 3: textStyle のフォント設定を適用
+      ctx.font = `${fontWeight} ${fit.fontPx}px ${fontFamilyCSS}`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = style.textColor;
@@ -582,7 +627,9 @@
     const fit = fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
     if (!fit.ok) return { ok: false };
     
-    ctx.font = `${isNarration ? '700' : '400'} ${fit.fontPx}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
+    // Phase 3: textStyle のフォント設定を適用（ナレーションは常に太字）
+    const effectiveWeight = isNarration ? '700' : fontWeight;
+    ctx.font = `${effectiveWeight} ${fit.fontPx}px ${fontFamilyCSS}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     
@@ -648,7 +695,8 @@
         break;
     }
     
-    const result = drawBubbleText(ctx, text, bubble.type, w, h, scale);
+    // Phase 3: textStyle を渡す
+    const result = drawBubbleText(ctx, text, bubble.type, w, h, scale, bubble.textStyle);
     
     if (options.showDeleteButton) {
       drawDeleteButton(ctx, w, scale);
@@ -1501,6 +1549,19 @@
         sizeOptions += `<option value="custom" selected>カスタム</option>`;
       }
       
+      // Phase 3: textStyle 設定
+      const ts = bubble.textStyle || DEFAULT_TEXT_STYLE;
+      const writingModeOptions = TEXT_STYLE_OPTIONS.writingMode.map(opt =>
+        `<option value="${opt.value}" ${ts.writingMode === opt.value ? 'selected' : ''}>${opt.name}</option>`
+      ).join('');
+      const fontFamilyOptions = TEXT_STYLE_OPTIONS.fontFamily.map(opt =>
+        `<option value="${opt.value}" ${ts.fontFamily === opt.value ? 'selected' : ''}>${opt.name}</option>`
+      ).join('');
+      const fontScaleOptions = TEXT_STYLE_OPTIONS.fontScale.map(opt =>
+        `<option value="${opt.value}" ${ts.fontScale === opt.value ? 'selected' : ''}>${opt.name}</option>`
+      ).join('');
+      const isBold = ts.fontWeight === 'bold';
+      
       return `
       <div class="rounded-lg p-2 border text-xs ${colorClass}" data-bubble-id="${bubble.id}">
         <div class="flex items-center justify-between mb-1">
@@ -1515,7 +1576,7 @@
             <i class="fas fa-times"></i>
           </button>
         </div>
-        <div class="flex gap-1 items-center">
+        <div class="flex gap-1 items-center mb-1">
           <select 
             class="flex-1 px-1 py-1 text-xs border border-gray-300 rounded"
             onchange="window.ComicEditorV2.updateBubbleType('${bubble.id}', this.value)"
@@ -1538,6 +1599,37 @@
             <i class="fas fa-location-arrow"></i>
           </button>
           ` : ''}
+        </div>
+        <!-- Phase 3: テキストスタイル設定 -->
+        <div class="flex gap-1 items-center border-t border-gray-200 pt-1">
+          <select 
+            class="w-12 px-1 py-0.5 text-[10px] border border-gray-200 rounded bg-gray-50"
+            onchange="window.ComicEditorV2.updateBubbleTextStyle('${bubble.id}', 'writingMode', this.value)"
+            title="書字方向"
+          >
+            ${writingModeOptions}
+          </select>
+          <select 
+            class="w-14 px-1 py-0.5 text-[10px] border border-gray-200 rounded bg-gray-50"
+            onchange="window.ComicEditorV2.updateBubbleTextStyle('${bubble.id}', 'fontFamily', this.value)"
+            title="フォント"
+          >
+            ${fontFamilyOptions}
+          </select>
+          <button 
+            onclick="window.ComicEditorV2.toggleBubbleFontWeight('${bubble.id}')"
+            class="px-1.5 py-0.5 text-[10px] border rounded ${isBold ? 'bg-gray-700 text-white border-gray-700' : 'bg-gray-50 text-gray-600 border-gray-200'}"
+            title="太字"
+          >
+            <i class="fas fa-bold"></i>
+          </button>
+          <select 
+            class="w-10 px-0.5 py-0.5 text-[10px] border border-gray-200 rounded bg-gray-50"
+            onchange="window.ComicEditorV2.updateBubbleTextStyle('${bubble.id}', 'fontScale', parseFloat(this.value))"
+            title="文字サイズ"
+          >
+            ${fontScaleOptions}
+          </select>
         </div>
         ${hasTailOption && tailEnabled ? `
         <div class="mt-1 text-gray-500 text-[10px]">
@@ -1987,6 +2079,42 @@
 
   // ============== グローバル公開 ==============
 
+  // ===== Phase 3: テキストスタイル更新関数 =====
+  
+  function updateBubbleTextStyle(bubbleId, key, value) {
+    if (!state.draft) return;
+    const bubble = state.draft.bubbles.find(b => b.id === bubbleId);
+    if (!bubble) return;
+    
+    // textStyle オブジェクトを初期化（なければ）
+    if (!bubble.textStyle) {
+      bubble.textStyle = { ...DEFAULT_TEXT_STYLE };
+    }
+    
+    bubble.textStyle[key] = value;
+    console.log(`[ComicEditorV2] Updated bubble ${bubbleId} textStyle.${key} = ${value}`);
+    
+    // 再描画＆パネル更新
+    renderCanvas();
+    renderBubbleList();
+  }
+  
+  function toggleBubbleFontWeight(bubbleId) {
+    if (!state.draft) return;
+    const bubble = state.draft.bubbles.find(b => b.id === bubbleId);
+    if (!bubble) return;
+    
+    if (!bubble.textStyle) {
+      bubble.textStyle = { ...DEFAULT_TEXT_STYLE };
+    }
+    
+    bubble.textStyle.fontWeight = bubble.textStyle.fontWeight === 'bold' ? 'normal' : 'bold';
+    console.log(`[ComicEditorV2] Toggled bubble ${bubbleId} fontWeight to ${bubble.textStyle.fontWeight}`);
+    
+    renderCanvas();
+    renderBubbleList();
+  }
+
   window.ComicEditorV2 = {
     open,
     close,
@@ -2008,6 +2136,9 @@
     updateBubbleType,
     updateBubbleSize,
     toggleBubbleTail,
+    // Phase 3: テキストスタイル
+    updateBubbleTextStyle,
+    toggleBubbleFontWeight,
     saveDraft,
     publish
   };
