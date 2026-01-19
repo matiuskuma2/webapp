@@ -1,0 +1,341 @@
+# Video Build SSOT & 依存関係ドキュメント
+
+**最終更新**: 2026-01-19  
+**バージョン**: 1.0  
+**目的**: 全シーンの最終動画化（Video Build）を完走するための依存関係とSSOT定義
+
+---
+
+## 1. 用語定義
+
+| 用語 | 定義 |
+|------|------|
+| **SSOT** | Single Source of Truth - 唯一の真実の情報源 |
+| **Video Build** | プロジェクト全体の素材を合算してMP4動画を生成するプロセス |
+| **Scene** | 動画を構成する各シーン（1〜N件） |
+| **display_asset_type** | シーンの表示素材タイプ: 'image' \| 'comic' \| 'video' |
+| **active_xxx** | 各素材種の「採用済み」レコード（is_active=1） |
+| **Preflight** | ビルド前の素材検証チェック |
+| **Remotion** | AWS Lambda上のレンダリングエンジン |
+
+---
+
+## 2. 依存関係フロー（SSOT図）
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Video Build パイプライン                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 1: Scene データ準備                                            │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  SSOT: scenes テーブル                                              │   │
+│  │  - display_asset_type (image | comic | video)                       │   │
+│  │  - dialogue (セリフテキスト)                                         │   │
+│  │  - comic_data (JSON: utterances[] for 漫画モード)                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                               ↓                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 2: 素材準備（表示素材）                                         │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  SSOT: display_asset_type に応じた素材ソース                         │   │
+│  │                                                                     │   │
+│  │  if display_asset_type == 'image':                                  │   │
+│  │    → image_generations (is_active=1, asset_type='ai' OR NULL)       │   │
+│  │    → 必須: r2_url                                                   │   │
+│  │                                                                     │   │
+│  │  if display_asset_type == 'comic':                                  │   │
+│  │    → image_generations (is_active=1, asset_type='comic')            │   │
+│  │    → 必須: r2_url                                                   │   │
+│  │                                                                     │   │
+│  │  if display_asset_type == 'video':                                  │   │
+│  │    → video_generations (is_active=1, status='completed')            │   │
+│  │    → 必須: r2_url                                                   │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                               ↓                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 3: 素材準備（音声）[オプション]                                  │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  SSOT: 音声ソース                                                    │   │
+│  │                                                                     │   │
+│  │  if display_asset_type == 'comic':                                  │   │
+│  │    → scenes.comic_data.utterances[].audio_url                       │   │
+│  │    → 各発話の duration_ms                                           │   │
+│  │                                                                     │   │
+│  │  else (image | video):                                              │   │
+│  │    → audio_generations (is_active=1, status='completed')            │   │
+│  │    → r2_url, duration_ms                                            │   │
+│  │                                                                     │   │
+│  │  ※ 音声がない場合はデフォルト 3000ms                                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                               ↓                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 4: Preflight検証                                              │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  API: GET /api/projects/:id/video-builds/preflight                  │   │
+│  │  実装: video-build-helpers.ts → validateProjectAssets()             │   │
+│  │                                                                     │   │
+│  │  検証内容:                                                           │   │
+│  │  - 全シーンに display_asset_type に応じた素材があるか                 │   │
+│  │  - image: active_image.r2_url が存在                                │   │
+│  │  - comic: active_comic.r2_url が存在                                │   │
+│  │  - video: active_video.status=completed && r2_url が存在            │   │
+│  │                                                                     │   │
+│  │  結果: is_ready (true/false), missing[], warnings[]                 │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                               ↓                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 5: project.json 生成                                          │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  API: POST /api/projects/:id/video-builds                           │   │
+│  │  実装: video-build-helpers.ts → buildProjectJson()                  │   │
+│  │                                                                     │   │
+│  │  SSOT 参照:                                                          │   │
+│  │  - asset.src = display_asset_type に基づく r2_url                   │   │
+│  │  - audio.src = 音声URL                                              │   │
+│  │  - duration_ms = 音声尺 + 500ms パディング                          │   │
+│  │  - ken_burns = asset.type=='image' のときのみ有効                   │   │
+│  │  - utterances = comic モード時のみ                                  │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                               ↓                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 6: AWS Orchestrator 送信                                      │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  クライアント: aws-video-build-client.ts                            │   │
+│  │  エンドポイント: POST /video/build/start (SigV4 署名)               │   │
+│  │                                                                     │   │
+│  │  リクエスト:                                                         │   │
+│  │  - video_build_id                                                   │   │
+│  │  - project_id                                                       │   │
+│  │  - owner_user_id / executor_user_id                                 │   │
+│  │  - project_json (GATE 5 の結果)                                     │   │
+│  │  - build_settings (captions, bgm, motion)                           │   │
+│  │                                                                     │   │
+│  │  レスポンス:                                                         │   │
+│  │  - aws_job_id                                                       │   │
+│  │  - remotion.render_id / site_name                                   │   │
+│  │  - output.bucket / key                                              │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                               ↓                                            │
+│  ┌─────────────────────────────────────────────────────────────────────┐   │
+│  │  GATE 7: ポーリング & 完了                                           │   │
+│  │  ────────────────────────────────────────────────────────────────── │   │
+│  │  API: POST /api/video-builds/:id/refresh                            │   │
+│  │  エンドポイント: GET /video/build/status/{buildId}                  │   │
+│  │                                                                     │   │
+│  │  ステータス遷移:                                                     │   │
+│  │  queued → validating → submitted → rendering → uploading → completed│   │
+│  │           ↓              ↓           ↓                              │   │
+│  │        failed         failed      failed                            │   │
+│  │                                                                     │   │
+│  │  完了時:                                                             │   │
+│  │  - download_url (presigned S3 URL, 24時間有効)                      │   │
+│  │  - render_completed_at                                              │   │
+│  │  - s3_output_size_bytes                                             │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. SSOT 定義（明文化）
+
+### 3.1 SSOT①: シーンの「表示に使う素材」
+
+| display_asset_type | SSOT テーブル | 条件 | 取得カラム |
+|--------------------|---------------|------|------------|
+| `image` | image_generations | is_active=1 AND (asset_type='ai' OR asset_type IS NULL) | r2_key, r2_url |
+| `comic` | image_generations | is_active=1 AND asset_type='comic' | id, r2_key, r2_url |
+| `video` | video_generations | is_active=1 AND status='completed' AND r2_url IS NOT NULL | id, status, r2_url, model, duration_sec |
+
+### 3.2 SSOT②: シーンの「音声」
+
+| display_asset_type | SSOT ソース | 条件 | 取得フィールド |
+|--------------------|-------------|------|----------------|
+| `comic` | scenes.comic_data.utterances[] | - | audio_url, duration_ms (per utterance) |
+| `image` / `video` | audio_generations | is_active=1 AND status='completed' | audio_url, duration_ms |
+
+### 3.3 SSOT③: シーン尺（duration_ms）
+
+| display_asset_type | 計算ロジック |
+|--------------------|--------------|
+| `video` | active_video.duration_sec × 1000 |
+| `comic` | SUM(utterances[].duration_ms) + 500ms |
+| `image` | active_audio.duration_ms + 500ms（音声なし: 3000ms デフォルト） |
+
+### 3.4 SSOT④: project.json の asset.src
+
+```typescript
+// video-build-helpers.ts: buildProjectJson()
+switch (displayType) {
+  case 'comic':
+    assetSrc = scene.active_comic?.r2_url || '';
+    break;
+  case 'video':
+    assetSrc = scene.active_video?.r2_url || '';
+    break;
+  default: // 'image'
+    assetSrc = scene.active_image?.r2_url || '';
+    break;
+}
+```
+
+---
+
+## 4. DB テーブル関連
+
+### 4.1 video_builds テーブル
+
+```sql
+CREATE TABLE video_builds (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  owner_user_id INTEGER NOT NULL,
+  executor_user_id INTEGER NOT NULL,
+  
+  status TEXT NOT NULL DEFAULT 'queued',
+  -- 'queued' | 'validating' | 'submitted' | 'rendering' | 'uploading' 
+  -- | 'completed' | 'failed' | 'cancelled' | 'retry_wait'
+  
+  progress_percent REAL DEFAULT 0,
+  progress_stage TEXT,
+  progress_message TEXT,
+  
+  settings_json TEXT NOT NULL,        -- ビルド設定
+  project_json_version TEXT,           -- '1.1'
+  project_json_r2_key TEXT,            -- R2に保存したproject.json
+  project_json_hash TEXT,              -- SHA-256 ハッシュ
+  
+  aws_job_id TEXT,
+  remotion_render_id TEXT,
+  remotion_site_name TEXT,
+  
+  s3_bucket TEXT,
+  s3_output_key TEXT,
+  s3_output_size_bytes INTEGER,
+  
+  total_scenes INTEGER,
+  total_duration_ms INTEGER,
+  render_started_at DATETIME,
+  render_completed_at DATETIME,
+  
+  error_code TEXT,
+  error_message TEXT,
+  error_details_json TEXT,
+  
+  download_url TEXT,                   -- presigned URL (24時間有効)
+  
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
+```
+
+### 4.2 関連テーブル
+
+| テーブル | 役割 | Video Build との関係 |
+|----------|------|---------------------|
+| scenes | シーン基本情報 | display_asset_type, dialogue, comic_data |
+| image_generations | AI画像・漫画画像 | active_image, active_comic の SSOT |
+| video_generations | I2V動画 | active_video の SSOT |
+| audio_generations | 音声 | active_audio の SSOT |
+
+---
+
+## 5. API エンドポイント
+
+### 5.1 Video Build APIs
+
+| メソッド | エンドポイント | 用途 |
+|----------|----------------|------|
+| GET | /api/video-builds/usage | 利用状況（月間/同時） |
+| GET | /api/projects/:id/video-builds/preflight | Preflight検証 |
+| GET | /api/projects/:id/video-builds | ビルド一覧 |
+| POST | /api/projects/:id/video-builds | ビルド開始 |
+| GET | /api/video-builds/:id | ビルド詳細 |
+| POST | /api/video-builds/:id/refresh | ステータス更新 |
+
+### 5.2 AWS Orchestrator APIs (内部)
+
+| メソッド | エンドポイント | 用途 |
+|----------|----------------|------|
+| POST | /video/build/start | Remotion ビルド開始 |
+| GET | /video/build/status/{buildId} | ステータス取得 |
+
+---
+
+## 6. 変更が入った場合の反映ルール
+
+### 6.1 Scene側変更 → Video Build への影響
+
+| 変更内容 | 影響 | 対応 |
+|----------|------|------|
+| display_asset_type 変更 | asset.src の参照先が変わる | Preflight で検知 |
+| 画像の採用変更 | active_image が変わる | Preflight で検知 |
+| 漫画の採用変更 | active_comic が変わる | Preflight で検知 |
+| 動画の採用変更 | active_video が変わる | Preflight で検知 |
+| 音声の採用変更 | audio.src, duration_ms が変わる | 警告表示 |
+| dialogue 変更 | 字幕テキストが変わる | 自動反映 |
+| comic_data.utterances 変更 | 漫画モードの音声が変わる | 自動反映 |
+
+### 6.2 ルール: Scene側改修凍結時の対処
+
+1. **Scene契約（SSOT）変更が必要な場合**:
+   - 本ドキュメントの SSOT 定義を更新
+   - video-build-helpers.ts の validateProjectAssets() を更新
+   - video-build-helpers.ts の buildProjectJson() を更新
+   - フロントエンドの updateVideoBuildRequirements() を更新
+
+2. **Build側の取り込み変更が必要な場合**:
+   - video-generation.ts の preflight / create エンドポイント更新
+   - aws-video-build-client.ts の型定義更新
+   - AWS Orchestrator (Lambda) の対応更新
+
+---
+
+## 7. 現在の問題点・TODO
+
+### 7.1 確認済みの問題
+
+- [ ] フロントエンドで `active_audio` がシーンデータに含まれていない
+- [ ] 漫画モードの `comic_data.utterances[].audio_url` の反映確認
+- [ ] AWS Orchestrator のエラーハンドリング強化
+- [ ] presigned URL 期限切れ時の再取得フロー確認
+
+### 7.2 テスト項目
+
+1. **Preflight テスト**
+   - [ ] image モードで画像なし → missing 検出
+   - [ ] comic モードで漫画なし → missing 検出
+   - [ ] video モードで動画なし → missing 検出
+   - [ ] video モードで generating 中 → missing（生成中メッセージ）
+   - [ ] 音声なし → warnings 表示
+
+2. **Build テスト**
+   - [ ] image モード × 音声あり → 正常完了
+   - [ ] comic モード × utterances 音声あり → 正常完了
+   - [ ] video モード × 動画完了 → 正常完了
+   - [ ] 混合モード（シーンごとに異なる display_asset_type） → 正常完了
+
+---
+
+## 8. ファイル一覧
+
+| ファイル | 役割 |
+|----------|------|
+| `/src/routes/video-generation.ts` | Video Build API エンドポイント |
+| `/src/utils/video-build-helpers.ts` | validateProjectAssets(), buildProjectJson() |
+| `/src/utils/aws-video-build-client.ts` | AWS Orchestrator クライアント |
+| `/public/static/project-editor.*.js` | フロントエンド Video Build UI |
+| `/migrations/0013_create_video_builds.sql` | DB スキーマ |
+
+---
+
+## 更新履歴
+
+| 日付 | バージョン | 変更内容 |
+|------|-----------|----------|
+| 2026-01-19 | 1.0 | 初版作成 |

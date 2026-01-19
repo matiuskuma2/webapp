@@ -1147,6 +1147,21 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           LIMIT 1
         `).bind(scene.id).first();
         
+        // アクティブ音声（Preflight用: 存在確認のみ）
+        const activeAudioRaw = await c.env.DB.prepare(`
+          SELECT id, r2_url, text
+          FROM audio_generations
+          WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+          LIMIT 1
+        `).bind(scene.id).first<{ id: number; r2_url: string; text: string }>();
+        
+        // 音声がある場合は、テキスト長から推定duration_msを計算（日本語: 約300ms/文字）
+        const activeAudio = activeAudioRaw ? {
+          id: activeAudioRaw.id,
+          audio_url: activeAudioRaw.r2_url,
+          duration_ms: Math.max(2000, (activeAudioRaw.text?.length || 0) * 300), // 最低2秒
+        } : null;
+        
         // comic_dataのパース
         let comicData = null;
         try {
@@ -1173,7 +1188,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
             model: activeVideo.model,
             duration_sec: activeVideo.duration_sec
           } : null,
-          active_audio: null,
+          active_audio: activeAudio,
           comic_data: comicData,
         };
       })
@@ -1352,9 +1367,21 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           LIMIT 1
         `).bind(scene.id).first();
         
-        // アクティブ音声（シーン単位）- TODO: audio_generationsテーブルがある場合
-        // 現状は null として扱う
-        const activeAudio = null;
+        // アクティブ音声（シーン単位）
+        // Note: duration_ms は現在DBに保存されていないため、null または推定値を使用
+        const activeAudioRaw = await c.env.DB.prepare(`
+          SELECT id, r2_url, text
+          FROM audio_generations
+          WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+          LIMIT 1
+        `).bind(scene.id).first<{ id: number; r2_url: string; text: string }>();
+        
+        // 音声がある場合は、テキスト長から推定duration_msを計算（日本語: 約300ms/文字）
+        const activeAudio = activeAudioRaw ? {
+          id: activeAudioRaw.id,
+          audio_url: activeAudioRaw.r2_url,
+          duration_ms: Math.max(2000, (activeAudioRaw.text?.length || 0) * 300), // 最低2秒
+        } : null;
         
         // comic_dataのパース
         let comicData = null;
