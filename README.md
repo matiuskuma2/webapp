@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-19（Phase 1-4完了: Scene Split SSOT + voice-presets v2 + bubble textStyle/timing + TTS usage logging）
+- **最終更新**: 2026-01-19（全Phase完了: Scene Split SSOT + TTS使用量API/警告UI + 漫画textStyle編集UI）
 
 ---
 
