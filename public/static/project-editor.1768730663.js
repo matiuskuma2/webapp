@@ -1841,14 +1841,14 @@ function renderScenes(scenes) {
             id="role-${scene.id}"
             class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
           >
-            <option value="hook" ${scene.role === 'hook' ? 'selected' : ''}>Hook</option>
-            <option value="context" ${scene.role === 'context' ? 'selected' : ''}>Context</option>
-            <option value="main_point" ${scene.role === 'main_point' ? 'selected' : ''}>Main Point</option>
-            <option value="evidence" ${scene.role === 'evidence' ? 'selected' : ''}>Evidence</option>
-            <option value="timeline" ${scene.role === 'timeline' ? 'selected' : ''}>Timeline</option>
-            <option value="analysis" ${scene.role === 'analysis' ? 'selected' : ''}>Analysis</option>
-            <option value="summary" ${scene.role === 'summary' ? 'selected' : ''}>Summary</option>
-            <option value="cta" ${scene.role === 'cta' ? 'selected' : ''}>CTA</option>
+            <option value="hook" ${scene.role === 'hook' ? 'selected' : ''}>導入・つかみ</option>
+            <option value="context" ${scene.role === 'context' ? 'selected' : ''}>背景・文脈</option>
+            <option value="main_point" ${scene.role === 'main_point' ? 'selected' : ''}>主要ポイント</option>
+            <option value="evidence" ${scene.role === 'evidence' ? 'selected' : ''}>根拠・証拠</option>
+            <option value="timeline" ${scene.role === 'timeline' ? 'selected' : ''}>時系列</option>
+            <option value="analysis" ${scene.role === 'analysis' ? 'selected' : ''}>分析・考察</option>
+            <option value="summary" ${scene.role === 'summary' ? 'selected' : ''}>まとめ</option>
+            <option value="cta" ${scene.role === 'cta' ? 'selected' : ''}>行動喚起</option>
           </select>
         </div>
         <div class="flex gap-2">
@@ -3567,14 +3567,14 @@ window.setPrimaryButtonState = setPrimaryButtonState;
 // Get role text
 function getRoleText(role) {
   const roleMap = {
-    'hook': 'Hook',
-    'context': 'Context',
-    'main_point': 'Main Point',
-    'evidence': 'Evidence',
-    'timeline': 'Timeline',
-    'analysis': 'Analysis',
-    'summary': 'Summary',
-    'cta': 'CTA'
+    'hook': '導入・つかみ',
+    'context': '背景・文脈',
+    'main_point': '主要ポイント',
+    'evidence': '根拠・証拠',
+    'timeline': '時系列',
+    'analysis': '分析・考察',
+    'summary': 'まとめ',
+    'cta': '行動喚起'
   };
   return roleMap[role] || role;
 }

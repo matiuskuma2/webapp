@@ -776,6 +776,174 @@ projects.post('/:id/reset', async (c) => {
   }
 })
 
+// GET /api/projects/:id/reset-to-input/preview - 入力からやり直しのプレビュー
+projects.get('/:id/reset-to-input/preview', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, status, source_type, source_text, audio_r2_key
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+
+    // リセット可能なステータス（uploaded以降）
+    const resetableStatuses = ['uploaded', 'transcribed', 'parsing', 'parsed', 'formatting', 'formatted', 'completed', 'failed']
+    const canReset = resetableStatuses.includes(project.status as string)
+
+    // 削除される項目をカウント
+    const [chunksCount, scenesCount, imagesCount, audiosCount] = await Promise.all([
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM text_chunks WHERE project_id = ?`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ?`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM audio_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first()
+    ])
+
+    return c.json({
+      project: {
+        id: project.id,
+        title: project.title,
+        status: project.status,
+        source_type: project.source_type
+      },
+      can_reset: canReset,
+      will_delete: {
+        chunks: (chunksCount as any)?.count || 0,
+        scenes: (scenesCount as any)?.count || 0,
+        images: (imagesCount as any)?.count || 0,
+        audios: (audiosCount as any)?.count || 0
+      },
+      will_preserve: {
+        source_text: project.source_type === 'text' && !!project.source_text,
+        audio_file: project.source_type === 'audio' && !!project.audio_r2_key,
+        characters: true,
+        world_settings: true,
+        style_settings: true
+      }
+    })
+  } catch (error) {
+    console.error('Error in reset-to-input preview:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to get reset preview' }
+    }, 500)
+  }
+})
+
+// POST /api/projects/:id/reset-to-input - 入力からやり直し（シーン・チャンクを削除）
+projects.post('/:id/reset-to-input', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, status, source_type, source_text, audio_r2_key
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+
+    // リセット可能なステータス確認
+    const resetableStatuses = ['uploaded', 'transcribed', 'parsing', 'parsed', 'formatting', 'formatted', 'completed', 'failed']
+    if (!resetableStatuses.includes(project.status as string)) {
+      return c.json({
+        error: {
+          code: 'INVALID_STATUS',
+          message: `Cannot reset from status: ${project.status}`
+        }
+      }, 400)
+    }
+
+    // 関連データ削除（カスケードではなく明示的に削除）
+    // 1. image_generations削除
+    await c.env.DB.prepare(`
+      DELETE FROM image_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).run()
+
+    // 2. audio_generations削除
+    await c.env.DB.prepare(`
+      DELETE FROM audio_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).run()
+
+    // 3. scene_character_map削除
+    await c.env.DB.prepare(`
+      DELETE FROM scene_character_map 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).run()
+
+    // 4. scene_style_settings削除
+    await c.env.DB.prepare(`
+      DELETE FROM scene_style_settings 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).run()
+
+    // 5. scenes削除
+    await c.env.DB.prepare(`
+      DELETE FROM scenes WHERE project_id = ?
+    `).bind(projectId).run()
+
+    // 6. text_chunks削除
+    await c.env.DB.prepare(`
+      DELETE FROM text_chunks WHERE project_id = ?
+    `).bind(projectId).run()
+
+    // 7. runs削除
+    await c.env.DB.prepare(`
+      DELETE FROM runs WHERE project_id = ?
+    `).bind(projectId).run()
+
+    // 8. transcriptions削除（音声ファイルはR2に残す）
+    await c.env.DB.prepare(`
+      DELETE FROM transcriptions WHERE project_id = ?
+    `).bind(projectId).run()
+
+    // リセット先のステータスを決定
+    let resetStatus = 'created'
+    if (project.source_type === 'text' && project.source_text) {
+      resetStatus = 'uploaded'
+    } else if (project.source_type === 'audio' && project.audio_r2_key) {
+      resetStatus = 'uploaded'
+    }
+
+    // ステータス更新
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET status = ?,
+          error_message = NULL,
+          last_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(resetStatus, projectId).run()
+
+    console.log(`[ResetToInput] Project ${projectId} reset to ${resetStatus}`)
+
+    return c.json({
+      success: true,
+      message: 'Project reset to input successfully',
+      project_id: parseInt(projectId),
+      reset_to: resetStatus
+    })
+  } catch (error) {
+    console.error('Error in reset-to-input:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to reset project' }
+    }, 500)
+  }
+})
+
 // GET /api/projects/:id/chunks - チャンク一覧取得（失敗チャンク確認用）
 projects.get('/:id/chunks', async (c) => {
   try {
