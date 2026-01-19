@@ -1,4 +1,23 @@
 {
+  "version": "2.0",
+  "updated_at": "2026-01-19",
+  "providers": {
+    "google": {
+      "name": "Google TTS",
+      "status": "active",
+      "description": "Google Cloud Text-to-Speech API"
+    },
+    "fish": {
+      "name": "Fish Audio",
+      "status": "active",
+      "description": "Fish Audio TTS API"
+    },
+    "elevenlabs": {
+      "name": "ElevenLabs",
+      "status": "coming_soon",
+      "description": "ElevenLabs Multilingual TTS（準備中）"
+    }
+  },
   "voice_presets": [
     {
       "id": "ja-JP-Neural2-B",
@@ -6,6 +25,7 @@
       "language": "ja-JP",
       "gender": "female",
       "provider": "google",
+      "tier": "premium",
       "description": "Google TTS Neural2 - 自然な女性の声"
     },
     {
@@ -14,6 +34,7 @@
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
+      "tier": "premium",
       "description": "Google TTS Neural2 - 自然な男性の声"
     },
     {
@@ -22,6 +43,7 @@
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
+      "tier": "premium",
       "description": "Google TTS Neural2 - 自然な男性の声"
     },
     {
@@ -30,6 +52,7 @@
       "language": "ja-JP",
       "gender": "female",
       "provider": "google",
+      "tier": "standard",
       "description": "WaveNet技術を使用した女性の声"
     },
     {
@@ -38,6 +61,7 @@
       "language": "ja-JP",
       "gender": "female",
       "provider": "google",
+      "tier": "standard",
       "description": "WaveNet技術を使用した女性の声"
     },
     {
@@ -46,6 +70,7 @@
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
+      "tier": "standard",
       "description": "WaveNet技術を使用した男性の声"
     },
     {
@@ -54,6 +79,7 @@
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
+      "tier": "standard",
       "description": "WaveNet技術を使用した男性の声"
     },
     {
@@ -62,6 +88,7 @@
       "language": "ja-JP",
       "gender": "female",
       "provider": "google",
+      "tier": "basic",
       "description": "標準的な女性の声"
     },
     {
@@ -70,6 +97,7 @@
       "language": "ja-JP",
       "gender": "female",
       "provider": "google",
+      "tier": "basic",
       "description": "標準的な女性の声"
     },
     {
@@ -78,6 +106,7 @@
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
+      "tier": "basic",
       "description": "標準的な男性の声"
     },
     {
@@ -86,6 +115,7 @@
       "language": "ja-JP",
       "gender": "male",
       "provider": "google",
+      "tier": "basic",
       "description": "標準的な男性の声"
     },
     {
@@ -94,7 +124,96 @@
       "language": "ja-JP",
       "gender": "female",
       "provider": "fish",
+      "tier": "premium",
       "description": "Fish Audio - 自然な女性の声"
+    },
+    {
+      "id": "el-aria",
+      "name": "Aria（女性）",
+      "language": "multilingual",
+      "gender": "female",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "9BWtsMINqrJLrRacOk9x",
+      "description": "ElevenLabs - 表現力豊かな女性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-sarah",
+      "name": "Sarah（女性）",
+      "language": "multilingual",
+      "gender": "female",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "EXAVITQu4vr4xnSDxMaL",
+      "description": "ElevenLabs - ソフトなニュース向け女性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-charlotte",
+      "name": "Charlotte（女性）",
+      "language": "multilingual",
+      "gender": "female",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "XB0fDUnXU5powFXDhCwa",
+      "description": "ElevenLabs - 魅力的なスウェーデン人女性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-adam",
+      "name": "Adam（男性）",
+      "language": "multilingual",
+      "gender": "male",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "pNInz6obpgDQGcFmaJgB",
+      "description": "ElevenLabs - 深いナレーション向け男性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-bill",
+      "name": "Bill（男性）",
+      "language": "multilingual",
+      "gender": "male",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "pqHfZKP75CvOlQylNhV4",
+      "description": "ElevenLabs - ドキュメンタリー向け男性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-brian",
+      "name": "Brian（男性）",
+      "language": "multilingual",
+      "gender": "male",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "nPczCjzI2devNBz1zQrb",
+      "description": "ElevenLabs - アメリカンナレーター男性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-lily",
+      "name": "Lily（女性）",
+      "language": "multilingual",
+      "gender": "female",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "pFZP5JQG7iQjIQuC4Bku",
+      "description": "ElevenLabs - イギリス英語の女性の声（準備中）",
+      "status": "coming_soon"
+    },
+    {
+      "id": "el-george",
+      "name": "George（男性）",
+      "language": "multilingual",
+      "gender": "male",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "JBFqnCBsd6RMkjVDRZzb",
+      "description": "ElevenLabs - イギリス英語の男性の声（準備中）",
+      "status": "coming_soon"
     }
   ]
 }
