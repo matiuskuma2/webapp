@@ -5511,6 +5511,7 @@ function renderVideoCard(video, sceneId) {
                class="w-full h-full object-cover"
                controls
                preload="metadata"
+               onerror="this.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画URLが期限切れです。再生成してください</div>'"
              ></video>`
           : video.status === 'generating'
             ? `<div class="w-full h-full flex items-center justify-center text-gray-400">

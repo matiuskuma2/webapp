@@ -309,7 +309,7 @@ window.AudioUI = {
    * Handle generate button click
    * @param {number} sceneId 
    */
-  async handleGenerate(sceneId) {
+  async handleGenerate(sceneId, forceRegenerate = false) {
     // Block if bulk generation is running
     if (window.isBulkImageGenerating) {
       showToast('一括生成中です。完了後に音声を生成できます。', 'warning');
@@ -328,8 +328,28 @@ window.AudioUI = {
     const selectedOption = voiceSelect?.options[voiceSelect.selectedIndex];
     const provider = selectedOption?.dataset?.provider || 'google';
     
-    // F-6: Fish Audio使用時の警告を削除（ユーザーの判断に委ねる）
-    // キャラクター登録時にFish Audioを選択している場合はそのまま生成
+    // 連打防止: 既存音声がある場合、同じ voice_id なら確認ダイアログを表示
+    if (!forceRegenerate) {
+      try {
+        const existingAudio = await window.AudioClient.fetchAudioForScene(sceneId);
+        const completedAudio = existingAudio?.audio_generations?.find(a => a.status === 'completed');
+        
+        if (completedAudio && completedAudio.voice_id === voiceId) {
+          // 同じ音声タイプで既に生成済み
+          const confirmRegenerate = confirm(
+            '同じ音声タイプで既に生成済みです。\n\n' +
+            '再生成するとコストがかかります。続行しますか？\n\n' +
+            '※セリフを変更した場合は「保存」してから再生成してください。'
+          );
+          if (!confirmRegenerate) {
+            return;
+          }
+        }
+      } catch (e) {
+        // 取得失敗は無視して続行
+        console.warn('[AudioUI] Failed to check existing audio:', e);
+      }
+    }
     
     try {
       // Set to generating state immediately
