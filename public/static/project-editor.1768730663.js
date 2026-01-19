@@ -6422,64 +6422,135 @@ async function showResetToInputModal() {
     const willDelete = data.will_delete;
     const willPreserve = data.will_preserve;
     
-    // Create modal HTML
+    // Calculate total items to delete
+    const totalItems = (willDelete.scenes || 0) + (willDelete.images || 0) + 
+                       (willDelete.audios || 0) + (willDelete.videos || 0);
+    
+    // Create modal HTML with strong warning
     const modalHtml = `
       <div id="resetToInputModal" class="fixed inset-0 flex items-center justify-center z-50">
-        <div class="absolute inset-0 bg-black/50" onclick="closeResetToInputModal()"></div>
-        <div class="relative bg-white rounded-xl shadow-xl w-[min(500px,94vw)] max-h-[90vh] overflow-y-auto">
+        <div class="absolute inset-0 bg-black/70"></div>
+        <div class="relative bg-white rounded-xl shadow-2xl w-[min(550px,94vw)] max-h-[90vh] overflow-y-auto border-4 border-red-500">
           <div class="p-6">
-            <h3 class="text-xl font-bold text-orange-600 mb-4">
-              <i class="fas fa-exclamation-triangle mr-2"></i>入力からやり直す
-            </h3>
+            <!-- Critical Warning Banner -->
+            <div class="bg-red-600 text-white p-4 rounded-lg mb-4 -mx-2 -mt-2">
+              <div class="flex items-center gap-3">
+                <i class="fas fa-radiation text-4xl animate-pulse"></i>
+                <div>
+                  <h3 class="text-xl font-bold">⚠️ 重大な警告 - データ完全削除</h3>
+                  <p class="text-red-100 text-sm mt-1">この操作は取り消せません</p>
+                </div>
+              </div>
+            </div>
             
-            <p class="text-gray-700 mb-4">
-              この操作により、シーンデータと生成済みコンテンツが削除されます。
-            </p>
+            <!-- Main Warning Message -->
+            <div class="bg-yellow-50 border-2 border-yellow-400 rounded-lg p-4 mb-4">
+              <p class="text-yellow-800 font-bold text-center">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                以下のデータが完全に削除され、二度と復元できません
+              </p>
+            </div>
             
-            <div class="mb-4 p-3 bg-red-50 rounded-lg border border-red-200">
-              <h4 class="font-semibold text-red-700 mb-2">
-                <i class="fas fa-trash mr-1"></i>削除されるデータ
+            <!-- Deletion Details -->
+            <div class="mb-4 p-4 bg-red-50 rounded-lg border-2 border-red-300">
+              <h4 class="font-bold text-red-800 mb-3 text-lg">
+                <i class="fas fa-skull-crossbones mr-2"></i>完全削除されるデータ
               </h4>
-              <ul class="text-sm text-red-600 space-y-1">
-                <li>• シーンデータ: <strong>${willDelete.scenes}件</strong></li>
-                <li>• 生成済み画像: <strong>${willDelete.images}件</strong></li>
-                <li>• 生成済み音声: <strong>${willDelete.audios}件</strong></li>
-                <li>• 生成済み動画: <strong>${willDelete.videos}件</strong></li>
-                <li>• テキストチャンク: <strong>${willDelete.chunks}件</strong></li>
+              <ul class="text-red-700 space-y-2">
+                <li class="flex justify-between border-b border-red-200 pb-1">
+                  <span><i class="fas fa-film mr-2"></i>シーンデータ</span>
+                  <strong class="text-red-800">${willDelete.scenes}件</strong>
+                </li>
+                <li class="flex justify-between border-b border-red-200 pb-1">
+                  <span><i class="fas fa-image mr-2"></i>生成済み画像（全履歴含む）</span>
+                  <strong class="text-red-800">${willDelete.images}件</strong>
+                </li>
+                <li class="flex justify-between border-b border-red-200 pb-1">
+                  <span><i class="fas fa-volume-up mr-2"></i>生成済み音声（全履歴含む）</span>
+                  <strong class="text-red-800">${willDelete.audios}件</strong>
+                </li>
+                <li class="flex justify-between border-b border-red-200 pb-1">
+                  <span><i class="fas fa-video mr-2"></i>生成済み動画</span>
+                  <strong class="text-red-800">${willDelete.videos}件</strong>
+                </li>
+                <li class="flex justify-between">
+                  <span><i class="fas fa-puzzle-piece mr-2"></i>テキストチャンク</span>
+                  <strong class="text-red-800">${willDelete.chunks}件</strong>
+                </li>
+              </ul>
+              <div class="mt-3 pt-3 border-t-2 border-red-300">
+                <p class="text-red-800 font-bold text-center">
+                  合計 <span class="text-2xl">${totalItems}</span> 件のコンテンツが削除されます
+                </p>
+              </div>
+            </div>
+            
+            <!-- Impact Warning -->
+            <div class="mb-4 p-3 bg-orange-50 rounded-lg border border-orange-300">
+              <h4 class="font-semibold text-orange-800 mb-2">
+                <i class="fas fa-ban mr-1"></i>削除後にできなくなること
+              </h4>
+              <ul class="text-sm text-orange-700 space-y-1">
+                <li>• <strong>ダウンロード不可</strong>: 生成した画像・音声・動画はダウンロードできなくなります</li>
+                <li>• <strong>履歴消失</strong>: シーンごとの生成履歴は全て失われます</li>
+                <li>• <strong>復元不可</strong>: 一度削除したデータは復元できません</li>
               </ul>
             </div>
             
-            <div class="mb-6 p-3 bg-green-50 rounded-lg border border-green-200">
+            <!-- Preserved Data -->
+            <div class="mb-4 p-3 bg-green-50 rounded-lg border border-green-200">
               <h4 class="font-semibold text-green-700 mb-2">
-                <i class="fas fa-check mr-1"></i>保持されるデータ
+                <i class="fas fa-shield-alt mr-1"></i>保持されるデータ
               </h4>
               <ul class="text-sm text-green-600 space-y-1">
                 <li>• キャラクター設定: <strong>${willPreserve.characters}人</strong></li>
-                <li>• ワールド設定: <strong>${willPreserve.world_settings > 0 ? 'あり' : 'なし'}</strong></li>
-                <li>• スタイル設定: <strong>${willPreserve.style_settings > 0 ? 'あり' : 'なし'}</strong></li>
-                <li>• 入力テキスト: <strong>${willPreserve.source_text ? '保持' : 'なし'}</strong></li>
-                <li>• 音声ファイル: <strong>${willPreserve.audio_r2_key ? '保持' : 'なし'}</strong></li>
+                <li>• ワールド設定・スタイル設定</li>
+                <li>• 入力テキスト${willPreserve.source_text ? '（保持）' : '（なし）'}</li>
               </ul>
             </div>
             
+            <!-- Confirmation Checkbox -->
+            <div class="mb-4 p-3 bg-gray-100 rounded-lg">
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" id="resetConfirmCheckbox" class="mt-1 w-5 h-5 accent-red-600">
+                <span class="text-gray-700 text-sm">
+                  上記の内容を理解し、<strong class="text-red-600">${totalItems}件のデータが完全に削除される</strong>ことに同意します
+                </span>
+              </label>
+            </div>
+            
+            <!-- Action Buttons -->
             <div class="flex gap-3 justify-end">
               <button 
                 onclick="closeResetToInputModal()"
-                class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold"
+                class="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-bold"
               >
-                キャンセル
+                <i class="fas fa-times mr-2"></i>キャンセル（安全）
               </button>
               <button 
+                id="resetExecuteBtn"
                 onclick="executeResetToInput()"
-                class="px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-semibold"
+                disabled
+                class="px-6 py-3 bg-red-600 text-white rounded-lg transition-colors font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-red-700"
               >
-                <i class="fas fa-undo mr-1"></i>リセットを実行
+                <i class="fas fa-trash-alt mr-2"></i>完全削除を実行
               </button>
             </div>
           </div>
         </div>
       </div>
     `;
+    
+    // Enable button only when checkbox is checked
+    setTimeout(() => {
+      const checkbox = document.getElementById('resetConfirmCheckbox');
+      const btn = document.getElementById('resetExecuteBtn');
+      if (checkbox && btn) {
+        checkbox.addEventListener('change', () => {
+          btn.disabled = !checkbox.checked;
+        });
+      }
+    }, 100);
     
     // Add modal to DOM
     const modalContainer = document.createElement('div');
