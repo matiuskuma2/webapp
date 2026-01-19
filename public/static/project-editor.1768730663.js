@@ -6623,7 +6623,8 @@ async function executeResetToInput() {
         : 'リセット完了: シーン・画像・音声を削除しました';
       showToast(msg, 'success');
       
-      // Update project status in cache
+      // Update project status in cache (both local and window scope)
+      currentProject.status = response.data.reset_to;
       if (window.currentProject) {
         window.currentProject.status = response.data.reset_to;
       }
