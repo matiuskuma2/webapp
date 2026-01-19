@@ -1084,13 +1084,14 @@ videoGeneration.get('/video-builds/usage', async (c) => {
     const userId = session.user_id;
     
     // Get usage stats from system settings
+    // Note: Table uses 'key' and 'value' columns (not 'setting_key' and 'setting_value')
     const settings = await c.env.DB.prepare(`
-      SELECT setting_key, setting_value FROM system_settings
-      WHERE setting_key IN ('video_build_daily_limit', 'video_build_concurrent_limit')
+      SELECT key, value FROM system_settings
+      WHERE key IN ('video_build_daily_limit', 'video_build_concurrent_limit')
     `).all();
     
     const settingsMap = new Map(
-      (settings.results || []).map((r: any) => [r.setting_key, r.setting_value])
+      (settings.results || []).map((r: any) => [r.key, r.value])
     );
     
     const dailyLimit = parseInt(settingsMap.get('video_build_daily_limit') || '3', 10);

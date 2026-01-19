@@ -838,4 +838,94 @@ projects.get('/:id/chunks', async (c) => {
   }
 })
 
+/**
+ * GET /api/projects/:id/scene-split-settings
+ * Get scene split settings for a project
+ */
+projects.get('/:id/scene-split-settings', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
+    }
+
+    // Get settings or return defaults
+    const settings = await c.env.DB.prepare(`
+      SELECT target_scene_count, min_chars, max_chars, pacing, use_world_bible
+      FROM scene_split_settings
+      WHERE project_id = ?
+    `).bind(projectId).first()
+
+    if (settings) {
+      return c.json(settings)
+    }
+
+    // Return defaults if no settings exist
+    return c.json({
+      target_scene_count: 20,
+      min_chars: 800,
+      max_chars: 1500,
+      pacing: 'normal',
+      use_world_bible: 1
+    })
+  } catch (error) {
+    console.error('[Projects] Failed to get scene split settings:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get settings' } }, 500)
+  }
+})
+
+/**
+ * PUT /api/projects/:id/scene-split-settings
+ * Update scene split settings for a project
+ */
+projects.put('/:id/scene-split-settings', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
+    }
+
+    const body = await c.req.json()
+    const { target_scene_count, min_chars, max_chars, pacing, use_world_bible } = body
+
+    // Validate
+    if (target_scene_count && (target_scene_count < 5 || target_scene_count > 200)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'target_scene_count must be 5-200' } }, 400)
+    }
+    if (min_chars && (min_chars < 200 || min_chars > 3000)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'min_chars must be 200-3000' } }, 400)
+    }
+    if (max_chars && (max_chars < 500 || max_chars > 5000)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'max_chars must be 500-5000' } }, 400)
+    }
+    if (min_chars && max_chars && min_chars >= max_chars) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'min_chars must be less than max_chars' } }, 400)
+    }
+
+    // Upsert settings (SQLite INSERT OR REPLACE)
+    await c.env.DB.prepare(`
+      INSERT INTO scene_split_settings (project_id, target_scene_count, min_chars, max_chars, pacing, use_world_bible)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        target_scene_count = excluded.target_scene_count,
+        min_chars = excluded.min_chars,
+        max_chars = excluded.max_chars,
+        pacing = excluded.pacing,
+        use_world_bible = excluded.use_world_bible
+    `).bind(
+      projectId,
+      target_scene_count ?? 20,
+      min_chars ?? 800,
+      max_chars ?? 1500,
+      pacing ?? 'normal',
+      use_world_bible ?? 1
+    ).run()
+
+    return c.json({ success: true })
+  } catch (error) {
+    console.error('[Projects] Failed to save scene split settings:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to save settings' } }, 500)
+  }
+})
+
 export default projects
