@@ -131,6 +131,9 @@ window.AudioState = {
           if (window.AudioUI) {
             window.AudioUI.updatePreview(sceneId, latest);
             window.AudioUI.setButtonState(sceneId, 'completed', 100);
+            
+            // Phase 4: Refresh TTS usage display after generation
+            window.AudioUI.refreshTTSUsage();
           }
           // Show toast for character voice generation
           if (window.showToast) {

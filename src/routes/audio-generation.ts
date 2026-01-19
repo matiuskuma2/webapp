@@ -717,4 +717,160 @@ audioGeneration.get('/tts/voices', async (c) => {
   }
 });
 
+// ===== Phase 4: TTS Usage Summary API =====
+// SSOT: docs/TTS_USAGE_LIMITS_SPEC.md
+
+const TTS_LIMITS = {
+  MONTHLY_LIMIT_USD: 100,
+  WARNING_70_PERCENT: 70,
+  WARNING_85_PERCENT: 85,
+  WARNING_95_PERCENT: 95,
+  DAILY_LIMIT_CHARACTERS: 500_000,
+};
+
+function getWarningLevel(percentage: number): string {
+  if (percentage >= 100) return 'limit_reached';
+  if (percentage >= 95) return 'warning_95';
+  if (percentage >= 85) return 'warning_85';
+  if (percentage >= 70) return 'warning_70';
+  return 'none';
+}
+
+/**
+ * GET /api/tts/usage
+ * TTS使用量サマリー（月間/日次/プロバイダ別）
+ */
+audioGeneration.get('/tts/usage', async (c) => {
+  try {
+    const userId = 1; // TODO: 認証から取得
+
+    // 今月の開始日（UTC）
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const monthStartStr = monthStart.toISOString().slice(0, 10);
+    
+    // 今日の開始日（UTC）
+    const todayStart = now.toISOString().slice(0, 10);
+    
+    // 次月1日（リセット日）
+    const nextMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1));
+    const nextResetStr = nextMonth.toISOString();
+
+    // 月間使用量（プロバイダ別）
+    const { results: monthlyByProvider } = await c.env.DB.prepare(`
+      SELECT 
+        provider,
+        SUM(text_length) as total_characters,
+        SUM(estimated_cost_usd) as total_cost,
+        COUNT(*) as request_count
+      FROM tts_usage_logs
+      WHERE created_at >= ? AND status = 'success'
+      GROUP BY provider
+    `).bind(monthStartStr).all();
+
+    // 日次使用量
+    const dailyResult = await c.env.DB.prepare(`
+      SELECT 
+        SUM(text_length) as total_characters,
+        COUNT(*) as request_count
+      FROM tts_usage_logs
+      WHERE created_at >= ? AND status = 'success'
+    `).bind(todayStart).first<any>();
+
+    // プロバイダ別集計
+    const byProvider = {
+      google: { characters: 0, cost_usd: 0, requests: 0 },
+      fish: { characters: 0, cost_usd: 0, requests: 0 },
+      elevenlabs: { characters: 0, cost_usd: 0, requests: 0 },
+    };
+
+    let monthlyTotalCost = 0;
+    let monthlyTotalChars = 0;
+
+    for (const row of monthlyByProvider || []) {
+      const provider = (row as any).provider as keyof typeof byProvider;
+      if (byProvider[provider]) {
+        byProvider[provider].characters = Number((row as any).total_characters) || 0;
+        byProvider[provider].cost_usd = Number((row as any).total_cost) || 0;
+        byProvider[provider].requests = Number((row as any).request_count) || 0;
+      }
+      monthlyTotalCost += Number((row as any).total_cost) || 0;
+      monthlyTotalChars += Number((row as any).total_characters) || 0;
+    }
+
+    const percentage = Math.round((monthlyTotalCost / TTS_LIMITS.MONTHLY_LIMIT_USD) * 100);
+    const warningLevel = getWarningLevel(percentage);
+
+    const dailyChars = Number(dailyResult?.total_characters) || 0;
+
+    return c.json({
+      monthly: {
+        used_usd: Math.round(monthlyTotalCost * 1000) / 1000,
+        limit_usd: TTS_LIMITS.MONTHLY_LIMIT_USD,
+        remaining_usd: Math.round((TTS_LIMITS.MONTHLY_LIMIT_USD - monthlyTotalCost) * 1000) / 1000,
+        percentage,
+        characters_used: monthlyTotalChars,
+      },
+      daily: {
+        characters_used: dailyChars,
+        limit_characters: TTS_LIMITS.DAILY_LIMIT_CHARACTERS,
+        remaining_characters: Math.max(0, TTS_LIMITS.DAILY_LIMIT_CHARACTERS - dailyChars),
+      },
+      by_provider: byProvider,
+      warning_level: warningLevel,
+      next_reset: nextResetStr,
+      limits: TTS_LIMITS,
+    });
+  } catch (error) {
+    console.error('[TTS Usage] Error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to get TTS usage'), 500);
+  }
+});
+
+/**
+ * GET /api/tts/usage/check
+ * TTS生成前の上限チェック（生成可否判定）
+ */
+audioGeneration.get('/tts/usage/check', async (c) => {
+  try {
+    const textLength = Number(c.req.query('text_length')) || 0;
+    const provider = c.req.query('provider') || 'google';
+
+    // 月間使用量を取得
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const monthStartStr = monthStart.toISOString().slice(0, 10);
+
+    const result = await c.env.DB.prepare(`
+      SELECT SUM(estimated_cost_usd) as total_cost
+      FROM tts_usage_logs
+      WHERE created_at >= ? AND status = 'success'
+    `).bind(monthStartStr).first<any>();
+
+    const currentCost = Number(result?.total_cost) || 0;
+    const estimatedCost = estimateTTSCost(provider, textLength);
+    const newTotalCost = currentCost + estimatedCost;
+    const percentage = Math.round((newTotalCost / TTS_LIMITS.MONTHLY_LIMIT_USD) * 100);
+
+    const allowed = newTotalCost < TTS_LIMITS.MONTHLY_LIMIT_USD;
+    const warningLevel = getWarningLevel(percentage);
+
+    return c.json({
+      allowed,
+      warning_level: warningLevel,
+      current_usage_usd: Math.round(currentCost * 1000) / 1000,
+      estimated_cost_usd: Math.round(estimatedCost * 10000) / 10000,
+      new_total_usd: Math.round(newTotalCost * 1000) / 1000,
+      limit_usd: TTS_LIMITS.MONTHLY_LIMIT_USD,
+      percentage,
+      message: allowed 
+        ? (warningLevel === 'none' ? null : `使用量が${percentage}%に達しています`)
+        : '月間上限に達しました。来月までお待ちください。',
+    });
+  } catch (error) {
+    console.error('[TTS Usage Check] Error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to check TTS usage'), 500);
+  }
+});
+
 export default audioGeneration;

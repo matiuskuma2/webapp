@@ -4,6 +4,8 @@
 window.AudioUI = {
   voicePresets: [],
   observer: null, // IntersectionObserver instance (Phase X-0)
+  ttsUsage: null, // Phase 4: TTS usage cache
+  ttsUsageLastFetch: null, // Last fetch timestamp
   
   /**
    * Initialize audio UI for all scenes
@@ -12,8 +14,11 @@ window.AudioUI = {
   async initForScenes(scenes) {
     console.log('[AudioUI] Initializing for scenes:', scenes.length);
     
-    // Load voice presets
-    await this.loadVoicePresets();
+    // Load voice presets and TTS usage (Phase 4)
+    await Promise.all([
+      this.loadVoicePresets(),
+      this.loadTTSUsage()
+    ]);
     
     // Initialize each scene's audio section
     for (const scene of scenes) {
@@ -29,8 +34,11 @@ window.AudioUI = {
   async initForVisibleScenes(scenes) {
     console.log('[AudioUI] Initializing lazy loading for scenes:', scenes.length);
     
-    // Load voice presets once
-    await this.loadVoicePresets();
+    // Load voice presets and TTS usage once (Phase 4)
+    await Promise.all([
+      this.loadVoicePresets(),
+      this.loadTTSUsage()
+    ]);
     
     // Create IntersectionObserver if not exists
     if (!this.observer) {
@@ -92,6 +100,104 @@ window.AudioUI = {
     }
   },
 
+  // ===== Phase 4: TTS Usage Tracking =====
+  
+  /**
+   * Load TTS usage data from API (with cache)
+   * キャッシュは5分間有効
+   */
+  async loadTTSUsage() {
+    const now = Date.now();
+    const cacheExpiry = 5 * 60 * 1000; // 5 minutes
+    
+    if (this.ttsUsage && this.ttsUsageLastFetch && (now - this.ttsUsageLastFetch < cacheExpiry)) {
+      return this.ttsUsage;
+    }
+    
+    try {
+      const response = await axios.get('/api/tts/usage');
+      this.ttsUsage = response.data;
+      this.ttsUsageLastFetch = now;
+      console.log('[AudioUI] TTS usage loaded:', this.ttsUsage.monthly.percentage + '%');
+      return this.ttsUsage;
+    } catch (error) {
+      console.error('[AudioUI] Failed to load TTS usage:', error);
+      return null;
+    }
+  },
+  
+  /**
+   * Generate TTS usage bar HTML
+   */
+  generateTTSUsageBarHTML() {
+    const usage = this.ttsUsage;
+    if (!usage) return '';
+    
+    const percentage = usage.monthly.percentage;
+    const warningLevel = usage.warning_level;
+    
+    // Color by warning level
+    let barColor = 'bg-green-500';
+    let textColor = 'text-green-700';
+    let warningIcon = '';
+    let warningMessage = '';
+    
+    if (warningLevel === 'limit_reached') {
+      barColor = 'bg-red-500';
+      textColor = 'text-red-700';
+      warningIcon = '<i class="fas fa-ban mr-1"></i>';
+      warningMessage = '<span class="text-red-600 text-xs font-bold ml-2">上限到達</span>';
+    } else if (warningLevel === 'warning_95') {
+      barColor = 'bg-red-500';
+      textColor = 'text-red-700';
+      warningIcon = '<i class="fas fa-exclamation-triangle mr-1 text-red-500"></i>';
+      warningMessage = '<span class="text-red-600 text-xs ml-2">残りわずか!</span>';
+    } else if (warningLevel === 'warning_85') {
+      barColor = 'bg-orange-500';
+      textColor = 'text-orange-700';
+      warningIcon = '<i class="fas fa-exclamation-circle mr-1 text-orange-500"></i>';
+      warningMessage = '<span class="text-orange-600 text-xs ml-2">注意</span>';
+    } else if (warningLevel === 'warning_70') {
+      barColor = 'bg-yellow-500';
+      textColor = 'text-yellow-700';
+    }
+    
+    return `
+      <div class="mb-3 p-2 bg-gray-50 rounded-lg border border-gray-200">
+        <div class="flex items-center justify-between mb-1">
+          <span class="text-xs text-gray-600">
+            ${warningIcon}今月の使用量
+          </span>
+          <span class="text-xs ${textColor} font-semibold">
+            $${usage.monthly.used_usd.toFixed(2)} / $${usage.monthly.limit_usd}
+            ${warningMessage}
+          </span>
+        </div>
+        <div class="w-full bg-gray-200 rounded-full h-2">
+          <div class="${barColor} h-2 rounded-full transition-all duration-300" style="width: ${Math.min(100, percentage)}%"></div>
+        </div>
+        <div class="flex justify-between mt-1">
+          <span class="text-xs text-gray-500">${usage.monthly.characters_used.toLocaleString()} 文字</span>
+          <span class="text-xs text-gray-500">${percentage}%</span>
+        </div>
+      </div>
+    `;
+  },
+  
+  /**
+   * Update TTS usage display (can be called after generation)
+   */
+  async refreshTTSUsage() {
+    // Clear cache to force reload
+    this.ttsUsageLastFetch = null;
+    await this.loadTTSUsage();
+    
+    // Update all usage bars
+    document.querySelectorAll('.tts-usage-bar').forEach(bar => {
+      bar.innerHTML = this.generateTTSUsageBarHTML();
+    });
+  },
+
   /**
    * Initialize audio UI for a single scene
    * @param {object} scene 
@@ -126,6 +232,9 @@ window.AudioUI = {
     ).join('');
     
     return `
+      <!-- Phase 4: TTS Usage Bar -->
+      <div class="tts-usage-bar">${this.generateTTSUsageBarHTML()}</div>
+      
       <!-- Voice Preset Selector -->
       <div class="mb-3">
         <label class="block text-sm font-semibold text-gray-700 mb-2">
@@ -260,16 +369,22 @@ window.AudioUI = {
   /**
    * Set button state (FIXED DOM - only update content/classes)
    * @param {number} sceneId 
-   * @param {string} state - 'idle' | 'generating' | 'completed' | 'failed'
+   * @param {string} state - 'idle' | 'generating' | 'completed' | 'failed' | 'limit_reached'
    * @param {number} percent - 0-100
    */
   setButtonState(sceneId, state, percent) {
     const btn = document.getElementById(`audioPrimaryBtn-${sceneId}`);
     if (!btn) return;
     
+    // Phase 4: Check if limit reached
+    if (this.ttsUsage?.warning_level === 'limit_reached' && state !== 'generating') {
+      state = 'limit_reached';
+    }
+    
     // Remove all state classes
     btn.classList.remove('bg-blue-600', 'hover:bg-blue-700', 'bg-yellow-500', 'hover:bg-yellow-600', 
-                         'bg-green-600', 'hover:bg-green-700', 'bg-red-600', 'hover:bg-red-700');
+                         'bg-green-600', 'hover:bg-green-700', 'bg-red-600', 'hover:bg-red-700',
+                         'bg-gray-400', 'cursor-not-allowed');
     
     // Apply state-specific styling
     switch (state) {
@@ -295,6 +410,14 @@ window.AudioUI = {
         btn.classList.add('bg-red-600', 'hover:bg-red-700');
         btn.innerHTML = '<i class="fas fa-exclamation-triangle mr-2"></i>再生成';
         btn.disabled = false;
+        break;
+        
+      // Phase 4: Limit reached state
+      case 'limit_reached':
+        btn.classList.add('bg-gray-400', 'cursor-not-allowed');
+        btn.innerHTML = '<i class="fas fa-ban mr-2"></i>上限到達';
+        btn.disabled = true;
+        btn.title = '月間使用量の上限に達しました。来月までお待ちください。';
         break;
     }
   },
