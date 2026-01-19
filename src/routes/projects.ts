@@ -343,9 +343,10 @@ projects.get('/:id/scenes', async (c) => {
 
     // シーン一覧取得（idx順、スタイル設定含む）
     // Phase1.7: display_asset_type, comic_data を追加
+    // Phase X-3: speech_type を追加
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT 
-        s.id, s.idx, s.role, s.title, s.dialogue, s.bullets, s.image_prompt, 
+        s.id, s.idx, s.role, s.title, s.dialogue, s.speech_type, s.bullets, s.image_prompt, 
         s.chunk_id, s.created_at, s.updated_at, s.display_asset_type, s.comic_data,
         sss.style_preset_id
       FROM scenes s
@@ -365,6 +366,7 @@ projects.get('/:id/scenes', async (c) => {
           role: scene.role,
           title: scene.title,
           dialogue: scene.dialogue,
+          speech_type: scene.speech_type || 'narration',
           bullets: JSON.parse(scene.bullets),
           image_prompt: scene.image_prompt,
           chunk_id: scene.chunk_id
@@ -445,6 +447,7 @@ projects.get('/:id/scenes', async (c) => {
             role: scene.role,
             title: scene.title,
             dialogue: scene.dialogue.substring(0, 100), // 最初の100文字のみ
+            speech_type: scene.speech_type || 'narration',
             bullets: JSON.parse(scene.bullets),
             image_prompt: scene.image_prompt.substring(0, 100), // 最初の100文字のみ
             style_preset_id: scene.style_preset_id || null,
@@ -562,6 +565,7 @@ projects.get('/:id/scenes', async (c) => {
           role: scene.role,
           title: scene.title,
           dialogue: scene.dialogue,
+          speech_type: scene.speech_type || 'narration',
           bullets: JSON.parse(scene.bullets),
           image_prompt: scene.image_prompt,
           created_at: scene.created_at,

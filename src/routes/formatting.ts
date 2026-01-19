@@ -489,14 +489,15 @@ async function processTextChunks(c: any, projectId: string, project: any) {
 
         return c.env.DB.prepare(`
           INSERT INTO scenes (
-            project_id, idx, role, title, dialogue, bullets, image_prompt, chunk_id
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            project_id, idx, role, title, dialogue, speech_type, bullets, image_prompt, chunk_id
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(
           projectId,
           tempIdx,
           scene.role || 'context',
           scene.title || '',
           scene.dialogue || '',
+          scene.speech_type || 'narration', // デフォルトはnarration
           JSON.stringify(scene.bullets || []),
           scene.image_prompt || '',
           chunk.id
@@ -650,14 +651,15 @@ async function processAudioTranscription(c: any, projectId: string, project: any
     const insertStatements = scenario.scenes.map(scene => {
       return c.env.DB.prepare(`
         INSERT INTO scenes (
-          project_id, idx, role, title, dialogue, bullets, image_prompt, chunk_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)
+          project_id, idx, role, title, dialogue, speech_type, bullets, image_prompt, chunk_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
       `).bind(
         projectId,
         scene.idx,
         scene.role,
         scene.title,
         scene.dialogue,
+        scene.speech_type || 'narration', // デフォルトはnarration
         JSON.stringify(scene.bullets),
         scene.image_prompt
       )
@@ -971,6 +973,16 @@ async function generateMiniScenesWithSchema(
 4. 各シーンの title は **10〜40 文字**
 5. 各シーンの image_prompt は **30〜400 文字**（英語推奨、具体的に描写）
 6. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
+7. speech_type は **必ず判定**:
+   - "dialogue": キャラクターが話す台詞（「」で囲まれた発言、直接話法）
+   - "narration": ナレーション、説明文、状況描写、第三者視点の語り
+
+【speech_type の判定基準】
+- 文章が「」や『』で囲まれた発言 → dialogue
+- 「〜と言った」「〜と告げる」などの引用 → dialogue
+- 状況説明、背景描写、解説 → narration
+- 視聴者への直接的な語りかけ → narration
+- 迷った場合は narration を選択
 
 【role の使い方】
 - hook: 視聴者の興味を引くオープニング
@@ -1011,6 +1023,11 @@ ${chunkText}
               },
               title: { type: 'string', minLength: 10, maxLength: 40 },
               dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              speech_type: {
+                type: 'string',
+                enum: ['dialogue', 'narration'],
+                description: 'dialogue=キャラクターの台詞, narration=ナレーション・説明'
+              },
               bullets: {
                 type: 'array',
                 minItems: 2,
@@ -1019,7 +1036,7 @@ ${chunkText}
               },
               image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
             },
-            required: ['role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            required: ['role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
           }
         }
@@ -1123,12 +1140,13 @@ async function repairMiniScenes(
 【修正ルール】
 - シーン数は 1-3 個
 - dialogue は 60〜140 文字
+- speech_type は "dialogue"（台詞）または "narration"（ナレーション）
 - bullets は 2〜3 個、各 8〜24 文字
 - title は 10〜40 文字
 - image_prompt は 30〜400 文字
 - 全フィールド必須
 
-内容を変えず、フォーマットのみ修正してください。`
+内容を変えず、フォーマットのみ修正してください。speech_typeがない場合は内容から推測してください。`
 
     const userPrompt = `以下のJSONを修正してください：
 
@@ -1150,6 +1168,10 @@ ${brokenJson}`
               },
               title: { type: 'string', minLength: 10, maxLength: 40 },
               dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              speech_type: {
+                type: 'string',
+                enum: ['dialogue', 'narration']
+              },
               bullets: {
                 type: 'array',
                 minItems: 2,
@@ -1158,7 +1180,7 @@ ${brokenJson}`
               },
               image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
             },
-            required: ['role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            required: ['role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
           }
         }
@@ -1254,6 +1276,16 @@ async function generateWithSchema(
 7. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
 8. idx は 1 から連番（欠番なし）
 9. metadata.total_scenes は scenes.length と一致させること
+10. speech_type は **必ず判定**:
+    - "dialogue": キャラクターが話す台詞（「」で囲まれた発言、直接話法）
+    - "narration": ナレーション、説明文、状況描写、第三者視点の語り
+
+【speech_type の判定基準】
+- 文章が「」や『』で囲まれた発言 → dialogue
+- 「〜と言った」「〜と告げる」などの引用 → dialogue
+- 状況説明、背景描写、解説 → narration
+- 視聴者への直接的な語りかけ → narration
+- 迷った場合は narration を選択
 
 【role の使い方】
 - hook: 視聴者の興味を引くオープニング
@@ -1307,6 +1339,10 @@ ${rawText}
               },
               title: { type: 'string', minLength: 1, maxLength: 50 },
               dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              speech_type: {
+                type: 'string',
+                enum: ['dialogue', 'narration']
+              },
               bullets: {
                 type: 'array',
                 minItems: 2,
@@ -1315,7 +1351,7 @@ ${rawText}
               },
               image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
             },
-            required: ['idx', 'role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            required: ['idx', 'role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
           }
         }
@@ -1418,6 +1454,7 @@ async function repairScenarioFormat(
 
 【修正ルール】
 - dialogue は 60〜140 文字（短すぎる場合は補完、長すぎる場合は短縮）
+- speech_type は "dialogue"（台詞）または "narration"（ナレーション）
 - bullets は 2〜3 個、各 8〜24 文字
 - title は 10〜40 文字
 - image_prompt は 30〜400 文字
@@ -1425,7 +1462,7 @@ async function repairScenarioFormat(
 - idx は連番
 - metadata.total_scenes は scenes.length と一致
 
-内容を変えず、フォーマットのみ修正してください。`
+内容を変えず、フォーマットのみ修正してください。speech_typeがない場合は内容から推測してください。`
 
     const userPrompt = `以下のJSONを修正してください：
 
@@ -1459,6 +1496,10 @@ ${brokenJson}`
               },
               title: { type: 'string', minLength: 1, maxLength: 50 },
               dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              speech_type: {
+                type: 'string',
+                enum: ['dialogue', 'narration']
+              },
               bullets: {
                 type: 'array',
                 minItems: 2,
@@ -1467,7 +1508,7 @@ ${brokenJson}`
               },
               image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
             },
-            required: ['idx', 'role', 'title', 'dialogue', 'bullets', 'image_prompt'],
+            required: ['idx', 'role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
           }
         }
