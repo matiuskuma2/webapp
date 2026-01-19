@@ -300,7 +300,9 @@ CREATE TABLE video_builds (
 
 ### 7.1 確認済みの問題
 
-- [ ] フロントエンドで `active_audio` がシーンデータに含まれていない
+- [x] ~~フロントエンドで `active_audio` がシーンデータに含まれていない~~ → **修正済み (2026-01-19)**
+  - video-generation.ts の preflight / create エンドポイントで audio_generations テーブルから取得するように修正
+  - duration_ms はテキスト長から推定（日本語約300ms/文字、最低2秒）
 - [ ] 漫画モードの `comic_data.utterances[].audio_url` の反映確認
 - [ ] AWS Orchestrator のエラーハンドリング強化
 - [ ] presigned URL 期限切れ時の再取得フロー確認

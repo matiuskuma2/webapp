@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-18（Phase1.7: 漫画機能のUI/UX整合性完成）
+- **最終更新**: 2026-01-19（Video Build SSOT整備完了）
 
 ---
 
@@ -271,11 +271,36 @@ Proprietary - All rights reserved
 
 ---
 
-最終更新: 2026-01-18
+最終更新: 2026-01-19
 
 ---
 
-## Phase1.7 漫画機能（最新）
+## Video Build 機能（最新）
+
+### 概要
+全シーンの素材（画像/漫画/動画＋音声）を合算して、1本の動画（MP4）を生成する機能。
+
+### SSOT定義
+- **表示素材**: `scenes.display_asset_type` ('image' | 'comic' | 'video') に基づいて SSOT を切り替え
+  - image → `image_generations` (is_active=1, asset_type='ai' OR NULL)
+  - comic → `image_generations` (is_active=1, asset_type='comic')
+  - video → `video_generations` (is_active=1, status='completed')
+- **音声**: `audio_generations` (is_active=1, status='completed')
+- **尺計算**: 音声尺 + 500ms パディング（音声なし: デフォルト3000ms）
+
+### API エンドポイント
+- `GET /api/video-builds/usage` - 利用状況（月間/同時）
+- `GET /api/projects/:id/video-builds/preflight` - Preflight検証
+- `GET /api/projects/:id/video-builds` - ビルド一覧
+- `POST /api/projects/:id/video-builds` - ビルド開始
+- `POST /api/video-builds/:id/refresh` - ステータス更新
+
+### 詳細ドキュメント
+- `docs/VIDEO_BUILD_SSOT.md` - SSOT & 依存関係ドキュメント
+
+---
+
+## Phase1.7 漫画機能
 
 ### 主要機能
 - **漫画エディタ**: 6種類の吹き出し（speech_round, speech_oval, thought_oval, telop_bar, caption, whisper）
