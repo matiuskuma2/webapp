@@ -22,8 +22,17 @@ import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
 
 /**
+ * Default SITE_URL for webapp
+ * This is used as fallback when SITE_URL is not configured in environment
+ */
+const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+
+/**
  * Convert relative R2 URL to absolute URL using SITE_URL
  * For Remotion Lambda to access R2 content via webapp
+ * 
+ * CRITICAL: Remotion Lambda cannot resolve relative URLs and will append them
+ * to its own S3 bucket URL, causing 404 errors.
  */
 function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string | undefined): string | null {
   if (!relativeUrl) return null;
@@ -31,15 +40,17 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
   if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
     return relativeUrl;
   }
-  // Relative path - prefix with SITE_URL
-  if (siteUrl) {
-    const baseUrl = siteUrl.replace(/\/$/, ''); // Remove trailing slash
-    const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
-    return `${baseUrl}${path}`;
+  // Relative path - prefix with SITE_URL (with fallback)
+  const baseUrl = (siteUrl || DEFAULT_SITE_URL).replace(/\/$/, ''); // Remove trailing slash
+  const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+  const absoluteUrl = `${baseUrl}${path}`;
+  
+  // Log for debugging if using fallback
+  if (!siteUrl) {
+    console.warn('[Video Build] SITE_URL not configured, using fallback:', DEFAULT_SITE_URL);
   }
-  // No SITE_URL configured - return as-is (will fail in Remotion)
-  console.warn('[Video Build] No SITE_URL configured, relative URLs will not work in Remotion');
-  return relativeUrl;
+  
+  return absoluteUrl;
 }
 
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
