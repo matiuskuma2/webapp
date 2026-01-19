@@ -794,17 +794,41 @@ projects.get('/:id/reset-to-input/preview', async (c) => {
       }, 404)
     }
 
-    // リセット可能なステータス（uploaded以降）
-    const resetableStatuses = ['uploaded', 'transcribed', 'parsing', 'parsed', 'formatting', 'formatted', 'completed', 'failed']
-    const canReset = resetableStatuses.includes(project.status as string)
-
-    // 削除される項目をカウント
-    const [chunksCount, scenesCount, imagesCount, audiosCount] = await Promise.all([
+    // 削除される項目をカウント + 動画・漫画の存在チェック
+    const [chunksCount, scenesCount, imagesCount, audiosCount, videosCount, videoBuildCount, comicCount] = await Promise.all([
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM text_chunks WHERE project_id = ?`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ?`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
-      c.env.DB.prepare(`SELECT COUNT(*) as count FROM audio_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first()
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM audio_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM video_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM video_builds WHERE project_id = ?`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ? AND comic_data IS NOT NULL`).bind(projectId).first()
     ])
+
+    const videoBuildExists = ((videoBuildCount as any)?.count || 0) > 0
+    const comicExists = ((comicCount as any)?.count || 0) > 0
+    const sceneVideosExist = ((videosCount as any)?.count || 0) > 0
+
+    // リセット可能条件:
+    // 1. ステータスがリセット可能なもの
+    // 2. Video Build（最終動画）が存在しない
+    // 3. 漫画化データが存在しない
+    // 4. シーン動画が存在しない
+    const resetableStatuses = ['uploaded', 'transcribed', 'parsing', 'parsed', 'formatting', 'formatted', 'completed', 'failed']
+    const statusOk = resetableStatuses.includes(project.status as string)
+    const canReset = statusOk && !videoBuildExists && !comicExists && !sceneVideosExist
+
+    // リセット不可の理由
+    let blockReason = null
+    if (!statusOk) {
+      blockReason = `現在のステータス（${project.status}）ではリセットできません`
+    } else if (videoBuildExists) {
+      blockReason = '最終動画（Video Build）が作成済みのため、リセットできません。動画を削除してから再度お試しください。'
+    } else if (comicExists) {
+      blockReason = '漫画化データが存在するため、リセットできません。漫画データを削除してから再度お試しください。'
+    } else if (sceneVideosExist) {
+      blockReason = 'シーン動画が生成済みのため、リセットできません。動画を削除してから再度お試しください。'
+    }
 
     return c.json({
       project: {
@@ -814,18 +838,24 @@ projects.get('/:id/reset-to-input/preview', async (c) => {
         source_type: project.source_type
       },
       can_reset: canReset,
+      block_reason: blockReason,
+      has_video_build: videoBuildExists,
+      has_comic: comicExists,
+      has_scene_videos: sceneVideosExist,
       will_delete: {
         chunks: (chunksCount as any)?.count || 0,
         scenes: (scenesCount as any)?.count || 0,
         images: (imagesCount as any)?.count || 0,
-        audios: (audiosCount as any)?.count || 0
+        audios: (audiosCount as any)?.count || 0,
+        videos: (videosCount as any)?.count || 0
       },
       will_preserve: {
         source_text: project.source_type === 'text' && !!project.source_text,
-        audio_file: project.source_type === 'audio' && !!project.audio_r2_key,
-        characters: true,
-        world_settings: true,
-        style_settings: true
+        audio_r2_key: project.source_type === 'audio' && !!project.audio_r2_key,
+        characters: 0, // 後で実際のカウントを取得
+        world_settings: 0,
+        style_settings: 0,
+        video_builds: (videoBuildCount as any)?.count || 0 // Video Buildは保持される
       }
     })
   } catch (error) {
@@ -861,6 +891,40 @@ projects.post('/:id/reset-to-input', async (c) => {
         error: {
           code: 'INVALID_STATUS',
           message: `Cannot reset from status: ${project.status}`
+        }
+      }, 400)
+    }
+
+    // 動画・漫画の存在チェック（これらがあればリセット不可）
+    const [videoBuildCount, comicCount, sceneVideosCount] = await Promise.all([
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM video_builds WHERE project_id = ?`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ? AND comic_data IS NOT NULL`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM video_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first()
+    ])
+
+    if (((videoBuildCount as any)?.count || 0) > 0) {
+      return c.json({
+        error: {
+          code: 'VIDEO_BUILD_EXISTS',
+          message: '最終動画（Video Build）が作成済みのため、リセットできません'
+        }
+      }, 400)
+    }
+
+    if (((comicCount as any)?.count || 0) > 0) {
+      return c.json({
+        error: {
+          code: 'COMIC_EXISTS',
+          message: '漫画化データが存在するため、リセットできません'
+        }
+      }, 400)
+    }
+
+    if (((sceneVideosCount as any)?.count || 0) > 0) {
+      return c.json({
+        error: {
+          code: 'SCENE_VIDEOS_EXIST',
+          message: 'シーン動画が生成済みのため、リセットできません'
         }
       }, 400)
     }

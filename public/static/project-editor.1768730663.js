@@ -6415,7 +6415,38 @@ async function showResetToInputModal() {
     const data = response.data;
     
     if (!data.can_reset) {
-      showToast(`現在のステータス（${data.project.status}）ではリセットできません`, 'warning');
+      // Show detailed block reason
+      const reason = data.block_reason || `現在のステータス（${data.project.status}）ではリセットできません`;
+      
+      // Create info modal for blocked reset
+      const blockedHtml = `
+        <div id="resetBlockedModal" class="fixed inset-0 flex items-center justify-center z-50">
+          <div class="absolute inset-0 bg-black/50" onclick="document.getElementById('resetBlockedModal')?.remove()"></div>
+          <div class="relative bg-white rounded-xl shadow-xl w-[min(450px,94vw)] p-6">
+            <div class="text-center mb-4">
+              <i class="fas fa-lock text-5xl text-gray-400 mb-3"></i>
+              <h3 class="text-xl font-bold text-gray-800">リセットできません</h3>
+            </div>
+            <div class="bg-yellow-50 border border-yellow-300 rounded-lg p-4 mb-4">
+              <p class="text-yellow-800">${reason}</p>
+            </div>
+            ${data.has_video_build ? '<p class="text-sm text-gray-600 mb-2"><i class="fas fa-video mr-2 text-blue-500"></i>最終動画が作成済みです</p>' : ''}
+            ${data.has_comic ? '<p class="text-sm text-gray-600 mb-2"><i class="fas fa-book mr-2 text-purple-500"></i>漫画化データが存在します</p>' : ''}
+            ${data.has_scene_videos ? '<p class="text-sm text-gray-600 mb-2"><i class="fas fa-film mr-2 text-green-500"></i>シーン動画が生成済みです</p>' : ''}
+            <div class="text-center mt-4">
+              <button 
+                onclick="document.getElementById('resetBlockedModal')?.remove()"
+                class="px-6 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors font-semibold"
+              >
+                閉じる
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+      const container = document.createElement('div');
+      container.innerHTML = blockedHtml;
+      document.body.appendChild(container.firstElementChild);
       return;
     }
     
