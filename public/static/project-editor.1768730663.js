@@ -6514,11 +6514,12 @@ async function executeResetToInput() {
     const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/reset-to-input`);
     
     if (response.data.success) {
-      const deleted = response.data.deleted;
-      showToast(
-        `リセット完了: シーン${deleted.scenes}件、画像${deleted.images}件、音声${deleted.audios}件を削除しました`,
-        'success'
-      );
+      // API returns: { success, message, project_id, reset_to, deleted }
+      const deleted = response.data.deleted || {};
+      const msg = deleted.scenes !== undefined 
+        ? `リセット完了: シーン${deleted.scenes}件、画像${deleted.images}件、音声${deleted.audios}件、動画${deleted.videos}件を削除しました`
+        : 'リセット完了: シーン・画像・音声を削除しました';
+      showToast(msg, 'success');
       
       // Update project status in cache
       if (window.currentProject) {

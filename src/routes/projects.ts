@@ -865,7 +865,67 @@ projects.post('/:id/reset-to-input', async (c) => {
       }, 400)
     }
 
-    // 関連データ削除（カスケードではなく明示的に削除）
+    // 削除件数カウント用
+    const deletedCounts = { scenes: 0, images: 0, audios: 0, videos: 0, chunks: 0 }
+
+    // ===== R2ファイル削除（ベストエフォート、DB削除前に実行） =====
+    
+    // 1. 画像R2ファイル削除
+    const { results: imageR2Keys } = await c.env.DB.prepare(`
+      SELECT DISTINCT r2_key FROM image_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+      AND r2_key IS NOT NULL
+    `).bind(projectId).all()
+    
+    for (const row of imageR2Keys || []) {
+      try {
+        if (row.r2_key) {
+          await c.env.R2.delete(row.r2_key as string)
+        }
+      } catch (e) {
+        console.error(`[ResetToInput] Failed to delete image R2: ${row.r2_key}`, e)
+      }
+    }
+    deletedCounts.images = imageR2Keys?.length || 0
+
+    // 2. 音声R2ファイル削除
+    const { results: audioR2Keys } = await c.env.DB.prepare(`
+      SELECT DISTINCT r2_key FROM audio_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+      AND r2_key IS NOT NULL
+    `).bind(projectId).all()
+    
+    for (const row of audioR2Keys || []) {
+      try {
+        if (row.r2_key) {
+          await c.env.R2.delete(row.r2_key as string)
+        }
+      } catch (e) {
+        console.error(`[ResetToInput] Failed to delete audio R2: ${row.r2_key}`, e)
+      }
+    }
+    deletedCounts.audios = audioR2Keys?.length || 0
+
+    // 3. 動画R2ファイル削除
+    const { results: videoR2Keys } = await c.env.DB.prepare(`
+      SELECT DISTINCT r2_key FROM video_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+      AND r2_key IS NOT NULL
+    `).bind(projectId).all()
+    
+    for (const row of videoR2Keys || []) {
+      try {
+        if (row.r2_key) {
+          await c.env.R2.delete(row.r2_key as string)
+        }
+      } catch (e) {
+        console.error(`[ResetToInput] Failed to delete video R2: ${row.r2_key}`, e)
+      }
+    }
+    deletedCounts.videos = videoR2Keys?.length || 0
+
+    // ===== DBデータ削除 =====
+    
     // 1. image_generations削除
     await c.env.DB.prepare(`
       DELETE FROM image_generations 
@@ -878,34 +938,50 @@ projects.post('/:id/reset-to-input', async (c) => {
       WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
     `).bind(projectId).run()
 
-    // 3. scene_character_map削除
+    // 3. video_generations削除
+    await c.env.DB.prepare(`
+      DELETE FROM video_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).run()
+
+    // 4. scene_character_map削除
     await c.env.DB.prepare(`
       DELETE FROM scene_character_map 
       WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
     `).bind(projectId).run()
 
-    // 4. scene_style_settings削除
+    // 5. scene_style_settings削除
     await c.env.DB.prepare(`
       DELETE FROM scene_style_settings 
       WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
     `).bind(projectId).run()
 
-    // 5. scenes削除
+    // 6. scenes削除（件数取得）
+    const scenesCountResult = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+    `).bind(projectId).first()
+    deletedCounts.scenes = (scenesCountResult?.count as number) || 0
+    
     await c.env.DB.prepare(`
       DELETE FROM scenes WHERE project_id = ?
     `).bind(projectId).run()
 
-    // 6. text_chunks削除
+    // 7. text_chunks削除（件数取得）
+    const chunksCountResult = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM text_chunks WHERE project_id = ?
+    `).bind(projectId).first()
+    deletedCounts.chunks = (chunksCountResult?.count as number) || 0
+    
     await c.env.DB.prepare(`
       DELETE FROM text_chunks WHERE project_id = ?
     `).bind(projectId).run()
 
-    // 7. runs削除
+    // 8. runs削除
     await c.env.DB.prepare(`
       DELETE FROM runs WHERE project_id = ?
     `).bind(projectId).run()
 
-    // 8. transcriptions削除（音声ファイルはR2に残す）
+    // 9. transcriptions削除（入力音声ファイルはR2に残す）
     await c.env.DB.prepare(`
       DELETE FROM transcriptions WHERE project_id = ?
     `).bind(projectId).run()
@@ -928,13 +1004,14 @@ projects.post('/:id/reset-to-input', async (c) => {
       WHERE id = ?
     `).bind(resetStatus, projectId).run()
 
-    console.log(`[ResetToInput] Project ${projectId} reset to ${resetStatus}`)
+    console.log(`[ResetToInput] Project ${projectId} reset to ${resetStatus}`, deletedCounts)
 
     return c.json({
       success: true,
       message: 'Project reset to input successfully',
       project_id: parseInt(projectId),
-      reset_to: resetStatus
+      reset_to: resetStatus,
+      deleted: deletedCounts  // フロントエンド互換のため追加
     })
   } catch (error) {
     console.error('Error in reset-to-input:', error)
