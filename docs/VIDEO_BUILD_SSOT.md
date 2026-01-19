@@ -324,7 +324,60 @@ CREATE TABLE video_builds (
 
 ---
 
-## 8. ファイル一覧
+## 8. 変更反映運用ルール
+
+### 8.1 Scene側改修凍結のルール
+
+**原則**: Scene側の細かい改修は凍結し、Video Build 完走に集中する。
+
+**例外**: 以下の場合のみ改修を許可：
+1. **Video Build のブロッカー**: Preflight で検出される致命的な問題
+2. **SSOT違反**: 既存の SSOT 定義に反する実装の修正
+3. **ユーザー操作不能**: UI 操作が不可能な状態
+
+### 8.2 変更ラベリングルール
+
+Scene 側の変更が必要な場合は、以下のラベルを付与：
+
+| ラベル | 意味 | 例 |
+|--------|------|-----|
+| `[SSOT-CHANGE]` | SSOT 定義の変更 | display_asset_type に新しい値を追加 |
+| `[BUILD-INTAKE]` | Build側で取り込む変更 | 音声URL形式の変更 |
+| `[SCENE-BUGFIX]` | Scene 側のバグ修正 | 採用フラグの不整合修正 |
+
+### 8.3 変更時のチェックリスト
+
+**Scene 側変更時**:
+- [ ] VIDEO_BUILD_SSOT.md の該当箇所を更新
+- [ ] validateProjectAssets() への影響を確認
+- [ ] buildProjectJson() への影響を確認
+- [ ] フロントエンド updateVideoBuildRequirements() への影響を確認
+
+**Build 側変更時**:
+- [ ] AWS Orchestrator の型定義との整合性を確認
+- [ ] project.json のバージョン番号を検討
+- [ ] エラーハンドリングの追加
+
+### 8.4 テスト実行チェックリスト
+
+変更後は以下を確認：
+
+```bash
+# 1. Preflight API テスト
+curl -s "https://webapp-c7n.pages.dev/api/projects/55/video-builds/preflight" | jq
+
+# 2. シーンデータ確認（display_asset_type）
+curl -s "https://webapp-c7n.pages.dev/api/projects/55/scenes?view=board" | jq '.[0] | {display_asset_type, active_image, active_comic, active_video, active_audio}'
+
+# 3. フロントエンド Video Build タブ
+# - https://webapp-c7n.pages.dev/projects/55 の「動画」タブを確認
+# - 要件チェックに問題がないこと
+# - 「動画生成を開始」ボタンがクリック可能なこと
+```
+
+---
+
+## 9. ファイル一覧
 
 | ファイル | 役割 |
 |----------|------|
@@ -336,8 +389,38 @@ CREATE TABLE video_builds (
 
 ---
 
+## 10. 動作確認コマンド集
+
+### Preflight 確認
+```bash
+# プロジェクト55の素材チェック
+curl -s "https://webapp-c7n.pages.dev/api/projects/55/video-builds/preflight" | jq
+```
+
+### シーンデータ確認
+```bash
+# シーン一覧（display_asset_type付き）
+curl -s "https://webapp-c7n.pages.dev/api/projects/55/scenes?view=board" | jq '.scenes | map({id, display_asset_type})'
+
+# 特定シーンの音声確認
+curl -s "https://webapp-c7n.pages.dev/api/scenes/537/audio" | jq '.active_audio'
+```
+
+### ビルド一覧
+```bash
+curl -s "https://webapp-c7n.pages.dev/api/projects/55/video-builds" | jq '.builds'
+```
+
+### 利用状況
+```bash
+curl -s "https://webapp-c7n.pages.dev/api/video-builds/usage" | jq
+```
+
+---
+
 ## 更新履歴
 
 | 日付 | バージョン | 変更内容 |
 |------|-----------|----------|
 | 2026-01-19 | 1.0 | 初版作成 |
+| 2026-01-19 | 1.1 | active_audio 取得修正、変更反映運用ルール追加 |
