@@ -312,8 +312,8 @@ async function initSceneSplitTab() {
     `;
   }
   
-  // Check if scenes already exist（軽量版API使用）
-  const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=edit`);
+  // Check if scenes already exist（キャラクター情報含む）
+  const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
   const scenes = scenesResponse.data.scenes || [];
   window.sceneSplitLoaded = true;
   
