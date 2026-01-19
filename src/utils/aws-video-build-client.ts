@@ -207,7 +207,13 @@ async function signRequest(
   const parsedUrl = new URL(url);
   const host = parsedUrl.host;
   const path = parsedUrl.pathname;
-  const queryString = parsedUrl.search.slice(1);
+  
+  // SigV4: クエリパラメータはアルファベット順にソートし、URI エンコードする必要がある
+  const sortedParams = Array.from(parsedUrl.searchParams.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  const queryString = sortedParams;
   
   const now = new Date();
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');

@@ -5,6 +5,9 @@ export type Bindings = {
   GEMINI_API_KEY: string;
   GOOGLE_TTS_API_KEY: string;
   FISH_AUDIO_API_TOKEN: string;
+  // ElevenLabs TTS
+  ELEVENLABS_API_KEY: string;
+  ELEVENLABS_DEFAULT_MODEL?: string;  // Default: eleven_multilingual_v2
   // Encryption for API keys (Key-Ring対応)
   // 鍵は必ず hex 64文字（32 bytes = 256 bit）で統一
   ENCRYPTION_KEY?: string;        // 現行鍵（新規暗号化に使用）

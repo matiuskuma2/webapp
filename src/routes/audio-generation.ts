@@ -5,6 +5,7 @@ import { GENERATION_STATUS, ERROR_CODES } from '../constants';
 import { createErrorResponse } from '../utils/error-response';
 import { base64ToUint8Array, generateR2Key, getR2PublicUrl } from '../utils/r2-helper';
 import { generateFishTTS } from '../utils/fish-audio'; // Phase X-1: Fish Audio integration
+import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, getElevenLabsVoiceList, ELEVENLABS_MODELS } from '../utils/elevenlabs'; // ElevenLabs TTS
 
 const audioGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -24,7 +25,17 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     const body = await c.req.json().catch(() => ({} as any));
     // Phase1.7: voice_preset_id もサポート（フロントエンド互換性）
     const voiceId = (body.voice_id || body.voice_preset_id) as string | undefined;
-    const provider = (body.provider as string | undefined) ?? 'google';
+    // Auto-detect provider from voice_id if not explicitly set
+    let provider = body.provider as string | undefined;
+    if (!provider) {
+      if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
+        provider = 'elevenlabs';
+      } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
+        provider = 'fish';
+      } else {
+        provider = 'google';
+      }
+    }
     const format = (body.format as string | undefined) ?? 'mp3';
     // Fish Audio requires 32000 or 44100 Hz for mp3, Google TTS uses 24000 Hz
     const defaultSampleRate = provider === 'fish' ? 44100 : 24000;
@@ -44,6 +55,10 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     const googleTtsKey = c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY;
     if (provider === 'google' && !googleTtsKey) {
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'GOOGLE_TTS_API_KEY is not set'), 500);
+    }
+    // ElevenLabs API key validation
+    if (provider === 'elevenlabs' && !c.env.ELEVENLABS_API_KEY) {
+      return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'ELEVENLABS_API_KEY is not set'), 500);
     }
 
     // 1) scene 取得（idx, project_id, dialogue）
@@ -305,7 +320,28 @@ async function generateAndUploadAudio(args: {
     let bytes: Uint8Array;
 
     // Phase X-1: Provider-based audio generation
-    if (provider === 'fish') {
+    if (provider === 'elevenlabs') {
+      // ElevenLabs TTS
+      const elevenLabsVoiceId = resolveElevenLabsVoiceId(voiceId);
+      if (!elevenLabsVoiceId) {
+        throw new Error(`ElevenLabs voice_id not found for: ${voiceId}`);
+      }
+
+      const modelId = (env as any).ELEVENLABS_DEFAULT_MODEL || ELEVENLABS_MODELS.MULTILINGUAL_V2;
+      const elevenLabsResult = await generateElevenLabsTTS(env.ELEVENLABS_API_KEY, {
+        text,
+        voice_id: elevenLabsVoiceId,
+        model_id: modelId,
+        output_format: 'mp3_44100_128',
+      });
+
+      if (!elevenLabsResult.success || !elevenLabsResult.audio) {
+        throw new Error(elevenLabsResult.error || 'ElevenLabs TTS failed');
+      }
+
+      bytes = new Uint8Array(elevenLabsResult.audio);
+      console.log(`[ElevenLabs] Generated ${bytes.length} bytes, ${elevenLabsResult.character_count} chars`);
+    } else if (provider === 'fish') {
       // Fish Audio TTS
       const referenceId = await getFishReferenceId(voiceId);
       if (!referenceId) {
@@ -412,16 +448,48 @@ audioGeneration.post('/tts/preview', async (c) => {
     const sampleText = text || 'こんにちは、これはサンプル音声です。';
     
     // Determine provider from voice_id
-    const isFishVoice = voice_id.startsWith('fish:');
-    const provider = isFishVoice ? 'fish' : 'google';
+    const isElevenLabsVoice = voice_id.startsWith('elevenlabs:') || voice_id.startsWith('el-') || isElevenLabsVoice(voice_id);
+    const isFishVoice = voice_id.startsWith('fish:') || voice_id.startsWith('fish-');
+    const provider = isElevenLabsVoice ? 'elevenlabs' : isFishVoice ? 'fish' : 'google';
 
-    if (provider === 'fish') {
+    if (provider === 'elevenlabs') {
+      // ElevenLabs TTS
+      if (!c.env.ELEVENLABS_API_KEY) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'ELEVENLABS_API_KEY is not set'), 500);
+      }
+      
+      const elevenLabsVoiceId = resolveElevenLabsVoiceId(voice_id);
+      if (!elevenLabsVoiceId) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Invalid ElevenLabs voice_id'), 400);
+      }
+      
+      const modelId = (c.env as any).ELEVENLABS_DEFAULT_MODEL || ELEVENLABS_MODELS.MULTILINGUAL_V2;
+      const elevenLabsResult = await generateElevenLabsTTS(c.env.ELEVENLABS_API_KEY, {
+        text: sampleText,
+        voice_id: elevenLabsVoiceId,
+        model_id: modelId,
+        output_format: 'mp3_44100_128',
+      });
+      
+      if (!elevenLabsResult.success || !elevenLabsResult.audio) {
+        console.error('[TTS Preview] ElevenLabs error:', elevenLabsResult.error);
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, elevenLabsResult.error || 'ElevenLabs TTS failed'), 500);
+      }
+      
+      // Return as base64 data URL
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(elevenLabsResult.audio)));
+      return c.json({
+        success: true,
+        audio_url: `data:audio/mpeg;base64,${base64}`,
+        character_count: elevenLabsResult.character_count,
+      });
+    } else if (provider === 'fish') {
       // Fish Audio
       if (!c.env.FISH_AUDIO_API_TOKEN) {
         return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'FISH_AUDIO_API_TOKEN is not set'), 500);
       }
       
-      const referenceId = voice_id.replace('fish:', '');
+      const referenceId = voice_id.replace('fish:', '').replace('fish-', '');
       const fishResult = await generateFishTTS(c.env.FISH_AUDIO_API_TOKEN, {
         text: sampleText,
         reference_id: referenceId,
@@ -479,6 +547,60 @@ audioGeneration.post('/tts/preview', async (c) => {
   } catch (error) {
     console.error('[TTS Preview] Error:', error);
     return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'TTS preview failed'), 500);
+  }
+});
+
+/**
+ * GET /api/tts/voices
+ * 利用可能なTTSボイス一覧を取得
+ */
+audioGeneration.get('/tts/voices', async (c) => {
+  try {
+    // ElevenLabs voices
+    const elevenLabsVoices = getElevenLabsVoiceList().map(v => ({
+      id: v.key,
+      voice_id: v.voice_id,
+      name: v.name,
+      provider: 'elevenlabs',
+      gender: v.gender,
+      description: v.description,
+      language: 'ja-JP',
+    }));
+
+    // Google TTS voices (existing)
+    const googleVoices = [
+      { id: 'ja-JP-Standard-A', name: 'Standard A（女性）', provider: 'google', gender: 'female', language: 'ja-JP' },
+      { id: 'ja-JP-Standard-B', name: 'Standard B（女性）', provider: 'google', gender: 'female', language: 'ja-JP' },
+      { id: 'ja-JP-Standard-C', name: 'Standard C（男性）', provider: 'google', gender: 'male', language: 'ja-JP' },
+      { id: 'ja-JP-Standard-D', name: 'Standard D（男性）', provider: 'google', gender: 'male', language: 'ja-JP' },
+      { id: 'ja-JP-Wavenet-A', name: 'Wavenet A（女性・自然）', provider: 'google', gender: 'female', language: 'ja-JP' },
+      { id: 'ja-JP-Wavenet-B', name: 'Wavenet B（女性・自然）', provider: 'google', gender: 'female', language: 'ja-JP' },
+      { id: 'ja-JP-Wavenet-C', name: 'Wavenet C（男性・自然）', provider: 'google', gender: 'male', language: 'ja-JP' },
+      { id: 'ja-JP-Wavenet-D', name: 'Wavenet D（男性・自然）', provider: 'google', gender: 'male', language: 'ja-JP' },
+    ];
+
+    // Fish Audio voices (if available)
+    const fishVoices = c.env.FISH_AUDIO_API_TOKEN ? [
+      { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', provider: 'fish', gender: 'female', language: 'ja-JP' },
+    ] : [];
+
+    return c.json({
+      success: true,
+      voices: {
+        elevenlabs: elevenLabsVoices,
+        google: googleVoices,
+        fish: fishVoices,
+      },
+      // Indicate which providers are configured
+      providers: {
+        elevenlabs: !!c.env.ELEVENLABS_API_KEY,
+        google: !!(c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY),
+        fish: !!c.env.FISH_AUDIO_API_TOKEN,
+      },
+    });
+  } catch (error) {
+    console.error('[TTS Voices] Error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to get voice list'), 500);
   }
 });
 

@@ -21,6 +21,27 @@ import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
 
+/**
+ * Convert relative R2 URL to absolute URL using SITE_URL
+ * For Remotion Lambda to access R2 content via webapp
+ */
+function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string | undefined): string | null {
+  if (!relativeUrl) return null;
+  // Already absolute URL
+  if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
+    return relativeUrl;
+  }
+  // Relative path - prefix with SITE_URL
+  if (siteUrl) {
+    const baseUrl = siteUrl.replace(/\/$/, ''); // Remove trailing slash
+    const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+    return `${baseUrl}${path}`;
+  }
+  // No SITE_URL configured - return as-is (will fail in Remotion)
+  console.warn('[Video Build] No SITE_URL configured, relative URLs will not work in Remotion');
+  return relativeUrl;
+}
+
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
 
 // ====================================================================
@@ -1076,7 +1097,18 @@ videoGeneration.get('/video-builds/usage', async (c) => {
       WHERE executor_user_id = ? AND status IN ('queued', 'validating', 'submitted', 'rendering', 'uploading')
     `).bind(userId).first<{ count: number }>();
     
+    // Count monthly builds (for UI display)
+    const monthlyBuilds = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM video_builds
+      WHERE executor_user_id = ? 
+      AND created_at >= datetime('now', 'start of month')
+    `).bind(userId).first<{ count: number }>();
+    
     return c.json({
+      // Legacy format for frontend compatibility
+      monthly_builds: monthlyBuilds?.count || 0,
+      concurrent_builds: activeBuilds?.count || 0,
+      // New detailed format
       daily_limit: dailyLimit,
       daily_used: todayBuilds?.count || 0,
       daily_remaining: Math.max(0, dailyLimit - (todayBuilds?.count || 0)),
@@ -1156,9 +1188,11 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
         `).bind(scene.id).first<{ id: number; r2_url: string; text: string }>();
         
         // 音声がある場合は、テキスト長から推定duration_msを計算（日本語: 約300ms/文字）
+        // IMPORTANT: Convert relative R2 URL to absolute URL for Remotion Lambda access
+        const siteUrl = c.env.SITE_URL;
         const activeAudio = activeAudioRaw ? {
           id: activeAudioRaw.id,
-          audio_url: activeAudioRaw.r2_url,
+          audio_url: toAbsoluteUrl(activeAudioRaw.r2_url, siteUrl),
           duration_ms: Math.max(2000, (activeAudioRaw.text?.length || 0) * 300), // 最低2秒
         } : null;
         
@@ -1179,12 +1213,13 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           title: scene.title || '',
           dialogue: scene.dialogue || '',
           display_asset_type: scene.display_asset_type || 'image',
-          active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: activeImage.r2_url } : null,
-          active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: activeComic.r2_url } : null,
+          // Convert all R2 URLs to absolute URLs for consistency
+          active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: toAbsoluteUrl(activeImage.r2_url, siteUrl) } : null,
+          active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: toAbsoluteUrl(activeComic.r2_url, siteUrl) } : null,
           active_video: activeVideo ? { 
             id: activeVideo.id, 
             status: activeVideo.status, 
-            r2_url: activeVideo.r2_url,
+            r2_url: toAbsoluteUrl(activeVideo.r2_url, siteUrl),
             model: activeVideo.model,
             duration_sec: activeVideo.duration_sec
           } : null,
@@ -1309,6 +1344,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
     }
     
+    // owner_user_id: project.user_id が null の場合はセッションユーザーをフォールバック
+    const ownerUserId = project.user_id || userId;
+    
     // 2. 二重実行防止（アクティブなビルドがある場合は拒否）
     const activeStatuses = ['queued', 'validating', 'submitted', 'rendering', 'uploading'];
     const activeBuild = await c.env.DB.prepare(`
@@ -1377,9 +1415,11 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         `).bind(scene.id).first<{ id: number; r2_url: string; text: string }>();
         
         // 音声がある場合は、テキスト長から推定duration_msを計算（日本語: 約300ms/文字）
+        // IMPORTANT: Convert relative R2 URL to absolute URL for Remotion Lambda access
+        const siteUrl = c.env.SITE_URL;
         const activeAudio = activeAudioRaw ? {
           id: activeAudioRaw.id,
-          audio_url: activeAudioRaw.r2_url,
+          audio_url: toAbsoluteUrl(activeAudioRaw.r2_url, siteUrl),
           duration_ms: Math.max(2000, (activeAudioRaw.text?.length || 0) * 300), // 最低2秒
         } : null;
         
@@ -1400,12 +1440,13 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           title: scene.title || '',
           dialogue: scene.dialogue || '',
           display_asset_type: scene.display_asset_type || 'image',
-          active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: activeImage.r2_url } : null,
-          active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: activeComic.r2_url } : null,
+          // Convert all R2 URLs to absolute URLs for Remotion Lambda
+          active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: toAbsoluteUrl(activeImage.r2_url, siteUrl) } : null,
+          active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: toAbsoluteUrl(activeComic.r2_url, siteUrl) } : null,
           active_video: activeVideo ? { 
             id: activeVideo.id, 
             status: activeVideo.status, 
-            r2_url: activeVideo.r2_url,
+            r2_url: toAbsoluteUrl(activeVideo.r2_url, siteUrl),
             model: activeVideo.model,
             duration_sec: activeVideo.duration_sec
           } : null,
@@ -1453,7 +1494,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     
     // 6. project.json生成
     const projectJson = buildProjectJson(
-      { id: project.id, title: project.title, user_id: project.user_id },
+      { id: project.id, title: project.title, user_id: ownerUserId },
       scenesWithAssets,
       buildSettings,
       {
@@ -1475,7 +1516,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       ) VALUES (?, ?, ?, ?, 'validating', 'Preparing', '素材検証完了、ビルド準備中...', ?, ?, '1.1', ?)
     `).bind(
       projectId,
-      project.user_id,
+      ownerUserId,
       userId,
       JSON.stringify(buildSettings),
       scenesWithAssets.length,
@@ -1524,9 +1565,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     const awsResponse = await startVideoBuild(clientConfig, {
       video_build_id: videoBuildId,
       project_id: projectId,
-      owner_user_id: project.user_id,
+      owner_user_id: ownerUserId,
       executor_user_id: userId,
-      is_delegation: project.user_id !== userId,
+      is_delegation: ownerUserId !== userId,
       project_json: projectJson,
       build_settings: buildSettings,
     });
@@ -1557,7 +1598,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     
     // 10. Update with AWS response
     const s3Bucket = awsResponse.output?.bucket || DEFAULT_OUTPUT_BUCKET;
-    const s3OutputKey = awsResponse.output?.key || getDefaultOutputKey(project.user_id, videoBuildId);
+    const s3OutputKey = awsResponse.output?.key || getDefaultOutputKey(ownerUserId, videoBuildId);
     
     await c.env.DB.prepare(`
       UPDATE video_builds 
@@ -1591,9 +1632,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       JSON.stringify({
         billing_source: 'platform',
         video_build_id: videoBuildId,
-        owner_user_id: project.user_id,
+        owner_user_id: ownerUserId,
         executor_user_id: userId,
-        is_delegation: project.user_id !== userId,
+        is_delegation: ownerUserId !== userId,
         status: 'submitted',
       })
     ).run();
