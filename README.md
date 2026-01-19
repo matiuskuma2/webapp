@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-19（全Phase完了: Scene Split SSOT + TTS使用量API/警告UI + 漫画textStyle編集UI）
+- **最終更新**: 2026-01-20（speech_type判定 + reset-to-input安全化 + ElevenLabs有効化）
 
 ---
 
@@ -385,6 +385,38 @@ npx wrangler d1 migrations apply webapp-production --remote
 - **Git履歴の整合性維持**: ファイル削除は環境間の不整合を生む
 - **べき等性**: `IF NOT EXISTS` により何度実行しても安全
 - **ドキュメント化**: 意図的な設計であることを明示
+
+---
+
+## 2026-01-20 追加機能
+
+### speech_type（セリフ/ナレーション判定）
+- **DB**: `scenes.speech_type` カラム追加（'dialogue' | 'narration'）
+- **AI判定**: シーン分割時にAIが自動分類
+  - dialogue: キャラクターの発言（「」内の台詞）
+  - narration: ナレーション、説明、状況描写
+- **API**: すべてのシーン取得APIで `speech_type` を返却
+- **マイグレーション**: `0019_add_scene_speech_type.sql`
+
+### reset-to-input 安全化
+- **ブロック条件追加**:
+  - Video Build（最終動画）が存在 → リセット不可
+  - 漫画化データが存在 → リセット不可
+  - シーン動画が存在 → リセット不可
+- **ボタン非活性化**: 上記条件でボタンがグレーアウト + 🔒アイコン
+- **R2クリーンアップ**: リセット時に画像/音声/動画のR2ファイルも削除（ストレージリーク防止）
+- **警告ダイアログ強化**: 削除件数明示 + 確認チェックボックス必須
+
+### ElevenLabs音声有効化
+- **voice-presets.json**: ElevenLabs 8ボイスを `status: 'active'` に変更
+- **キャラクター設定UI**: Voice Presetドロップダウンに「Google TTS」「ElevenLabs (Premium)」グループ表示
+
+### その他修正
+- シーン分割「やり直す」ボタン重複削除（小ボタンのみ残す）
+- シーンカテゴリ日本語化（Hook→導入・つかみ 等）
+- S3署名付きURL期限切れハンドリング
+- 音声再生成連打防止（確認ダイアログ）
+- Google Fonts追加ロード（手書きフォント対応）
 
 ---
 
