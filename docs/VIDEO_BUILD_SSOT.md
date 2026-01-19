@@ -1,8 +1,107 @@
 # Video Build SSOT & 依存関係ドキュメント
 
 **最終更新**: 2026-01-19  
-**バージョン**: 1.0  
+**バージョン**: 1.1  
 **目的**: 全シーンの最終動画化（Video Build）を完走するための依存関係とSSOT定義
+
+---
+
+## ⚡ BuildRequest v1 完全仕様（確定）
+
+### Remotion 契約
+- **Remotion は BuildRequest JSON のみを参照**
+- **DB を直接読まない**
+- **Scene / Comic / Audio / Style の変更は BuildRequest 生成ロジックで吸収**
+
+### BuildRequest v1 JSON Schema
+
+```json
+{
+  "version": "1.0",
+  "project": {
+    "id": 55,
+    "title": "サンプルプロジェクト"
+  },
+  "output": {
+    "resolution": { "width": 1080, "height": 1920 },
+    "fps": 30,
+    "format": "mp4"
+  },
+  "timeline": {
+    "scenes": [
+      {
+        "scene_id": 537,
+        "order": 1,
+        "duration_ms": 4200,
+        "visual": {
+          "type": "comic",
+          "source": { "image_url": "https://..." },
+          "effect": { "type": "none", "zoom": 1.0, "pan": "center" }
+        },
+        "audio": {
+          "voice": { "audio_url": "https://...", "speed": 1.0 }
+        },
+        "bubbles": [
+          {
+            "id": "u1",
+            "text": "これはテストです",
+            "type": "speech",
+            "position": { "x": 0.42, "y": 0.68 },
+            "timing": { "start_ms": 300, "end_ms": 2100 }
+          }
+        ],
+        "telop": { "enabled": false }
+      }
+    ]
+  },
+  "bgm": null
+}
+```
+
+### SSOT 関数（video-build-helpers.ts）
+
+| 関数 | 責務 | SSOT |
+|------|------|------|
+| `selectSceneVisual()` | display_asset_type → visual 変換 | 素材選択の唯一のロジック |
+| `computeSceneDurationMs()` | 尺計算 | 尺計算の唯一のロジック |
+| `buildSceneBubbles()` | 吹き出しデータ生成 | v1: comic の utterances を変換 |
+| `buildBuildRequestV1()` | BuildRequest v1 生成 | **唯一の出口** |
+| `validateProjectAssets()` | Preflight検証 | selectSceneVisual と同じロジック |
+
+### visual.type の決定ルール
+
+| display_asset_type | visual.type | source | effect |
+|--------------------|-------------|--------|--------|
+| `image` | `image` | `image_url: active_image.r2_url` | kenburns (zoom: 1.05) |
+| `comic` | `comic` | `image_url: active_comic.r2_url` | none |
+| `video` | `video` | `video_url: active_video.r2_url` | none |
+
+### duration_ms の決定ルール（v1: 推定固定）
+
+1. **video モード**: `active_video.duration_sec × 1000`
+2. **comic モード**: `SUM(utterances[].duration_ms) + 500ms`
+3. **audio あり**: `active_audio.duration_ms + 500ms`
+4. **dialogue から推定**: `dialogue.length × 300ms`（最低2000ms）
+5. **デフォルト**: `3000ms`
+
+### 将来拡張（v1.1+）
+
+```json
+{
+  "bgm": {
+    "audio_url": "https://...",
+    "volume": 0.3,
+    "ducking": true
+  },
+  "extras": [
+    {
+      "type": "intro",
+      "duration_ms": 2000,
+      "visual": { "type": "image", "source": { "image_url": "..." } }
+    }
+  ]
+}
+```
 
 ---
 
