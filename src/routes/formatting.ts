@@ -70,7 +70,7 @@ formatting.get('/:id/format/status', async (c) => {
     const projectId = c.req.param('id')
 
     const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
+      SELECT id, status, error_message, updated_at FROM projects WHERE id = ?
     `).bind(projectId).first()
 
     if (!project) {
@@ -78,6 +78,14 @@ formatting.get('/:id/format/status', async (c) => {
         error: { code: 'NOT_FOUND', message: 'Project not found' }
       }, 404)
     }
+
+    // 最新の run を取得（run_no表示用）
+    const latestRun = await c.env.DB.prepare(`
+      SELECT id, run_no, state, created_at FROM runs
+      WHERE project_id = ?
+      ORDER BY run_no DESC
+      LIMIT 1
+    `).bind(projectId).first()
 
     // text_chunks の進捗を取得
     const { results: chunks } = await c.env.DB.prepare(`
@@ -96,11 +104,16 @@ formatting.get('/:id/format/status', async (c) => {
     return c.json({
       project_id: parseInt(projectId),
       status: project.status,
+      error_message: project.error_message || null,
       total_chunks: total,
       processed: done,
       failed: failed,
       processing: processing,
-      pending: total - done - failed - processing
+      pending: total - done - failed - processing,
+      // サポート用追加情報
+      run_id: latestRun?.id || null,
+      run_no: latestRun?.run_no || null,
+      started_at: latestRun?.created_at || project.updated_at
     })
 
   } catch (error) {

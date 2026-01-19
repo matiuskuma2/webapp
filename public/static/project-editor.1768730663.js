@@ -551,6 +551,7 @@ async function saveSourceText() {
 // Global polling state
 let formatPollingInterval = null;
 let formatPollingStartTime = null;
+let currentFormatRunNo = null; // サポート用: 現在のrun_no
 const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 
 // Format and split scenes with progress monitoring
@@ -737,6 +738,9 @@ function showFormatProgressUI() {
           <p id="formatProgressDetails" class="text-xs text-gray-600">
             進捗を確認中...
           </p>
+          <div id="formatRunInfo" class="mt-2 text-xs text-gray-400">
+            <!-- サポート用: Project / Run / 開始時刻 -->
+          </div>
         </div>
       </div>
     </div>
@@ -767,11 +771,11 @@ function startFormatPolling() {
         formatPollingStartTime = null;
         
         // Generate log ID for support
-        const logId = `format_timeout_${PROJECT_ID}_${Date.now()}`;
+        const logId = `format_timeout_${PROJECT_ID}_${currentFormatRunNo || 'unknown'}_${Date.now()}`;
         console.error('[Format] LogID:', logId);
         
-        // Show timeout UI
-        showFormatTimeoutUI(logId, elapsed);
+        // Show timeout UI with run_no
+        showFormatTimeoutUI(logId, elapsed, currentFormatRunNo);
         isProcessing = false;
         return;
       }
@@ -790,7 +794,7 @@ function startFormatPolling() {
         formatPollingInterval = null;
         formatPollingStartTime = null;
         
-        showFormatFailedUI(data.error_message || 'シーン化に失敗しました');
+        showFormatFailedUI(data.error_message || 'シーン化に失敗しました', currentFormatRunNo);
         isProcessing = false;
         return;
       }
@@ -874,8 +878,9 @@ function startFormatPolling() {
 }
 
 // Show timeout UI
-function showFormatTimeoutUI(logId, elapsedMs) {
+function showFormatTimeoutUI(logId, elapsedMs, runNo = null) {
   const formatSection = document.getElementById('formatSection');
+  const runInfoHtml = runNo ? `<span class="ml-4">Run: #${runNo}</span>` : '';
   formatSection.innerHTML = `
     <div class="p-6 bg-yellow-50 border-l-4 border-yellow-600 rounded-lg">
       <div class="flex items-start">
@@ -887,6 +892,7 @@ function showFormatTimeoutUI(logId, elapsedMs) {
             サーバー側で処理が継続している可能性があります。
           </p>
           <div class="bg-gray-100 p-2 rounded text-xs font-mono mb-4">
+            Project: ${PROJECT_ID}${runInfoHtml}<br>
             LogID: ${logId}
           </div>
           <div class="flex gap-2">
@@ -905,8 +911,9 @@ function showFormatTimeoutUI(logId, elapsedMs) {
 }
 
 // Show failed UI
-function showFormatFailedUI(errorMessage) {
+function showFormatFailedUI(errorMessage, runNo = null) {
   const formatSection = document.getElementById('formatSection');
+  const runInfoHtml = runNo ? `<div class="bg-gray-100 p-2 rounded text-xs font-mono mb-4">Project: ${PROJECT_ID} / Run: #${runNo}</div>` : '';
   formatSection.innerHTML = `
     <div class="p-6 bg-red-50 border-l-4 border-red-600 rounded-lg">
       <div class="flex items-start">
@@ -914,6 +921,7 @@ function showFormatFailedUI(errorMessage) {
         <div class="flex-1">
           <h3 class="font-bold text-gray-800 mb-2 text-lg">シーン化に失敗しました</h3>
           <p class="text-sm text-gray-700 mb-4">${errorMessage}</p>
+          ${runInfoHtml}
           <div class="flex gap-2">
             <button onclick="resetFormatAndRetry()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
               <i class="fas fa-redo mr-1"></i>やり直す
@@ -967,7 +975,7 @@ async function retryFormatPolling() {
       showFormatProgressUI();
       startFormatPolling();
     } else if (data.status === 'failed') {
-      showFormatFailedUI(data.error_message || 'シーン化に失敗しました');
+      showFormatFailedUI(data.error_message || 'シーン化に失敗しました', data.run_no);
     } else {
       showToast(`現在のステータス: ${data.status}`, 'info');
     }
@@ -1016,10 +1024,20 @@ async function updateFormatProgress(data) {
   const progressText = document.getElementById('formatProgressText');
   const progressBar = document.getElementById('formatProgressBar');
   const progressDetails = document.getElementById('formatProgressDetails');
+  const runInfo = document.getElementById('formatRunInfo');
   
   if (!progressText || !progressBar || !progressDetails) return;
   
-  const { status, total_chunks, processed, failed, processing, pending } = data;
+  const { status, total_chunks, processed, failed, processing, pending, run_no, run_id, started_at } = data;
+  
+  // サポート用: run_no を保持＆表示
+  if (run_no) {
+    currentFormatRunNo = run_no;
+  }
+  if (runInfo && run_no) {
+    const startTime = started_at ? new Date(started_at).toLocaleTimeString('ja-JP') : '--:--';
+    runInfo.innerHTML = `<span class="text-gray-500 text-xs">Project: ${PROJECT_ID} / Run: #${run_no} / 開始: ${startTime}</span>`;
+  }
   
   // Calculate progress percentage
   const percentage = total_chunks > 0 ? Math.round((processed / total_chunks) * 100) : 0;
