@@ -325,7 +325,7 @@ async function initSceneSplitTab() {
     document.getElementById('formatSection').classList.remove('hidden');
     document.getElementById('scenesSection').classList.add('hidden');
     document.getElementById('scenesEmptyState').classList.add('hidden');
-    document.getElementById('resetToInputSection')?.classList.add('hidden');
+    // Note: resetToInputSection removed - using only resetToInputBtnSmall in scenes header
   } else {
     // Show scenes with character info
     document.getElementById('formatSection').classList.add('hidden');
@@ -6532,7 +6532,7 @@ async function executeResetToInput() {
       
       // Hide scenes section and show format section
       document.getElementById('scenesSection')?.classList.add('hidden');
-      document.getElementById('resetToInputSection')?.classList.add('hidden');
+      // Note: resetToInputSection removed - using only resetToInputBtnSmall in scenes header
       document.getElementById('goToBuilderBtn')?.classList.add('hidden');
       document.getElementById('characterWarningSection')?.classList.add('hidden');
       document.getElementById('formatSection')?.classList.remove('hidden');
@@ -6561,21 +6561,13 @@ async function executeResetToInput() {
 }
 
 /**
- * Update reset to input section visibility based on project status
+ * Update reset to input button visibility based on project status
  */
 function updateResetToInputVisibility(status) {
-  const resetSection = document.getElementById('resetToInputSection');
   const resetBtnSmall = document.getElementById('resetToInputBtnSmall');
   
+  // Show reset button only when scenes exist (formatted, generating_images, completed, failed)
   const showReset = ['formatted', 'generating_images', 'completed', 'failed'].includes(status);
-  
-  if (resetSection) {
-    if (showReset) {
-      resetSection.classList.remove('hidden');
-    } else {
-      resetSection.classList.add('hidden');
-    }
-  }
   
   if (resetBtnSmall) {
     if (showReset) {

@@ -823,28 +823,6 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Reset to Input Section (Phase F-3) -->
-                <div id="resetToInputSection" class="mb-6 p-4 bg-orange-50 rounded-lg border-l-4 border-orange-500 hidden">
-                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                        <div>
-                            <h3 class="font-semibold text-gray-800 mb-1">
-                                <i class="fas fa-undo mr-2 text-orange-600"></i>入力からやり直す
-                            </h3>
-                            <p class="text-sm text-gray-600">
-                                シーン・画像・音声を削除し、入力テキストから再分割します。<br>
-                                <span class="text-orange-700">※キャラクター設定・ワールド設定・スタイル設定は保持されます</span>
-                            </p>
-                        </div>
-                        <button 
-                            id="resetToInputBtn"
-                            onclick="showResetToInputModal()"
-                            class="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-semibold whitespace-nowrap touch-manipulation"
-                        >
-                            <i class="fas fa-undo mr-2"></i>やり直す
-                        </button>
-                    </div>
-                </div>
-                
                 <!-- Scenes Table -->
                 <div id="scenesSection" class="hidden">
                     <div class="flex items-center justify-between mb-4">
