@@ -345,7 +345,10 @@
 
     try {
       const data = await window.WorldCharacterClient.fetchVoicePresets();
-      const presets = data.voice_presets || [];
+      const allPresets = data.voice_presets || [];
+      
+      // v2互換: status='coming_soon' のプリセットは除外
+      const presets = allPresets.filter(p => p.status !== 'coming_soon');
 
       const opts = ['<option value="">-- 音声を選択 --</option>'];
       for (const p of presets) {
@@ -357,7 +360,7 @@
         opts.push(`<option value="${id}">${name}</option>`);
       }
       sel.innerHTML = opts.join('');
-      console.log(`[WorldCharacterModal] Loaded ${presets.length} voice presets`);
+      console.log(`[WorldCharacterModal] Loaded ${presets.length} voice presets (filtered from ${allPresets.length})`);
     } catch (e) {
       console.error('[WorldCharacterModal] Failed to load voice presets:', e);
       sel.innerHTML = '<option value="">(プリセット取得失敗)</option>';

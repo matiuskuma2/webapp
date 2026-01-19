@@ -75,12 +75,17 @@ window.AudioUI = {
 
   /**
    * Load voice presets from JSON
+   * v2互換: status='coming_soon' のプリセットは除外
    */
   async loadVoicePresets() {
     try {
       const response = await axios.get('/static/voice-presets.json');
-      this.voicePresets = response.data.voice_presets || [];
-      console.log('[AudioUI] Loaded voice presets:', this.voicePresets.length);
+      const allPresets = response.data.voice_presets || [];
+      
+      // Filter out 'coming_soon' presets (ElevenLabs等の準備中ボイス)
+      this.voicePresets = allPresets.filter(preset => preset.status !== 'coming_soon');
+      
+      console.log('[AudioUI] Loaded voice presets:', this.voicePresets.length, '(filtered from', allPresets.length, ')');
     } catch (error) {
       console.error('[AudioUI] Failed to load voice presets:', error);
       this.voicePresets = [];
