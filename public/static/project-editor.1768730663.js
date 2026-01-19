@@ -6664,9 +6664,10 @@ async function executeResetToInput() {
 }
 
 /**
- * Update reset to input button visibility based on project status
+ * Update reset to input button visibility and state based on project status
+ * Also checks if videos/comics exist to disable the button
  */
-function updateResetToInputVisibility(status) {
+async function updateResetToInputVisibility(status) {
   const resetBtnSmall = document.getElementById('resetToInputBtnSmall');
   
   // Show reset button only when scenes exist (formatted, generating_images, completed, failed)
@@ -6675,6 +6676,30 @@ function updateResetToInputVisibility(status) {
   if (resetBtnSmall) {
     if (showReset) {
       resetBtnSmall.classList.remove('hidden');
+      
+      // Check if reset is actually allowed (no videos/comics)
+      try {
+        const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/reset-to-input/preview`);
+        const data = response.data;
+        
+        if (!data.can_reset) {
+          // Disable button and show reason on hover
+          resetBtnSmall.disabled = true;
+          resetBtnSmall.classList.add('opacity-50', 'cursor-not-allowed');
+          resetBtnSmall.classList.remove('hover:bg-orange-200');
+          resetBtnSmall.title = data.block_reason || 'リセットできません';
+          resetBtnSmall.innerHTML = '<i class="fas fa-lock mr-1"></i>やり直し不可';
+        } else {
+          // Enable button
+          resetBtnSmall.disabled = false;
+          resetBtnSmall.classList.remove('opacity-50', 'cursor-not-allowed');
+          resetBtnSmall.classList.add('hover:bg-orange-200');
+          resetBtnSmall.title = '入力からやり直す';
+          resetBtnSmall.innerHTML = '<i class="fas fa-undo mr-1"></i>やり直す';
+        }
+      } catch (e) {
+        console.error('Failed to check reset availability:', e);
+      }
     } else {
       resetBtnSmall.classList.add('hidden');
     }

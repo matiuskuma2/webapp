@@ -794,15 +794,18 @@ projects.get('/:id/reset-to-input/preview', async (c) => {
       }, 404)
     }
 
-    // 削除される項目をカウント + 動画・漫画の存在チェック
-    const [chunksCount, scenesCount, imagesCount, audiosCount, videosCount, videoBuildCount, comicCount] = await Promise.all([
+    // 削除される項目をカウント + 動画・漫画の存在チェック + 保持される項目のカウント
+    const [chunksCount, scenesCount, imagesCount, audiosCount, videosCount, videoBuildCount, comicCount, charactersCount, worldSettingsCount, styleSettingsCount] = await Promise.all([
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM text_chunks WHERE project_id = ?`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ?`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM audio_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM video_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).first(),
       c.env.DB.prepare(`SELECT COUNT(*) as count FROM video_builds WHERE project_id = ?`).bind(projectId).first(),
-      c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ? AND comic_data IS NOT NULL`).bind(projectId).first()
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM scenes WHERE project_id = ? AND comic_data IS NOT NULL`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM project_character_models WHERE project_id = ?`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM world_settings WHERE project_id = ?`).bind(projectId).first(),
+      c.env.DB.prepare(`SELECT COUNT(*) as count FROM project_style_settings WHERE project_id = ?`).bind(projectId).first()
     ])
 
     const videoBuildExists = ((videoBuildCount as any)?.count || 0) > 0
@@ -852,9 +855,9 @@ projects.get('/:id/reset-to-input/preview', async (c) => {
       will_preserve: {
         source_text: project.source_type === 'text' && !!project.source_text,
         audio_r2_key: project.source_type === 'audio' && !!project.audio_r2_key,
-        characters: 0, // 後で実際のカウントを取得
-        world_settings: 0,
-        style_settings: 0,
+        characters: (charactersCount as any)?.count || 0,
+        world_settings: (worldSettingsCount as any)?.count || 0,
+        style_settings: (styleSettingsCount as any)?.count || 0,
         video_builds: (videoBuildCount as any)?.count || 0 // Video Buildは保持される
       }
     })
