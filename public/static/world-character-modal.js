@@ -195,7 +195,7 @@
             <!-- Voice Type Selection -->
             <div class="flex gap-2 mb-3">
               <button id="wc-voice-type-preset" class="flex-1 px-3 py-2 text-sm font-semibold rounded-lg border-2 border-green-500 bg-green-100 text-green-700">
-                Google TTS
+                Voice Preset
               </button>
               <button id="wc-voice-type-fish" class="flex-1 px-3 py-2 text-sm font-semibold rounded-lg border-2 border-gray-300 bg-white text-gray-600 hover:border-green-500">
                 Fish Audio
@@ -350,15 +350,35 @@
       // v2互換: status='coming_soon' のプリセットは除外
       const presets = allPresets.filter(p => p.status !== 'coming_soon');
 
+      // プロバイダー別にグループ化
+      const googlePresets = presets.filter(p => p.provider === 'google');
+      const elevenLabsPresets = presets.filter(p => p.provider === 'elevenlabs');
+      
       const opts = ['<option value="">-- 音声を選択 --</option>'];
-      for (const p of presets) {
-        // Fish Audioはプリセットから除外（別タブで入力）
-        if (p.provider === 'fish') continue;
-        
-        const id = escapeHtml(p.id);
-        const name = escapeHtml(p.name);
-        opts.push(`<option value="${id}">${name}</option>`);
+      
+      // Google TTS
+      if (googlePresets.length > 0) {
+        opts.push('<optgroup label="Google TTS">');
+        for (const p of googlePresets) {
+          const id = escapeHtml(p.id);
+          const name = escapeHtml(p.name);
+          opts.push(`<option value="${id}" data-provider="google">${name}</option>`);
+        }
+        opts.push('</optgroup>');
       }
+      
+      // ElevenLabs
+      if (elevenLabsPresets.length > 0) {
+        opts.push('<optgroup label="ElevenLabs (Premium)">');
+        for (const p of elevenLabsPresets) {
+          const id = escapeHtml(p.id);
+          const name = escapeHtml(p.name);
+          const gender = p.gender === 'female' ? '♀' : '♂';
+          opts.push(`<option value="${id}" data-provider="elevenlabs">${name} ${gender}</option>`);
+        }
+        opts.push('</optgroup>');
+      }
+      
       sel.innerHTML = opts.join('');
       console.log(`[WorldCharacterModal] Loaded ${presets.length} voice presets (filtered from ${allPresets.length})`);
     } catch (e) {

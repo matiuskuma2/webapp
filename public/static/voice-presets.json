@@ -14,8 +14,8 @@
     },
     "elevenlabs": {
       "name": "ElevenLabs",
-      "status": "coming_soon",
-      "description": "ElevenLabs Multilingual TTS（準備中）"
+      "status": "active",
+      "description": "ElevenLabs Multilingual TTS - 高品質な多言語対応音声"
     }
   },
   "voice_presets": [
@@ -135,8 +135,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "9BWtsMINqrJLrRacOk9x",
-      "description": "ElevenLabs - 表現力豊かな女性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - 表現力豊かな女性の声",
+      "status": "active"
     },
     {
       "id": "el-sarah",
@@ -146,8 +146,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "EXAVITQu4vr4xnSDxMaL",
-      "description": "ElevenLabs - ソフトなニュース向け女性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - ソフトなニュース向け女性の声",
+      "status": "active"
     },
     {
       "id": "el-charlotte",
@@ -157,8 +157,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "XB0fDUnXU5powFXDhCwa",
-      "description": "ElevenLabs - 魅力的なスウェーデン人女性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - 魅力的なスウェーデン人女性の声",
+      "status": "active"
     },
     {
       "id": "el-adam",
@@ -168,8 +168,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "pNInz6obpgDQGcFmaJgB",
-      "description": "ElevenLabs - 深いナレーション向け男性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - 深いナレーション向け男性の声",
+      "status": "active"
     },
     {
       "id": "el-bill",
@@ -179,8 +179,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "pqHfZKP75CvOlQylNhV4",
-      "description": "ElevenLabs - ドキュメンタリー向け男性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - ドキュメンタリー向け男性の声",
+      "status": "active"
     },
     {
       "id": "el-brian",
@@ -190,8 +190,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "nPczCjzI2devNBz1zQrb",
-      "description": "ElevenLabs - アメリカンナレーター男性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - アメリカンナレーター男性の声",
+      "status": "active"
     },
     {
       "id": "el-lily",
@@ -201,8 +201,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "pFZP5JQG7iQjIQuC4Bku",
-      "description": "ElevenLabs - イギリス英語の女性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - イギリス英語の女性の声",
+      "status": "active"
     },
     {
       "id": "el-george",
@@ -212,8 +212,8 @@
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "JBFqnCBsd6RMkjVDRZzb",
-      "description": "ElevenLabs - イギリス英語の男性の声（準備中）",
-      "status": "coming_soon"
+      "description": "ElevenLabs - イギリス英語の男性の声",
+      "status": "active"
     }
   ]
 }

@@ -61,7 +61,13 @@ parsing.post('/:id/parse', async (c) => {
     // 5. テキスト分割（意味単位）
     const chunks = intelligentChunking(sourceText)
 
-    // 6. text_chunks に保存
+    // 6. 既存のチャンクを削除（再実行時の対応）
+    await c.env.DB.prepare(`
+      DELETE FROM text_chunks WHERE project_id = ?
+    `).bind(projectId).run()
+    console.log(`[Parse] Deleted existing chunks for project ${projectId}`)
+
+    // 8. text_chunks に保存
     try {
       const insertStatements = chunks.map((chunk, index) => {
         return c.env.DB.prepare(`
@@ -71,8 +77,9 @@ parsing.post('/:id/parse', async (c) => {
       })
 
       await c.env.DB.batch(insertStatements)
+      console.log(`[Parse] Inserted ${chunks.length} chunks for project ${projectId}`)
 
-    } catch (dbError) {
+    } catch (dbError: any) {
       console.error('Failed to insert chunks:', dbError)
 
       // DB挿入失敗 → status を元に戻す
@@ -85,19 +92,20 @@ parsing.post('/:id/parse', async (c) => {
       return c.json({
         error: {
           code: 'DB_INSERT_FAILED',
-          message: 'Failed to save chunks to database'
+          message: 'Failed to save chunks to database',
+          details: dbError?.message || String(dbError)
         }
       }, 500)
     }
 
-    // 7. ステータスを 'parsed' に更新
+    // 9. ステータスを 'parsed' に更新
     await c.env.DB.prepare(`
       UPDATE projects 
       SET status = 'parsed', updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(projectId).run()
 
-    // 8. レスポンス返却
+    // 10. レスポンス返却
     return c.json({
       project_id: parseInt(projectId),
       total_chunks: chunks.length,
