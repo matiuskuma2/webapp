@@ -6,6 +6,46 @@ import type { Bindings } from '../types/bindings'
 
 const comic = new Hono<{ Bindings: Bindings }>()
 
+// ===== Phase 3: textStyle / timing デフォルト値 =====
+// SSOT: docs/BUBBLE_TEXTSTYLE_SPEC.md
+const DEFAULT_TEXT_STYLE = {
+  writingMode: 'horizontal' as const,
+  fontFamily: 'gothic' as const,
+  fontWeight: 'normal' as const,
+  fontScale: 1.0,
+  textAlign: 'center' as const,
+  lineHeight: 1.4
+}
+
+const DEFAULT_TIMING = {
+  show_from_ms: 0,
+  show_until_ms: -1, // -1 = シーン終了まで
+  mode: 'scene_duration' as const,
+  animation: {
+    enter: 'fade' as const,
+    exit: 'fade' as const,
+    duration_ms: 200
+  }
+}
+
+// bubble に textStyle/timing が無ければデフォルト値を適用
+function normalizeBubble(bubble: any): any {
+  return {
+    ...bubble,
+    textStyle: bubble.textStyle ? { ...DEFAULT_TEXT_STYLE, ...bubble.textStyle } : DEFAULT_TEXT_STYLE,
+    timing: bubble.timing ? { ...DEFAULT_TIMING, ...bubble.timing } : DEFAULT_TIMING
+  }
+}
+
+// draft 内の bubbles を正規化
+function normalizeDraft(draft: any): any {
+  if (!draft || !draft.bubbles) return draft
+  return {
+    ...draft,
+    bubbles: draft.bubbles.map(normalizeBubble)
+  }
+}
+
 /**
  * POST /api/scenes/:id/comic/publish
  * 漫画を公開（PNG画像をアップロードしてimage_generationsに登録）
@@ -88,17 +128,19 @@ comic.post('/:id/comic/publish', async (c) => {
 
     // comic_dataを更新（draft + published）
     // Phase1.7: published に utterances と bubbles も保存
+    // Phase 3: textStyle/timing のデフォルト値を適用
     const existingComicData = scene.comic_data ? JSON.parse(scene.comic_data as string) : {}
-    const publishedUtterances = draft?.utterances || existingComicData.draft?.utterances || []
-    const publishedBubbles = draft?.bubbles || existingComicData.draft?.bubbles || []
+    const normalizedDraft = normalizeDraft(draft || existingComicData.draft || null)
+    const publishedUtterances = normalizedDraft?.utterances || []
+    const publishedBubbles = normalizedDraft?.bubbles || []
     
     const newComicData = {
-      draft: draft || existingComicData.draft || null,
+      draft: normalizedDraft,
       published: {
         image_generation_id: imageGenerationId,
         published_at: new Date().toISOString(),
         utterances: publishedUtterances,  // 最大3発話を保存
-        bubbles: publishedBubbles         // 吹き出し情報も保存
+        bubbles: publishedBubbles         // 吹き出し情報も保存（textStyle/timing付き）
       },
       base_image_generation_id: base_image_generation_id || existingComicData.base_image_generation_id || null
     }
@@ -148,10 +190,12 @@ comic.post('/:id/comic/draft', async (c) => {
     }
 
     // 既存のcomic_dataを保持しつつdraftを更新
+    // Phase 3: textStyle/timing のデフォルト値を適用
     const existingComicData = scene.comic_data ? JSON.parse(scene.comic_data as string) : {}
+    const normalizedDraft = normalizeDraft(draft)
     const newComicData = {
       ...existingComicData,
-      draft: draft,
+      draft: normalizedDraft,
       base_image_generation_id: base_image_generation_id || existingComicData.base_image_generation_id || null
     }
 

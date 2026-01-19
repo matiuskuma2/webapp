@@ -9,6 +9,84 @@ import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, get
 
 const audioGeneration = new Hono<{ Bindings: Bindings }>();
 
+// ===== Phase 4: TTS Usage Logging =====
+// SSOT: docs/TTS_USAGE_LIMITS_SPEC.md
+
+interface TTSUsageLogParams {
+  env: Bindings;
+  userId?: number;
+  projectId?: number;
+  sceneId?: number;
+  characterKey?: string;
+  provider: string;
+  voiceId: string;
+  model?: string;
+  textLength: number;
+  audioBytes?: number;
+  audioDurationMs?: number;
+  status: 'success' | 'failed' | 'cached';
+  cacheHit?: boolean;
+  errorMessage?: string;
+}
+
+// コスト推定関数
+function estimateTTSCost(provider: string, textLength: number, model?: string): number {
+  switch (provider) {
+    case 'google':
+      // WaveNet: $16/1M chars, Standard: $4/1M chars
+      const ratePerMillion = model?.toLowerCase().includes('wavenet') ? 16 : 4;
+      return (textLength / 1_000_000) * ratePerMillion;
+    case 'fish':
+      // $0.015/1000 chars
+      return (textLength / 1000) * 0.015;
+    case 'elevenlabs':
+      // $0.24/1000 chars (average)
+      return (textLength / 1000) * 0.24;
+    default:
+      return 0;
+  }
+}
+
+// TTS使用量ログ記録
+async function logTTSUsage(params: TTSUsageLogParams): Promise<void> {
+  try {
+    const estimatedCost = estimateTTSCost(params.provider, params.textLength, params.model);
+    const billingUnit = params.provider === 'google' ? 'characters' : 'characters';
+    
+    await params.env.DB.prepare(`
+      INSERT INTO tts_usage_logs (
+        user_id, project_id, scene_id, character_key,
+        provider, voice_id, model,
+        text_length, audio_duration_ms, audio_bytes,
+        estimated_cost_usd, billing_unit, billing_amount,
+        status, cache_hit, error_message
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      params.userId ?? 1, // デフォルトユーザー
+      params.projectId ?? null,
+      params.sceneId ?? null,
+      params.characterKey ?? null,
+      params.provider,
+      params.voiceId,
+      params.model ?? null,
+      params.textLength,
+      params.audioDurationMs ?? null,
+      params.audioBytes ?? null,
+      estimatedCost,
+      billingUnit,
+      params.textLength, // 課金単位での使用量
+      params.status,
+      params.cacheHit ? 1 : 0,
+      params.errorMessage ?? null
+    ).run();
+    
+    console.log(`[TTS Usage] Logged: provider=${params.provider}, chars=${params.textLength}, cost=$${estimatedCost.toFixed(6)}, status=${params.status}`);
+  } catch (error) {
+    // ログ記録の失敗は無視（本体処理に影響させない）
+    console.error('[TTS Usage] Failed to log:', error);
+  }
+}
+
 /**
  * POST /api/scenes/:id/generate-audio
  * - 競合(生成中)は 409
@@ -421,6 +499,29 @@ async function generateAndUploadAudio(args: {
         SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).bind(GENERATION_STATUS.FAILED, 'R2 upload verification failed', audioId).run();
+      
+      // Phase 4: ログ記録（失敗）
+      await logTTSUsage({
+        env,
+        projectId,
+        sceneId: audioId, // scene_id は後で取得が必要
+        provider,
+        voiceId,
+        textLength: text.length,
+        status: 'failed',
+        errorMessage: 'R2 upload verification failed'
+      });
+    } else {
+      // Phase 4: ログ記録（成功）
+      await logTTSUsage({
+        env,
+        projectId,
+        provider,
+        voiceId,
+        textLength: text.length,
+        audioBytes: bytes.length,
+        status: 'success'
+      });
     }
   } catch (err: any) {
     console.error(`[Audio] generation failed audioId=${audioId}`, err);
@@ -429,6 +530,17 @@ async function generateAndUploadAudio(args: {
       SET status = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(GENERATION_STATUS.FAILED, String(err?.message ?? 'Unknown error'), audioId).run();
+    
+    // Phase 4: ログ記録（失敗）
+    await logTTSUsage({
+      env,
+      projectId,
+      provider,
+      voiceId,
+      textLength: text.length,
+      status: 'failed',
+      errorMessage: String(err?.message ?? 'Unknown error')
+    });
   }
 }
 
