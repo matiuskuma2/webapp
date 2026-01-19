@@ -550,6 +550,8 @@ async function saveSourceText() {
 
 // Global polling state
 let formatPollingInterval = null;
+let formatPollingStartTime = null;
+const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 
 // Format and split scenes with progress monitoring
 async function formatAndSplit() {
@@ -743,28 +745,62 @@ function showFormatProgressUI() {
   formatSection.classList.remove('hidden');
 }
 
-// Start polling for format progress
+// Start polling for format progress with timeout
 function startFormatPolling() {
   // Clear any existing interval
   if (formatPollingInterval) {
     clearInterval(formatPollingInterval);
   }
   
+  // Record start time for timeout
+  formatPollingStartTime = Date.now();
+  
   // Poll every 5 seconds
   formatPollingInterval = setInterval(async () => {
     try {
+      // ===== TIMEOUT CHECK =====
+      const elapsed = Date.now() - formatPollingStartTime;
+      if (elapsed > FORMAT_TIMEOUT_MS) {
+        console.error('[Format] Timeout reached:', elapsed, 'ms');
+        clearInterval(formatPollingInterval);
+        formatPollingInterval = null;
+        formatPollingStartTime = null;
+        
+        // Generate log ID for support
+        const logId = `format_timeout_${PROJECT_ID}_${Date.now()}`;
+        console.error('[Format] LogID:', logId);
+        
+        // Show timeout UI
+        showFormatTimeoutUI(logId, elapsed);
+        isProcessing = false;
+        return;
+      }
+      
       const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/format/status`);
       const data = response.data;
       
       updateFormatProgress(data);
       
-      console.log('Format polling status:', data.status, 'processed:', data.processed, 'pending:', data.pending);
+      console.log('Format polling status:', data.status, 'processed:', data.processed, 'pending:', data.pending, 'elapsed:', Math.round(elapsed/1000), 's');
+      
+      // ===== FAILED STATUS CHECK =====
+      if (data.status === 'failed') {
+        console.error('[Format] Project status is failed');
+        clearInterval(formatPollingInterval);
+        formatPollingInterval = null;
+        formatPollingStartTime = null;
+        
+        showFormatFailedUI(data.error_message || 'シーン化に失敗しました');
+        isProcessing = false;
+        return;
+      }
       
       // Check if completed
       if (data.status === 'formatted') {
         console.log('Format completed, stopping polling');
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
+        formatPollingStartTime = null;
         
         // Get actual scene count from scenes API
         try {
@@ -816,12 +852,163 @@ function startFormatPolling() {
       
     } catch (error) {
       console.error('Polling error:', error);
-      clearInterval(formatPollingInterval);
-      formatPollingInterval = null;
-      showToast('進捗確認中にエラーが発生しました', 'error');
-      isProcessing = false;
+      // ===== NETWORK ERROR: Don't stop polling immediately =====
+      // Only stop after 3 consecutive failures
+      if (!window.formatPollingFailCount) window.formatPollingFailCount = 0;
+      window.formatPollingFailCount++;
+      
+      if (window.formatPollingFailCount >= 3) {
+        clearInterval(formatPollingInterval);
+        formatPollingInterval = null;
+        formatPollingStartTime = null;
+        window.formatPollingFailCount = 0;
+        
+        const logId = `format_error_${PROJECT_ID}_${Date.now()}`;
+        showFormatErrorUI(error.message || '進捗確認中にエラーが発生しました', logId);
+        isProcessing = false;
+      } else {
+        console.warn(`[Format] Network error (attempt ${window.formatPollingFailCount}/3), retrying...`);
+      }
     }
   }, 5000);
+}
+
+// Show timeout UI
+function showFormatTimeoutUI(logId, elapsedMs) {
+  const formatSection = document.getElementById('formatSection');
+  formatSection.innerHTML = `
+    <div class="p-6 bg-yellow-50 border-l-4 border-yellow-600 rounded-lg">
+      <div class="flex items-start">
+        <i class="fas fa-clock text-yellow-600 text-3xl mr-4 mt-1"></i>
+        <div class="flex-1">
+          <h3 class="font-bold text-gray-800 mb-2 text-lg">タイムアウトしました</h3>
+          <p class="text-sm text-gray-700 mb-4">
+            シーン化処理が ${Math.round(elapsedMs / 60000)} 分以上かかっています。<br>
+            サーバー側で処理が継続している可能性があります。
+          </p>
+          <div class="bg-gray-100 p-2 rounded text-xs font-mono mb-4">
+            LogID: ${logId}
+          </div>
+          <div class="flex gap-2">
+            <button onclick="retryFormatPolling()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+              <i class="fas fa-sync mr-1"></i>再確認
+            </button>
+            <button onclick="resetFormatAndRetry()" class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700">
+              <i class="fas fa-redo mr-1"></i>最初からやり直す
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  formatSection.classList.remove('hidden');
+}
+
+// Show failed UI
+function showFormatFailedUI(errorMessage) {
+  const formatSection = document.getElementById('formatSection');
+  formatSection.innerHTML = `
+    <div class="p-6 bg-red-50 border-l-4 border-red-600 rounded-lg">
+      <div class="flex items-start">
+        <i class="fas fa-exclamation-circle text-red-600 text-3xl mr-4 mt-1"></i>
+        <div class="flex-1">
+          <h3 class="font-bold text-gray-800 mb-2 text-lg">シーン化に失敗しました</h3>
+          <p class="text-sm text-gray-700 mb-4">${errorMessage}</p>
+          <div class="flex gap-2">
+            <button onclick="resetFormatAndRetry()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+              <i class="fas fa-redo mr-1"></i>やり直す
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  formatSection.classList.remove('hidden');
+}
+
+// Show error UI
+function showFormatErrorUI(errorMessage, logId) {
+  const formatSection = document.getElementById('formatSection');
+  formatSection.innerHTML = `
+    <div class="p-6 bg-red-50 border-l-4 border-red-600 rounded-lg">
+      <div class="flex items-start">
+        <i class="fas fa-wifi text-red-600 text-3xl mr-4 mt-1"></i>
+        <div class="flex-1">
+          <h3 class="font-bold text-gray-800 mb-2 text-lg">通信エラーが発生しました</h3>
+          <p class="text-sm text-gray-700 mb-4">${errorMessage}</p>
+          <div class="bg-gray-100 p-2 rounded text-xs font-mono mb-4">
+            LogID: ${logId}
+          </div>
+          <div class="flex gap-2">
+            <button onclick="retryFormatPolling()" class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+              <i class="fas fa-sync mr-1"></i>再試行
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+  formatSection.classList.remove('hidden');
+}
+
+// Retry polling (check current status)
+async function retryFormatPolling() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/format/status`);
+    const data = response.data;
+    
+    if (data.status === 'formatted') {
+      showToast('シーン化が完了しています', 'success');
+      await loadScenes();
+      switchTab('builder');
+    } else if (data.status === 'formatting') {
+      showToast('処理を再開します', 'info');
+      isProcessing = true;
+      showFormatProgressUI();
+      startFormatPolling();
+    } else if (data.status === 'failed') {
+      showFormatFailedUI(data.error_message || 'シーン化に失敗しました');
+    } else {
+      showToast(`現在のステータス: ${data.status}`, 'info');
+    }
+  } catch (error) {
+    console.error('Retry check failed:', error);
+    showToast('ステータス確認に失敗しました', 'error');
+  }
+}
+
+// Reset and retry from beginning
+async function resetFormatAndRetry() {
+  if (!confirm('シーン化をやり直しますか？\n既存のシーンは削除されます。')) {
+    return;
+  }
+  
+  try {
+    // Reset project status to 'uploaded' or 'parsed'
+    // This will be handled by calling format again
+    showToast('処理を再開します', 'info');
+    
+    // Reload project to get fresh status
+    const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
+    currentProject = projectResponse.data;
+    
+    // Show format section and allow retry
+    const formatSection = document.getElementById('formatSection');
+    formatSection.innerHTML = `
+      <div class="p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg">
+        <h3 class="font-bold text-gray-800 mb-4">シーン分割</h3>
+        <p class="text-sm text-gray-600 mb-4">テキストをシーンに分割します。</p>
+        <button id="formatBtn" onclick="formatAndSplit()" class="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors">
+          <i class="fas fa-magic mr-2"></i>シーン化を実行
+        </button>
+      </div>
+    `;
+    formatSection.classList.remove('hidden');
+    
+  } catch (error) {
+    console.error('Reset failed:', error);
+    showToast('リセットに失敗しました', 'error');
+  }
 }
 
 // Update format progress UI
