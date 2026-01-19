@@ -448,9 +448,10 @@ audioGeneration.post('/tts/preview', async (c) => {
     const sampleText = text || 'こんにちは、これはサンプル音声です。';
     
     // Determine provider from voice_id
-    const isElevenLabsVoice = voice_id.startsWith('elevenlabs:') || voice_id.startsWith('el-') || isElevenLabsVoice(voice_id);
-    const isFishVoice = voice_id.startsWith('fish:') || voice_id.startsWith('fish-');
-    const provider = isElevenLabsVoice ? 'elevenlabs' : isFishVoice ? 'fish' : 'google';
+    // Note: isElevenLabsVoice is imported function, use different variable name
+    const isElevenLabs = voice_id.startsWith('elevenlabs:') || voice_id.startsWith('el-') || isElevenLabsVoice(voice_id);
+    const isFish = voice_id.startsWith('fish:') || voice_id.startsWith('fish-');
+    const provider = isElevenLabs ? 'elevenlabs' : isFish ? 'fish' : 'google';
 
     if (provider === 'elevenlabs') {
       // ElevenLabs TTS
