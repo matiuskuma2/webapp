@@ -819,13 +819,21 @@ async function autoMergeScenes(c: any, projectId: string, stats: any) {
     // ✅ Failures do not affect 'formatted' status
     try {
       const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
+      const { extractAndUpdateCharacterTraits } = await import('../utils/character-trait-extractor');
+      
       c.executionCtx.waitUntil(
-        autoAssignCharactersToScenes(c.env.DB, parseInt(projectId))
-          .then(result => {
-            console.log(`[Phase X-2] Auto-assigned ${result.assigned} characters to ${result.scenes} scenes (project ${projectId})`);
-          })
+        (async () => {
+          // Step 1: Auto-assign characters to scenes
+          const assignResult = await autoAssignCharactersToScenes(c.env.DB, parseInt(projectId));
+          console.log(`[Phase X-2] Auto-assigned ${assignResult.assigned} characters to ${assignResult.scenes} scenes (project ${projectId})`);
+          
+          // Step 2: Extract and update character traits from scene dialogues
+          // Phase X-3: This ensures visual consistency across all scenes
+          const traitResult = await extractAndUpdateCharacterTraits(c.env.DB, parseInt(projectId));
+          console.log(`[Phase X-3] Extracted traits for ${traitResult.updated} characters: ${traitResult.characters.join(', ')}`);
+        })()
           .catch(err => {
-            console.error(`[Phase X-2] Auto-assign failed for project ${projectId}:`, err.message);
+            console.error(`[Phase X-2/X-3] Character processing failed for project ${projectId}:`, err.message);
           })
       );
     } catch (err) {

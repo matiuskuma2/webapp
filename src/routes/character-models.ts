@@ -488,14 +488,21 @@ app.post('/projects/:projectId/characters/auto-assign', async (c) => {
     
     // Execute auto-assign
     const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
+    const { extractAndUpdateCharacterTraits } = await import('../utils/character-trait-extractor');
+    
     const result = await autoAssignCharactersToScenes(c.env.DB, projectId);
+    
+    // Phase X-3: Also extract and update character traits
+    const traitResult = await extractAndUpdateCharacterTraits(c.env.DB, projectId);
+    console.log(`[Phase X-3] Extracted traits for ${traitResult.updated} characters during auto-assign`);
     
     return c.json({
       success: true,
       assigned: result.assigned,
       scenes: result.scenes,
       skipped: result.skipped,
-      message: `Assigned ${result.assigned} characters to ${result.scenes} scenes`
+      traits_updated: traitResult.updated,
+      message: `Assigned ${result.assigned} characters to ${result.scenes} scenes, updated ${traitResult.updated} character traits`
     });
   } catch (error) {
     console.error('[Characters] Auto-assign error:', error);

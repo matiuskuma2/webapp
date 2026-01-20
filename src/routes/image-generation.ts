@@ -793,6 +793,9 @@ async function generateImageWithRetry(
       }
       
       // キャラクター参照の説明をプロンプトに追加
+      // 日本語テキスト生成を明示的に指定
+      const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
+      
       let enhancedPrompt = prompt
       if (limitedImages.length > 0) {
         const charNames = limitedImages
@@ -800,10 +803,12 @@ async function generateImageWithRetry(
           .map(img => img.characterName)
           .join(', ')
         if (charNames) {
-          enhancedPrompt = `Using the provided reference images for character consistency (${charNames}), generate: ${prompt}`
+          enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency (${charNames}), generate: ${prompt}`
         } else {
-          enhancedPrompt = `Using the provided reference images for character consistency, generate: ${prompt}`
+          enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency, generate: ${prompt}`
         }
+      } else {
+        enhancedPrompt = `${japaneseTextInstruction}\n\n${prompt}`
       }
       
       // テキストプロンプトを追加
