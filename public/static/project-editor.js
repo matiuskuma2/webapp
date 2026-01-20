@@ -611,8 +611,8 @@ async function loadBuilderSceneCharTraits(sceneId) {
   if (!container) return;
   
   try {
-    // Get characters for this scene
-    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/characters`);
+    // Get characters for this scene (with timeout to prevent freeze)
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/characters`, { timeout: 10000 });
     const characters = response.data.scene_characters || [];
     
     if (characters.length === 0) {
@@ -620,8 +620,8 @@ async function loadBuilderSceneCharTraits(sceneId) {
       return;
     }
     
-    // Get scene-specific overrides
-    const traitsResponse = await axios.get(`${API_BASE}/scenes/${sceneId}/character-traits`);
+    // Get scene-specific overrides (with timeout)
+    const traitsResponse = await axios.get(`${API_BASE}/scenes/${sceneId}/character-traits`, { timeout: 10000 });
     const sceneTraits = traitsResponse.data.scene_traits || [];
     const traitMap = new Map(sceneTraits.map(t => [t.character_key, t]));
     
@@ -3851,10 +3851,13 @@ function renderBuilderScenes(scenes, page = 1) {
   
   // ========== Phase X-5: Load Character Traits for Scenes ==========
   // Load character traits for each visible scene (async, non-blocking)
-  setTimeout(() => {
-    filteredScenes.forEach(scene => {
-      loadBuilderSceneCharTraits(scene.id);
-    });
+  // Throttled to avoid overwhelming the API with parallel requests
+  setTimeout(async () => {
+    const BATCH_SIZE = 3; // Load 3 scenes at a time
+    for (let i = 0; i < filteredScenes.length; i += BATCH_SIZE) {
+      const batch = filteredScenes.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map(scene => loadBuilderSceneCharTraits(scene.id)));
+    }
   }, 100);
   
   // ========== Phase X-0: Pagination Controls ==========

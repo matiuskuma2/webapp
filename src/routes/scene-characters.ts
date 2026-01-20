@@ -21,7 +21,7 @@ app.get('/:sceneId/characters', async (c) => {
     const mappings = await c.env.DB.prepare(`
       SELECT 
         scm.id, scm.scene_id, scm.character_key, scm.is_primary, scm.created_at,
-        pcm.character_name, pcm.appearance_description, pcm.reference_image_r2_url
+        pcm.character_name, pcm.appearance_description, pcm.story_traits, pcm.reference_image_r2_url
       FROM scene_character_map scm
       LEFT JOIN scenes s ON scm.scene_id = s.id
       LEFT JOIN project_character_models pcm 

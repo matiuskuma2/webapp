@@ -4,16 +4,14 @@
  */
 
 /**
- * シーン固有のプロンプトに、ニュース風インフォグラフィックのスタイル指定を追加
+ * シーン固有のプロンプトをそのまま返す
+ * スタイルはスタイルプリセット（composeStyledPrompt）で適用される
  * 
  * @param scenePrompt - シーン固有の内容記述（scene.image_prompt）
- * @returns 最終的な画像生成プロンプト
+ * @returns 画像生成プロンプト（そのまま）
  */
 export function buildImagePrompt(scenePrompt: string): string {
-  // スタイル指定（固定部分）
-  const styleTemplate = ", clean infographic style, news broadcast quality, professional layout, modern design, data visualization elements, blue and white color scheme, high contrast, readable text hierarchy, minimalist composition, corporate aesthetic, 16:9 aspect ratio";
-  
-  return scenePrompt + styleTemplate;
+  return scenePrompt;
 }
 
 /**
