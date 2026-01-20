@@ -21,7 +21,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ======== 設定 ========
 const CONFIG = {
   region: process.env.AWS_REGION || 'ap-northeast-1',
-  siteBucket: process.env.SITE_BUCKET || 'rilarc-remotion-site-prod-202601',
+  siteBucket: process.env.SITE_BUCKET || 'remotionlambda-apnortheast1-ucgr0eo7k7',
   rendersBucket: process.env.RENDERS_BUCKET || 'rilarc-remotion-renders-prod-202601',
   functionName: 'rilarc-video-build-prod',
   memorySizeInMb: 2048,
