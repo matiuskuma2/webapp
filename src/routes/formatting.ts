@@ -541,11 +541,21 @@ async function processTextChunks(c: any, projectId: string, project: any) {
   // 統計を取得
   const stats = await getChunkStats(c.env.DB, projectId)
 
+  // 最新のrun_id/run_noを取得（SSOT: UI側でmismatch検出に使用）
+  const latestRun = await c.env.DB.prepare(`
+    SELECT id, run_no FROM runs
+    WHERE project_id = ?
+    ORDER BY run_no DESC
+    LIMIT 1
+  `).bind(projectId).first()
+
   return c.json({
     project_id: parseInt(projectId),
     status: 'formatting',
     batch_processed: successCount,
     batch_failed: failedCount,
+    run_id: latestRun?.id || null,
+    run_no: latestRun?.run_no || null,
     ...stats
   }, 200)
 }

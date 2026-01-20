@@ -1,8 +1,21 @@
 // API Base URL
 const API_BASE = '/api';
 
-// Global state
+// Global state (SSOT: currentProjectはwindow.currentProjectに一本化)
+// これにより reset-to-input 等で片方だけ更新される事故を防止
+window.currentProject = window.currentProject || null;
+// currentProject参照はwindow.currentProjectを使用するgetterを定義
+Object.defineProperty(window, 'currentProjectRef', {
+  get: function() { return window.currentProject; },
+  set: function(value) { window.currentProject = value; }
+});
+// 後方互換のため、letでもcurrentProjectを使えるようにする（代入時は両方更新）
 let currentProject = null;
+// currentProjectへの代入を検知してwindow.currentProjectも更新するラッパー
+const updateCurrentProject = (project) => {
+  currentProject = project;
+  window.currentProject = project;
+};
 let isProcessing = false; // ボタン連打防止用フラグ（グローバル処理用）
 window.isBulkImageGenerating = false; // Global flag for bulk image generation (window scope for template access)
 window.sceneProcessing = {}; // Global flag for individual scene processing (window scope)
@@ -69,7 +82,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function loadProject() {
   try {
     const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
-    currentProject = response.data;
+    updateCurrentProject(response.data);
     
     // Update UI
     document.getElementById('projectTitle').textContent = currentProject.title;
@@ -816,6 +829,7 @@ async function saveSourceText() {
 let formatPollingInterval = null;
 let formatPollingStartTime = null;
 let currentFormatRunNo = null; // サポート用: 現在のrun_no
+let currentFormatRunId = null; // SSOT: 監視中のrun_id（mismatch検出用）
 const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 
 // Format and split scenes with progress monitoring
@@ -938,6 +952,11 @@ async function formatAndSplit() {
       return;
     }
     
+    // SSOT: 監視するrun_id/run_noを保存（mismatch検出用）
+    currentFormatRunId = response.data.run_id || null;
+    currentFormatRunNo = response.data.run_no || null;
+    console.log('[Format] Started monitoring run_id:', currentFormatRunId, 'run_no:', currentFormatRunNo);
+    
     // Start polling for progress
     startFormatPolling();
     
@@ -1049,7 +1068,26 @@ function startFormatPolling() {
       
       updateFormatProgress(data);
       
-      console.log('Format polling status:', data.status, 'processed:', data.processed, 'pending:', data.pending, 'elapsed:', Math.round(elapsed/1000), 's');
+      console.log('Format polling status:', data.status, 'processed:', data.processed, 'pending:', data.pending, 'run_id:', data.run_id, 'elapsed:', Math.round(elapsed/1000), 's');
+      
+      // ===== RUN_ID MISMATCH CHECK (SSOT) =====
+      // 別のrunが開始された場合は即座に停止
+      if (currentFormatRunId && data.run_id && data.run_id !== currentFormatRunId) {
+        console.warn('[Format] Run ID mismatch detected! Expected:', currentFormatRunId, 'Got:', data.run_id);
+        clearInterval(formatPollingInterval);
+        formatPollingInterval = null;
+        formatPollingStartTime = null;
+        currentFormatRunId = null;
+        currentFormatRunNo = null;
+        
+        showToast('別のシーン化処理が開始されました。画面を更新してください。', 'warning');
+        isProcessing = false;
+        
+        // UIをリセット
+        document.getElementById('formatProgressUI')?.classList.add('hidden');
+        document.getElementById('formatSection')?.classList.remove('hidden');
+        return;
+      }
       
       // ===== FAILED STATUS CHECK =====
       if (data.status === 'failed') {
@@ -1262,7 +1300,7 @@ async function resetFormatAndRetry() {
     
     // Reload project to get fresh status
     const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
-    currentProject = projectResponse.data;
+    updateCurrentProject(projectResponse.data);
     
     // Show format section and allow retry
     const formatSection = document.getElementById('formatSection');
@@ -7022,11 +7060,9 @@ async function executeResetToInput() {
         : 'リセット完了: シーン・画像・音声を削除しました';
       showToast(msg, 'success');
       
-      // Update project status in cache (both local and window scope)
-      currentProject.status = response.data.reset_to;
-      if (window.currentProject) {
-        window.currentProject.status = response.data.reset_to;
-      }
+      // Update project status in cache (SSOT: updateCurrentProjectで統一更新)
+      const updatedProject = { ...currentProject, status: response.data.reset_to };
+      updateCurrentProject(updatedProject);
       
       // Clear scene caches to force refresh
       window.sceneSplitLoaded = false;
