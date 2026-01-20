@@ -358,3 +358,65 @@ ALTER TABLE scene_character_map DROP COLUMN role;
 | 日付 | 変更内容 |
 |------|----------|
 | 2026-01-20 | 初版作成（コードレビュー結果） |
+| 2026-01-20 | P0-1～P0-5, P1-1 実装完了 |
+
+---
+
+## 11. 実装完了報告 (2026-01-20)
+
+### ✅ 完了項目
+
+#### P0-1: r2_url保存不具合修正
+- **修正ファイル**: `src/routes/image-generation.ts`
+- **内容**: バッチ生成時の `UPDATE` クエリに `r2_url` カラムを追加
+- **検証**: ビルド成功
+
+#### P0-2: バッチ生成でスタイルプリセット適用
+- **修正ファイル**: `src/routes/image-generation.ts`
+- **内容**: `composeStyledPrompt()` を使用するよう変更
+- **検証**: ビルド成功
+
+#### P0-3: キャラクター参照画像取得のSSOT化
+- **新規ファイル**: `src/utils/character-reference-helper.ts`
+- **機能**:
+  - `getSceneReferenceImages()`: シーンのキャラクター参照画像を取得
+  - `fetchReferenceImageFromR2()`: R2から画像取得→base64変換
+  - 最大5枚の制限を適用（Gemini API仕様）
+  - 優先度: `is_primary=1` → `created_at` 順
+- **検証**: ビルド成功
+
+#### P0-4: バッチ生成もSSOT化されたヘルパーを使用
+- **修正ファイル**: `src/routes/image-generation.ts`
+- **内容**: `getSceneReferenceImages()` を使用するよう変更
+- **検証**: ビルド成功
+
+#### P0-5: 全画像生成ボタンの非活性化UI
+- **確認ファイル**: `public/static/project-editor.*.js`
+- **内容**: 既存実装を確認
+  - 全生成済み時: ボタンdisabled、テキスト「全画像生成済み」
+  - 早期リターン: API呼び出し前にステータスチェック
+- **状態**: 実装済み
+
+#### P1-1: 参照画像を最大5枚に絞る優先度SSOTドキュメント
+- **ファイル**: `src/utils/character-reference-helper.ts` のコメント
+- **内容**: 
+  - MAX_REFERENCE_IMAGES = 5 の定数
+  - 優先度ルールのドキュメント
+
+### ⏳ 保留項目
+
+#### P2: 参照画像キャッシュ（R2→base64の二重取得防止）
+- **状態**: 未着手
+- **理由**: パフォーマンス改善は優先度低
+- **将来対応**: プロジェクト単位でキャラクター参照画像をキャッシュ
+
+### 🔧 ローカルテスト環境
+
+- **URL**: https://3000-ifuxiog3lbf1ljqeq3f8e-d0b9e1e2.sandbox.novita.ai
+- **起動コマンド**: `pm2 start ecosystem.config.cjs`
+- **ビルド**: `npm run build`
+
+### 📝 本番デプロイ
+
+- **状態**: Cloudflare API key 未設定
+- **手順**: Deploy タブで API key を設定後、`npx wrangler pages deploy dist` を実行
