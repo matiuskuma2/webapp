@@ -6692,7 +6692,7 @@ async function startVideoBuild() {
   };
   
   // Confirm
-  if (!confirm('動画生成を開始しますか？\\n\\n処理には数分かかる場合があります。')) {
+  if (!confirm('動画生成を開始しますか？\n\n処理には数分かかる場合があります。')) {
     return;
   }
   

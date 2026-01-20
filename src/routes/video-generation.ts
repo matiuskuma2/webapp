@@ -1532,7 +1532,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       userId,
       JSON.stringify(buildSettings),
       scenesWithAssets.length,
-      projectJson.summary.total_duration_ms,
+      projectJson.summary?.total_duration_ms ?? (projectJson as any).total_duration_ms ?? 0,
       projectJsonHash
     ).run();
     
