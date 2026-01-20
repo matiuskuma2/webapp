@@ -1722,6 +1722,181 @@ app.get('/projects/:id', (c) => {
         </div>
     </div>
 
+    <!-- Phase X-5: Character Trait Edit Modal (Improved) -->
+    <div id="character-trait-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto">
+        <div class="min-h-screen px-4 py-8 flex items-start justify-center">
+            <div class="bg-white rounded-xl shadow-2xl w-full max-w-2xl">
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-indigo-600 to-purple-600 px-6 py-4 rounded-t-xl">
+                    <h2 id="trait-modal-title" class="text-xl font-bold text-white">
+                        <i class="fas fa-user-tag mr-2"></i>キャラクター特徴を編集
+                    </h2>
+                </div>
+                
+                <!-- Content -->
+                <div class="p-6 space-y-4">
+                    <!-- Hidden fields -->
+                    <input type="hidden" id="trait-modal-character-key" />
+                    <input type="hidden" id="trait-modal-scene-id" />
+                    <input type="hidden" id="trait-modal-mode" /> <!-- 'story', 'scene', or 'select' -->
+                    
+                    <!-- Step 1: Character Selection (for scene override) -->
+                    <div id="trait-modal-step-select" class="hidden space-y-4">
+                        <div class="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                            <p class="text-sm text-blue-700">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                <strong>シーン別オーバーライド</strong>を設定するキャラクターを選択してください。<br>
+                                変身・衣装変更・状態変化など、このシーンでのみ異なる描写が必要なキャラクターを選びます。
+                            </p>
+                        </div>
+                        
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-users mr-1 text-indigo-600"></i>キャラクターを選択
+                            </label>
+                            <div id="trait-modal-character-list" class="space-y-2">
+                                <!-- Character cards will be inserted here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Example section -->
+                        <div class="mt-4">
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-lightbulb mr-1 text-yellow-500"></i>シーン別特徴を設定する場面の例
+                            </label>
+                            <div class="grid grid-cols-2 gap-2 text-sm">
+                                <div class="p-2 bg-yellow-50 rounded border border-yellow-200">
+                                    <span class="font-semibold text-yellow-800">変身・変化</span>
+                                    <p class="text-yellow-700 text-xs mt-1">妖精→人間への変身</p>
+                                </div>
+                                <div class="p-2 bg-green-50 rounded border border-green-200">
+                                    <span class="font-semibold text-green-800">衣装・装備</span>
+                                    <p class="text-green-700 text-xs mt-1">鎧を着る、武器を持つ</p>
+                                </div>
+                                <div class="p-2 bg-red-50 rounded border border-red-200">
+                                    <span class="font-semibold text-red-800">状態変化</span>
+                                    <p class="text-red-700 text-xs mt-1">傷・疲労・感情の変化</p>
+                                </div>
+                                <div class="p-2 bg-blue-50 rounded border border-blue-200">
+                                    <span class="font-semibold text-blue-800">時間経過</span>
+                                    <p class="text-blue-700 text-xs mt-1">成長後・数年後の姿</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Step 2: Trait Edit (shared with story trait edit) -->
+                    <div id="trait-modal-step-edit" class="space-y-4">
+                        <!-- Character info -->
+                        <div class="flex items-center gap-4 p-4 bg-gray-50 rounded-lg">
+                            <img id="trait-modal-char-image" src="" alt="" class="w-16 h-16 rounded-full object-cover border-2 border-indigo-200 hidden">
+                            <div id="trait-modal-char-placeholder" class="w-16 h-16 rounded-full bg-gray-200 flex items-center justify-center">
+                                <i class="fas fa-user text-gray-400 text-2xl"></i>
+                            </div>
+                            <div>
+                                <h3 id="trait-modal-char-name" class="font-bold text-lg text-gray-800">キャラクター名</h3>
+                                <p id="trait-modal-char-subtitle" class="text-sm text-gray-500">共通特徴を編集</p>
+                            </div>
+                        </div>
+                    
+                    <!-- Mode description -->
+                    <div id="trait-modal-description" class="p-4 bg-blue-50 rounded-lg border border-blue-200">
+                        <p class="text-sm text-blue-700"></p>
+                    </div>
+                    
+                    <!-- AI suggestion section (for scene override mode) -->
+                    <div id="trait-modal-ai-section" class="hidden">
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="text-sm font-semibold text-gray-700">
+                                <i class="fas fa-robot mr-1 text-purple-600"></i>AI検出した特徴
+                            </label>
+                            <button 
+                                id="trait-modal-ai-detect"
+                                class="text-xs px-3 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200"
+                            >
+                                <i class="fas fa-magic mr-1"></i>再検出
+                            </button>
+                        </div>
+                        <div id="trait-modal-ai-suggestions" class="p-3 bg-purple-50 rounded-lg border border-purple-200 text-sm">
+                            <i class="fas fa-spinner fa-spin mr-1"></i>検出中...
+                        </div>
+                        <button 
+                            id="trait-modal-use-ai"
+                            class="mt-2 text-xs text-purple-600 hover:text-purple-800"
+                        >
+                            <i class="fas fa-arrow-down mr-1"></i>この内容を使用
+                        </button>
+                    </div>
+                    
+                    <!-- Trait input -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-edit mr-1 text-indigo-600"></i>特徴を入力
+                        </label>
+                        <textarea 
+                            id="trait-modal-input"
+                            rows="4"
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
+                            placeholder="例: 小さな妖精、キラキラと光る羽を持つ、青いドレス"
+                        ></textarea>
+                    </div>
+                    
+                    <!-- Examples section (for scene override mode) -->
+                    <div id="trait-modal-examples" class="hidden">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-lightbulb mr-1 text-yellow-500"></i>シーン別特徴を設定する場面の例
+                        </label>
+                        <div class="space-y-2 text-sm">
+                            <div class="p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+                                <span class="font-semibold text-yellow-800">変身・変化シーン:</span>
+                                <p class="text-yellow-700 mt-1">「妖精から人間の姿に変身した。羽は消え、普通の少女の姿になっている」</p>
+                            </div>
+                            <div class="p-3 bg-green-50 rounded-lg border border-green-200">
+                                <span class="font-semibold text-green-800">衣装・装備変更:</span>
+                                <p class="text-green-700 mt-1">「戦士の鎧を着ている。剣と盾を持っている」</p>
+                            </div>
+                            <div class="p-3 bg-red-50 rounded-lg border border-red-200">
+                                <span class="font-semibold text-red-800">状態変化:</span>
+                                <p class="text-red-700 mt-1">「傷だらけで疲弊した様子。服は破れ、汚れている」</p>
+                            </div>
+                            <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                                <span class="font-semibold text-blue-800">成長・時間経過:</span>
+                                <p class="text-blue-700 mt-1">「数年後の姿。髪が伸び、大人びた表情になっている」</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Current traits info -->
+                    <div id="trait-modal-current" class="hidden">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-info-circle mr-1 text-gray-500"></i>現在の共通特徴
+                        </label>
+                        <div id="trait-modal-current-value" class="p-3 bg-gray-50 rounded-lg text-sm text-gray-600 italic">
+                            未設定
+                        </div>
+                    </div>
+                    </div><!-- End of trait-modal-step-edit -->
+                </div>
+                
+                <!-- Footer -->
+                <div id="trait-modal-footer" class="bg-gray-50 px-6 py-4 rounded-b-xl flex gap-3 justify-end">
+                    <button 
+                        id="trait-modal-cancel"
+                        class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+                    >
+                        キャンセル
+                    </button>
+                    <button 
+                        id="trait-modal-save"
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold"
+                    >
+                        <i class="fas fa-save mr-2"></i>保存
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
     <!-- Phase A-3: Character Library Import Modal -->
     <div id="library-import-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 overflow-y-auto">
         <div class="min-h-screen px-4 flex items-center justify-center">
@@ -1796,6 +1971,7 @@ app.get('/projects/:id', (c) => {
     <script src="/static/world-character-ui.js"></script>
     <script src="/static/character-library.js"></script>
     <script src="/static/scene-edit-modal.js"></script>
+    <script src="/static/character-trait-modal.js"></script>
     <!-- comic-editor v1 は凍結（Phase1.6 SSOT再構築中） -->
     <!-- <script src="/static/comic-editor.js"></script> -->
     <script src="/static/comic-editor-v2.js"></script>

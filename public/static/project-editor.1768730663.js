@@ -510,28 +510,31 @@ function toggleCharacterTraitsSummary() {
 
 /**
  * Open modal to edit character's story traits
+ * Uses CharacterTraitModal for proper UI
  */
 async function openCharacterTraitEdit(characterKey, characterName) {
-  const currentTraits = await getCharacterCurrentTraits(characterKey);
+  if (!window.CharacterTraitModal) {
+    console.error('[CharacterTraitEdit] CharacterTraitModal not loaded');
+    showToast('モーダルの読み込みに失敗しました', 'error');
+    return;
+  }
   
-  const newTraits = prompt(
-    `「${characterName}」の共通特徴を編集:\n\n` +
-    `例: 小さな妖精、キラキラと光る羽を持つ、青いドレス\n\n` +
-    `※全シーンに適用されます。特定シーンで異なる描写が必要な場合は、シーン別オーバーライドを追加してください。`,
-    currentTraits || ''
-  );
-  
-  if (newTraits !== null) {
-    try {
-      await axios.put(`${API_BASE}/projects/${PROJECT_ID}/characters/${characterKey}/story-traits`, {
-        story_traits: newTraits
-      });
-      showToast('キャラクター特徴を更新しました', 'success');
-      loadCharacterTraitsSummary();
-    } catch (error) {
-      console.error('Failed to update character traits:', error);
-      showToast('特徴の更新に失敗しました', 'error');
-    }
+  try {
+    // Get current traits and image
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters/${characterKey}`);
+    const char = response.data.character || {};
+    const currentTraits = char.story_traits || char.appearance_description || '';
+    const imageUrl = char.reference_image_r2_url || null;
+    
+    window.CharacterTraitModal.openForStoryTraits(
+      characterKey,
+      characterName,
+      currentTraits,
+      imageUrl
+    );
+  } catch (error) {
+    console.error('Failed to open character trait edit:', error);
+    showToast('キャラクター情報の取得に失敗しました', 'error');
   }
 }
 
@@ -566,75 +569,17 @@ async function removeSceneCharacterTrait(sceneId, characterKey) {
 
 /**
  * Open modal to add scene-specific trait override
- * Example: "妖精のベルがこのシーンで人間に変身する"
+ * Uses CharacterTraitModal for proper UI with character selection
  */
 async function openAddSceneTraitOverride(sceneId, sceneIdx) {
-  try {
-    // Get characters assigned to this scene
-    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/characters`);
-    const characters = response.data.scene_characters || [];
-    
-    if (characters.length === 0) {
-      showToast('先にキャラクターを割り当ててください', 'warning');
-      return;
-    }
-    
-    // Build character selection
-    const charOptions = characters.map(c => 
-      `${c.character_name || c.character_key}`
-    ).join(', ');
-    
-    const selectedCharName = prompt(
-      `シーン #${sceneIdx} の特徴オーバーライド\n\n` +
-      `どのキャラクターの特徴を変更しますか？\n` +
-      `割り当て済みキャラ: ${charOptions}\n\n` +
-      `キャラクター名を入力:`
-    );
-    
-    if (!selectedCharName) return;
-    
-    // Find matching character
-    const matchedChar = characters.find(c => 
-      (c.character_name || '').toLowerCase().includes(selectedCharName.toLowerCase()) ||
-      (c.character_key || '').toLowerCase().includes(selectedCharName.toLowerCase())
-    );
-    
-    if (!matchedChar) {
-      showToast('キャラクターが見つかりません', 'error');
-      return;
-    }
-    
-    const traitDescription = prompt(
-      `「${matchedChar.character_name || matchedChar.character_key}」の` +
-      `シーン #${sceneIdx} での特徴:\n\n` +
-      `例:\n` +
-      `- 人間の姿に変身した。妖精の羽は消え、普通の少女の姿になっている\n` +
-      `- 戦士の鎧を着ている。剣を持っている\n` +
-      `- 傷だらけで疲弊した様子\n\n` +
-      `※このシーンの画像生成時のみ、この特徴が優先されます`
-    );
-    
-    if (!traitDescription) return;
-    
-    // Save the override
-    await axios.post(`${API_BASE}/scenes/${sceneId}/character-traits`, {
-      character_key: matchedChar.character_key,
-      trait_description: traitDescription,
-      override_type: 'transform',
-      source: 'manual'
-    });
-    
-    showToast(`シーン #${sceneIdx} の特徴オーバーライドを追加しました`, 'success');
-    
-    // Refresh the traits summary if it's visible
-    const content = document.getElementById('characterTraitsSummaryContent');
-    if (content && !content.classList.contains('hidden')) {
-      loadCharacterTraitsSummary();
-    }
-  } catch (error) {
-    console.error('Failed to add scene trait override:', error);
-    showToast('特徴オーバーライドの追加に失敗しました', 'error');
+  if (!window.CharacterTraitModal) {
+    console.error('[SceneTraitOverride] CharacterTraitModal not loaded');
+    showToast('モーダルの読み込みに失敗しました', 'error');
+    return;
   }
+  
+  // Open the modal in character selection mode
+  window.CharacterTraitModal.openForSceneOverrideSelection(sceneId, sceneIdx);
 }
 
 /**
