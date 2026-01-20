@@ -337,6 +337,9 @@ async function initSceneSplitTab() {
     renderScenes(scenes);
     document.getElementById('scenesCount').textContent = scenes.length;
     
+    // Phase X-5: Show character traits summary section
+    document.getElementById('characterTraitsSummarySection')?.classList.remove('hidden');
+    
     // Phase F-3: Show reset to input option
     updateResetToInputVisibility(currentProject.status);
   }
@@ -384,6 +387,261 @@ async function updateCharacterWarning() {
     warningSection.classList.add('hidden');
   }
 }
+
+/**
+ * Phase X-5: Load and display character traits summary
+ * Shows base traits and scene-specific overrides
+ */
+async function loadCharacterTraitsSummary() {
+  const section = document.getElementById('characterTraitsSummarySection');
+  const listContainer = document.getElementById('characterTraitsList');
+  
+  if (!section || !listContainer) return;
+  
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/character-traits-summary`);
+    const characters = response.data.characters || [];
+    
+    if (characters.length === 0) {
+      section.classList.add('hidden');
+      return;
+    }
+    
+    // Show section
+    section.classList.remove('hidden');
+    
+    // Render character traits
+    listContainer.innerHTML = characters.map(char => {
+      const hasOverrides = char.scene_overrides && char.scene_overrides.length > 0;
+      
+      return `
+        <div class="bg-white rounded-lg p-3 border border-gray-200">
+          <div class="flex items-center gap-3 mb-2">
+            ${char.reference_image ? `
+              <img src="${char.reference_image}" alt="${escapeHtml(char.character_name)}" 
+                   class="w-10 h-10 rounded-full object-cover border-2 border-indigo-200">
+            ` : `
+              <div class="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
+                <i class="fas fa-user text-gray-400"></i>
+              </div>
+            `}
+            <div class="flex-1">
+              <span class="font-semibold text-gray-800">${escapeHtml(char.character_name)}</span>
+              ${hasOverrides ? `
+                <span class="ml-2 text-xs px-2 py-0.5 bg-yellow-100 text-yellow-700 rounded-full">
+                  <i class="fas fa-layer-group mr-1"></i>${char.scene_overrides.length}件のシーン別設定
+                </span>
+              ` : ''}
+            </div>
+            <button 
+              onclick="openCharacterTraitEdit('${char.character_key}', '${escapeHtml(char.character_name)}')"
+              class="text-xs px-2 py-1 bg-indigo-100 text-indigo-700 rounded hover:bg-indigo-200"
+            >
+              <i class="fas fa-edit"></i>
+            </button>
+          </div>
+          
+          <div class="ml-13 space-y-2">
+            <!-- Base Traits -->
+            <div class="flex items-start gap-2">
+              <span class="text-xs font-semibold text-gray-500 w-16 flex-shrink-0">共通特徴:</span>
+              <span class="text-sm text-gray-700">
+                ${char.base_traits ? escapeHtml(char.base_traits) : '<span class="text-gray-400 italic">未設定</span>'}
+              </span>
+            </div>
+            
+            ${hasOverrides ? `
+              <div class="mt-2 pt-2 border-t border-gray-100">
+                <span class="text-xs font-semibold text-yellow-700 block mb-1">
+                  <i class="fas fa-exchange-alt mr-1"></i>シーン別オーバーライド:
+                </span>
+                <div class="space-y-1">
+                  ${char.scene_overrides.map(o => `
+                    <div class="flex items-center gap-2 text-xs bg-yellow-50 p-2 rounded">
+                      <span class="px-2 py-0.5 bg-yellow-200 text-yellow-800 rounded font-mono">
+                        #${o.scene_idx}
+                      </span>
+                      <span class="text-gray-600">${escapeHtml(o.trait_description)}</span>
+                      <button 
+                        onclick="removeSceneCharacterTrait(${o.scene_id}, '${char.character_key}')"
+                        class="ml-auto text-red-500 hover:text-red-700"
+                        title="削除"
+                      >
+                        <i class="fas fa-times"></i>
+                      </button>
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+    
+    console.log('[CharacterTraits] Loaded summary for', characters.length, 'characters');
+  } catch (error) {
+    console.warn('Failed to load character traits summary:', error);
+    section.classList.add('hidden');
+  }
+}
+
+/**
+ * Toggle character traits summary visibility
+ */
+function toggleCharacterTraitsSummary() {
+  const content = document.getElementById('characterTraitsSummaryContent');
+  const btn = document.getElementById('toggleTraitsSummaryBtn');
+  
+  if (!content || !btn) return;
+  
+  const isHidden = content.classList.contains('hidden');
+  
+  if (isHidden) {
+    content.classList.remove('hidden');
+    btn.innerHTML = '<i class="fas fa-chevron-up mr-1"></i>閉じる';
+    // Load data when expanding
+    loadCharacterTraitsSummary();
+  } else {
+    content.classList.add('hidden');
+    btn.innerHTML = '<i class="fas fa-chevron-down mr-1"></i>詳細';
+  }
+}
+
+/**
+ * Open modal to edit character's story traits
+ */
+async function openCharacterTraitEdit(characterKey, characterName) {
+  const currentTraits = await getCharacterCurrentTraits(characterKey);
+  
+  const newTraits = prompt(
+    `「${characterName}」の共通特徴を編集:\n\n` +
+    `例: 小さな妖精、キラキラと光る羽を持つ、青いドレス\n\n` +
+    `※全シーンに適用されます。特定シーンで異なる描写が必要な場合は、シーン別オーバーライドを追加してください。`,
+    currentTraits || ''
+  );
+  
+  if (newTraits !== null) {
+    try {
+      await axios.put(`${API_BASE}/projects/${PROJECT_ID}/characters/${characterKey}/story-traits`, {
+        story_traits: newTraits
+      });
+      showToast('キャラクター特徴を更新しました', 'success');
+      loadCharacterTraitsSummary();
+    } catch (error) {
+      console.error('Failed to update character traits:', error);
+      showToast('特徴の更新に失敗しました', 'error');
+    }
+  }
+}
+
+/**
+ * Get current traits for a character
+ */
+async function getCharacterCurrentTraits(characterKey) {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters/${characterKey}`);
+    return response.data.character?.story_traits || response.data.character?.appearance_description || '';
+  } catch (error) {
+    console.warn('Failed to get character traits:', error);
+    return '';
+  }
+}
+
+/**
+ * Remove scene-specific character trait override
+ */
+async function removeSceneCharacterTrait(sceneId, characterKey) {
+  if (!confirm('このシーン別オーバーライドを削除しますか？')) return;
+  
+  try {
+    await axios.delete(`${API_BASE}/scenes/${sceneId}/character-traits/${characterKey}`);
+    showToast('シーン別設定を削除しました', 'success');
+    loadCharacterTraitsSummary();
+  } catch (error) {
+    console.error('Failed to remove scene trait:', error);
+    showToast('削除に失敗しました', 'error');
+  }
+}
+
+/**
+ * Open modal to add scene-specific trait override
+ * Example: "妖精のベルがこのシーンで人間に変身する"
+ */
+async function openAddSceneTraitOverride(sceneId, sceneIdx) {
+  try {
+    // Get characters assigned to this scene
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/characters`);
+    const characters = response.data.scene_characters || [];
+    
+    if (characters.length === 0) {
+      showToast('先にキャラクターを割り当ててください', 'warning');
+      return;
+    }
+    
+    // Build character selection
+    const charOptions = characters.map(c => 
+      `${c.character_name || c.character_key}`
+    ).join(', ');
+    
+    const selectedCharName = prompt(
+      `シーン #${sceneIdx} の特徴オーバーライド\n\n` +
+      `どのキャラクターの特徴を変更しますか？\n` +
+      `割り当て済みキャラ: ${charOptions}\n\n` +
+      `キャラクター名を入力:`
+    );
+    
+    if (!selectedCharName) return;
+    
+    // Find matching character
+    const matchedChar = characters.find(c => 
+      (c.character_name || '').toLowerCase().includes(selectedCharName.toLowerCase()) ||
+      (c.character_key || '').toLowerCase().includes(selectedCharName.toLowerCase())
+    );
+    
+    if (!matchedChar) {
+      showToast('キャラクターが見つかりません', 'error');
+      return;
+    }
+    
+    const traitDescription = prompt(
+      `「${matchedChar.character_name || matchedChar.character_key}」の` +
+      `シーン #${sceneIdx} での特徴:\n\n` +
+      `例:\n` +
+      `- 人間の姿に変身した。妖精の羽は消え、普通の少女の姿になっている\n` +
+      `- 戦士の鎧を着ている。剣を持っている\n` +
+      `- 傷だらけで疲弊した様子\n\n` +
+      `※このシーンの画像生成時のみ、この特徴が優先されます`
+    );
+    
+    if (!traitDescription) return;
+    
+    // Save the override
+    await axios.post(`${API_BASE}/scenes/${sceneId}/character-traits`, {
+      character_key: matchedChar.character_key,
+      trait_description: traitDescription,
+      override_type: 'transform',
+      source: 'manual'
+    });
+    
+    showToast(`シーン #${sceneIdx} の特徴オーバーライドを追加しました`, 'success');
+    
+    // Refresh the traits summary if it's visible
+    const content = document.getElementById('characterTraitsSummaryContent');
+    if (content && !content.classList.contains('hidden')) {
+      loadCharacterTraitsSummary();
+    }
+  } catch (error) {
+    console.error('Failed to add scene trait override:', error);
+    showToast('特徴オーバーライドの追加に失敗しました', 'error');
+  }
+}
+
+// Make functions globally accessible
+window.toggleCharacterTraitsSummary = toggleCharacterTraitsSummary;
+window.openCharacterTraitEdit = openCharacterTraitEdit;
+window.removeSceneCharacterTrait = removeSceneCharacterTrait;
+window.openAddSceneTraitOverride = openAddSceneTraitOverride;
 
 // ========== A) Microphone Recording ==========
 async function startRecording() {
@@ -1815,6 +2073,17 @@ function renderScenes(scenes) {
             `}
           </div>
         </div>
+        ${imageChars.length > 0 ? `
+          <div class="mt-2 pt-2 border-t border-gray-200">
+            <button 
+              onclick="openAddSceneTraitOverride(${scene.id}, ${scene.idx})"
+              class="text-xs px-2 py-1 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 transition-colors"
+              title="このシーンだけの特徴変化を設定（例: 妖精→人間の変身）"
+            >
+              <i class="fas fa-layer-group mr-1"></i>シーン別特徴を追加
+            </button>
+          </div>
+        ` : ''}
       </div>
     ` : `
       <div class="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">

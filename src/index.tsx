@@ -823,6 +823,33 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
+                <!-- Character Traits Summary (Phase X-5) -->
+                <div id="characterTraitsSummarySection" class="mb-6 hidden">
+                    <div class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg border border-indigo-200 p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <h3 class="font-semibold text-indigo-800">
+                                <i class="fas fa-user-tag mr-2"></i>キャラクター特徴（物語全体）
+                            </h3>
+                            <button 
+                                onclick="toggleCharacterTraitsSummary()"
+                                class="text-sm text-indigo-600 hover:text-indigo-800"
+                                id="toggleTraitsSummaryBtn"
+                            >
+                                <i class="fas fa-chevron-down mr-1"></i>詳細
+                            </button>
+                        </div>
+                        <div id="characterTraitsSummaryContent" class="hidden space-y-3">
+                            <p class="text-xs text-gray-600 mb-2">
+                                物語から抽出された共通特徴と、シーン別のオーバーライドを表示します。
+                                画像生成時、シーン別オーバーライドがあればそれが優先されます。
+                            </p>
+                            <div id="characterTraitsList" class="space-y-2">
+                                <!-- Populated by JS -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
                 <!-- Scenes Table -->
                 <div id="scenesSection" class="hidden">
                     <div class="flex items-center justify-between mb-4">
