@@ -277,8 +277,103 @@
 
 ---
 
-## 7. 更新履歴
+## 7. 運用事故防止ルール（SSOT）
+
+### 7.1 project-editor.js の更新ルール
+
+**現状（案A適用済み）:**
+- ファイル名: `public/static/project-editor.js` （固定）
+- 参照: `<script src="/static/project-editor.js?v=YYYYMMDDHHMM"></script>`
+- キャッシュバスター: クエリパラメータで管理
+
+**更新手順:**
+1. `public/static/project-editor.js` を編集
+2. `src/index.tsx` の `?v=` パラメータを現在日時に更新
+3. **両方のファイルが変更されていることを確認してからコミット**
+
+### 7.2 currentProject の参照ルール
+
+**SSOT:** `window.currentProject` が唯一の正
+
+```javascript
+// ✅ 正しい更新方法
+updateCurrentProject(newProject);
+
+// ❌ 避けるべき方法（片方だけ更新）
+currentProject = newProject;  // letで宣言された変数のみ更新
+```
+
+**実装位置:** `project-editor.js:1-18`
+
+### 7.3 Scene Split の監視ルール
+
+**SSOT:** `currentFormatRunId` で監視対象を識別
+
+```javascript
+// Format開始時にrun_idを保存
+currentFormatRunId = response.data.run_id;
+
+// ポーリング時にmismatchをチェック
+if (data.run_id !== currentFormatRunId) {
+  // 別のrunが開始された → 即座に停止
+  clearInterval(formatPollingInterval);
+}
+```
+
+**停止条件:**
+- `status in ['formatted', 'failed', 'canceled']`
+- `run_id mismatch`
+- `10分タイムアウト`
+- `ネットワークエラー3回連続`
+
+**実装位置:** `project-editor.js:830-833, 1073-1090`
+
+### 7.4 キャラクター特徴の優先順位
+
+**SSOT:** `world-character-helper.ts:141`
+
+```
+C（シーン固有） > B（物語共通） > A（キャラ登録）
+
+1. scene_override      (最高) ← シーン別オーバーライド（変身など）
+2. story_traits        (高)   ← 物語から抽出された特徴
+3. appearance_description (低) ← 手動設定の外見説明
+```
+
+**参照画像は常に併用:** 優先度に関わらず `reference_image_r2_url` は必ず送信
+
+### 7.5 画像生成の参照画像ルール
+
+**SSOT:** `character-reference-helper.ts`
+
+```
+最大枚数: 5枚（Gemini API制限）
+優先順位: is_primary=1 → created_at順
+```
+
+**取得関数:** `getSceneReferenceImages(db, r2, sceneId)`
+
+**使用箇所:**
+- 単体生成: `image-generation.ts:377-388`
+- 一括生成: `image-generation.ts:648-659`
+
+### 7.6 voice_presets coming_soon フィルタ
+
+**対象ファイル:**
+- `audio-ui.js:91-94` ✅ フィルタ適用済み
+- `world-character-modal.js:348-350` ✅ フィルタ適用済み
+- `project-editor.js` → ハードコードのため対象外
+
+**フィルタ方法:**
+```javascript
+const presets = (data.voice_presets || []).filter(p => p.status !== 'coming_soon');
+```
+
+---
+
+## 8. 更新履歴
 
 | 日付 | 内容 |
 |------|------|
 | 2026-01-19 | 初版作成（音声・キャラクター・Video Build・Scene Split・漫画） |
+| 2026-01-20 | 運用事故防止ルール追加（SSOT 7項目） |
