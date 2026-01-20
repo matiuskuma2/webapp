@@ -66,7 +66,7 @@
     /**
      * Open modal for editing story-wide traits
      */
-    openForStoryTraits(characterKey, characterName, currentTraits, imageUrl) {
+    async openForStoryTraits(characterKey, characterName, currentTraits, imageUrl) {
       this.currentMode = 'story';
       this.currentCharacterKey = characterKey;
       this.currentCharacterName = characterName;
@@ -96,8 +96,7 @@
         </p>
       `;
       
-      // Hide scene-specific sections
-      document.getElementById('trait-modal-ai-section').classList.add('hidden');
+      // Hide scene-specific sections (examples, current)
       document.getElementById('trait-modal-examples').classList.add('hidden');
       document.getElementById('trait-modal-current').classList.add('hidden');
       
@@ -107,6 +106,16 @@
         '例: 小さな妖精、キラキラと光る羽を持つ、青いドレスを着ている';
       
       this.showModal();
+      
+      // 共通特徴でも、未設定の場合はAI検出を試みる
+      if (!currentTraits) {
+        // AI検出セクションを表示
+        document.getElementById('trait-modal-ai-section').classList.remove('hidden');
+        // 全シーンのダイアログを取得してAI検出
+        await this.detectTraitsFromAllScenes();
+      } else {
+        document.getElementById('trait-modal-ai-section').classList.add('hidden');
+      }
     },
     
     /**
@@ -343,13 +352,18 @@
     showStep(step) {
       const selectStep = document.getElementById('trait-modal-step-select');
       const editStep = document.getElementById('trait-modal-step-edit');
+      const saveBtn = document.getElementById('trait-modal-save');
       
       if (step === 'select') {
         selectStep?.classList.remove('hidden');
         editStep?.classList.add('hidden');
+        // キャラ選択画面では保存ボタンを非表示
+        saveBtn?.classList.add('hidden');
       } else {
         selectStep?.classList.add('hidden');
         editStep?.classList.remove('hidden');
+        // 編集画面では保存ボタンを表示
+        saveBtn?.classList.remove('hidden');
       }
     },
     
@@ -528,6 +542,67 @@
       
       // Return unique traits (max 3)
       return [...new Set(traits)].slice(0, 3);
+    },
+    
+    /**
+     * Detect traits from ALL scenes (for story-wide traits)
+     */
+    async detectTraitsFromAllScenes() {
+      const suggestionsEl = document.getElementById('trait-modal-ai-suggestions');
+      if (!suggestionsEl) return;
+      
+      suggestionsEl.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>全シーンを分析中...';
+      
+      try {
+        // Get all scenes
+        const response = await axios.get(`/api/projects/${window.PROJECT_ID}/scenes?view=board`);
+        const scenes = response.data.scenes || [];
+        
+        if (scenes.length === 0) {
+          suggestionsEl.innerHTML = '<span class="text-gray-400">シーンがありません</span>';
+          return;
+        }
+        
+        // Combine all dialogues
+        const allText = scenes.map(s => [s.dialogue || '', s.image_prompt || ''].join(' ')).join('\n');
+        
+        // Extract traits
+        const traits = this.extractTraitsFromText(allText, this.currentCharacterName);
+        
+        if (traits.length > 0) {
+          suggestionsEl.innerHTML = `
+            <div class="space-y-1">
+              <p class="text-xs text-gray-500 mb-2">
+                <i class="fas fa-magic mr-1"></i>物語から自動検出した特徴:
+              </p>
+              ${traits.map(t => `<div class="flex items-center gap-2">
+                <i class="fas fa-check text-purple-500"></i>
+                <span>${this.escapeHtml(t)}</span>
+              </div>`).join('')}
+            </div>
+          `;
+          suggestionsEl.dataset.traits = traits.join('、');
+          
+          // Auto-fill if input is empty
+          const inputEl = document.getElementById('trait-modal-input');
+          if (inputEl && !inputEl.value) {
+            inputEl.value = traits.join('、');
+            this.showToast('物語から特徴を自動抽出しました', 'info');
+          }
+        } else {
+          suggestionsEl.innerHTML = `
+            <span class="text-gray-500">
+              <i class="fas fa-search mr-1"></i>
+              物語から「${this.escapeHtml(this.currentCharacterName)}」の特徴を自動検出できませんでした。<br>
+              <span class="text-xs">手動で入力してください。</span>
+            </span>
+          `;
+          suggestionsEl.dataset.traits = '';
+        }
+      } catch (error) {
+        console.error('[CharacterTraitModal] Failed to detect traits from all scenes:', error);
+        suggestionsEl.innerHTML = '<span class="text-red-500">検出エラー</span>';
+      }
     },
     
     /**
