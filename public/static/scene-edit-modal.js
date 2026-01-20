@@ -421,35 +421,32 @@
       }
       
       container.innerHTML = `
-        <!-- Warning about traits -->
-        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-          <p class="text-amber-800 text-sm font-semibold">
-            <i class="fas fa-exclamation-triangle mr-1"></i>
-            特徴は視覚的特徴のみ入力してください
+        <!-- Simple explanation -->
+        <div class="mb-4 p-4 bg-gradient-to-r from-yellow-100 to-yellow-50 border-2 border-yellow-400 rounded-lg">
+          <p class="text-yellow-800 font-bold text-sm mb-2">
+            <i class="fas fa-star mr-1"></i>ここでできること
           </p>
-          <p class="text-amber-700 text-xs mt-1">
-            セリフ・感情・行動を入れると画像にテキストが表示されてしまいます。
+          <p class="text-yellow-700 text-sm">
+            <strong>変身・衣装変更・状態変化</strong>など、<strong>このシーンだけ</strong>普段と違う見た目にしたい場合に設定します。
+          </p>
+          <p class="text-yellow-600 text-xs mt-2">
+            ⚠️ セリフ・感情・行動は入れないでください（画像に文字が表示されます）
           </p>
         </div>
         
-        <!-- Trait layers explanation -->
-        <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
-          <p class="text-blue-800 text-sm font-semibold mb-2">
-            <i class="fas fa-layer-group mr-1"></i>特徴の3層構造
-          </p>
-          <div class="text-xs space-y-1">
-            <div class="flex items-center gap-2">
-              <span class="inline-block w-3 h-3 bg-yellow-400 rounded"></span>
-              <span><strong>C: シーン別</strong>（このシーンのみ）→ 最優先</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="inline-block w-3 h-3 bg-purple-400 rounded"></span>
-              <span><strong>B: 物語共通</strong>（全シーン）</span>
-            </div>
-            <div class="flex items-center gap-2">
-              <span class="inline-block w-3 h-3 bg-gray-400 rounded"></span>
-              <span><strong>A: キャラ登録</strong>（基礎設定）</span>
-            </div>
+        <!-- Quick legend -->
+        <div class="mb-4 flex flex-wrap gap-3 text-xs">
+          <div class="flex items-center gap-1">
+            <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold bg-gray-500">A</span>
+            <span class="text-gray-600">キャラ登録（Stylesで設定）</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold bg-purple-500">B</span>
+            <span class="text-purple-600">物語共通（Stylesで設定）</span>
+          </div>
+          <div class="flex items-center gap-1">
+            <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold bg-yellow-500">C</span>
+            <span class="text-yellow-700 font-bold">このシーン専用 ← ここで編集</span>
           </div>
         </div>
         
@@ -465,6 +462,7 @@
     
     /**
      * Render trait editor for a single character
+     * Clearer UI: Show what's editable here vs what needs Styles tab
      */
     renderCharacterTraitEditor(char) {
       const currentTrait = this.currentState.sceneTraits[char.character_key] || '';
@@ -473,98 +471,110 @@
       const isLoading = this.aiLoading[char.character_key] || false;
       
       return `
-        <div class="p-4 border border-gray-200 rounded-lg ${hasOverride ? 'bg-yellow-50 border-yellow-300' : ''}" data-trait-card="${this.escapeHtml(char.character_key)}">
+        <div class="p-4 border-2 rounded-lg ${hasOverride ? 'bg-yellow-50 border-yellow-400' : 'bg-white border-gray-200'}" data-trait-card="${this.escapeHtml(char.character_key)}">
           <!-- Header -->
-          <div class="flex items-center gap-3 mb-3">
+          <div class="flex items-center gap-3 mb-4">
             ${char.reference_image_r2_url 
-              ? `<img src="${char.reference_image_r2_url}" class="w-10 h-10 rounded-full object-cover border-2 border-indigo-200" />`
-              : `<div class="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center">
-                   <i class="fas fa-user text-gray-400"></i>
+              ? `<img src="${char.reference_image_r2_url}" class="w-12 h-12 rounded-full object-cover border-2 border-indigo-300 shadow" />`
+              : `<div class="w-12 h-12 rounded-full bg-gray-200 flex items-center justify-center">
+                   <i class="fas fa-user text-gray-400 text-lg"></i>
                  </div>`
             }
             <div class="flex-1">
-              <h4 class="font-semibold text-gray-800">${this.escapeHtml(char.character_name)}</h4>
+              <h4 class="font-bold text-gray-800 text-lg">${this.escapeHtml(char.character_name)}</h4>
               ${hasOverride 
-                ? '<span class="text-xs bg-yellow-400 text-yellow-800 px-2 py-0.5 rounded">シーン別特徴あり</span>' 
-                : ''
+                ? '<span class="text-xs bg-yellow-500 text-white px-2 py-0.5 rounded font-semibold">⚡ このシーン専用の特徴あり</span>' 
+                : '<span class="text-xs text-gray-500">通常の特徴を使用中</span>'
               }
             </div>
           </div>
           
-          <!-- Section A: Saved traits (read-only reference) -->
-          <div class="mb-3 p-2 bg-gray-50 rounded border border-gray-200">
-            <label class="block text-xs font-semibold text-gray-500 mb-1">
-              <i class="fas fa-database mr-1"></i>保存済みの特徴
-            </label>
-            <div class="text-xs space-y-1">
-              <div class="flex items-start">
-                <span class="inline-block w-8 font-bold text-gray-500">A:</span>
-                <span class="text-gray-600">${char.appearance_description ? this.escapeHtml(char.appearance_description) : '<i class="text-gray-400">未設定</i>'}</span>
+          <!-- Reference Info: A & B (Read-only, set in Styles tab) -->
+          <div class="mb-4 p-3 bg-gray-100 rounded-lg border border-gray-300 opacity-70">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-bold text-gray-600">
+                <i class="fas fa-lock mr-1"></i>参照情報（Stylesタブで変更）
+              </span>
+              <span class="text-xs text-gray-400">編集不可</span>
+            </div>
+            <div class="text-xs space-y-2">
+              <div class="flex items-start gap-2">
+                <span class="inline-flex items-center justify-center w-6 h-5 rounded text-white font-bold text-xs bg-gray-500">A</span>
+                <div class="flex-1">
+                  <span class="text-gray-500 font-semibold">キャラ登録:</span>
+                  <span class="text-gray-600 ml-1">${char.appearance_description ? this.escapeHtml(char.appearance_description.substring(0, 50)) + (char.appearance_description.length > 50 ? '...' : '') : '<i class="text-gray-400">未設定</i>'}</span>
+                </div>
               </div>
-              <div class="flex items-start">
-                <span class="inline-block w-8 font-bold text-purple-600">B:</span>
-                <span class="text-purple-700">${char.story_traits ? this.escapeHtml(char.story_traits) : '<i class="text-gray-400">未設定</i>'}</span>
-              </div>
-              <div class="flex items-start">
-                <span class="inline-block w-8 font-bold text-yellow-600">C:</span>
-                <span class="text-yellow-700">${this.originalState.sceneTraits[char.character_key] ? this.escapeHtml(this.originalState.sceneTraits[char.character_key]) : '<i class="text-gray-400">未設定</i>'}</span>
+              <div class="flex items-start gap-2">
+                <span class="inline-flex items-center justify-center w-6 h-5 rounded text-white font-bold text-xs bg-purple-500">B</span>
+                <div class="flex-1">
+                  <span class="text-purple-600 font-semibold">物語共通:</span>
+                  <span class="text-purple-700 ml-1">${char.story_traits ? this.escapeHtml(char.story_traits.substring(0, 50)) + (char.story_traits.length > 50 ? '...' : '') : '<i class="text-gray-400">未設定</i>'}</span>
+                </div>
               </div>
             </div>
           </div>
           
-          <!-- Section B: AI Candidate (not saved) -->
-          <div class="mb-3">
-            <div class="flex items-center justify-between mb-1">
-              <label class="block text-xs font-semibold text-blue-600">
-                <i class="fas fa-robot mr-1"></i>AI候補（未保存）
-              </label>
-              <button 
-                type="button"
-                class="ai-extract-btn text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors ${isLoading ? 'opacity-50 cursor-wait' : ''}"
-                data-character-key="${this.escapeHtml(char.character_key)}"
-                ${isLoading ? 'disabled' : ''}
-              >
-                ${isLoading 
-                  ? '<i class="fas fa-spinner fa-spin mr-1"></i>抽出中...'
-                  : '<i class="fas fa-magic mr-1"></i>AIで候補を作る'
+          <!-- Editable Section: C (Scene-specific) -->
+          <div class="p-3 bg-yellow-50 rounded-lg border-2 border-yellow-400">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="inline-flex items-center justify-center w-6 h-5 rounded text-white font-bold text-xs bg-yellow-500">C</span>
+              <span class="text-sm font-bold text-yellow-700">
+                <i class="fas fa-edit mr-1"></i>このシーンだけの特徴
+              </span>
+              <span class="text-xs text-yellow-600 bg-yellow-200 px-2 py-0.5 rounded">ここで編集</span>
+            </div>
+            
+            <!-- AI Assist -->
+            <div class="mb-3 p-2 bg-white rounded border border-yellow-300">
+              <div class="flex items-center justify-between mb-1">
+                <span class="text-xs text-blue-600 font-semibold">
+                  <i class="fas fa-robot mr-1"></i>AI補助
+                </span>
+                <button 
+                  type="button"
+                  class="ai-extract-btn text-xs px-2 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors ${isLoading ? 'opacity-50 cursor-wait' : ''}"
+                  data-character-key="${this.escapeHtml(char.character_key)}"
+                  ${isLoading ? 'disabled' : ''}
+                >
+                  ${isLoading 
+                    ? '<i class="fas fa-spinner fa-spin mr-1"></i>抽出中...'
+                    : '<i class="fas fa-magic mr-1"></i>セリフから抽出'
+                  }
+                </button>
+              </div>
+              <div class="ai-candidate-area text-sm min-h-[28px]" data-candidate-area="${this.escapeHtml(char.character_key)}">
+                ${aiCandidate !== null 
+                  ? aiCandidate 
+                    ? `<div class="flex items-center justify-between gap-2 p-1 bg-blue-50 rounded">
+                         <span class="text-blue-800">${this.escapeHtml(aiCandidate)}</span>
+                         <button 
+                           type="button"
+                           class="use-candidate-btn text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors flex-shrink-0"
+                           data-character-key="${this.escapeHtml(char.character_key)}"
+                         >
+                           <i class="fas fa-arrow-down mr-1"></i>入力欄へ
+                         </button>
+                       </div>`
+                    : '<span class="text-gray-400 italic">特徴が見つかりませんでした</span>'
+                  : '<span class="text-gray-400 italic">セリフから特徴を自動抽出できます</span>'
                 }
-              </button>
+              </div>
             </div>
-            <div class="ai-candidate-area p-2 bg-blue-50 rounded border border-blue-200 min-h-[40px]" data-candidate-area="${this.escapeHtml(char.character_key)}">
-              ${aiCandidate !== null 
-                ? aiCandidate 
-                  ? `<div class="flex items-start justify-between">
-                       <span class="text-sm text-blue-800">${this.escapeHtml(aiCandidate)}</span>
-                       <button 
-                         type="button"
-                         class="use-candidate-btn ml-2 text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors flex-shrink-0"
-                         data-character-key="${this.escapeHtml(char.character_key)}"
-                       >
-                         <i class="fas fa-check mr-1"></i>使用
-                       </button>
-                     </div>`
-                  : '<span class="text-xs text-gray-500 italic">候補が見つかりませんでした</span>'
-                : '<span class="text-xs text-gray-400 italic">「AIで候補を作る」を押して抽出</span>'
-              }
+            
+            <!-- Input Field -->
+            <div>
+              <textarea 
+                class="scene-trait-input w-full px-3 py-2 border-2 border-yellow-400 rounded-lg focus:outline-none focus:ring-2 focus:ring-yellow-500 text-sm bg-white"
+                data-character-key="${this.escapeHtml(char.character_key)}"
+                rows="2"
+                placeholder="例: 人間に変身して羽が消えた / 戦闘で傷だらけ / 正装を着ている"
+              >${this.escapeHtml(currentTrait)}</textarea>
+              <p class="text-xs text-yellow-700 mt-1 font-medium">
+                <i class="fas fa-lightbulb mr-1"></i>
+                空欄 → 通常の特徴（B or A）を使用 ／ 入力 → このシーンだけ上書き
+              </p>
             </div>
-          </div>
-          
-          <!-- Section C: Edit input -->
-          <div>
-            <label class="block text-xs font-semibold text-indigo-700 mb-1">
-              <i class="fas fa-edit mr-1"></i>
-              このシーンでの特徴変化（編集欄）
-            </label>
-            <textarea 
-              class="scene-trait-input w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-              data-character-key="${this.escapeHtml(char.character_key)}"
-              rows="2"
-              placeholder="例: 人間の姿に変身。妖精の羽は消え、普通の少女の姿"
-            >${this.escapeHtml(currentTrait)}</textarea>
-            <p class="text-xs text-gray-500 mt-1">
-              <i class="fas fa-info-circle mr-1"></i>
-              空欄にすると共通特徴（B）またはキャラ登録（A）が適用されます
-            </p>
           </div>
         </div>
       `;
