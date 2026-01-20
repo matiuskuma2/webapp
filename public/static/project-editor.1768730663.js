@@ -2256,6 +2256,75 @@ function updateBuilderStatusBar(scenes) {
     </div>
     ` : ''}
   `;
+  
+  // Phase X-4: 画像生成ボタンの状態更新
+  updateImageGenerationButtons(stats);
+}
+
+/**
+ * Phase X-4: 画像生成ボタンの状態を更新
+ * - 全画像完了時: ボタンを非活性化
+ * - 未生成・失敗がない時: 該当ボタンを非活性化
+ */
+function updateImageGenerationButtons(stats) {
+  const allBtn = document.getElementById('generateAllImagesBtn');
+  const pendingBtn = document.getElementById('generatePendingImagesBtn');
+  const failedBtn = document.getElementById('generateFailedImagesBtn');
+  
+  const total = stats.completed + stats.pending + stats.failed + stats.generating;
+  const allCompleted = stats.completed === total && total > 0;
+  const isGenerating = stats.generating > 0 || window.isBulkImageGenerating;
+  
+  // 全画像生成ボタン
+  if (allBtn) {
+    if (allCompleted) {
+      allBtn.disabled = true;
+      allBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      allBtn.classList.remove('hover:bg-green-700');
+      allBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i>全画像生成済み';
+    } else if (isGenerating) {
+      // 生成中は別の処理で制御されるので触らない
+    } else {
+      allBtn.disabled = false;
+      allBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      allBtn.classList.add('hover:bg-green-700');
+      allBtn.innerHTML = '<i class="fas fa-magic mr-2"></i>全画像生成';
+    }
+  }
+  
+  // 未生成のみボタン
+  if (pendingBtn) {
+    if (stats.pending === 0) {
+      pendingBtn.disabled = true;
+      pendingBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      pendingBtn.classList.remove('hover:bg-blue-700');
+      pendingBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i>未生成なし';
+    } else if (isGenerating) {
+      // 生成中は別の処理で制御
+    } else {
+      pendingBtn.disabled = false;
+      pendingBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      pendingBtn.classList.add('hover:bg-blue-700');
+      pendingBtn.innerHTML = '<i class="fas fa-plus-circle mr-2"></i>未生成のみ';
+    }
+  }
+  
+  // 失敗のみボタン
+  if (failedBtn) {
+    if (stats.failed === 0) {
+      failedBtn.disabled = true;
+      failedBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      failedBtn.classList.remove('hover:bg-red-700');
+      failedBtn.innerHTML = '<i class="fas fa-check-circle mr-2"></i>失敗なし';
+    } else if (isGenerating) {
+      // 生成中は別の処理で制御
+    } else {
+      failedBtn.disabled = false;
+      failedBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      failedBtn.classList.add('hover:bg-red-700');
+      failedBtn.innerHTML = '<i class="fas fa-redo mr-2"></i>失敗のみ';
+    }
+  }
 }
 
 // フィルタ設定
@@ -3790,11 +3859,28 @@ async function generateBulkImages(mode) {
     return;
   }
   
+  // Phase X-4: 事前チェック - 対象がない場合は早期リターン
+  const currentScenes = window.lastLoadedScenes || [];
+  const stats = getSceneStats(currentScenes);
+  const total = stats.completed + stats.pending + stats.failed + stats.generating;
+  
+  if (mode === 'all' && stats.completed === total && total > 0) {
+    showToast('すべての画像は生成済みです', 'info');
+    return;
+  }
+  if (mode === 'pending' && stats.pending === 0) {
+    showToast('未生成の画像はありません', 'info');
+    return;
+  }
+  if (mode === 'failed' && stats.failed === 0) {
+    showToast('失敗した画像はありません', 'info');
+    return;
+  }
+  
   isProcessing = true;
   window.isBulkImageGenerating = true;  // Set global bulk generation flag
   
   // Re-render Builder UI to disable individual buttons
-  const currentScenes = window.lastLoadedScenes || [];
   if (currentScenes.length > 0) {
     renderBuilderScenes(currentScenes);
   }
