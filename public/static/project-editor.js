@@ -1327,10 +1327,18 @@ async function resetFormatAndRetry() {
     // This will be handled by calling format again
     showToast('処理を再開します', 'info');
     
-    // Hide character-related sections (they will be refreshed after re-split)
-    document.getElementById('characterTraitsSummarySection')?.classList.add('hidden');
-    document.getElementById('characterStatusSection')?.classList.add('hidden');
-    document.getElementById('scenesSection')?.classList.add('hidden');
+    // Hide and clear character-related sections (they will be refreshed after re-split)
+    const traitsSection = document.getElementById('characterTraitsSummarySection');
+    const traitsContent = document.getElementById('characterTraitsSummaryContent');
+    const charStatusSection = document.getElementById('characterStatusSection');
+    const scenesSection = document.getElementById('scenesSection');
+    const characterTraitsList = document.getElementById('characterTraitsList');
+    
+    if (traitsSection) traitsSection.classList.add('hidden');
+    if (traitsContent) traitsContent.innerHTML = '';
+    if (characterTraitsList) characterTraitsList.innerHTML = '';
+    if (charStatusSection) charStatusSection.classList.add('hidden');
+    if (scenesSection) scenesSection.classList.add('hidden');
     
     // Clear scenes list
     const scenesList = document.getElementById('scenesList');
@@ -2275,11 +2283,20 @@ function renderScenes(scenes) {
         </div>
         
         <div>
-          <label class="block text-sm font-semibold text-gray-700 mb-2">要点（1行1項目）</label>
+          <label class="block text-sm font-semibold text-gray-700 mb-1">
+            要点（1行1項目）
+            <span class="text-xs font-normal text-gray-500">
+              - 画像生成時の背景指示として使用
+            </span>
+          </label>
+          <p class="text-xs text-blue-600 mb-2">
+            <i class="fas fa-info-circle mr-1"></i>
+            シーンの状況・場面設定。画像プロンプトに自動で追加されます。
+          </p>
           <textarea 
             id="bullets-${scene.id}"
             rows="3"
-            placeholder="項目1&#10;項目2&#10;項目3"
+            placeholder="森の中の出会い&#10;朝の光が差し込む&#10;静かな雰囲気"
             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
           >${scene.bullets.join('\n')}</textarea>
         </div>

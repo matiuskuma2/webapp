@@ -144,6 +144,7 @@ scenes.get('/:id', async (c) => {
       `).bind(sceneId).first()
 
       // キャラクター情報取得（プロジェクトIDを取得してから）
+      // A/B/C層の特徴も取得: A=appearance_description, B=story_traits, C=scene_trait
       const projectId = scene.project_id
       const { results: characterMappings } = await c.env.DB.prepare(`
         SELECT 
@@ -151,10 +152,15 @@ scenes.get('/:id', async (c) => {
           scm.is_primary,
           pcm.character_name,
           pcm.voice_preset_id,
-          pcm.reference_image_r2_url
+          pcm.reference_image_r2_url,
+          pcm.appearance_description,
+          pcm.story_traits,
+          sct.trait_description AS scene_trait
         FROM scene_character_map scm
         LEFT JOIN project_character_models pcm 
           ON scm.character_key = pcm.character_key AND pcm.project_id = ?
+        LEFT JOIN scene_character_traits sct
+          ON sct.scene_id = scm.scene_id AND sct.character_key = scm.character_key
         WHERE scm.scene_id = ?
       `).bind(projectId, sceneId).all()
 
@@ -241,13 +247,16 @@ scenes.get('/:id', async (c) => {
         })(),
         style_preset: stylePreset || null,
         style_preset_id: stylePreset?.id || null,
-        // キャラクター情報追加
+        // キャラクター情報追加（A/B/C層の特徴を含む）
         characters: characterMappings.map((c: any) => ({
           character_key: c.character_key,
           character_name: c.character_name,
           is_primary: c.is_primary,
           voice_preset_id: c.voice_preset_id,
-          reference_image_r2_url: c.reference_image_r2_url
+          reference_image_r2_url: c.reference_image_r2_url,
+          appearance_description: c.appearance_description || null,  // A層
+          story_traits: c.story_traits || null,                      // B層
+          scene_trait: c.scene_trait || null                         // C層
         })),
         voice_character: voiceCharacter ? {
           character_key: voiceCharacter.character_key,
