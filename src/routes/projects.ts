@@ -441,6 +441,23 @@ projects.get('/:id/scenes', async (c) => {
             || (characterMappings.length > 0 ? characterMappings[0] : null)
             || null
 
+          // シーン別特徴（C層）取得
+          const { results: sceneTraits } = await c.env.DB.prepare(`
+            SELECT character_key, trait_description
+            FROM scene_character_traits
+            WHERE scene_id = ?
+          `).bind(scene.id).all()
+
+          // キャラクターの特徴情報をマージ（A/B/C層）
+          const { results: charDetails } = await c.env.DB.prepare(`
+            SELECT character_key, appearance_description, story_traits
+            FROM project_character_models
+            WHERE project_id = ?
+          `).bind(projectId).all()
+
+          const charDetailsMap = new Map((charDetails as any[]).map((c: any) => [c.character_key, c]))
+          const sceneTraitsMap = new Map((sceneTraits as any[]).map((t: any) => [t.character_key, t.trait_description]))
+
           return {
             id: scene.id,
             idx: scene.idx,
@@ -499,14 +516,24 @@ projects.get('/:id/scenes', async (c) => {
               model: activeVideo.model,
               duration_sec: activeVideo.duration_sec
             } : null,
-            // キャラクター情報追加
-            characters: characterMappings.map((c: any) => ({
-              character_key: c.character_key,
-              character_name: c.character_name,
-              is_primary: c.is_primary,
-              voice_preset_id: c.voice_preset_id,
-              reference_image_r2_url: c.reference_image_r2_url
-            })),
+            // キャラクター情報追加（A/B/C層の特徴含む）
+            characters: characterMappings.map((c: any) => {
+              const charDetail = charDetailsMap.get(c.character_key) || {}
+              const sceneTrait = sceneTraitsMap.get(c.character_key) || null
+              return {
+                character_key: c.character_key,
+                character_name: c.character_name,
+                is_primary: c.is_primary,
+                voice_preset_id: c.voice_preset_id,
+                reference_image_r2_url: c.reference_image_r2_url,
+                // A層: キャラクター登録の外見
+                appearance_description: charDetail.appearance_description || null,
+                // B層: 物語共通の特徴
+                story_traits: charDetail.story_traits || null,
+                // C層: シーン別特徴
+                scene_trait: sceneTrait
+              }
+            }),
             voice_character: voiceCharacter ? {
               character_key: voiceCharacter.character_key,
               character_name: voiceCharacter.character_name,

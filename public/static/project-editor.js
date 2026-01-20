@@ -1327,6 +1327,15 @@ async function resetFormatAndRetry() {
     // This will be handled by calling format again
     showToast('処理を再開します', 'info');
     
+    // Hide character-related sections (they will be refreshed after re-split)
+    document.getElementById('characterTraitsSummarySection')?.classList.add('hidden');
+    document.getElementById('characterStatusSection')?.classList.add('hidden');
+    document.getElementById('scenesSection')?.classList.add('hidden');
+    
+    // Clear scenes list
+    const scenesList = document.getElementById('scenesList');
+    if (scenesList) scenesList.innerHTML = '';
+    
     // Reload project to get fresh status
     const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
     updateCurrentProject(projectResponse.data);
@@ -2147,6 +2156,37 @@ function renderScenes(scenes) {
           </div>
         </div>
         ${imageChars.length > 0 ? `
+          <!-- キャラクター特徴表示（A/B/C層） -->
+          <div class="mt-3 pt-3 border-t border-gray-200">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-semibold text-gray-600">
+                <i class="fas fa-user-tag mr-1 text-purple-500"></i>適用される特徴
+              </span>
+              <span class="text-xs text-gray-400">優先度: C > B > A</span>
+            </div>
+            <div class="space-y-2">
+              ${imageChars.map(c => {
+                const hasC = c.scene_trait && c.scene_trait.trim();
+                const hasB = c.story_traits && c.story_traits.trim();
+                const hasA = c.appearance_description && c.appearance_description.trim();
+                const activeTrait = hasC ? c.scene_trait : (hasB ? c.story_traits : (hasA ? c.appearance_description : null));
+                const activeLayer = hasC ? 'C' : (hasB ? 'B' : (hasA ? 'A' : null));
+                const layerColors = { 'C': 'bg-yellow-100 text-yellow-800 border-yellow-300', 'B': 'bg-purple-100 text-purple-800 border-purple-300', 'A': 'bg-gray-100 text-gray-600 border-gray-300' };
+                const layerBadge = activeLayer ? \`<span class="px-1 py-0.5 text-xs rounded border \${layerColors[activeLayer]}">\${activeLayer}</span>\` : '';
+                return \`
+                  <div class="text-xs bg-gray-50 rounded p-2 border border-gray-100">
+                    <div class="flex items-center gap-1 mb-1">
+                      \${layerBadge}
+                      <span class="font-medium text-gray-700">\${escapeHtml(c.character_name || c.character_key)}</span>
+                    </div>
+                    <div class="text-gray-600 truncate" title="\${activeTrait ? escapeHtml(activeTrait) : '特徴未設定'}">
+                      \${activeTrait ? escapeHtml(activeTrait.substring(0, 50)) + (activeTrait.length > 50 ? '...' : '') : '<span class="text-gray-400 italic">特徴未設定</span>'}
+                    </div>
+                  </div>
+                \`;
+              }).join('')}
+            </div>
+          </div>
           <div class="mt-2 pt-2 border-t border-gray-200">
             <button 
               onclick="openAddSceneTraitOverride(${scene.id}, ${scene.idx})"
