@@ -191,6 +191,73 @@
       // Character assignment
       this.renderImageCharacters(scene.characters || []);
       this.renderVoiceCharacter(scene.voice_character);
+      
+      // Phase X-5: Load and display character traits
+      this.loadCharacterTraits(scene.id, scene.characters || []);
+    },
+    
+    /**
+     * Phase X-5: Load character traits for the scene
+     * @param {number} sceneId 
+     * @param {Array} assignedChars 
+     */
+    async loadCharacterTraits(sceneId, assignedChars) {
+      const section = document.getElementById('edit-character-traits-section');
+      const listContainer = document.getElementById('edit-character-traits-list');
+      
+      if (!section || !listContainer) return;
+      
+      if (!assignedChars || assignedChars.length === 0) {
+        section.classList.add('hidden');
+        return;
+      }
+      
+      try {
+        // Get scene-specific trait overrides
+        const traitsResponse = await axios.get(`/api/scenes/${sceneId}/character-traits`);
+        const sceneTraits = traitsResponse.data.scene_traits || [];
+        const traitMap = new Map(sceneTraits.map(t => [t.character_key, t]));
+        
+        // Build display
+        const html = assignedChars.map(char => {
+          const override = traitMap.get(char.character_key);
+          // Fetch base traits from characters array
+          const fullChar = this.characters.find(c => c.character_key === char.character_key);
+          const baseTraits = fullChar?.story_traits || fullChar?.appearance_description || null;
+          
+          return `
+            <div class="flex items-start gap-2 py-1 ${override ? 'bg-yellow-50 px-2 rounded' : ''}">
+              <span class="font-semibold text-indigo-700 text-sm">${this.escapeHtml(char.character_name || char.character_key)}:</span>
+              <span class="flex-1 text-sm ${override ? 'text-yellow-700' : 'text-gray-600'}">
+                ${override 
+                  ? `<i class="fas fa-exchange-alt mr-1" title="シーン別オーバーライド"></i>${this.escapeHtml(override.trait_description)}`
+                  : baseTraits 
+                    ? this.escapeHtml(baseTraits) 
+                    : '<span class="italic text-gray-400">特徴未設定</span>'
+                }
+              </span>
+            </div>
+          `;
+        }).join('');
+        
+        listContainer.innerHTML = html || '<span class="text-gray-400 italic text-sm">特徴情報なし</span>';
+        section.classList.remove('hidden');
+      } catch (error) {
+        console.warn('[SceneEditModal] Failed to load character traits:', error);
+        section.classList.add('hidden');
+      }
+    },
+    
+    /**
+     * Escape HTML for safe display
+     * @param {string} str 
+     * @returns {string}
+     */
+    escapeHtml(str) {
+      if (!str) return '';
+      const div = document.createElement('div');
+      div.textContent = str;
+      return div.innerHTML;
     },
     
     /**

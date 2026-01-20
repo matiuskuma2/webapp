@@ -1644,12 +1644,29 @@ app.get('/projects/:id', (c) => {
                         <label class="block text-sm font-semibold text-gray-700 mb-2">
                             <i class="fas fa-image mr-1 text-purple-600"></i>画像プロンプト
                         </label>
+                        <p class="text-xs text-amber-600 mb-2">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            ※画像内のテキストを日本語にしたい場合は、プロンプトに「文字は日本語で」と追記してください
+                        </p>
                         <textarea 
                             id="edit-image-prompt"
                             rows="3"
                             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                            placeholder="画像プロンプトを入力..."
+                            placeholder="例: A beautiful forest scene. 文字は日本語で。"
                         ></textarea>
+                    </div>
+                    
+                    <!-- Character Traits Info (Phase X-5) -->
+                    <div id="edit-character-traits-section" class="hidden bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-lg border border-indigo-200">
+                        <h4 class="text-sm font-semibold text-indigo-800 mb-2">
+                            <i class="fas fa-user-tag mr-1"></i>適用されるキャラクター特徴
+                        </h4>
+                        <p class="text-xs text-gray-600 mb-2">
+                            画像生成時、以下の特徴がプロンプトに自動適用されます（カスタム編集時はスキップ可）
+                        </p>
+                        <div id="edit-character-traits-list" class="space-y-2">
+                            <!-- Dynamically populated -->
+                        </div>
                     </div>
                     
                     <!-- Character Assignment (Phase 2-3) -->

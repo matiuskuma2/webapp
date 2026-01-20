@@ -637,11 +637,72 @@ async function openAddSceneTraitOverride(sceneId, sceneIdx) {
   }
 }
 
+/**
+ * Load character traits for a specific scene in Builder
+ */
+async function loadBuilderSceneCharTraits(sceneId) {
+  const container = document.getElementById(`builderCharTraitsList-${sceneId}`);
+  if (!container) return;
+  
+  try {
+    // Get characters for this scene
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/characters`);
+    const characters = response.data.scene_characters || [];
+    
+    if (characters.length === 0) {
+      container.innerHTML = '<span class="text-gray-400 italic">キャラクター未割当</span>';
+      return;
+    }
+    
+    // Get scene-specific overrides
+    const traitsResponse = await axios.get(`${API_BASE}/scenes/${sceneId}/character-traits`);
+    const sceneTraits = traitsResponse.data.scene_traits || [];
+    const traitMap = new Map(sceneTraits.map(t => [t.character_key, t]));
+    
+    // Render character traits
+    const html = characters.map(char => {
+      const override = traitMap.get(char.character_key);
+      const baseTraits = char.story_traits || char.appearance_description || null;
+      
+      return `
+        <div class="flex items-start gap-2 py-1 ${override ? 'bg-yellow-50 px-2 rounded' : ''}">
+          <span class="font-semibold text-indigo-700">${escapeHtml(char.character_name || char.character_key)}:</span>
+          <span class="flex-1 ${override ? 'text-yellow-700' : 'text-gray-600'}">
+            ${override 
+              ? `<i class="fas fa-exchange-alt mr-1" title="シーン別オーバーライド"></i>${escapeHtml(override.trait_description)}`
+              : baseTraits 
+                ? escapeHtml(baseTraits) 
+                : '<span class="italic text-gray-400">特徴未設定</span>'
+            }
+          </span>
+        </div>
+      `;
+    }).join('');
+    
+    container.innerHTML = html || '<span class="text-gray-400 italic">特徴情報なし</span>';
+  } catch (error) {
+    console.warn('Failed to load scene character traits:', error);
+    container.innerHTML = '<span class="text-red-500">読み込みエラー</span>';
+  }
+}
+
+/**
+ * Load character traits for all visible scenes in Builder
+ */
+function loadAllBuilderCharTraits(scenes) {
+  if (!Array.isArray(scenes)) return;
+  scenes.forEach(scene => {
+    loadBuilderSceneCharTraits(scene.id);
+  });
+}
+
 // Make functions globally accessible
 window.toggleCharacterTraitsSummary = toggleCharacterTraitsSummary;
 window.openCharacterTraitEdit = openCharacterTraitEdit;
 window.removeSceneCharacterTrait = removeSceneCharacterTrait;
 window.openAddSceneTraitOverride = openAddSceneTraitOverride;
+window.loadBuilderSceneCharTraits = loadBuilderSceneCharTraits;
+window.loadAllBuilderCharTraits = loadAllBuilderCharTraits;
 
 // ========== A) Microphone Recording ==========
 async function startRecording() {
@@ -2172,9 +2233,14 @@ function renderScenes(scenes) {
         
         <div>
           <label class="block text-sm font-semibold text-gray-700 mb-2">画像プロンプト</label>
+          <p class="text-xs text-amber-600 mb-2">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            ※画像内のテキストを日本語にしたい場合は、プロンプトに「文字は日本語で」と追記してください
+          </p>
           <textarea 
             id="imagePrompt-${scene.id}"
             rows="3"
+            placeholder="例: A beautiful forest scene. 文字は日本語で。"
             class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
           >${escapeHtml(scene.image_prompt)}</textarea>
         </div>
@@ -2887,11 +2953,35 @@ ${escapeHtml(scene.dialogue)}
       </div>
       ` : ''}
       
+      <!-- Character Traits Section (Phase X-5) -->
+      <div id="builderCharTraits-${scene.id}" class="bg-gradient-to-r from-indigo-50 to-purple-50 p-3 rounded-lg border border-indigo-200">
+        <div class="flex items-center justify-between mb-2">
+          <label class="text-sm font-semibold text-indigo-800">
+            <i class="fas fa-user-tag mr-1"></i>キャラクター特徴
+          </label>
+          <button 
+            onclick="loadBuilderSceneCharTraits(${scene.id})"
+            class="text-xs text-indigo-600 hover:text-indigo-800"
+            title="特徴を再読み込み"
+          >
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+        <div id="builderCharTraitsList-${scene.id}" class="text-xs text-gray-600">
+          <i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...
+        </div>
+      </div>
+      
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-2">画像プロンプト</label>
+        <p class="text-xs text-amber-600 mb-2">
+          <i class="fas fa-exclamation-triangle mr-1"></i>
+          ※画像内のテキストを日本語にしたい場合は「文字は日本語で」と追記
+        </p>
         <textarea 
           id="builderPrompt-${scene.id}"
           rows="3"
+          placeholder="例: A beautiful forest scene. 文字は日本語で。"
           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
         >${escapeHtml(scene.image_prompt)}</textarea>
       </div>
@@ -3709,6 +3799,14 @@ function renderBuilderScenes(scenes, page = 1) {
   // ========== Phase X-2 UI-3: Character Tag Click Handler ==========
   // Initialize character tag click events (idempotent, event delegation)
   initCharacterTagEvents();
+  
+  // ========== Phase X-5: Load Character Traits for Scenes ==========
+  // Load character traits for each visible scene (async, non-blocking)
+  setTimeout(() => {
+    filteredScenes.forEach(scene => {
+      loadBuilderSceneCharTraits(scene.id);
+    });
+  }, 100);
   
   // ========== Phase X-0: Pagination Controls ==========
   renderPaginationControls(allFilteredScenes.length, page);
