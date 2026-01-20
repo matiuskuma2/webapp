@@ -276,9 +276,9 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
   try {
     const sceneId = c.req.param('id')
 
-    // 1. シーン情報取得
+    // 1. シーン情報取得（is_prompt_customizedも取得）
     const scene = await c.env.DB.prepare(`
-      SELECT s.id, s.idx, s.image_prompt, s.project_id
+      SELECT s.id, s.idx, s.image_prompt, s.project_id, s.is_prompt_customized
       FROM scenes s
       WHERE s.id = ?
     `).bind(sceneId).first()
@@ -352,19 +352,27 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
     
     // 6. Phase X-2: Fetch world settings and character info (Optional - no error if missing)
+    // Phase X-4: If prompt is customized, skip text enhancement but still load reference images
+    const isPromptCustomized = scene.is_prompt_customized === 1;
     let enhancedPrompt = buildImagePrompt(scene.image_prompt as string);
     let referenceImages: ReferenceImage[] = [];
     
     try {
       const { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
       
-      const world = await fetchWorldSettings(c.env.DB, scene.project_id as number);
       const characters = await fetchSceneCharacters(c.env.DB, parseInt(sceneId));
       
-      // Enhance prompt with world + character context
-      enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
+      // Phase X-4: テキスト強化はカスタマイズされていない場合のみ
+      if (!isPromptCustomized) {
+        const world = await fetchWorldSettings(c.env.DB, scene.project_id as number);
+        // Enhance prompt with world + character context
+        enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
+      } else {
+        console.log('[Image Gen] Phase X-4: Skipping text enhancement (prompt is customized)');
+      }
       
-      // Phase X-3: キャラクター参照画像を取得
+      // Phase X-3: キャラクター参照画像は常に取得（視覚的一貫性のため）
+      // ※ カスタムプロンプトでも参照画像は使用する
       for (const char of characters) {
         if (char.reference_image_r2_url) {
           try {
@@ -401,11 +409,11 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         }
       }
       
-      console.log('[Image Gen] Phase X-2/X-3 enhancement:', {
-        has_world: !!world,
+      console.log('[Image Gen] Phase X-2/X-3/X-4 enhancement:', {
+        is_prompt_customized: isPromptCustomized,
         character_count: characters.length,
         reference_images_loaded: referenceImages.length,
-        enhanced: enhancedPrompt !== buildImagePrompt(scene.image_prompt as string)
+        text_enhanced: !isPromptCustomized
       });
     } catch (error) {
       // Phase X-2: Fallback to original prompt if enhancement fails (no breaking change)
@@ -430,11 +438,13 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     `).bind(generationId).run()
 
     // 9. Gemini APIで画像生成（キャラクター参照画像付き、429リトライ付き）
+    // Phase X-4: カスタムプロンプトの場合は日本語指示をスキップ
     const imageResult = await generateImageWithRetry(
       finalPrompt,
       c.env.GEMINI_API_KEY,
       3,
-      referenceImages
+      referenceImages,
+      isPromptCustomized  // skipDefaultInstructions
     )
 
     if (!imageResult.success) {
@@ -578,13 +588,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
       `).bind(projectId).run()
     }
 
-    // 4. 対象シーン取得
+    // 4. 対象シーン取得（is_prompt_customizedも取得）
     let targetScenes: any[] = []
     
     if (mode === 'all') {
       // 全シーン
       const { results } = await c.env.DB.prepare(`
-        SELECT id, idx, image_prompt FROM scenes
+        SELECT id, idx, image_prompt, is_prompt_customized FROM scenes
         WHERE project_id = ?
         ORDER BY idx ASC
       `).bind(projectId).all()
@@ -592,7 +602,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     } else if (mode === 'pending') {
       // アクティブな画像がないシーン
       const { results } = await c.env.DB.prepare(`
-        SELECT s.id, s.idx, s.image_prompt
+        SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
         FROM scenes s
         LEFT JOIN image_generations ig ON s.id = ig.scene_id AND ig.is_active = 1
         WHERE s.project_id = ? AND ig.id IS NULL
@@ -602,7 +612,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     } else if (mode === 'failed') {
       // 最後の生成が失敗したシーン
       const { results } = await c.env.DB.prepare(`
-        SELECT s.id, s.idx, s.image_prompt
+        SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
         FROM scenes s
         INNER JOIN (
           SELECT scene_id, MAX(id) as max_id
@@ -684,12 +694,16 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
         const generationId = insertResult.meta.last_row_id as number
 
+        // Phase X-4: カスタムプロンプトフラグを確認
+        const isPromptCustomized = scene.is_prompt_customized === 1;
+        
         // Gemini APIで画像生成（キャラクター参照画像付き）
         const imageResult = await generateImageWithRetry(
           finalPrompt,
           c.env.GEMINI_API_KEY,
           3,
-          referenceImages
+          referenceImages,
+          isPromptCustomized  // skipDefaultInstructions
         )
 
         if (!imageResult.success) {
@@ -763,12 +777,16 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
  * Gemini APIで画像生成（429リトライ付き）
  * 公式仕様: generateContent エンドポイント
  * キャラクター参照画像をサポート（最大5枚）
+ * 
+ * @param skipDefaultInstructions - true の場合、日本語指示などのデフォルト指示をスキップ
+ *                                  （ユーザーがカスタムプロンプトを入力した場合）
  */
 async function generateImageWithRetry(
   prompt: string,
   apiKey: string,
   maxRetries: number = 3,
-  referenceImages: ReferenceImage[] = []
+  referenceImages: ReferenceImage[] = [],
+  skipDefaultInstructions: boolean = false
 ): Promise<{
   success: boolean
   imageData?: ArrayBuffer
@@ -782,6 +800,7 @@ async function generateImageWithRetry(
       const parts: any[] = []
       
       // キャラクター参照画像を追加（最大5枚）
+      // ※ 参照画像は常に使用（視覚的一貫性のため）
       const limitedImages = referenceImages.slice(0, 5)
       for (const refImg of limitedImages) {
         parts.push({
@@ -792,23 +811,40 @@ async function generateImageWithRetry(
         })
       }
       
-      // キャラクター参照の説明をプロンプトに追加
-      // 日本語テキスト生成を明示的に指定
-      const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
-      
+      // Phase X-4: カスタムプロンプトの場合はデフォルト指示をスキップ
       let enhancedPrompt = prompt
-      if (limitedImages.length > 0) {
-        const charNames = limitedImages
-          .filter(img => img.characterName)
-          .map(img => img.characterName)
-          .join(', ')
-        if (charNames) {
-          enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency (${charNames}), generate: ${prompt}`
-        } else {
-          enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency, generate: ${prompt}`
+      
+      if (skipDefaultInstructions) {
+        // カスタムプロンプト: 参照画像の説明のみ追加（日本語指示なし）
+        if (limitedImages.length > 0) {
+          const charNames = limitedImages
+            .filter(img => img.characterName)
+            .map(img => img.characterName)
+            .join(', ')
+          if (charNames) {
+            enhancedPrompt = `Using the provided reference images for character visual consistency (${charNames}), generate: ${prompt}`
+          } else {
+            enhancedPrompt = `Using the provided reference images for character visual consistency, generate: ${prompt}`
+          }
         }
+        console.log('[Gemini Image Gen] Custom prompt mode - skipping default instructions')
       } else {
-        enhancedPrompt = `${japaneseTextInstruction}\n\n${prompt}`
+        // 通常モード: 日本語指示 + 参照画像説明
+        const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
+        
+        if (limitedImages.length > 0) {
+          const charNames = limitedImages
+            .filter(img => img.characterName)
+            .map(img => img.characterName)
+            .join(', ')
+          if (charNames) {
+            enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency (${charNames}), generate: ${prompt}`
+          } else {
+            enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency, generate: ${prompt}`
+          }
+        } else {
+          enhancedPrompt = `${japaneseTextInstruction}\n\n${prompt}`
+        }
       }
       
       // テキストプロンプトを追加

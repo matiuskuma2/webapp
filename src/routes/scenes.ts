@@ -310,6 +310,9 @@ scenes.put('/:id', async (c) => {
     if (image_prompt !== undefined) {
       updates.push('image_prompt = ?')
       values.push(image_prompt)
+      // Phase X-4: Mark prompt as customized when user edits it
+      updates.push('is_prompt_customized = ?')
+      values.push(1)
     }
     // Phase1: 漫画編集データ対応
     if (comic_data !== undefined) {
@@ -413,6 +416,9 @@ scenes.patch('/:id', async (c) => {
     if (body.image_prompt !== undefined) {
       updates.push('image_prompt = ?')
       values.push(body.image_prompt)
+      // Phase X-4: Mark prompt as customized when user edits it
+      updates.push('is_prompt_customized = ?')
+      values.push(1)
     }
     if (body.comic_data !== undefined) {
       updates.push('comic_data = ?')
