@@ -359,6 +359,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     
     try {
       const { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
+      const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
       
       const characters = await fetchSceneCharacters(c.env.DB, parseInt(sceneId));
       
@@ -371,43 +372,20 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         console.log('[Image Gen] Phase X-4: Skipping text enhancement (prompt is customized)');
       }
       
-      // Phase X-3: キャラクター参照画像は常に取得（視覚的一貫性のため）
-      // ※ カスタムプロンプトでも参照画像は使用する
-      for (const char of characters) {
-        if (char.reference_image_r2_url) {
-          try {
-            // R2キーを抽出（/images/characters/... → images/characters/...）
-            const r2Key = char.reference_image_r2_url.startsWith('/') 
-              ? char.reference_image_r2_url.substring(1) 
-              : char.reference_image_r2_url;
-            
-            // R2から画像を取得
-            const r2Object = await c.env.R2.get(r2Key);
-            if (r2Object) {
-              const arrayBuffer = await r2Object.arrayBuffer();
-              const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-              const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
-              
-              referenceImages.push({
-                base64Data,
-                mimeType,
-                characterName: char.character_name || char.character_key
-              });
-              
-              console.log('[Image Gen] Loaded character reference:', {
-                character: char.character_name || char.character_key,
-                r2Key,
-                sizeBytes: arrayBuffer.byteLength
-              });
-            }
-          } catch (refError) {
-            console.warn('[Image Gen] Failed to load character reference image:', {
-              character: char.character_name || char.character_key,
-              error: refError
-            });
-          }
-        }
-      }
+      // SSOT: キャラクター参照画像取得（character-reference-helper使用）
+      // ※ カスタムプロンプトでも参照画像は常に使用する（視覚的一貫性のため）
+      const ssotReferenceImages = await getSceneReferenceImages(
+        c.env.DB,
+        c.env.R2,
+        parseInt(sceneId)
+      );
+      
+      // 型変換（characterKey → 省略）
+      referenceImages = ssotReferenceImages.map(img => ({
+        base64Data: img.base64Data,
+        mimeType: img.mimeType,
+        characterName: img.characterName
+      }));
       
       console.log('[Image Gen] Phase X-2/X-3/X-4 enhancement:', {
         is_prompt_customized: isPromptCustomized,
@@ -644,46 +622,52 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     let failedCount = 0
     
     // ヘルパー関数をインポート
-    const { fetchSceneCharacters } = await import('../utils/world-character-helper');
+    const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
+    const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer');
+    const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
 
     for (const scene of targetScenes) {
       try {
-        const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+        // Phase X-4: カスタムプロンプトフラグを確認（先に取得）
+        const isPromptCustomized = scene.is_prompt_customized === 1;
         
-        // Phase X-3: キャラクター参照画像を取得
+        // 基本プロンプト構築
+        let enhancedPrompt = buildImagePrompt(scene.image_prompt as string)
+        
+        // Phase X-3: キャラクター参照画像を取得 + テキスト強化
         let referenceImages: ReferenceImage[] = [];
         try {
           const characters = await fetchSceneCharacters(c.env.DB, scene.id as number);
           
-          for (const char of characters) {
-            if (char.reference_image_r2_url) {
-              try {
-                const r2Key = char.reference_image_r2_url.startsWith('/') 
-                  ? char.reference_image_r2_url.substring(1) 
-                  : char.reference_image_r2_url;
-                
-                const r2Object = await c.env.R2.get(r2Key);
-                if (r2Object) {
-                  const arrayBuffer = await r2Object.arrayBuffer();
-                  const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
-                  const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
-                  
-                  referenceImages.push({
-                    base64Data,
-                    mimeType,
-                    characterName: char.character_name || char.character_key
-                  });
-                }
-              } catch (refError) {
-                console.warn(`[Batch Image Gen] Failed to load ref for ${char.character_key}:`, refError);
-              }
-            }
+          // テキスト強化（カスタムプロンプトでない場合のみ）
+          if (!isPromptCustomized) {
+            const world = await fetchWorldSettings(c.env.DB, parseInt(projectId));
+            enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
           }
+          
+          // SSOT: キャラクター参照画像取得（character-reference-helper使用）
+          const ssotReferenceImages = await getSceneReferenceImages(
+            c.env.DB,
+            c.env.R2,
+            scene.id as number
+          );
+          
+          referenceImages = ssotReferenceImages.map(img => ({
+            base64Data: img.base64Data,
+            mimeType: img.mimeType,
+            characterName: img.characterName
+          }));
           
           console.log(`[Batch Image Gen] Scene ${scene.id}: ${referenceImages.length} character refs loaded`);
         } catch (charError) {
           console.warn(`[Batch Image Gen] Failed to fetch characters for scene ${scene.id}:`, charError);
         }
+
+        // スタイルプリセット適用
+        const styleSettings = await fetchSceneStyleSettings(c.env.DB, scene.id as number, parseInt(projectId));
+        const effectiveStyleId = getEffectiveStylePresetId(styleSettings);
+        const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId);
+        const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset);
 
         // image_generationsレコード作成
         const insertResult = await c.env.DB.prepare(`
@@ -694,9 +678,6 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
         const generationId = insertResult.meta.last_row_id as number
 
-        // Phase X-4: カスタムプロンプトフラグを確認
-        const isPromptCustomized = scene.is_prompt_customized === 1;
-        
         // Gemini APIで画像生成（キャラクター参照画像付き）
         const imageResult = await generateImageWithRetry(
           finalPrompt,
@@ -729,12 +710,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           WHERE scene_id = ? AND id != ? AND is_active = 1
         `).bind(scene.id, generationId).run()
 
-        // 新しい画像をアクティブ化
+        // 新しい画像をアクティブ化（r2_url も保存）
+        const r2Url = `/${r2Key}`
         await c.env.DB.prepare(`
           UPDATE image_generations 
-          SET status = 'completed', r2_key = ?, is_active = 1
+          SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1
           WHERE id = ?
-        `).bind(r2Key, generationId).run()
+        `).bind(r2Key, r2Url, generationId).run()
 
         successCount++
 
