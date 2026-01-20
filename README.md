@@ -271,7 +271,130 @@ Proprietary - All rights reserved
 
 ---
 
-最終更新: 2026-01-19
+最終更新: 2026-01-20
+
+---
+
+## サブシステム構成（動画生成関連）
+
+本リポジトリには、メインのCloudflare Pagesアプリに加えて、動画生成に必要なサブシステムが含まれています。
+
+### アーキテクチャ概要
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Cloudflare                                                      │
+│  ┌──────────────────┐  ┌──────────────────┐                     │
+│  │ webapp           │  │ webapp-cron      │                     │
+│  │ (Pages + D1 + R2)│  │ (Workers Cron)   │                     │
+│  │                  │  │ 毎日UTC19:00     │                     │
+│  │ POST /video/build│  │ 動画30日自動削除 │                     │
+│  └────────┬─────────┘  └──────────────────┘                     │
+└───────────┼─────────────────────────────────────────────────────┘
+            │ HTTPS + SigV4
+            ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  AWS (ap-northeast-1)                                            │
+│                                                                  │
+│  ┌──────────────────┐    ┌──────────────────────────────────┐   │
+│  │ API Gateway      │───▶│ aws-orchestrator (Lambda)        │   │
+│  │ POST /video/build│    │ rilarc-video-build-orch          │   │
+│  │     /start       │    │ Remotion Lambda を呼び出し        │   │
+│  └──────────────────┘    └────────────────┬─────────────────┘   │
+│                                           │                      │
+│                                           ▼                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ Remotion Lambda (remotion-render-4-0-404-mem2048mb...)   │   │
+│  │ ・video-build-remotion のコードをバンドル                  │   │
+│  │ ・S3にサイトデプロイ済み                                   │   │
+│  │ ・動画レンダリング実行                                     │   │
+│  └────────────────────────────────────────┬─────────────────┘   │
+│                                           │                      │
+│                                           ▼                      │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │ S3 Buckets                                                │   │
+│  │ ・remotionlambda-apnortheast1-xxx (Remotion内部)          │   │
+│  │ ・rilarc-remotion-renders-prod-202601 (出力動画)          │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  ┌──────────────────┐    ┌──────────────────────────────────┐   │
+│  │ API Gateway      │───▶│ aws-video-proxy (Lambda)         │   │
+│  │ POST /video      │    │ rilarc-video-proxy               │   │
+│  │     /generate    │    │ Google Veo APIプロキシ            │   │
+│  └──────────────────┘    └──────────────────────────────────┘   │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### サブシステム一覧
+
+| ディレクトリ | デプロイ先 | 用途 | 本番関数名/URL |
+|-------------|-----------|------|---------------|
+| `video-build-remotion/` | AWS Lambda (Remotion) | 動画レンダリングロジック | S3サイト: rilarc-video-build |
+| `aws-orchestrator/` | AWS Lambda | Remotion呼び出しオーケストレーター | rilarc-video-build-orch |
+| `aws-orchestrator-b2/` | AWS Lambda (予備) | Remotion Lambda SDK版 | - |
+| `aws-video-proxy/` | AWS Lambda | Google Veo APIプロキシ | rilarc-video-proxy |
+| `webapp-cron/` | Cloudflare Workers | 定期ジョブ（動画削除等） | webapp-cron |
+
+### デプロイ手順
+
+#### 1. video-build-remotion（Remotion Lambda）
+
+```bash
+cd video-build-remotion
+npm install
+npm run deploy  # Remotion サイト + Lambda をデプロイ
+```
+
+環境変数:
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION` (default: ap-northeast-1)
+
+#### 2. aws-orchestrator（オーケストレーター Lambda）
+
+```bash
+cd aws-orchestrator
+npm install
+zip -r function.zip index.mjs node_modules
+aws lambda update-function-code \
+  --function-name rilarc-video-build-orch \
+  --zip-file fileb://function.zip \
+  --region ap-northeast-1
+```
+
+#### 3. aws-video-proxy（Veoプロキシ Lambda）
+
+```bash
+cd aws-video-proxy
+npm install
+npm run build
+npm run package
+npm run deploy
+```
+
+#### 4. webapp-cron（Cloudflare Workers Cron）
+
+```bash
+cd webapp-cron
+npm install
+npx wrangler deploy
+```
+
+### 環境変数・シークレット
+
+#### AWS Lambda共通
+- `AWS_REGION`: ap-northeast-1
+- `REMOTION_FUNCTION_NAME`: remotion-render-4-0-404-mem2048mb-disk2048mb-240sec
+- `REMOTION_SERVE_URL`: S3サイトURL
+- `OUTPUT_BUCKET`: rilarc-remotion-renders-prod-202601
+
+#### aws-video-proxy
+- `GOOGLE_API_KEY`: Google Veo API キー
+
+#### webapp-cron
+- D1バインディング: webapp-production (51860cd3-bfa8-4eab-8a11-aa230adee686)
+- R2バインディング: webapp-bucket
 
 ---
 
