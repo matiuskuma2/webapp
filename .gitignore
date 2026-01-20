@@ -15,9 +15,14 @@ out/
 # Wrangler
 .wrangler/
 
-# AWS Lambda
+# AWS Lambda deployment artifacts
 */function.zip
 function.zip
+*/worker.zip
+worker.zip
+
+# Core dumps
+core
 
 # OS
 .DS_Store
