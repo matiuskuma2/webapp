@@ -353,9 +353,22 @@ C（シーン固有） > B（物語共通） > A（キャラ登録）
 
 **取得関数:** `getSceneReferenceImages(db, r2, sceneId)`
 
-**使用箇所:**
+**使用箇所（全経路統一済み）:**
 - 単体生成: `image-generation.ts:377-388`
+- 旧バッチ生成: `image-generation.ts:98-140` ✅ 2026-01-20 統一完了
 - 一括生成: `image-generation.ts:648-659`
+
+**将来拡張（変身シーン対応）:**
+変身シーンで参照画像が邪魔になる場合の逃げ道として、以下の拡張を想定：
+
+```sql
+-- scene_character_traits への追加カラム（未実装）
+ALTER TABLE scene_character_traits ADD COLUMN reference_image_mode TEXT DEFAULT 'inherit';
+-- 値: 'inherit' (デフォルト), 'disable' (参照画像無効化), 'override' (別画像を使用)
+ALTER TABLE scene_character_traits ADD COLUMN override_reference_image_r2_url TEXT DEFAULT NULL;
+```
+
+現時点では仕様として明記のみ。実装は「妖精→人間」のような変身でキャラが維持されすぎる問題が発生した際に対応。
 
 ### 7.6 voice_presets coming_soon フィルタ
 
@@ -371,9 +384,55 @@ const presets = (data.voice_presets || []).filter(p => p.status !== 'coming_soon
 
 ---
 
-## 8. 更新履歴
+## 8. 運用ゲート検証チェックリスト
+
+### Gate 1: 特徴3層（A/B/C）が効いているか
+
+**テストシナリオ:**
+1. キャラ登録(A): レン＝人間（appearance_description: "人間の青年"）
+2. 物語(B): シーン1の台詞に「レンは妖精だった」→ story_traits 設定
+3. シーン(C): シーン2だけ「レンは人間に変身、羽が消える」を scene_character_traits に設定
+
+**期待結果:**
+- シーン1生成画像: 妖精レン（BがAを上書き）
+- シーン2生成画像: 人間レン・羽なし（CがBを上書き）
+- シーン3生成画像: 妖精レン（Bに戻る）
+
+**検証状態:** [ ] 未検証 / [ ] OK / [ ] NG
+
+---
+
+### Gate 2: 画像生成経路差分の事故がないか
+
+**テストシナリオ:**
+同じシーンに対して以下の3経路で生成し、キャラが飛ばないことを確認
+
+| 経路 | エンドポイント | 検証状態 |
+|------|---------------|----------|
+| 単体生成 | `POST /scenes/:id/generate-image` | [ ] OK / [ ] NG |
+| 旧バッチ生成 | `POST /projects/:id/generate-images` | [ ] OK / [ ] NG |
+| 一括生成 | `POST /projects/:id/generate-all-images` | [ ] OK / [ ] NG |
+
+**SSOT統一状況（2026-01-20 確認）:**
+- 全3経路で `enhancePromptWithWorldAndCharacters` 使用: ✅
+- 全3経路で `getSceneReferenceImages` 使用: ✅
+
+---
+
+### Gate 3: 参照画像の上限・優先順位が守られているか
+
+**テストシナリオ:**
+- 6人以上キャラ割当 → 参照画像は最大5枚で落ちないこと
+- 優先順位: is_primary=1 が先、次に created_at 順
+
+**検証状態:** [ ] 未検証 / [ ] OK / [ ] NG
+
+---
+
+## 9. 更新履歴
 
 | 日付 | 内容 |
 |------|------|
 | 2026-01-19 | 初版作成（音声・キャラクター・Video Build・Scene Split・漫画） |
 | 2026-01-20 | 運用事故防止ルール追加（SSOT 7項目） |
+| 2026-01-20 | 旧バッチ生成にSSOT関数統一、運用ゲート検証チェックリスト追加 |

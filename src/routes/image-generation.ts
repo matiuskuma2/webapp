@@ -69,7 +69,7 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
     // 4. pending の scenes を取得（最大1件: Gemini APIが遅いため）
     const BATCH_SIZE = 1
     const { results: pendingScenes } = await c.env.DB.prepare(`
-      SELECT s.id, s.idx, s.image_prompt
+      SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
       FROM scenes s
       LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
       WHERE s.project_id = ? AND ig.id IS NULL
@@ -96,18 +96,56 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
     }
 
     // 5. 各sceneの画像生成
+    // SSOT: ヘルパー関数をインポート（単体生成・一括生成と統一）
+    const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
+    const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
+    const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer');
+    
     let successCount = 0
     let failedCount = 0
 
     for (const scene of pendingScenes) {
       try {
-        // 最終プロンプト生成（スタイルプリセット適用）
-        const finalPrompt = await composeStyledPrompt(
-          c.env.DB,
-          parseInt(projectId),
-          scene.id as number,
-          scene.image_prompt as string
-        )
+        // Phase X-4: カスタムプロンプトフラグを確認
+        const isPromptCustomized = scene.is_prompt_customized === 1;
+        
+        // 基本プロンプト構築
+        let enhancedPrompt = buildImagePrompt(scene.image_prompt as string);
+        
+        // SSOT: キャラクター参照画像を取得 + テキスト強化
+        let referenceImages: ReferenceImage[] = [];
+        try {
+          const characters = await fetchSceneCharacters(c.env.DB, scene.id as number);
+          
+          // テキスト強化（カスタムプロンプトでない場合のみ）
+          if (!isPromptCustomized) {
+            const world = await fetchWorldSettings(c.env.DB, parseInt(projectId));
+            enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
+          }
+          
+          // SSOT: キャラクター参照画像取得（character-reference-helper使用）
+          const ssotReferenceImages = await getSceneReferenceImages(
+            c.env.DB,
+            c.env.R2,
+            scene.id as number
+          );
+          
+          referenceImages = ssotReferenceImages.map(img => ({
+            base64Data: img.base64Data,
+            mimeType: img.mimeType,
+            characterName: img.characterName
+          }));
+          
+          console.log(`[Legacy Batch] Scene ${scene.id}: ${referenceImages.length} character refs loaded`);
+        } catch (charError) {
+          console.warn(`[Legacy Batch] Failed to fetch characters for scene ${scene.id}:`, charError);
+        }
+
+        // スタイルプリセット適用
+        const styleSettings = await fetchSceneStyleSettings(c.env.DB, scene.id as number, parseInt(projectId));
+        const effectiveStyleId = getEffectiveStylePresetId(styleSettings);
+        const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId);
+        const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset);
 
         // image_generationsレコード作成（generating状態）
         const insertResult = await c.env.DB.prepare(`
@@ -118,11 +156,13 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
         const generationId = insertResult.meta.last_row_id as number
 
-        // Gemini APIで画像生成（429リトライ付き）
+        // Gemini APIで画像生成（キャラクター参照画像付き、429リトライ付き）
         const imageResult = await generateImageWithRetry(
           finalPrompt,
           c.env.GEMINI_API_KEY,
-          3
+          3,
+          referenceImages,
+          isPromptCustomized  // skipDefaultInstructions
         )
 
         if (!imageResult.success) {
