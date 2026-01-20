@@ -1931,7 +1931,7 @@ app.get('/projects/:id', (c) => {
     <script src="/static/world-character-modal.js"></script>
     <script src="/static/world-character-ui.js"></script>
     <script src="/static/character-library.js"></script>
-    <script src="/static/scene-edit-modal.js?v=20260120-3"></script>
+    <script src="/static/scene-edit-modal.js?v=20260120-4"></script>
     <script src="/static/character-trait-modal.js?v=20260120-2"></script>
     <!-- comic-editor v1 は凍結（Phase1.6 SSOT再構築中） -->
     <!-- <script src="/static/comic-editor.js"></script> -->

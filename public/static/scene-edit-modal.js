@@ -20,6 +20,7 @@
     currentSceneId: null,
     currentSceneIdx: null,
     characters: [], // All project characters
+    sceneData: null, // Scene dialogue/prompt for AI extraction
     
     // Original state for dirty checking (SSOT)
     originalState: {
@@ -34,6 +35,10 @@
       voiceCharacterKey: null,
       sceneTraits: {} // { character_key: trait_description }
     },
+    
+    // AI candidates (not saved until user clicks "use")
+    aiCandidates: {}, // { character_key: extracted_traits }
+    aiLoading: {}, // { character_key: boolean }
     
     // Active tab
     activeTab: 'characters', // 'characters' | 'traits'
@@ -102,6 +107,11 @@
         
         this.currentSceneIdx = ctx.scene.idx;
         this.characters = ctx.project_characters || [];
+        this.sceneData = ctx.scene; // Store scene for AI extraction
+        
+        // Reset AI candidates
+        this.aiCandidates = {};
+        this.aiLoading = {};
         
         // Store original state for dirty checking
         this.originalState = {
@@ -459,9 +469,12 @@
     renderCharacterTraitEditor(char) {
       const currentTrait = this.currentState.sceneTraits[char.character_key] || '';
       const hasOverride = currentTrait && currentTrait.trim();
+      const aiCandidate = this.aiCandidates[char.character_key] || null;
+      const isLoading = this.aiLoading[char.character_key] || false;
       
       return `
-        <div class="p-4 border border-gray-200 rounded-lg ${hasOverride ? 'bg-yellow-50 border-yellow-300' : ''}">
+        <div class="p-4 border border-gray-200 rounded-lg ${hasOverride ? 'bg-yellow-50 border-yellow-300' : ''}" data-trait-card="${this.escapeHtml(char.character_key)}">
+          <!-- Header -->
           <div class="flex items-center gap-3 mb-3">
             ${char.reference_image_r2_url 
               ? `<img src="${char.reference_image_r2_url}" class="w-10 h-10 rounded-full object-cover border-2 border-indigo-200" />`
@@ -478,28 +491,69 @@
             </div>
           </div>
           
-          <!-- Current composite traits (read-only) -->
-          <div class="mb-3">
+          <!-- Section A: Saved traits (read-only reference) -->
+          <div class="mb-3 p-2 bg-gray-50 rounded border border-gray-200">
             <label class="block text-xs font-semibold text-gray-500 mb-1">
-              現在適用される特徴（C > B > A）
+              <i class="fas fa-database mr-1"></i>保存済みの特徴
             </label>
-            <div class="text-sm text-gray-700 bg-white p-2 rounded border border-gray-200">
-              ${hasOverride 
-                ? `<span class="text-yellow-700"><i class="fas fa-exchange-alt mr-1"></i><strong>C:</strong> ${this.escapeHtml(currentTrait)}</span>`
-                : char.story_traits 
-                  ? `<span class="text-purple-700"><strong>B:</strong> ${this.escapeHtml(char.story_traits)}</span>`
-                  : char.appearance_description 
-                    ? `<span class="text-gray-600"><strong>A:</strong> ${this.escapeHtml(char.appearance_description)}</span>`
-                    : '<span class="italic text-gray-400">特徴未設定</span>'
+            <div class="text-xs space-y-1">
+              <div class="flex items-start">
+                <span class="inline-block w-8 font-bold text-gray-500">A:</span>
+                <span class="text-gray-600">${char.appearance_description ? this.escapeHtml(char.appearance_description) : '<i class="text-gray-400">未設定</i>'}</span>
+              </div>
+              <div class="flex items-start">
+                <span class="inline-block w-8 font-bold text-purple-600">B:</span>
+                <span class="text-purple-700">${char.story_traits ? this.escapeHtml(char.story_traits) : '<i class="text-gray-400">未設定</i>'}</span>
+              </div>
+              <div class="flex items-start">
+                <span class="inline-block w-8 font-bold text-yellow-600">C:</span>
+                <span class="text-yellow-700">${this.originalState.sceneTraits[char.character_key] ? this.escapeHtml(this.originalState.sceneTraits[char.character_key]) : '<i class="text-gray-400">未設定</i>'}</span>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Section B: AI Candidate (not saved) -->
+          <div class="mb-3">
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-semibold text-blue-600">
+                <i class="fas fa-robot mr-1"></i>AI候補（未保存）
+              </label>
+              <button 
+                type="button"
+                class="ai-extract-btn text-xs px-2 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200 transition-colors ${isLoading ? 'opacity-50 cursor-wait' : ''}"
+                data-character-key="${this.escapeHtml(char.character_key)}"
+                ${isLoading ? 'disabled' : ''}
+              >
+                ${isLoading 
+                  ? '<i class="fas fa-spinner fa-spin mr-1"></i>抽出中...'
+                  : '<i class="fas fa-magic mr-1"></i>AIで候補を作る'
+                }
+              </button>
+            </div>
+            <div class="ai-candidate-area p-2 bg-blue-50 rounded border border-blue-200 min-h-[40px]" data-candidate-area="${this.escapeHtml(char.character_key)}">
+              ${aiCandidate !== null 
+                ? aiCandidate 
+                  ? `<div class="flex items-start justify-between">
+                       <span class="text-sm text-blue-800">${this.escapeHtml(aiCandidate)}</span>
+                       <button 
+                         type="button"
+                         class="use-candidate-btn ml-2 text-xs px-2 py-1 bg-green-500 text-white rounded hover:bg-green-600 transition-colors flex-shrink-0"
+                         data-character-key="${this.escapeHtml(char.character_key)}"
+                       >
+                         <i class="fas fa-check mr-1"></i>使用
+                       </button>
+                     </div>`
+                  : '<span class="text-xs text-gray-500 italic">候補が見つかりませんでした</span>'
+                : '<span class="text-xs text-gray-400 italic">「AIで候補を作る」を押して抽出</span>'
               }
             </div>
           </div>
           
-          <!-- Scene-specific trait input -->
+          <!-- Section C: Edit input -->
           <div>
             <label class="block text-xs font-semibold text-indigo-700 mb-1">
-              <i class="fas fa-layer-group mr-1"></i>
-              このシーンでの特徴変化（C層）
+              <i class="fas fa-edit mr-1"></i>
+              このシーンでの特徴変化（編集欄）
             </label>
             <textarea 
               class="scene-trait-input w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
@@ -508,6 +562,7 @@
               placeholder="例: 人間の姿に変身。妖精の羽は消え、普通の少女の姿"
             >${this.escapeHtml(currentTrait)}</textarea>
             <p class="text-xs text-gray-500 mt-1">
+              <i class="fas fa-info-circle mr-1"></i>
               空欄にすると共通特徴（B）またはキャラ登録（A）が適用されます
             </p>
           </div>
@@ -519,6 +574,7 @@
      * Bind trait input events
      */
     bindTraitEvents() {
+      // Text input events
       document.querySelectorAll('.scene-trait-input').forEach(input => {
         input.addEventListener('input', (e) => {
           const key = e.target.dataset.characterKey;
@@ -526,6 +582,170 @@
           this.updateSaveButtonState();
         });
       });
+      
+      // AI extract buttons
+      document.querySelectorAll('.ai-extract-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const key = e.target.closest('.ai-extract-btn').dataset.characterKey;
+          this.extractAiCandidate(key);
+        });
+      });
+      
+      // Use candidate buttons
+      document.querySelectorAll('.use-candidate-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const key = e.target.closest('.use-candidate-btn').dataset.characterKey;
+          this.useCandidate(key);
+        });
+      });
+    },
+    
+    /**
+     * Extract AI candidate from scene dialogue
+     * @param {string} characterKey 
+     */
+    async extractAiCandidate(characterKey) {
+      if (this.aiLoading[characterKey]) return;
+      
+      const char = this.characters.find(c => c.character_key === characterKey);
+      if (!char) return;
+      
+      console.log(`[SceneEditModal] Extracting AI candidate for ${characterKey}`);
+      
+      // Set loading state
+      this.aiLoading[characterKey] = true;
+      this.renderTraitsTab();
+      this.bindTraitEvents();
+      
+      try {
+        // Extract traits from scene dialogue (client-side extraction)
+        const dialogue = this.sceneData?.dialogue || '';
+        const imagePrompt = this.sceneData?.image_prompt || '';
+        const text = `${dialogue} ${imagePrompt}`;
+        
+        // Extract visual traits for this character
+        const candidate = this.extractVisualTraitsFromText(text, char.character_name);
+        
+        // Store candidate
+        this.aiCandidates[characterKey] = candidate;
+        
+        if (!candidate) {
+          this.showToast('視覚的特徴が見つかりませんでした', 'info');
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] AI extraction failed:', error);
+        this.aiCandidates[characterKey] = '';
+        this.showToast('特徴の抽出に失敗しました', 'error');
+      } finally {
+        this.aiLoading[characterKey] = false;
+        this.renderTraitsTab();
+        this.bindTraitEvents();
+      }
+    },
+    
+    /**
+     * Extract visual traits from text (client-side, no AI API call)
+     * @param {string} text - Scene text
+     * @param {string} characterName - Character name to find
+     * @returns {string} Extracted visual traits
+     */
+    extractVisualTraitsFromText(text, characterName) {
+      if (!text || !characterName) return '';
+      
+      // Remove dialogue in 「」 to avoid text on images
+      let cleanText = text.replace(/「[^」]*」/g, '');
+      
+      // Patterns for visual traits to look for
+      const visualPatterns = [
+        // Species/type
+        /(?:小さな)?(?:妖精|精霊|人間|少女|少年|女性|男性|エルフ|魔女|魔法使い)/g,
+        // Physical features
+        /(?:透明な|キラキラ(?:と)?光る|大きな|小さな|長い|短い)?(?:羽|翼|しっぽ|尻尾|耳|角|目|瞳|髪)/g,
+        // Clothing/items
+        /(?:青い|赤い|白い|黒い|緑の|金色の)?(?:ドレス|服|衣装|マント|帽子|杖|剣)/g,
+        // Transformation
+        /(?:人間の姿|妖精の姿|変身し|姿を変え)/g,
+        // State changes
+        /(?:羽が消え|羽が現れ|光を放|輝き)/g,
+      ];
+      
+      // Exclude patterns (emotions, actions, speech)
+      const excludePatterns = [
+        /[泣笑怒叫言答驚悲喜思考願祈呼聞見][いきくけこっ]*/g,
+        /ありがとう|ごめん|すみません|一緒に|来い|行こう|待って|お願い/g,
+        /という|と言って|と答え|と叫|驚きを隠せなかっ|故郷を救/g,
+        /涙を浮かべ|笑顔で/g,
+      ];
+      
+      // Find sentences containing the character name
+      const sentences = cleanText.split(/[。！？\n]/);
+      const relevantSentences = sentences.filter(s => s.includes(characterName));
+      
+      if (relevantSentences.length === 0) {
+        // Try to find any visual traits in the text
+        let traits = [];
+        for (const pattern of visualPatterns) {
+          const matches = cleanText.match(pattern);
+          if (matches) {
+            traits.push(...matches);
+          }
+        }
+        // Remove duplicates and limit
+        traits = [...new Set(traits)].slice(0, 5);
+        return traits.length > 0 ? traits.join('、') : '';
+      }
+      
+      // Extract traits from relevant sentences
+      let traits = [];
+      for (const sentence of relevantSentences) {
+        // Apply exclude patterns
+        let cleaned = sentence;
+        for (const pattern of excludePatterns) {
+          cleaned = cleaned.replace(pattern, '');
+        }
+        
+        // Find visual traits
+        for (const pattern of visualPatterns) {
+          const matches = cleaned.match(pattern);
+          if (matches) {
+            traits.push(...matches);
+          }
+        }
+      }
+      
+      // Remove duplicates and clean up
+      traits = [...new Set(traits)]
+        .filter(t => t.length > 1)
+        .slice(0, 5);
+      
+      return traits.length > 0 ? traits.join('、') : '';
+    },
+    
+    /**
+     * Use AI candidate - copy to input field
+     * @param {string} characterKey 
+     */
+    useCandidate(characterKey) {
+      const candidate = this.aiCandidates[characterKey];
+      
+      if (!candidate || !candidate.trim()) {
+        this.showToast('候補がありません', 'warning');
+        return;
+      }
+      
+      // Set to current state
+      this.currentState.sceneTraits[characterKey] = candidate;
+      
+      // Update input field
+      const input = document.querySelector(`.scene-trait-input[data-character-key="${characterKey}"]`);
+      if (input) {
+        input.value = candidate;
+      }
+      
+      // Update save button state (now dirty)
+      this.updateSaveButtonState();
+      
+      this.showToast('候補を入力欄にコピーしました', 'success');
     },
     
     /**

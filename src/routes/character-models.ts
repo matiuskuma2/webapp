@@ -1062,11 +1062,14 @@ app.put('/projects/:projectId/characters/:characterKey/story-traits', async (c) 
     
     const { story_traits } = body;
     
+    // P2: Sanitize B-layer traits to prevent text on images
+    const sanitizedTraits = sanitizeTraits(story_traits || '');
+    
     await c.env.DB.prepare(`
       UPDATE project_character_models
       SET story_traits = ?, updated_at = CURRENT_TIMESTAMP
       WHERE project_id = ? AND character_key = ?
-    `).bind(story_traits || null, projectId, characterKey).run();
+    `).bind(sanitizedTraits || null, projectId, characterKey).run();
     
     const character = await c.env.DB.prepare(`
       SELECT * FROM project_character_models
@@ -1082,5 +1085,47 @@ app.put('/projects/:projectId/characters/:characterKey/story-traits', async (c) 
     );
   }
 });
+
+/**
+ * Sanitize trait description to prevent text appearing in images
+ * - Remove dialogue (「」)
+ * - Remove emotional/action words
+ * - Limit length
+ * 
+ * Same as scene-characters.ts (P2: apply to B-layer story_traits)
+ */
+function sanitizeTraits(s: string): string {
+  if (!s) return '';
+  let t = s;
+  
+  // Remove dialogue in brackets
+  t = t.replace(/「[^」]*」/g, '');
+  
+  // Remove quotes
+  t = t.replace(/["']/g, '');
+  
+  // Remove emotional/action patterns
+  const excludePatterns = [
+    /[泣笑怒叫言答驚悲喜思考願祈][いきくけこっ]*/g,
+    /ありがとう|ごめん|すみません|一緒に|来い|行こう|待って|お願い/g,
+    /という|と言って|と答え|と叫/g,
+  ];
+  
+  for (const pattern of excludePatterns) {
+    t = t.replace(pattern, '');
+  }
+  
+  // Clean up whitespace and punctuation
+  t = t.replace(/\s+/g, ' ').trim();
+  t = t.replace(/^[、。\s]+|[、。\s]+$/g, '');
+  t = t.replace(/、{2,}/g, '、');
+  
+  // Limit length
+  if (t.length > 150) {
+    t = t.substring(0, 150);
+  }
+  
+  return t;
+}
 
 export default app;
