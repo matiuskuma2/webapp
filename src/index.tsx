@@ -1609,97 +1609,52 @@ app.get('/projects/:id', (c) => {
                 </div>
                 
                 <!-- Content -->
-                <div class="p-6 space-y-6" style="max-height: 70vh; overflow-y: auto;">
+                <div class="p-6 space-y-4" style="max-height: 70vh; overflow-y: auto;">
                     <!-- Scene ID (hidden) -->
                     <input type="hidden" id="edit-scene-id" />
                     
-                    <!-- Dialogue -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">
-                            <i class="fas fa-comment mr-1 text-blue-600"></i>セリフ
-                        </label>
-                        <textarea 
-                            id="edit-dialogue"
-                            rows="4"
-                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                            placeholder="セリフを入力..."
-                        ></textarea>
-                    </div>
-                    
-                    <!-- Bullets -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">
-                            <i class="fas fa-list mr-1 text-green-600"></i>要点
-                        </label>
-                        <textarea 
-                            id="edit-bullets"
-                            rows="3"
-                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                            placeholder="要点を改行区切りで入力..."
-                        ></textarea>
-                    </div>
-                    
-                    <!-- Image Prompt -->
-                    <div>
-                        <label class="block text-sm font-semibold text-gray-700 mb-2">
-                            <i class="fas fa-image mr-1 text-purple-600"></i>画像プロンプト
-                        </label>
-                        <p class="text-xs text-amber-600 mb-2">
-                            <i class="fas fa-exclamation-triangle mr-1"></i>
-                            ※画像内のテキストを日本語にしたい場合は、プロンプトに「文字は日本語で」と追記してください
-                        </p>
-                        <textarea 
-                            id="edit-image-prompt"
-                            rows="3"
-                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                            placeholder="例: A beautiful forest scene. 文字は日本語で。"
-                        ></textarea>
-                    </div>
-                    
-                    <!-- Character Traits Info (Phase X-5) -->
-                    <div id="edit-character-traits-section" class="hidden bg-gradient-to-r from-indigo-50 to-purple-50 p-4 rounded-lg border border-indigo-200">
-                        <h4 class="text-sm font-semibold text-indigo-800 mb-2">
-                            <i class="fas fa-user-tag mr-1"></i>適用されるキャラクター特徴
-                        </h4>
-                        <p class="text-xs text-gray-600 mb-2">
-                            画像生成時、以下の特徴がプロンプトに自動適用されます（カスタム編集時はスキップ可）
-                        </p>
-                        <div id="edit-character-traits-list" class="space-y-2">
-                            <!-- Dynamically populated -->
-                        </div>
-                    </div>
-                    
-                    <!-- Character Assignment (Phase 2-3) -->
-                    <div class="border-t pt-6">
-                        <h3 class="text-lg font-bold text-gray-800 mb-4">
-                            <i class="fas fa-users mr-2 text-indigo-600"></i>キャラクター割り当て
-                        </h3>
-                        
-                        <!-- Image Characters -->
-                        <div class="mb-4">
-                            <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                <i class="fas fa-image mr-1 text-blue-600"></i>画像キャラクター（最大3人）
-                            </label>
-                            <div id="edit-image-characters" class="space-y-2">
-                                <!-- Dynamically populated -->
-                            </div>
-                            <p class="text-xs text-gray-500 mt-1">画像に登場するキャラクターを選択してください</p>
-                        </div>
-                        
-                        <!-- Voice Character -->
+                    <!-- Basic Info Section (always visible) -->
+                    <div class="space-y-4 pb-4 border-b border-gray-200">
+                        <!-- Dialogue -->
                         <div>
                             <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                <i class="fas fa-microphone mr-1 text-green-600"></i>音声キャラクター（1人）
+                                <i class="fas fa-comment mr-1 text-blue-600"></i>セリフ
                             </label>
-                            <select 
-                                id="edit-voice-character"
+                            <textarea 
+                                id="edit-dialogue"
+                                rows="3"
                                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                            >
-                                <option value="">-- 音声キャラクターを選択 --</option>
-                                <!-- Dynamically populated -->
-                            </select>
-                            <p class="text-xs text-gray-500 mt-1">セリフを喋るキャラクターを選択してください</p>
+                                placeholder="セリフを入力..."
+                            ></textarea>
                         </div>
+                        
+                        <!-- Image Prompt -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-image mr-1 text-purple-600"></i>画像プロンプト
+                            </label>
+                            <textarea 
+                                id="edit-image-prompt"
+                                rows="2"
+                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                placeholder="例: A beautiful forest scene."
+                            ></textarea>
+                        </div>
+                    </div>
+                    
+                    <!-- Tab Navigation (SSOT: single modal, two tabs) -->
+                    <div id="scene-edit-tabs">
+                        <!-- Dynamically populated -->
+                    </div>
+                    
+                    <!-- Tab A: Character Assignment -->
+                    <div id="scene-edit-tab-characters" class="space-y-4">
+                        <!-- Dynamically populated -->
+                    </div>
+                    
+                    <!-- Tab B: Character Traits -->
+                    <div id="scene-edit-tab-traits" class="hidden space-y-4">
+                        <!-- Dynamically populated -->
                     </div>
                 </div>
                 
@@ -1709,13 +1664,13 @@ app.get('/projects/:id', (c) => {
                         id="cancel-edit-scene"
                         class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
                     >
-                        キャンセル
+                        閉じる
                     </button>
                     <button 
                         id="save-edit-scene"
-                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                        <i class="fas fa-save mr-2"></i>保存
+                        <i class="fas fa-check mr-2"></i>変更なし
                     </button>
                 </div>
             </div>

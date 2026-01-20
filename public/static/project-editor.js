@@ -582,17 +582,25 @@ async function removeSceneCharacterTrait(sceneId, characterKey) {
 
 /**
  * Open modal to add scene-specific trait override
- * Uses CharacterTraitModal for proper UI with character selection
+ * Phase X-6: Now uses unified SceneEditModal with tabs
  */
 async function openAddSceneTraitOverride(sceneId, sceneIdx) {
-  if (!window.CharacterTraitModal) {
-    console.error('[SceneTraitOverride] CharacterTraitModal not loaded');
+  // Use unified SceneEditModal instead of CharacterTraitModal
+  if (window.SceneEditModal) {
+    await window.SceneEditModal.open(sceneId);
+    // Switch to traits tab after opening
+    setTimeout(() => {
+      if (window.SceneEditModal.switchTab) {
+        window.SceneEditModal.switchTab('traits');
+      }
+    }, 100);
+  } else if (window.CharacterTraitModal) {
+    // Fallback to old modal if SceneEditModal not loaded
+    window.CharacterTraitModal.openForSceneOverrideSelection(sceneId, sceneIdx);
+  } else {
+    console.error('[SceneTraitOverride] No modal available');
     showToast('モーダルの読み込みに失敗しました', 'error');
-    return;
   }
-  
-  // Open the modal in character selection mode
-  window.CharacterTraitModal.openForSceneOverrideSelection(sceneId, sceneIdx);
 }
 
 /**

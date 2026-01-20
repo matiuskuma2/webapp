@@ -383,4 +383,261 @@ app.delete('/:sceneId/character-traits/:characterKey', async (c) => {
   }
 });
 
+/**
+ * GET /api/scenes/:sceneId/edit-context
+ * Get complete edit context for scene modal (SSOT for unified editing)
+ * 
+ * Returns:
+ * - scene: Basic scene data
+ * - project_characters: All characters in the project with their traits
+ * - assigned_image_character_keys: Characters assigned to this scene
+ * - scene_traits: Scene-specific trait overrides (C layer)
+ */
+app.get('/:sceneId/edit-context', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    
+    // 1. Get scene basic info
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id, idx, dialogue, image_prompt, is_prompt_customized, 
+             display_asset_type, comic_data, created_at, updated_at
+      FROM scenes
+      WHERE id = ?
+    `).bind(sceneId).first();
+    
+    if (!scene) {
+      return c.json(
+        createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'),
+        404
+      );
+    }
+    
+    const projectId = scene.project_id;
+    
+    // 2. Get all project characters with traits (A + B layers)
+    const charactersResult = await c.env.DB.prepare(`
+      SELECT 
+        character_key,
+        character_name,
+        reference_image_r2_url,
+        voice_preset_id,
+        voice_provider,
+        appearance_description,
+        story_traits,
+        aliases_json
+      FROM project_character_models
+      WHERE project_id = ?
+      ORDER BY created_at ASC
+    `).bind(projectId).all();
+    
+    // 3. Get assigned characters for this scene
+    const mappingsResult = await c.env.DB.prepare(`
+      SELECT character_key, is_primary
+      FROM scene_character_map
+      WHERE scene_id = ?
+      ORDER BY is_primary DESC, created_at ASC
+    `).bind(sceneId).all();
+    
+    const assignedCharacterKeys = (mappingsResult.results || []).map((m: any) => m.character_key);
+    const voiceCharacter = (mappingsResult.results || []).find((m: any) => m.is_primary === 1);
+    
+    // 4. Get scene-specific trait overrides (C layer)
+    const traitsResult = await c.env.DB.prepare(`
+      SELECT id, character_key, override_type, trait_description, source, confidence
+      FROM scene_character_traits
+      WHERE scene_id = ?
+    `).bind(sceneId).all();
+    
+    return c.json({
+      scene: {
+        id: scene.id,
+        project_id: scene.project_id,
+        idx: scene.idx,
+        dialogue: scene.dialogue || '',
+        image_prompt: scene.image_prompt || '',
+        is_prompt_customized: scene.is_prompt_customized || 0,
+        display_asset_type: scene.display_asset_type || 'image',
+        comic_data: scene.comic_data ? JSON.parse(String(scene.comic_data)) : null
+      },
+      project_characters: (charactersResult.results || []).map((char: any) => ({
+        character_key: char.character_key,
+        character_name: char.character_name,
+        reference_image_r2_url: char.reference_image_r2_url,
+        voice_preset_id: char.voice_preset_id,
+        voice_provider: char.voice_provider,
+        appearance_description: char.appearance_description || '',
+        story_traits: char.story_traits || '',
+        aliases: char.aliases_json ? JSON.parse(char.aliases_json) : []
+      })),
+      assigned_image_character_keys: assignedCharacterKeys,
+      voice_character_key: voiceCharacter?.character_key || null,
+      scene_traits: (traitsResult.results || []).map((t: any) => ({
+        id: t.id,
+        character_key: t.character_key,
+        override_type: t.override_type,
+        trait_description: t.trait_description,
+        source: t.source,
+        confidence: t.confidence
+      }))
+    });
+  } catch (error) {
+    console.error('[Scene Edit Context] Get error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to get scene edit context'),
+      500
+    );
+  }
+});
+
+/**
+ * POST /api/scenes/:sceneId/save-edit-context
+ * Save complete edit context in a single transaction (SSOT)
+ * 
+ * Payload:
+ * - image_character_keys: string[] - Characters assigned to scene
+ * - voice_character_key: string | null - Character for voice (must be in image_character_keys)
+ * - scene_traits: { character_key: string, override_traits: string }[] - Scene-specific overrides
+ * 
+ * Important: This replaces ALL scene characters and traits atomically
+ * Empty override_traits will DELETE the trait entry (no garbage)
+ */
+app.post('/:sceneId/save-edit-context', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    const body = await c.req.json();
+    
+    const { 
+      image_character_keys = [], 
+      voice_character_key,
+      scene_traits = []
+    } = body;
+    
+    // Validate scene exists
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id FROM scenes WHERE id = ?
+    `).bind(sceneId).first();
+    
+    if (!scene) {
+      return c.json(
+        createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'),
+        404
+      );
+    }
+    
+    // SSOT Validation: voice_character must be in image_characters
+    let finalVoiceCharacter = voice_character_key;
+    if (image_character_keys.length > 0) {
+      if (!finalVoiceCharacter || !image_character_keys.includes(finalVoiceCharacter)) {
+        finalVoiceCharacter = image_character_keys[0]; // Auto-select first
+        console.log(`[Save Edit Context] Auto-selected voice_character: ${finalVoiceCharacter}`);
+      }
+    } else {
+      finalVoiceCharacter = null;
+    }
+    
+    // === STEP 1: Delete and re-insert scene_character_map (atomic replace) ===
+    await c.env.DB.prepare(`
+      DELETE FROM scene_character_map WHERE scene_id = ?
+    `).bind(sceneId).run();
+    
+    for (const charKey of image_character_keys) {
+      const isPrimary = charKey === finalVoiceCharacter ? 1 : 0;
+      await c.env.DB.prepare(`
+        INSERT INTO scene_character_map (scene_id, character_key, is_primary, created_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `).bind(sceneId, charKey, isPrimary).run();
+    }
+    
+    // === STEP 2: Delete and re-insert scene_character_traits (atomic replace) ===
+    await c.env.DB.prepare(`
+      DELETE FROM scene_character_traits WHERE scene_id = ?
+    `).bind(sceneId).run();
+    
+    // Only insert non-empty traits
+    for (const trait of scene_traits) {
+      const sanitizedTraits = sanitizeTraits(trait.override_traits || '');
+      if (sanitizedTraits) {
+        await c.env.DB.prepare(`
+          INSERT INTO scene_character_traits (scene_id, character_key, override_type, trait_description, source, created_at, updated_at)
+          VALUES (?, ?, 'transform', ?, 'manual', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        `).bind(sceneId, trait.character_key, sanitizedTraits).run();
+      }
+    }
+    
+    // Return updated context (same format as GET)
+    // Re-fetch to ensure consistency
+    const updatedMappings = await c.env.DB.prepare(`
+      SELECT character_key, is_primary
+      FROM scene_character_map
+      WHERE scene_id = ?
+      ORDER BY is_primary DESC, created_at ASC
+    `).bind(sceneId).all();
+    
+    const updatedTraits = await c.env.DB.prepare(`
+      SELECT id, character_key, override_type, trait_description, source
+      FROM scene_character_traits
+      WHERE scene_id = ?
+    `).bind(sceneId).all();
+    
+    return c.json({
+      success: true,
+      assigned_image_character_keys: (updatedMappings.results || []).map((m: any) => m.character_key),
+      voice_character_key: finalVoiceCharacter,
+      scene_traits: (updatedTraits.results || []).map((t: any) => ({
+        id: t.id,
+        character_key: t.character_key,
+        override_type: t.override_type,
+        trait_description: t.trait_description,
+        source: t.source
+      }))
+    });
+  } catch (error) {
+    console.error('[Save Edit Context] Error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to save edit context'),
+      500
+    );
+  }
+});
+
+/**
+ * Sanitize trait description to prevent text appearing in images
+ * - Remove dialogue (「」)
+ * - Remove emotional/action words
+ * - Limit length
+ */
+function sanitizeTraits(s: string): string {
+  if (!s) return '';
+  let t = s;
+  
+  // Remove dialogue in brackets
+  t = t.replace(/「[^」]*」/g, '');
+  
+  // Remove quotes
+  t = t.replace(/["']/g, '');
+  
+  // Remove emotional/action patterns
+  const excludePatterns = [
+    /[泣笑怒叫言答驚悲喜思考願祈][いきくけこっ]*/g,
+    /ありがとう|ごめん|すみません|一緒に|来い|行こう|待って|お願い/g,
+    /という|と言って|と答え|と叫/g,
+  ];
+  
+  for (const pattern of excludePatterns) {
+    t = t.replace(pattern, '');
+  }
+  
+  // Clean up whitespace and punctuation
+  t = t.replace(/\s+/g, ' ').trim();
+  t = t.replace(/^[、。\s]+|[、。\s]+$/g, '');
+  t = t.replace(/、{2,}/g, '、');
+  
+  // Limit length
+  if (t.length > 150) {
+    t = t.substring(0, 150);
+  }
+  
+  return t;
+}
+
 export default app;
