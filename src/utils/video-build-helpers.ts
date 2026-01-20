@@ -492,16 +492,246 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
 }
 
 // ====================================================================
-// Legacy: buildProjectJson (後方互換性のため維持)
+// Phase R1: Remotionスキーマ準拠 ProjectJson 生成
 // ====================================================================
 
 /**
- * @deprecated Use buildBuildRequestV1 instead
+ * RemotionScene_R1 - Phase R1 用シーン型
+ * Remotion の ProjectSceneSchema に完全準拠
+ */
+export interface RemotionScene_R1 {
+  idx: number;
+  role: string;
+  title: string;
+  dialogue: string;
+  timing: {
+    start_ms: number;       // ★ 必須: 累積計算
+    duration_ms: number;    // ★ 必須: SSOT
+    head_pad_ms: number;
+    tail_pad_ms: number;
+  };
+  assets: {
+    image?: {
+      url: string;
+      width: number;
+      height: number;
+    };
+    audio?: {
+      url: string;
+      duration_ms: number;
+      format: 'mp3' | 'wav';
+    };
+    video_clip?: {
+      url: string;
+      duration_ms: number;
+    };
+  };
+  characters?: {
+    image?: string[];
+    voice?: string;
+  };
+}
+
+/**
+ * RemotionProjectJson_R1 - Phase R1 用プロジェクトJSON型
+ * Remotion の ProjectJsonSchema に完全準拠
+ */
+export interface RemotionProjectJson_R1 {
+  schema_version: '1.1';
+  project_id: number;
+  project_title: string;
+  created_at: string;
+  build_settings: {
+    preset: string;
+    resolution: {
+      width: number;
+      height: number;
+    };
+    fps: number;
+    codec: 'h264' | 'h265';
+    audio?: {
+      bgm_enabled: boolean;
+      bgm_volume: number;
+      narration_volume: number;
+      duck_bgm_on_voice: boolean;
+    };
+    transition?: {
+      type: 'none' | 'fade' | 'slide' | 'wipe';
+      duration_ms: number;
+    };
+  };
+  global: {
+    default_scene_duration_ms: number;
+    transition_duration_ms: number;
+  };
+  assets?: {
+    bgm?: {
+      url: string;
+      duration_ms: number;
+      volume: number;
+    };
+  };
+  scenes: RemotionScene_R1[];
+  summary: {
+    total_scenes: number;
+    total_duration_ms: number;
+    has_audio: boolean;
+    has_video_clips: boolean;
+  };
+}
+
+/**
+ * buildProjectJson - Remotionスキーマ完全準拠版
  * 
- * 後方互換性のため維持。内部で buildBuildRequestV1 を呼び出し、
- * 旧形式の ProjectJson に変換して返す。
+ * Phase R1: video-only で全シーンが繋がるMP4を出す
+ * 
+ * ## SSOT ルール
+ * - duration_ms: audio があれば audio.duration_ms、なければ computeSceneDurationMs()
+ * - start_ms: 累積計算（0, n, n+m, ...）
+ * 
+ * ## Phase R1 で扱わないもの
+ * - ❌ balloons / telops / bgm
+ * - ❌ video_clip（generated video）
+ * - ❌ comic 専用処理
+ * 
+ * @param project プロジェクト基本情報
+ * @param scenes シーンデータ配列（idx昇順）
+ * @param settings ビルド設定
+ * @param options オプション
+ * @returns Remotionスキーマ準拠のProjectJson
  */
 export function buildProjectJson(
+  project: ProjectData,
+  scenes: SceneData[],
+  settings: VideoBuildSettings,
+  options?: {
+    aspectRatio?: '9:16' | '16:9' | '1:1';
+    resolution?: '720p' | '1080p';
+    fps?: number;
+  }
+): RemotionProjectJson_R1 {
+  const now = new Date().toISOString();
+  const aspectRatio = options?.aspectRatio || '9:16';
+  const resolution = options?.resolution || '1080p';
+  const fps = options?.fps || 30;
+  
+  const resolutionSize = RESOLUTION_MAP[resolution][aspectRatio];
+  
+  // ========================================
+  // Phase R1 核心: start_ms 累積計算
+  // ========================================
+  let currentMs = 0;
+  let hasAudio = false;
+  let hasVideoClips = false;
+  
+  const remotionScenes: RemotionScene_R1[] = scenes.map((scene) => {
+    // 1. duration_ms 確定 (SSOT)
+    // audio があれば audio.duration_ms を優先
+    const durationMs = scene.active_audio?.duration_ms 
+      ? scene.active_audio.duration_ms + AUDIO_PADDING_MS
+      : computeSceneDurationMs(scene);
+    
+    // 2. start_ms 累積計算 (Phase R1 の核心)
+    const startMs = currentMs;
+    currentMs += durationMs;
+    
+    // 3. visual URL 取得
+    // Phase R1: image or comic（静止画として扱う）
+    let imageUrl: string | undefined;
+    const displayType = scene.display_asset_type || 'image';
+    
+    if (displayType === 'comic' && scene.active_comic?.r2_url) {
+      imageUrl = scene.active_comic.r2_url;
+    } else if (scene.active_image?.r2_url) {
+      imageUrl = scene.active_image.r2_url;
+    }
+    
+    // 4. audio 取得
+    let audioAsset: RemotionScene_R1['assets']['audio'] | undefined;
+    if (scene.active_audio?.audio_url) {
+      hasAudio = true;
+      audioAsset = {
+        url: scene.active_audio.audio_url,
+        duration_ms: scene.active_audio.duration_ms,
+        format: 'mp3',
+      };
+    }
+    
+    // 5. RemotionScene_R1 構築
+    return {
+      idx: scene.idx,
+      role: scene.role || 'main_point',
+      title: scene.title || '',
+      dialogue: scene.dialogue || '',
+      timing: {
+        start_ms: startMs,
+        duration_ms: durationMs,
+        head_pad_ms: 0,
+        tail_pad_ms: 0,
+      },
+      assets: {
+        image: imageUrl ? {
+          url: imageUrl,
+          width: resolutionSize.width,
+          height: resolutionSize.height,
+        } : undefined,
+        audio: audioAsset,
+        // Phase R1: video_clip は未対応
+      },
+      // Phase R1: characters は未対応
+    };
+  });
+  
+  // ========================================
+  // RemotionProjectJson_R1 構築
+  // ========================================
+  return {
+    schema_version: '1.1',
+    project_id: project.id,
+    project_title: project.title,
+    created_at: now,
+    build_settings: {
+      preset: settings.motion?.preset || 'none',
+      resolution: resolutionSize,
+      fps,
+      codec: 'h264',
+      audio: {
+        bgm_enabled: settings.bgm?.enabled || false,
+        bgm_volume: settings.bgm?.volume || 0.3,
+        narration_volume: 1.0,
+        duck_bgm_on_voice: true,
+      },
+      transition: {
+        type: 'fade',
+        duration_ms: 300,
+      },
+    },
+    global: {
+      default_scene_duration_ms: DEFAULT_SCENE_DURATION_MS,
+      transition_duration_ms: 300,
+    },
+    // Phase R1: BGM は未対応
+    scenes: remotionScenes,
+    summary: {
+      total_scenes: scenes.length,
+      total_duration_ms: currentMs,
+      has_audio: hasAudio,
+      has_video_clips: hasVideoClips,
+    },
+  };
+}
+
+// ====================================================================
+// Legacy: buildProjectJsonLegacy (後方互換性のため維持)
+// ====================================================================
+
+/**
+ * @deprecated Use buildProjectJson instead
+ * 
+ * 旧形式のProjectJsonを出力する関数。
+ * Phase R1 以降は使用しない。
+ */
+export function buildProjectJsonLegacy(
   project: ProjectData,
   scenes: SceneData[],
   settings: VideoBuildSettings,
@@ -585,7 +815,7 @@ export function buildProjectJson(
 // Hash Helper
 // ====================================================================
 
-export async function hashProjectJson(projectJson: ProjectJson | BuildRequestV1): Promise<string> {
+export async function hashProjectJson(projectJson: ProjectJson | BuildRequestV1 | RemotionProjectJson_R1): Promise<string> {
   const jsonString = JSON.stringify(projectJson);
   const encoder = new TextEncoder();
   const data = encoder.encode(jsonString);
