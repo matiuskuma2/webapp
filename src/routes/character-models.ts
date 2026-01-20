@@ -984,4 +984,103 @@ app.post('/projects/:projectId/characters/create-with-image', async (c) => {
   }
 });
 
+/**
+ * GET /api/projects/:projectId/character-traits-summary
+ * Get summary of all character traits for visualization
+ * 
+ * Returns:
+ * - For each character: base traits (story_traits), scene overrides
+ * - Useful for scene split visualization
+ */
+app.get('/projects/:projectId/character-traits-summary', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    
+    // Get all characters with their story traits
+    const characters = await c.env.DB.prepare(`
+      SELECT 
+        character_key, character_name, appearance_description, story_traits, reference_image_r2_url
+      FROM project_character_models
+      WHERE project_id = ?
+      ORDER BY created_at ASC
+    `).bind(projectId).all();
+    
+    // Get all scene trait overrides for this project
+    const sceneTraits = await c.env.DB.prepare(`
+      SELECT 
+        sct.scene_id, sct.character_key, sct.override_type, sct.trait_description, sct.source,
+        s.idx as scene_idx, s.title as scene_title
+      FROM scene_character_traits sct
+      INNER JOIN scenes s ON sct.scene_id = s.id
+      WHERE s.project_id = ?
+      ORDER BY s.idx ASC
+    `).bind(projectId).all();
+    
+    // Build summary for each character
+    const characterSummaries = (characters.results || []).map(char => {
+      const overrides = (sceneTraits.results || [])
+        .filter(t => t.character_key === char.character_key)
+        .map(t => ({
+          scene_id: t.scene_id,
+          scene_idx: t.scene_idx,
+          scene_title: t.scene_title,
+          override_type: t.override_type,
+          trait_description: t.trait_description,
+          source: t.source
+        }));
+      
+      return {
+        character_key: char.character_key,
+        character_name: char.character_name,
+        base_traits: char.story_traits || char.appearance_description || null,
+        reference_image: char.reference_image_r2_url || null,
+        scene_overrides: overrides
+      };
+    });
+    
+    return c.json({
+      characters: characterSummaries
+    });
+  } catch (error) {
+    console.error('[Characters] Traits summary error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to get character traits summary'),
+      500
+    );
+  }
+});
+
+/**
+ * PUT /api/projects/:projectId/characters/:characterKey/story-traits
+ * Update story-wide traits for a character
+ */
+app.put('/projects/:projectId/characters/:characterKey/story-traits', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    const characterKey = c.req.param('characterKey');
+    const body = await c.req.json();
+    
+    const { story_traits } = body;
+    
+    await c.env.DB.prepare(`
+      UPDATE project_character_models
+      SET story_traits = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND character_key = ?
+    `).bind(story_traits || null, projectId, characterKey).run();
+    
+    const character = await c.env.DB.prepare(`
+      SELECT * FROM project_character_models
+      WHERE project_id = ? AND character_key = ?
+    `).bind(projectId, characterKey).first();
+    
+    return c.json({ character });
+  } catch (error) {
+    console.error('[Characters] Update story traits error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to update story traits'),
+      500
+    );
+  }
+});
+
 export default app;

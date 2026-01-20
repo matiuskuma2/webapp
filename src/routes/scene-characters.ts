@@ -251,4 +251,136 @@ app.post('/:sceneId/characters/batch', async (c) => {
 
 // auto-assign moved to character-models.ts
 
+/**
+ * GET /api/scenes/:sceneId/character-traits
+ * Get character trait overrides for a scene
+ */
+app.get('/:sceneId/character-traits', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    
+    const traits = await c.env.DB.prepare(`
+      SELECT 
+        sct.id, sct.scene_id, sct.character_key, sct.override_type,
+        sct.trait_description, sct.source, sct.confidence,
+        sct.created_at, sct.updated_at,
+        pcm.character_name, pcm.story_traits
+      FROM scene_character_traits sct
+      LEFT JOIN scenes s ON sct.scene_id = s.id
+      LEFT JOIN project_character_models pcm 
+        ON s.project_id = pcm.project_id AND sct.character_key = pcm.character_key
+      WHERE sct.scene_id = ?
+      ORDER BY sct.created_at ASC
+    `).bind(sceneId).all();
+
+    return c.json({
+      scene_traits: traits.results || []
+    });
+  } catch (error) {
+    console.error('[Scene Character Traits] List error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to list scene character traits'),
+      500
+    );
+  }
+});
+
+/**
+ * POST /api/scenes/:sceneId/character-traits
+ * Add a character trait override for a scene
+ * 
+ * Example: Scene 10: Bell transforms from fairy to human
+ * {
+ *   "character_key": "bell",
+ *   "override_type": "transform",
+ *   "trait_description": "人間の姿に変身した。妖精の羽は消え、普通の人間の少女の姿になっている。"
+ * }
+ */
+app.post('/:sceneId/character-traits', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    const body = await c.req.json();
+
+    const { 
+      character_key, 
+      override_type = 'transform', 
+      trait_description,
+      source = 'manual'
+    } = body;
+
+    if (!character_key || !trait_description) {
+      return c.json(
+        createErrorResponse(
+          ERROR_CODES.INVALID_REQUEST, 
+          'character_key and trait_description are required'
+        ),
+        400
+      );
+    }
+
+    // Check if override already exists for this scene and character
+    const existing = await c.env.DB.prepare(`
+      SELECT id FROM scene_character_traits
+      WHERE scene_id = ? AND character_key = ?
+    `).bind(sceneId, character_key).first();
+
+    if (existing) {
+      // Update existing
+      await c.env.DB.prepare(`
+        UPDATE scene_character_traits
+        SET override_type = ?, trait_description = ?, source = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(override_type, trait_description, source, existing.id).run();
+
+      const updated = await c.env.DB.prepare(`
+        SELECT * FROM scene_character_traits WHERE id = ?
+      `).bind(existing.id).first();
+
+      return c.json({ scene_trait: updated });
+    }
+
+    // Insert new
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scene_character_traits (scene_id, character_key, override_type, trait_description, source)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(sceneId, character_key, override_type, trait_description, source).run();
+
+    const newTrait = await c.env.DB.prepare(`
+      SELECT * FROM scene_character_traits WHERE id = ?
+    `).bind(result.meta.last_row_id).first();
+
+    return c.json({ scene_trait: newTrait }, 201);
+  } catch (error) {
+    console.error('[Scene Character Traits] Add error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to add scene character trait'),
+      500
+    );
+  }
+});
+
+/**
+ * DELETE /api/scenes/:sceneId/character-traits/:characterKey
+ * Remove a character trait override from a scene
+ */
+app.delete('/:sceneId/character-traits/:characterKey', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    const characterKey = c.req.param('characterKey');
+
+    await c.env.DB.prepare(`
+      DELETE FROM scene_character_traits
+      WHERE scene_id = ? AND character_key = ?
+    `).bind(sceneId, characterKey).run();
+
+    return c.json({ success: true });
+  } catch (error) {
+    console.error('[Scene Character Traits] Delete error:', error);
+    return c.json(
+      createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to remove scene character trait'),
+      500
+    );
+  }
+});
+
 export default app;
