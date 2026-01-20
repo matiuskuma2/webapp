@@ -1881,6 +1881,12 @@ app.get('/projects/:id', (c) => {
                 <!-- Footer -->
                 <div id="trait-modal-footer" class="bg-gray-50 px-6 py-4 rounded-b-xl flex gap-3 justify-end">
                     <button 
+                        id="trait-modal-back"
+                        class="hidden px-6 py-2 bg-gray-200 text-gray-600 rounded-lg hover:bg-gray-300 transition-colors font-semibold mr-auto"
+                    >
+                        <i class="fas fa-arrow-left mr-2"></i>戻る
+                    </button>
+                    <button 
                         id="trait-modal-cancel"
                         class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
                     >
@@ -1888,7 +1894,7 @@ app.get('/projects/:id', (c) => {
                     </button>
                     <button 
                         id="trait-modal-save"
-                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold"
+                        class="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <i class="fas fa-save mr-2"></i>保存
                     </button>

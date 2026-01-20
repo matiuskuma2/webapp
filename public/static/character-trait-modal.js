@@ -36,6 +36,8 @@
       const saveBtn = document.getElementById('trait-modal-save');
       const aiDetectBtn = document.getElementById('trait-modal-ai-detect');
       const useAiBtn = document.getElementById('trait-modal-use-ai');
+      const backBtn = document.getElementById('trait-modal-back');
+      const inputEl = document.getElementById('trait-modal-input');
       
       if (cancelBtn) {
         cancelBtn.addEventListener('click', () => this.close());
@@ -51,6 +53,15 @@
       
       if (useAiBtn) {
         useAiBtn.addEventListener('click', () => this.useAiSuggestion());
+      }
+      
+      if (backBtn) {
+        backBtn.addEventListener('click', () => this.goBackToSelection());
+      }
+      
+      // 入力欄の変更を監視して保存ボタンの状態を更新
+      if (inputEl) {
+        inputEl.addEventListener('input', () => this.updateSaveButtonState());
       }
       
       // Close on background click
@@ -353,17 +364,27 @@
       const selectStep = document.getElementById('trait-modal-step-select');
       const editStep = document.getElementById('trait-modal-step-edit');
       const saveBtn = document.getElementById('trait-modal-save');
+      const backBtn = document.getElementById('trait-modal-back');
       
       if (step === 'select') {
         selectStep?.classList.remove('hidden');
         editStep?.classList.add('hidden');
-        // キャラ選択画面では保存ボタンを非表示
+        // キャラ選択画面では保存ボタンと戻るボタンを非表示
         saveBtn?.classList.add('hidden');
+        backBtn?.classList.add('hidden');
       } else {
         selectStep?.classList.add('hidden');
         editStep?.classList.remove('hidden');
-        // 編集画面では保存ボタンを表示
+        // 編集画面では保存ボタンを表示し、入力状態で有効/無効を切り替え
         saveBtn?.classList.remove('hidden');
+        // シーン編集モードの場合は戻るボタンを表示
+        if (this.currentMode === 'scene' && this.currentSceneId) {
+          backBtn?.classList.remove('hidden');
+        } else {
+          backBtn?.classList.add('hidden');
+        }
+        // 保存ボタンの状態を更新
+        setTimeout(() => this.updateSaveButtonState(), 100);
       }
     },
     
@@ -474,6 +495,7 @@
     
     /**
      * Extract traits from text using pattern matching
+     * セリフ（「」で囲まれた部分）は除外する - 画像にテロップが付いてしまうため
      */
     extractTraitsFromText(text, characterName) {
       if (!text || !characterName) return [];
@@ -481,28 +503,40 @@
       const traits = [];
       const normalizedName = characterName.toLowerCase();
       
-      // Split into sentences
-      const sentences = text.split(/[。！？\n]/);
+      // セリフ（「」内）を除去してから処理
+      const textWithoutDialogue = text.replace(/「[^」]*」/g, '');
       
-      // Patterns for character state/appearance changes
+      // Split into sentences
+      const sentences = textWithoutDialogue.split(/[。！？\n]/);
+      
+      // Patterns for character state/appearance changes (VISUAL traits only)
       const transformPatterns = [
-        // Transformation
+        // Transformation (visual)
         { pattern: /(?:変身|変化|変わ|なっ)(?:した|て|る|ている)/, type: 'transform' },
-        // Appearance
+        // Appearance (visual)
         { pattern: /(?:姿|形|様子|表情|顔)(?:が|は|に|を)/, type: 'appearance' },
-        // Body parts
+        // Body parts (visual)
         { pattern: /(?:羽|翼|尻尾|角|髪|目|手|足)(?:が|は|を)?(?:消え|現れ|生え|伸び|縮ん|光っ|輝い)/, type: 'body' },
-        // Clothing
+        // Clothing (visual)
         { pattern: /(?:着替え|着て|纏っ|身に|脱い|装備|鎧|服|ドレス|衣装)/, type: 'clothing' },
-        // State
-        { pattern: /(?:傷|怪我|疲れ|疲弊|元気|回復|泣|笑|怒|喜)/, type: 'state' },
-        // Age/Growth
-        { pattern: /(?:成長|大人|子供|幼|老|若|年齢)/, type: 'age' },
+        // Species/Type (visual)
+        { pattern: /(?:妖精|精霊|人間|少女|少年|女性|男性|王女|王子|姫|騎士|魔女|魔法使い)/, type: 'species' },
+      ];
+      
+      // 除外するパターン（感情・行動・セリフ由来の言葉）
+      const excludePatterns = [
+        /泣い|笑っ|怒っ|喜ん|悲しん|叫ん|言っ|話し|答え/,  // 感情・行動
+        /隠せ|驚き|救い|心|想い|気持ち|願い|決意/,  // 感情表現
+        /一緒に|来い|行こう|待って|お願い|ありがとう/,  // セリフ由来
+        /した$|です$|ました$/,  // 文末
       ];
       
       for (const sentence of sentences) {
         const trimmedSentence = sentence.trim();
-        if (!trimmedSentence || trimmedSentence.length < 5) continue;
+        if (!trimmedSentence || trimmedSentence.length < 3) continue;
+        
+        // 除外パターンに該当したらスキップ
+        if (excludePatterns.some(p => p.test(trimmedSentence))) continue;
         
         // Check if character is mentioned (or if it's a general description)
         const mentionsCharacter = trimmedSentence.toLowerCase().includes(normalizedName);
@@ -520,21 +554,27 @@
                 .trim();
             }
             
-            if (extracted.length > 5 && extracted.length < 100 && !traits.includes(extracted)) {
+            // 最終チェック: 除外パターンを再度確認
+            if (excludePatterns.some(p => p.test(extracted))) continue;
+            
+            if (extracted.length >= 3 && extracted.length < 100 && !traits.includes(extracted)) {
               traits.push(extracted);
             }
             break;
           }
         }
         
-        // Also check for direct descriptions after character name
+        // Also check for direct descriptions after character name (visual only)
         if (mentionsCharacter) {
-          const directPattern = new RegExp(`${characterName}(?:は|が|の)([^。、]{5,50})`, 'gi');
+          const directPattern = new RegExp(`${characterName}(?:は|が|の)([^。、]{3,50})`, 'gi');
           let match;
           while ((match = directPattern.exec(trimmedSentence)) !== null) {
             const desc = match[1]?.trim();
-            if (desc && desc.length > 5 && !traits.includes(desc)) {
-              traits.push(desc);
+            // 除外パターンをチェック
+            if (desc && desc.length >= 3 && !traits.includes(desc)) {
+              if (!excludePatterns.some(p => p.test(desc))) {
+                traits.push(desc);
+              }
             }
           }
         }
@@ -612,9 +652,57 @@
       const suggestionsEl = document.getElementById('trait-modal-ai-suggestions');
       const inputEl = document.getElementById('trait-modal-input');
       
-      if (suggestionsEl && inputEl && suggestionsEl.dataset.traits) {
-        inputEl.value = suggestionsEl.dataset.traits;
-        this.showToast('AI検出した特徴を入力欄にコピーしました', 'success');
+      if (suggestionsEl && inputEl) {
+        const traits = suggestionsEl.dataset.traits || '';
+        if (traits) {
+          inputEl.value = traits;
+          this.showToast('AI検出した特徴を入力欄にコピーしました', 'success');
+          // 保存ボタンの状態を更新
+          this.updateSaveButtonState();
+        } else {
+          this.showToast('検出された特徴がありません。手動で入力してください。', 'warning');
+        }
+      }
+    },
+    
+    /**
+     * Go back to character selection (from edit step to select step)
+     */
+    goBackToSelection() {
+      if (this.currentMode === 'scene' && this.currentSceneId && this.currentSceneIdx) {
+        // Reset to selection mode
+        this.showStep('select');
+        this.currentMode = 'select';
+        this.currentCharacterKey = null;
+        this.currentCharacterName = null;
+        
+        // Update title
+        document.getElementById('trait-modal-title').innerHTML = 
+          `<i class="fas fa-layer-group mr-2"></i>シーン #${this.currentSceneIdx} のキャラクター特徴設定`;
+        
+        // Reload characters list
+        this.loadSceneCharacters(this.currentSceneId);
+      }
+    },
+    
+    /**
+     * Update save button state based on input
+     */
+    updateSaveButtonState() {
+      const inputEl = document.getElementById('trait-modal-input');
+      const saveBtn = document.getElementById('trait-modal-save');
+      const traitValue = inputEl?.value?.trim() || '';
+      
+      if (saveBtn) {
+        if (traitValue) {
+          saveBtn.disabled = false;
+          saveBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+          saveBtn.classList.add('hover:bg-indigo-700');
+        } else {
+          saveBtn.disabled = true;
+          saveBtn.classList.add('opacity-50', 'cursor-not-allowed');
+          saveBtn.classList.remove('hover:bg-indigo-700');
+        }
       }
     },
     
