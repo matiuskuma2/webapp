@@ -421,7 +421,6 @@ app.get('/:sceneId/edit-context', async (c) => {
         character_name,
         reference_image_r2_url,
         voice_preset_id,
-        voice_provider,
         appearance_description,
         story_traits,
         aliases_json
@@ -464,7 +463,6 @@ app.get('/:sceneId/edit-context', async (c) => {
         character_name: char.character_name,
         reference_image_r2_url: char.reference_image_r2_url,
         voice_preset_id: char.voice_preset_id,
-        voice_provider: char.voice_provider,
         appearance_description: char.appearance_description || '',
         story_traits: char.story_traits || '',
         aliases: char.aliases_json ? JSON.parse(char.aliases_json) : []
