@@ -2244,46 +2244,25 @@ function renderScenes(scenes) {
 }
 
 /**
- * Phase F-5: Open scene character edit modal
- * Uses WorldCharacterModal's assign feature, dynamically loading if needed
+ * Phase X-6: Open unified scene edit modal with character assignment + traits tabs
+ * Replaces WorldCharacterModal.openAssign with SceneEditModal
  */
 async function openSceneCharacterEdit(sceneId) {
-  // If WorldCharacterModal is not loaded, load it dynamically
-  if (!window.WorldCharacterModal || typeof window.WorldCharacterModal.openAssign !== 'function') {
-    showToast('キャラ割り当て画面を準備中...', 'info');
-    
-    try {
-      // Load required scripts dynamically
-      const scripts = [
-        '/static/world-character-client.js',
-        '/static/world-character-modal.js'
-      ];
-      
-      for (const src of scripts) {
-        if (document.querySelector(`script[src="${src}"]`)) continue;
-        await new Promise((resolve, reject) => {
-          const script = document.createElement('script');
-          script.src = src;
-          script.onload = resolve;
-          script.onerror = reject;
-          document.body.appendChild(script);
-        });
-      }
-      
-      // Wait for initialization (WorldCharacterModal may need time to setup)
-      await new Promise(resolve => setTimeout(resolve, 300));
-    } catch (err) {
-      console.error('[openSceneCharacterEdit] Failed to load WorldCharacterModal:', err);
-      showToast('キャラ割り当て機能の読み込みに失敗しました。Stylesタブを一度開いてから再試行してください。', 'error');
-      return;
+  // Use unified SceneEditModal (Phase X-6)
+  if (window.SceneEditModal && typeof window.SceneEditModal.open === 'function') {
+    await window.SceneEditModal.open(sceneId);
+    // Default to characters tab
+    if (window.SceneEditModal.switchTab) {
+      window.SceneEditModal.switchTab('characters');
     }
-  }
-  
-  // Now try to use WorldCharacterModal
-  if (window.WorldCharacterModal && typeof window.WorldCharacterModal.openAssign === 'function') {
-    window.WorldCharacterModal.openAssign(sceneId);
   } else {
-    showToast('キャラ割り当て機能が利用できません。Stylesタブを一度開いてから再試行してください。', 'warning');
+    // Fallback to old WorldCharacterModal if SceneEditModal not loaded
+    console.warn('[openSceneCharacterEdit] SceneEditModal not loaded, trying fallback');
+    if (window.WorldCharacterModal && typeof window.WorldCharacterModal.openAssign === 'function') {
+      window.WorldCharacterModal.openAssign(sceneId);
+    } else {
+      showToast('モーダルの読み込みに失敗しました。ページを再読み込みしてください。', 'error');
+    }
   }
 }
 
