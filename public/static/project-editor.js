@@ -625,20 +625,41 @@ async function loadBuilderSceneCharTraits(sceneId) {
     const sceneTraits = traitsResponse.data.scene_traits || [];
     const traitMap = new Map(sceneTraits.map(t => [t.character_key, t]));
     
-    // Render character traits
+    // Render character traits with A/B/C labels
     const html = characters.map(char => {
       const override = traitMap.get(char.character_key);
-      const baseTraits = char.story_traits || char.appearance_description || null;
+      const hasStoryTraits = char.story_traits && char.story_traits.trim();
+      const hasAppearance = char.appearance_description && char.appearance_description.trim();
+      
+      // Determine which layer is active
+      let activeLayer = 'none';
+      let displayTraits = '';
+      let layerLabel = '';
+      
+      if (override && override.trait_description) {
+        activeLayer = 'C';
+        displayTraits = override.trait_description;
+        layerLabel = '<span class="inline-flex items-center justify-center w-4 h-4 rounded text-white font-bold text-xs bg-yellow-500 mr-1">C</span>';
+      } else if (hasStoryTraits) {
+        activeLayer = 'B';
+        displayTraits = char.story_traits;
+        layerLabel = '<span class="inline-flex items-center justify-center w-4 h-4 rounded text-white font-bold text-xs bg-purple-500 mr-1">B</span>';
+      } else if (hasAppearance) {
+        activeLayer = 'A';
+        displayTraits = char.appearance_description;
+        layerLabel = '<span class="inline-flex items-center justify-center w-4 h-4 rounded text-white font-bold text-xs bg-gray-500 mr-1">A</span>';
+      }
+      
+      const bgClass = activeLayer === 'C' ? 'bg-yellow-50' : activeLayer === 'B' ? 'bg-purple-50' : '';
+      const textClass = activeLayer === 'C' ? 'text-yellow-700' : activeLayer === 'B' ? 'text-purple-700' : 'text-gray-600';
       
       return `
-        <div class="flex items-start gap-2 py-1 ${override ? 'bg-yellow-50 px-2 rounded' : ''}">
+        <div class="flex items-start gap-2 py-1 ${bgClass} px-2 rounded">
           <span class="font-semibold text-indigo-700">${escapeHtml(char.character_name || char.character_key)}:</span>
-          <span class="flex-1 ${override ? 'text-yellow-700' : 'text-gray-600'}">
-            ${override 
-              ? `<i class="fas fa-exchange-alt mr-1" title="シーン別オーバーライド"></i>${escapeHtml(override.trait_description)}`
-              : baseTraits 
-                ? escapeHtml(baseTraits) 
-                : '<span class="italic text-gray-400">特徴未設定</span>'
+          <span class="flex-1 ${textClass}">
+            ${displayTraits 
+              ? `${layerLabel}${escapeHtml(displayTraits.length > 60 ? displayTraits.substring(0, 60) + '...' : displayTraits)}`
+              : '<span class="italic text-gray-400">特徴未設定</span>'
             }
           </span>
         </div>

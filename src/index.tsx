@@ -839,9 +839,27 @@ app.get('/projects/:id', (c) => {
                             </button>
                         </div>
                         <div id="characterTraitsSummaryContent" class="hidden space-y-3">
+                            <!-- A/B/C Legend -->
+                            <div class="flex flex-wrap gap-3 text-xs mb-3 p-2 bg-white rounded border border-indigo-100">
+                                <div class="flex items-center gap-1">
+                                    <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold bg-gray-500">A</span>
+                                    <span class="text-gray-600">キャラ登録（Stylesで設定）</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold bg-purple-500">B</span>
+                                    <span class="text-purple-600">物語共通（Stylesで設定）</span>
+                                </div>
+                                <div class="flex items-center gap-1">
+                                    <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold bg-yellow-500">C</span>
+                                    <span class="text-yellow-700">シーン別（各シーンで設定）</span>
+                                </div>
+                            </div>
                             <p class="text-xs text-gray-600 mb-2">
-                                物語から抽出された共通特徴と、シーン別のオーバーライドを表示します。
-                                画像生成時、シーン別オーバーライドがあればそれが優先されます。
+                                <i class="fas fa-info-circle mr-1"></i>
+                                優先度: <strong>C > B > A</strong>（シーン別があれば最優先）
+                                <br>
+                                <i class="fas fa-exclamation-triangle mr-1 text-orange-500"></i>
+                                見た目のみ記載。セリフ・感情・行動は入れないでください。
                             </p>
                             <div id="characterTraitsList" class="space-y-2">
                                 <!-- Populated by JS -->
@@ -1928,7 +1946,7 @@ app.get('/projects/:id', (c) => {
     <script src="/static/audio-state.js"></script>
     <script src="/static/audio-ui.js"></script>
     <script src="/static/world-character-client.js"></script>
-    <script src="/static/world-character-modal.js"></script>
+    <script src="/static/world-character-modal.js?v=20260120-2"></script>
     <script src="/static/world-character-ui.js"></script>
     <script src="/static/character-library.js"></script>
     <script src="/static/scene-edit-modal.js?v=20260120-5"></script>
@@ -1936,7 +1954,7 @@ app.get('/projects/:id', (c) => {
     <!-- comic-editor v1 は凍結（Phase1.6 SSOT再構築中） -->
     <!-- <script src="/static/comic-editor.js"></script> -->
     <script src="/static/comic-editor-v2.js"></script>
-    <script src="/static/project-editor.js?v=20260120-2"></script>
+    <script src="/static/project-editor.js?v=20260120-3"></script>
 </body>
 </html>
   `)

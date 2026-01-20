@@ -242,6 +242,7 @@
     fd.append('character_name', payload.character_name || '');
     fd.append('aliases_json', JSON.stringify(payload.aliases || []));
     fd.append('appearance_description', payload.appearance_description || '');
+    fd.append('story_traits', payload.story_traits || '');
     fd.append('voice_preset_id', payload.voice_preset_id || '');
 
     if (imageFileOrNull) {
@@ -273,6 +274,7 @@
     fd.append('character_name', payload.character_name || '');
     fd.append('aliases_json', JSON.stringify(payload.aliases || []));
     fd.append('appearance_description', payload.appearance_description || '');
+    fd.append('story_traits', payload.story_traits || '');
     fd.append('voice_preset_id', payload.voice_preset_id || '');
 
     if (imageFileOrNull) {

@@ -242,25 +242,73 @@
             </div>
           </div>
 
-          <!-- ========== オプション設定（折りたたみ）========== -->
-          <details class="border border-gray-200 rounded-lg">
+          <!-- ========== 画像生成用の設定 ========== -->
+          <details class="border border-gray-200 rounded-lg" open>
             <summary class="px-4 py-3 cursor-pointer hover:bg-gray-50 font-semibold text-gray-700">
-              <i class="fas fa-cog mr-2"></i>オプション設定
+              <i class="fas fa-image mr-2"></i>画像生成用の設定
             </summary>
             <div class="px-4 pb-4 space-y-4">
-              <!-- Appearance Description -->
-              <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-1">
-                  外見・ビジュアル設定（任意）
-                </label>
+              <!-- A Layer: Base Appearance -->
+              <div class="p-3 bg-gray-50 rounded-lg border-2 border-gray-300">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="inline-flex items-center justify-center w-6 h-6 rounded text-white font-bold text-sm bg-gray-500">A</span>
+                  <label class="text-sm font-bold text-gray-700">
+                    基本の外見（キャラ登録）
+                  </label>
+                </div>
                 <textarea id="wc-appearance" 
-                  class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" 
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400" 
                   rows="2" 
                   placeholder="例: 32歳の日本人女性、黒髪ショートボブ、オフィスカジュアル"></textarea>
-                <p class="text-xs text-gray-500 mt-1">
-                  シーン画像生成時にこの情報がプロンプトに追加されます
+                <p class="text-xs text-gray-600 mt-1">
+                  <i class="fas fa-info-circle mr-1"></i>
+                  このキャラの基本的な外見。全シーンで適用されます。
+                </p>
+                <p class="text-xs text-orange-600 mt-1">
+                  <i class="fas fa-exclamation-triangle mr-1"></i>
+                  見た目のみ記載（セリフ・感情・行動は入れない）
                 </p>
               </div>
+              
+              <!-- B Layer: Story Traits -->
+              <div class="p-3 bg-purple-50 rounded-lg border-2 border-purple-300">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="inline-flex items-center justify-center w-6 h-6 rounded text-white font-bold text-sm bg-purple-500">B</span>
+                  <label class="text-sm font-bold text-purple-700">
+                    物語共通の特徴
+                  </label>
+                </div>
+                <textarea id="wc-story-traits" 
+                  class="w-full border border-purple-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-400" 
+                  rows="2" 
+                  placeholder="例: 小さな妖精、キラキラ光る羽、銀色の髪"></textarea>
+                <p class="text-xs text-purple-600 mt-1">
+                  <i class="fas fa-info-circle mr-1"></i>
+                  この物語で一貫した特徴。Aに追加して全シーンで適用。
+                </p>
+                <p class="text-xs text-orange-600 mt-1">
+                  <i class="fas fa-exclamation-triangle mr-1"></i>
+                  見た目のみ記載（セリフ・感情・行動は入れない）
+                </p>
+              </div>
+              
+              <!-- Note about C layer -->
+              <div class="p-2 bg-yellow-50 rounded border border-yellow-200">
+                <p class="text-xs text-yellow-700">
+                  <span class="inline-flex items-center justify-center w-5 h-5 rounded text-white font-bold text-xs bg-yellow-500 mr-1">C</span>
+                  <strong>シーン別の特徴</strong>は、各シーンの編集画面で設定します。
+                  <br>（例: 変身シーンで「人間の姿、羽が消えている」など）
+                </p>
+              </div>
+            </div>
+          </details>
+          
+          <!-- ========== その他の設定（折りたたみ）========== -->
+          <details class="border border-gray-200 rounded-lg">
+            <summary class="px-4 py-3 cursor-pointer hover:bg-gray-50 font-semibold text-gray-700">
+              <i class="fas fa-cog mr-2"></i>その他の設定
+            </summary>
+            <div class="px-4 pb-4 space-y-4">
 
               <!-- Aliases -->
               <div>
@@ -703,6 +751,10 @@
     appearanceEl.value = character?.appearance_description || '';
     if (appearancePromptEl) appearancePromptEl.value = character?.appearance_description || '';
     
+    // B layer: Story traits
+    const storyTraitsEl = document.getElementById('wc-story-traits');
+    if (storyTraitsEl) storyTraitsEl.value = character?.story_traits || '';
+    
     // Voice handling
     const voicePresetId = character?.voice_preset_id || '';
     if (voicePresetId.startsWith('fish:')) {
@@ -898,6 +950,7 @@
     const name = document.getElementById('wc-name').value.trim();
     const aliasesText = document.getElementById('wc-aliases').value;
     const appearance = document.getElementById('wc-appearance').value.trim();
+    const storyTraits = document.getElementById('wc-story-traits')?.value?.trim() || '';
     
     // Get voice value
     let voice = null;
@@ -953,6 +1006,7 @@
       character_name: name,
       aliases: valid.length > 0 ? valid : null,
       appearance_description: appearance || null,
+      story_traits: storyTraits || null,
       voice_preset_id: voice,
     };
 

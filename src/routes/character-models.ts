@@ -652,6 +652,7 @@ app.post('/projects/:projectId/characters/:characterKey/update', async (c) => {
     const characterName = formData.get('character_name') as string || '';
     const aliasesJsonStr = formData.get('aliases_json') as string || '[]';
     const appearanceDescription = formData.get('appearance_description') as string || '';
+    const storyTraits = formData.get('story_traits') as string || '';
     const voicePresetId = formData.get('voice_preset_id') as string || '';
     const imageFile = formData.get('image') as File | null;
 
@@ -715,6 +716,7 @@ app.post('/projects/:projectId/characters/:characterKey/update', async (c) => {
       SET character_name = ?,
           aliases_json = ?,
           appearance_description = ?,
+          story_traits = ?,
           voice_preset_id = ?,
           reference_image_r2_key = ?,
           reference_image_r2_url = ?,
@@ -724,6 +726,7 @@ app.post('/projects/:projectId/characters/:characterKey/update', async (c) => {
       characterName || null,
       aliasesJson,
       appearanceDescription || null,
+      storyTraits || null,
       voicePresetId || null,
       r2Key,
       r2Url,
