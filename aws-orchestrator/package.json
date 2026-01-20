@@ -1,0 +1,1 @@
+{"type":"module","dependencies":{"@aws-sdk/client-lambda":"^3.500.0","@aws-sdk/client-s3":"^3.500.0","@aws-sdk/s3-request-presigner":"^3.500.0"}}

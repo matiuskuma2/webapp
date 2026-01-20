@@ -1,0 +1,18 @@
+name = "webapp-cron"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# Cron Triggers - UTC 19:00 = JST 04:00 毎日実行
+[triggers]
+crons = ["0 19 * * *"]
+
+# D1 Database - webapp と同じ DB を共有
+[[d1_databases]]
+binding = "DB"
+database_name = "webapp-production"
+database_id = "51860cd3-bfa8-4eab-8a11-aa230adee686"
+
+# R2 Bucket - webapp と同じバケットを共有
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "webapp-bucket"

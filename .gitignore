@@ -1,37 +1,27 @@
-# prod
-dist/
-
-# dev
-.yarn/
-!.yarn/releases
-.vscode/*
-!.vscode/launch.json
-!.vscode/*.code-snippets
-.idea/workspace.xml
-.idea/usage.statistics.xml
-.idea/shelf
-
-# deps
+# Dependencies
 node_modules/
-.wrangler
+*/node_modules/
 
-# env
+# Build outputs
+dist/
+*/dist/
+out/
+
+# Environment
 .env
-.env.production
 .dev.vars
-
-# logs
-logs/
 *.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
 
-# misc
+# Wrangler
+.wrangler/
+
+# AWS Lambda
+*/function.zip
+function.zip
+
+# OS
 .DS_Store
 
-# test data
-test_audio.mp3
-core
+# IDE
+.idea/
+.vscode/

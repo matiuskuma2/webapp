@@ -1,0 +1,35 @@
+{
+  "name": "video-build-remotion",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "build": "remotion bundle src/index.ts --out-dir=dist",
+    "preview": "remotion preview src/index.ts",
+    "render": "remotion render src/index.ts RilarcVideo out/video.mp4",
+    "deploy": "node scripts/deploy.mjs",
+    "test-render": "node scripts/test-render.mjs",
+    "studio": "remotion studio src/index.ts"
+  },
+  "keywords": [
+    "remotion",
+    "video",
+    "rilarc"
+  ],
+  "author": "RILARC",
+  "license": "ISC",
+  "description": "RILARC Video Build - Remotion Lambda Project",
+  "dependencies": {
+    "@remotion/bundler": "^4.0.404",
+    "@remotion/cli": "^4.0.404",
+    "@remotion/lambda": "^4.0.404",
+    "@remotion/renderer": "^4.0.404",
+    "remotion": "^4.0.404",
+    "zod": "^3.22.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.6",
+    "@types/react": "^19.2.8",
+    "typescript": "^5.9.3"
+  }
+}
