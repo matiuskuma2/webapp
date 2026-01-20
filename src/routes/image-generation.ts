@@ -2,6 +2,15 @@ import { Hono } from 'hono'
 import type { Bindings } from '../types/bindings'
 import { buildImagePrompt, buildR2Key, composeStyledPrompt } from '../utils/image-prompt-builder'
 
+/**
+ * 参照画像の型定義（キャラクター一貫性用）
+ */
+interface ReferenceImage {
+  base64Data: string
+  mimeType: string
+  characterName?: string
+}
+
 const imageGeneration = new Hono<{ Bindings: Bindings }>()
 
 // POST /api/projects/:id/generate-images - バッチ画像生成
@@ -344,6 +353,8 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     
     // 6. Phase X-2: Fetch world settings and character info (Optional - no error if missing)
     let enhancedPrompt = buildImagePrompt(scene.image_prompt as string);
+    let referenceImages: ReferenceImage[] = [];
+    
     try {
       const { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
       
@@ -353,9 +364,47 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       // Enhance prompt with world + character context
       enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
       
-      console.log('[Image Gen] Phase X-2 enhancement:', {
+      // Phase X-3: キャラクター参照画像を取得
+      for (const char of characters) {
+        if (char.reference_image_r2_url) {
+          try {
+            // R2キーを抽出（/images/characters/... → images/characters/...）
+            const r2Key = char.reference_image_r2_url.startsWith('/') 
+              ? char.reference_image_r2_url.substring(1) 
+              : char.reference_image_r2_url;
+            
+            // R2から画像を取得
+            const r2Object = await c.env.R2.get(r2Key);
+            if (r2Object) {
+              const arrayBuffer = await r2Object.arrayBuffer();
+              const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+              const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
+              
+              referenceImages.push({
+                base64Data,
+                mimeType,
+                characterName: char.character_name || char.character_key
+              });
+              
+              console.log('[Image Gen] Loaded character reference:', {
+                character: char.character_name || char.character_key,
+                r2Key,
+                sizeBytes: arrayBuffer.byteLength
+              });
+            }
+          } catch (refError) {
+            console.warn('[Image Gen] Failed to load character reference image:', {
+              character: char.character_name || char.character_key,
+              error: refError
+            });
+          }
+        }
+      }
+      
+      console.log('[Image Gen] Phase X-2/X-3 enhancement:', {
         has_world: !!world,
         character_count: characters.length,
+        reference_images_loaded: referenceImages.length,
         enhanced: enhancedPrompt !== buildImagePrompt(scene.image_prompt as string)
       });
     } catch (error) {
@@ -380,11 +429,12 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       UPDATE image_generations SET status = 'generating' WHERE id = ?
     `).bind(generationId).run()
 
-    // 9. Gemini APIで画像生成（429リトライ付き）
+    // 9. Gemini APIで画像生成（キャラクター参照画像付き、429リトライ付き）
     const imageResult = await generateImageWithRetry(
       finalPrompt,
       c.env.GEMINI_API_KEY,
-      3
+      3,
+      referenceImages
     )
 
     if (!imageResult.success) {
@@ -582,10 +632,48 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     // 5. 各シーンで画像生成（順次実行）
     let successCount = 0
     let failedCount = 0
+    
+    // ヘルパー関数をインポート
+    const { fetchSceneCharacters } = await import('../utils/world-character-helper');
 
     for (const scene of targetScenes) {
       try {
         const finalPrompt = buildImagePrompt(scene.image_prompt as string)
+        
+        // Phase X-3: キャラクター参照画像を取得
+        let referenceImages: ReferenceImage[] = [];
+        try {
+          const characters = await fetchSceneCharacters(c.env.DB, scene.id as number);
+          
+          for (const char of characters) {
+            if (char.reference_image_r2_url) {
+              try {
+                const r2Key = char.reference_image_r2_url.startsWith('/') 
+                  ? char.reference_image_r2_url.substring(1) 
+                  : char.reference_image_r2_url;
+                
+                const r2Object = await c.env.R2.get(r2Key);
+                if (r2Object) {
+                  const arrayBuffer = await r2Object.arrayBuffer();
+                  const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+                  const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
+                  
+                  referenceImages.push({
+                    base64Data,
+                    mimeType,
+                    characterName: char.character_name || char.character_key
+                  });
+                }
+              } catch (refError) {
+                console.warn(`[Batch Image Gen] Failed to load ref for ${char.character_key}:`, refError);
+              }
+            }
+          }
+          
+          console.log(`[Batch Image Gen] Scene ${scene.id}: ${referenceImages.length} character refs loaded`);
+        } catch (charError) {
+          console.warn(`[Batch Image Gen] Failed to fetch characters for scene ${scene.id}:`, charError);
+        }
 
         // image_generationsレコード作成
         const insertResult = await c.env.DB.prepare(`
@@ -596,11 +684,12 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
         const generationId = insertResult.meta.last_row_id as number
 
-        // Gemini APIで画像生成
+        // Gemini APIで画像生成（キャラクター参照画像付き）
         const imageResult = await generateImageWithRetry(
           finalPrompt,
           c.env.GEMINI_API_KEY,
-          3
+          3,
+          referenceImages
         )
 
         if (!imageResult.success) {
@@ -673,11 +762,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 /**
  * Gemini APIで画像生成（429リトライ付き）
  * 公式仕様: generateContent エンドポイント
+ * キャラクター参照画像をサポート（最大5枚）
  */
 async function generateImageWithRetry(
   prompt: string,
   apiKey: string,
-  maxRetries: number = 3
+  maxRetries: number = 3,
+  referenceImages: ReferenceImage[] = []
 ): Promise<{
   success: boolean
   imageData?: ArrayBuffer
@@ -687,6 +778,43 @@ async function generateImageWithRetry(
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
+      // パーツを構築：参照画像 + テキストプロンプト
+      const parts: any[] = []
+      
+      // キャラクター参照画像を追加（最大5枚）
+      const limitedImages = referenceImages.slice(0, 5)
+      for (const refImg of limitedImages) {
+        parts.push({
+          inline_data: {
+            data: refImg.base64Data,
+            mime_type: refImg.mimeType
+          }
+        })
+      }
+      
+      // キャラクター参照の説明をプロンプトに追加
+      let enhancedPrompt = prompt
+      if (limitedImages.length > 0) {
+        const charNames = limitedImages
+          .filter(img => img.characterName)
+          .map(img => img.characterName)
+          .join(', ')
+        if (charNames) {
+          enhancedPrompt = `Using the provided reference images for character consistency (${charNames}), generate: ${prompt}`
+        } else {
+          enhancedPrompt = `Using the provided reference images for character consistency, generate: ${prompt}`
+        }
+      }
+      
+      // テキストプロンプトを追加
+      parts.push({ text: enhancedPrompt })
+      
+      console.log('[Gemini Image Gen] Request:', {
+        referenceImageCount: limitedImages.length,
+        promptLength: enhancedPrompt.length,
+        hasCharacterRefs: limitedImages.some(img => img.characterName)
+      })
+
       // Gemini API公式仕様: generateContent
       const response = await fetch(
         'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
@@ -699,11 +827,7 @@ async function generateImageWithRetry(
           body: JSON.stringify({
             contents: [
               {
-                parts: [
-                  {
-                    text: prompt
-                  }
-                ]
+                parts: parts
               }
             ],
             generationConfig: {
