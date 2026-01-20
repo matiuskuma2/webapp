@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-20（speech_type判定 + reset-to-input安全化 + ElevenLabs有効化）
+- **最終更新**: 2026-01-20（キャラクター特徴管理 + シーン別オーバーライド + 画像生成改善）
 
 ---
 
@@ -417,6 +417,56 @@ npx wrangler d1 migrations apply webapp-production --remote
 - S3署名付きURL期限切れハンドリング
 - 音声再生成連打防止（確認ダイアログ）
 - Google Fonts追加ロード（手書きフォント対応）
+
+### Phase X-4/X-5: キャラクター特徴管理システム
+
+#### 概要
+キャラクターの一貫した描写を実現するため、物語全体の共通特徴とシーン別オーバーライドを管理。
+
+#### 優先順位（画像生成時）
+1. **参照画像** - 常に使用（視覚的一貫性維持）
+2. **シーン別オーバーライド** - あれば最優先
+3. **共通特徴（story_traits）** - 物語全体で適用
+4. **appearance_description** - 手動設定の外見説明
+5. **日本語テキスト指示** - デフォルト追加（カスタムプロンプト時はスキップ）
+
+#### データモデル
+```
+project_character_models
+├── character_key, character_name
+├── appearance_description (手動設定)
+├── story_traits (物語全体の特徴)
+└── reference_image_r2_url (参照画像)
+
+scene_character_traits
+├── scene_id, character_key
+├── override_type ('transform' など)
+└── trait_description (シーン別特徴)
+
+scenes
+└── is_prompt_customized (0/1) - カスタムプロンプトフラグ
+```
+
+#### 機能
+1. **キャラクター特徴サマリー表示**: シーン分割画面で全キャラの共通特徴とシーン別オーバーライドを一覧表示
+2. **シーン別オーバーライド追加**: 各シーンで「シーン別特徴を追加」ボタンから設定可能
+3. **カスタムプロンプト対応**: Builderでプロンプト編集時は日本語指示・自動特徴追加をスキップ
+4. **自動特徴抽出**: シーン分割時にダイアログからキャラクター特徴を自動抽出
+
+#### 使用例
+```
+キャラクター: ベル
+共通特徴: 小さな妖精、キラキラと光る羽、青いドレス
+シーン別オーバーライド:
+  #10: 人間の姿に変身。妖精の羽は消え、普通の少女の姿
+```
+
+#### API
+- `GET /api/projects/:id/character-traits-summary` - 特徴サマリー取得
+- `PUT /api/projects/:id/characters/:key/story-traits` - 共通特徴更新
+- `GET /api/scenes/:id/character-traits` - シーン別オーバーライド取得
+- `POST /api/scenes/:id/character-traits` - シーン別オーバーライド追加
+- `DELETE /api/scenes/:id/character-traits/:key` - シーン別オーバーライド削除
 
 ---
 
