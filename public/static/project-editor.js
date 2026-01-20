@@ -2180,18 +2180,16 @@ function renderScenes(scenes) {
                 const activeTrait = hasC ? c.scene_trait : (hasB ? c.story_traits : (hasA ? c.appearance_description : null));
                 const activeLayer = hasC ? 'C' : (hasB ? 'B' : (hasA ? 'A' : null));
                 const layerColors = { 'C': 'bg-yellow-100 text-yellow-800 border-yellow-300', 'B': 'bg-purple-100 text-purple-800 border-purple-300', 'A': 'bg-gray-100 text-gray-600 border-gray-300' };
-                const layerBadge = activeLayer ? \`<span class="px-1 py-0.5 text-xs rounded border \${layerColors[activeLayer]}">\${activeLayer}</span>\` : '';
-                return \`
-                  <div class="text-xs bg-gray-50 rounded p-2 border border-gray-100">
-                    <div class="flex items-center gap-1 mb-1">
-                      \${layerBadge}
-                      <span class="font-medium text-gray-700">\${escapeHtml(c.character_name || c.character_key)}</span>
-                    </div>
-                    <div class="text-gray-600 truncate" title="\${activeTrait ? escapeHtml(activeTrait) : '特徴未設定'}">
-                      \${activeTrait ? escapeHtml(activeTrait.substring(0, 50)) + (activeTrait.length > 50 ? '...' : '') : '<span class="text-gray-400 italic">特徴未設定</span>'}
-                    </div>
-                  </div>
-                \`;
+                const layerBadge = activeLayer ? '<span class="px-1 py-0.5 text-xs rounded border ' + layerColors[activeLayer] + '">' + activeLayer + '</span>' : '';
+                return '<div class="text-xs bg-gray-50 rounded p-2 border border-gray-100">' +
+                  '<div class="flex items-center gap-1 mb-1">' +
+                    layerBadge +
+                    '<span class="font-medium text-gray-700">' + escapeHtml(c.character_name || c.character_key) + '</span>' +
+                  '</div>' +
+                  '<div class="text-gray-600 truncate" title="' + (activeTrait ? escapeHtml(activeTrait) : '特徴未設定') + '">' +
+                    (activeTrait ? escapeHtml(activeTrait.substring(0, 50)) + (activeTrait.length > 50 ? '...' : '') : '<span class="text-gray-400 italic">特徴未設定</span>') +
+                  '</div>' +
+                '</div>';
               }).join('')}
             </div>
           </div>
