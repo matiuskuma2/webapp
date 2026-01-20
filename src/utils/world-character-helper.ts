@@ -108,11 +108,19 @@ export async function fetchSceneCharacters(
  * Enhance prompt with world settings and character info
  * Phase X-2: Safely adds world/character context without breaking existing prompts
  * Phase X-4: Supports scene-specific trait overrides
+ * Phase X-7: A/B/C layer composition (Identity + State)
  * 
- * Priority for character description:
- * 1. scene_override (if set) - シーン別の特徴（例：妖精→人間の変身）
- * 2. story_traits - 物語全体で抽出された特徴
- * 3. appearance_description - 手動設定された外見説明
+ * Character Layer System (確定仕様):
+ * - A層 (Identity/本人性): appearance_description + 参照画像
+ *   → 常に含める。崩れると別キャラになる。消えない/上書きされない/抜け落ちない
+ * - B層 (State/通常状態): story_traits
+ *   → Aを前提として上に重なる。通常状態の補足（妖精/小さい/羽がある等）
+ * - C層 (Exception/例外状態): scene_override
+ *   → Aを維持しつつ、Bを一時的に上書き（人間に変身/羽が消えている等）
+ * 
+ * Composition Rule:
+ * - Cがない場合: A + B（通常）
+ * - Cがある場合: A + C（Bは無効化）
  * 
  * @param basePrompt - Original scene prompt
  * @param world - World settings (optional)
@@ -131,15 +139,40 @@ export function enhancePromptWithWorldAndCharacters(
     enhancements.push(world.prompt_prefix);
   }
   
-  // Phase X-4: Add character descriptions with override support
+  // Phase X-7: Character layer composition (A/B/C)
   if (characters.length > 0) {
     const characterDescriptions = characters
-      .filter(c => c.scene_override || c.story_traits || c.appearance_description)
+      .filter(c => c.appearance_description || c.story_traits || c.scene_override)
       .map(c => {
         const prefix = c.is_primary ? '[Main Character]' : '[Character]';
-        // Priority: scene_override > story_traits > appearance_description
-        const description = c.scene_override || c.story_traits || c.appearance_description;
-        return `${prefix} ${c.character_name}: ${description}`;
+        
+        // A層: Identity（本人性）- 常に含める
+        const identityPart = c.appearance_description || '';
+        
+        // 状態部分: CがあればC、なければB
+        // C層: 例外状態（Bを上書き）
+        // B層: 通常状態（Aの補足）
+        const statePart = c.scene_override || c.story_traits || '';
+        
+        // 合成: A + (C || B)
+        // Aが空でもキャラ名は出力（参照画像がA層の実体として機能）
+        const parts: string[] = [];
+        if (identityPart) {
+          parts.push(identityPart);
+        }
+        if (statePart) {
+          parts.push(statePart);
+        }
+        
+        const description = parts.join('。');
+        
+        // キャラ名は必ず含める（参照画像との紐付け）
+        if (description) {
+          return `${prefix} ${c.character_name}: ${description}`;
+        } else {
+          // A/B/C全て空でもキャラ名だけは出す（参照画像で本人性を担保）
+          return `${prefix} ${c.character_name}`;
+        }
       })
       .join(', ');
     
