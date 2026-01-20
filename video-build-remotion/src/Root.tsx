@@ -12,7 +12,7 @@ const defaultProjectJson: ProjectJson = {
   created_at: new Date().toISOString(),
   build_settings: {
     preset: 'youtube_standard',
-    resolution: { width: 1920, height: 1080 },
+    resolution: { width: 1080, height: 1920 },  // 9:16 デフォルト
     fps: 30,
     codec: 'h264',
   },
@@ -34,9 +34,9 @@ const defaultProjectJson: ProjectJson = {
       },
       assets: {
         image: {
-          url: 'https://via.placeholder.com/1920x1080/3b82f6/ffffff?text=Scene+1',
-          width: 1920,
-          height: 1080,
+          url: 'https://via.placeholder.com/1080x1920/3b82f6/ffffff?text=Scene+1',
+          width: 1080,
+          height: 1920,
         },
       },
     },
@@ -53,9 +53,9 @@ const defaultProjectJson: ProjectJson = {
       },
       assets: {
         image: {
-          url: 'https://via.placeholder.com/1920x1080/10b981/ffffff?text=Scene+2',
-          width: 1920,
-          height: 1080,
+          url: 'https://via.placeholder.com/1080x1920/10b981/ffffff?text=Scene+2',
+          width: 1080,
+          height: 1920,
         },
       },
     },
@@ -72,9 +72,9 @@ const defaultProjectJson: ProjectJson = {
       },
       assets: {
         image: {
-          url: 'https://via.placeholder.com/1920x1080/f59e0b/ffffff?text=Scene+3',
-          width: 1920,
-          height: 1080,
+          url: 'https://via.placeholder.com/1080x1920/f59e0b/ffffff?text=Scene+3',
+          width: 1080,
+          height: 1920,
         },
       },
     },
@@ -87,19 +87,30 @@ const defaultProjectJson: ProjectJson = {
   },
 };
 
+/**
+ * calculateMetadata を使用して動的に Composition のメタデータを計算
+ * これにより inputProps から渡された projectJson に基づいて
+ * durationInFrames, width, height, fps が決定される
+ */
 export const RilarcRoot: React.FC = () => {
   return (
     <>
       <Composition
         id="RilarcVideo"
         component={RilarcVideo}
-        durationInFrames={calculateTotalFrames(
-          defaultProjectJson.summary.total_duration_ms,
-          defaultProjectJson.build_settings.fps
-        )}
-        fps={defaultProjectJson.build_settings.fps}
-        width={defaultProjectJson.build_settings.resolution.width}
-        height={defaultProjectJson.build_settings.resolution.height}
+        calculateMetadata={({ props }) => {
+          const pj = props.projectJson;
+          const fps = pj.build_settings.fps;
+          const totalDurationMs = pj.summary.total_duration_ms;
+          const durationInFrames = calculateTotalFrames(totalDurationMs, fps);
+          
+          return {
+            durationInFrames,
+            fps,
+            width: pj.build_settings.resolution.width,
+            height: pj.build_settings.resolution.height,
+          };
+        }}
         defaultProps={{
           projectJson: defaultProjectJson,
         }}
