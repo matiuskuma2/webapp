@@ -2083,11 +2083,12 @@ function renderScenes(scenes) {
           <div class="mt-2 pt-2 border-t border-gray-200">
             <button 
               onclick="openAddSceneTraitOverride(${scene.id}, ${scene.idx})"
-              class="text-xs px-2 py-1 bg-yellow-100 text-yellow-700 rounded hover:bg-yellow-200 transition-colors"
-              title="このシーンだけの特徴変化を設定（例: 妖精→人間の変身）"
+              class="text-xs px-3 py-1.5 bg-yellow-100 text-yellow-700 rounded-lg hover:bg-yellow-200 transition-colors border border-yellow-200"
+              title="変身・衣装変更・状態変化など、このシーンでのみ異なる描写が必要な場合に設定"
             >
-              <i class="fas fa-layer-group mr-1"></i>シーン別特徴を追加
+              <i class="fas fa-magic mr-1"></i>シーン別の特徴変化を設定
             </button>
+            <span class="ml-2 text-xs text-gray-400">変身・衣装変更・状態変化など</span>
           </div>
         ` : ''}
       </div>
