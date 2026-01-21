@@ -1428,9 +1428,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       }, 409);
     }
     
-    // 3. シーンデータ取得（display_asset_type + R2 text_render_mode + 素材情報）
+    // 3. シーンデータ取得（display_asset_type + 素材情報）
     const { results: rawScenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, display_asset_type, comic_data, text_render_mode
+      SELECT id, idx, role, title, dialogue, display_asset_type, comic_data
       FROM scenes
       WHERE project_id = ?
       ORDER BY idx ASC
@@ -1537,78 +1537,6 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           audio_url: u.audio_url ? toAbsoluteUrl(u.audio_url, siteUrl) : null,
         }));
         
-        // R2-A: scene_balloons を取得（utterance と同期で表示）
-        const { results: balloonRows } = await c.env.DB.prepare(`
-          SELECT 
-            id, utterance_id, x, y, w, h,
-            shape, display_mode, start_ms, end_ms,
-            tail_enabled, tail_tip_x, tail_tip_y,
-            writing_mode, text_align,
-            font_family, font_weight, font_size, line_height,
-            padding, bg_color, text_color, border_color, border_width,
-            z_index
-          FROM scene_balloons
-          WHERE scene_id = ?
-          ORDER BY z_index ASC, id ASC
-        `).bind(scene.id).all<{
-          id: number;
-          utterance_id: number | null;
-          x: number;
-          y: number;
-          w: number;
-          h: number;
-          shape: string;
-          display_mode: string;
-          start_ms: number | null;
-          end_ms: number | null;
-          tail_enabled: number;
-          tail_tip_x: number | null;
-          tail_tip_y: number | null;
-          writing_mode: string;
-          text_align: string;
-          font_family: string | null;
-          font_weight: number | null;
-          font_size: number | null;
-          line_height: number | null;
-          padding: number | null;
-          bg_color: string | null;
-          text_color: string | null;
-          border_color: string | null;
-          border_width: number | null;
-          z_index: number;
-        }>();
-        
-        const balloons = balloonRows.map(b => ({
-          id: b.id,
-          utterance_id: b.utterance_id,
-          position: { x: b.x, y: b.y },
-          size: { w: b.w, h: b.h },
-          shape: b.shape as 'round' | 'square' | 'thought' | 'shout' | 'caption',
-          display_mode: b.display_mode as 'voice_window' | 'manual_window',
-          timing: b.display_mode === 'manual_window' 
-            ? { start_ms: b.start_ms, end_ms: b.end_ms }
-            : null, // voice_window の場合は utterance から取得
-          tail: {
-            enabled: b.tail_enabled === 1,
-            tip_x: b.tail_tip_x ?? 0.5,
-            tip_y: b.tail_tip_y ?? 1.2,
-          },
-          style: {
-            writing_mode: b.writing_mode || 'horizontal',
-            text_align: b.text_align || 'center',
-            font_family: b.font_family || 'sans-serif',
-            font_weight: b.font_weight || 700,
-            font_size: b.font_size || 24,
-            line_height: b.line_height || 1.4,
-            padding: b.padding || 12,
-            bg_color: b.bg_color || '#FFFFFF',
-            text_color: b.text_color || '#000000',
-            border_color: b.border_color || '#000000',
-            border_width: b.border_width || 2,
-          },
-          z_index: b.z_index,
-        }));
-        
         return {
           id: scene.id,
           idx: scene.idx,
@@ -1616,8 +1544,6 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           title: scene.title || '',
           dialogue: scene.dialogue || '',
           display_asset_type: scene.display_asset_type || 'image',
-          // R2: text_render_mode（remotion / baked / none）
-          text_render_mode: scene.text_render_mode || 'remotion',
           // Convert all R2 URLs to absolute URLs for Remotion Lambda
           active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: toAbsoluteUrl(activeImage.r2_url, siteUrl) } : null,
           active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: toAbsoluteUrl(activeComic.r2_url, siteUrl) } : null,
@@ -1632,8 +1558,6 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           comic_data: comicData,
           // R1.5: utterances（SSOT）
           utterances: utterances.length > 0 ? utterances : null,
-          // R2-A: balloons（utterance 連動）
-          balloons: balloons.length > 0 ? balloons : null,
         };
       })
     );
