@@ -24,6 +24,7 @@ import settings from './routes/settings' // User settings & API keys
 import auth from './routes/auth' // Authentication
 import admin from './routes/admin' // Admin API routes
 import comic from './routes/comic' // Phase1.5: Comic editor API
+import utterances from './routes/utterances' // R1.5: Scene utterances API
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -59,6 +60,7 @@ app.route('/api', audioGeneration) // For /api/scenes/:id/audio, /api/audio/:aud
 app.route('/api/scenes', sceneCharacters) // For /api/scenes/:sceneId/characters - MUST be before generic /api/scenes/:id
 app.route('/api/scenes', videoGeneration) // For /api/scenes/:sceneId/videos - MUST be before generic /api/scenes/:id
 app.route('/api/scenes', comic) // For /api/scenes/:id/comic/* - Phase1.5 comic editor
+app.route('/api', utterances) // R1.5: For /api/scenes/:sceneId/utterances, /api/utterances/:id
 app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate
@@ -1670,7 +1672,12 @@ app.get('/projects/:id', (c) => {
                         <!-- Dynamically populated -->
                     </div>
                     
-                    <!-- Tab B: Character Traits -->
+                    <!-- Tab B: Utterances (R1.5 音声タブ) -->
+                    <div id="scene-edit-tab-utterances" class="hidden space-y-4">
+                        <!-- Dynamically populated by UtterancesTab -->
+                    </div>
+                    
+                    <!-- Tab C: Character Traits -->
                     <div id="scene-edit-tab-traits" class="hidden space-y-4">
                         <!-- Dynamically populated -->
                     </div>
@@ -1949,7 +1956,8 @@ app.get('/projects/:id', (c) => {
     <script src="/static/world-character-modal.js?v=20260120-2"></script>
     <script src="/static/world-character-ui.js"></script>
     <script src="/static/character-library.js"></script>
-    <script src="/static/scene-edit-modal.js?v=20260120-5"></script>
+    <script src="/static/scene-edit-modal.js?v=20260121-1"></script>
+    <script src="/static/utterances-tab.js?v=20260121-1"></script>
     <script src="/static/character-trait-modal.js?v=20260120-2"></script>
     <!-- comic-editor v1 は凍結（Phase1.6 SSOT再構築中） -->
     <!-- <script src="/static/comic-editor.js"></script> -->

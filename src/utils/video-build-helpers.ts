@@ -154,6 +154,18 @@ export interface SceneData {
     }>;
     base_image_generation_id?: number;
   } | null;
+  // R1.5: scene_utterances から読み込んだ発話リスト
+  utterances?: Array<{
+    id: number;
+    order_no: number;
+    role: 'narration' | 'dialogue';
+    character_key: string | null;
+    character_name?: string | null;
+    text: string;
+    audio_generation_id: number | null;
+    duration_ms: number | null;
+    audio_url?: string | null;
+  }> | null;
 }
 
 export interface ProjectData {
@@ -657,8 +669,57 @@ export function buildProjectJson(
     // 1. voices[] 構築 - R1.5の核心
     const voices: VoiceAsset[] = [];
     
-    // 既存の audio を voice に変換（後方互換）
-    if (scene.active_audio?.audio_url) {
+    // R1.5: scene_utterances があればそこから voices を構築（SSOT優先）
+    if (scene.utterances && scene.utterances.length > 0) {
+      let voiceStartMs = 0;
+      for (const utt of scene.utterances) {
+        // 音声URLがあるutteranceのみ voices に追加
+        if (utt.audio_url && utt.duration_ms) {
+          hasAudio = true;
+          
+          voices.push({
+            id: `voice-utt-${utt.id}`,
+            role: utt.role,
+            character_key: utt.character_key || null,
+            character_name: utt.character_name || null,
+            audio_url: utt.audio_url,
+            duration_ms: utt.duration_ms,
+            text: utt.text || '',
+            start_ms: voiceStartMs,
+            format: 'mp3',
+          });
+          
+          voiceStartMs += utt.duration_ms;
+        } else {
+          // 音声なしでもテキストがあればvoicesに追加（字幕用）
+          // start_ms は推定値を使用
+          const estimatedDuration = Math.max(
+            MIN_DURATION_MS,
+            (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
+          );
+          
+          voices.push({
+            id: `voice-utt-${utt.id}`,
+            role: utt.role,
+            character_key: utt.character_key || null,
+            character_name: utt.character_name || null,
+            audio_url: '', // 空の場合は再生しない
+            duration_ms: estimatedDuration,
+            text: utt.text || '',
+            start_ms: voiceStartMs,
+            format: 'mp3',
+          });
+          
+          voiceStartMs += estimatedDuration;
+        }
+      }
+      
+      if (voices.length > 0) {
+        scenesWithVoices++;
+      }
+    }
+    // R1.5 fallback: utterances がない場合、既存の active_audio を voice に変換（後方互換）
+    else if (scene.active_audio?.audio_url) {
       hasAudio = true;
       scenesWithVoices++;
       

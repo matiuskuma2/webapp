@@ -1,0 +1,674 @@
+// src/routes/utterances.ts
+// R1.5: Scene Utterances API (Multi-speaker audio SSOT)
+import { Hono } from 'hono';
+import type { Bindings } from '../types/bindings';
+import { createErrorResponse } from '../utils/error-response';
+
+const utterances = new Hono<{ Bindings: Bindings }>();
+
+// =============================================================================
+// Types
+// =============================================================================
+
+interface Utterance {
+  id: number;
+  scene_id: number;
+  order_no: number;
+  role: 'narration' | 'dialogue';
+  character_key: string | null;
+  text: string;
+  audio_generation_id: number | null;
+  duration_ms: number | null;
+  audio_url?: string | null;
+  character_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AssignedCharacter {
+  character_key: string;
+  name: string;
+  voice_preset_id?: string | null;
+}
+
+// =============================================================================
+// Helper: Lazy Migration
+// Creates a default utterance from scene.dialogue if no utterances exist
+// =============================================================================
+
+async function lazyMigrateSceneUtterances(
+  db: D1Database,
+  sceneId: number,
+  dialogue: string | null,
+  activeAudioId: number | null
+): Promise<void> {
+  // Check if utterances exist
+  const existing = await db.prepare(`
+    SELECT COUNT(*) as count FROM scene_utterances WHERE scene_id = ?
+  `).bind(sceneId).first<{ count: number }>();
+
+  if (existing && existing.count > 0) {
+    return; // Already has utterances
+  }
+
+  // No utterances exist - create default narration utterance
+  const text = dialogue || '';
+  
+  // Get duration from active audio if exists
+  let durationMs: number | null = null;
+  if (activeAudioId) {
+    const audio = await db.prepare(`
+      SELECT duration_ms FROM audio_generations WHERE id = ?
+    `).bind(activeAudioId).first<{ duration_ms: number | null }>();
+    if (audio) {
+      durationMs = audio.duration_ms;
+    }
+  }
+
+  await db.prepare(`
+    INSERT INTO scene_utterances (
+      scene_id, order_no, role, character_key, text, audio_generation_id, duration_ms
+    ) VALUES (?, 1, 'narration', NULL, ?, ?, ?)
+  `).bind(sceneId, text, activeAudioId, durationMs).run();
+
+  console.log(`[Utterances] Lazy migrated scene ${sceneId} - created default narration utterance`);
+}
+
+// =============================================================================
+// GET /api/scenes/:sceneId/utterances
+// Returns utterances with assigned characters for the scene
+// =============================================================================
+
+utterances.get('/scenes/:sceneId/utterances', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    if (!Number.isFinite(sceneId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid scene id'), 400);
+    }
+
+    // Get scene with project_id and dialogue
+    const scene = await c.env.DB.prepare(`
+      SELECT s.id, s.project_id, s.dialogue
+      FROM scenes s
+      WHERE s.id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number; dialogue: string }>();
+
+    if (!scene) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Scene not found'), 404);
+    }
+
+    // Get active audio for lazy migration
+    const activeAudio = await c.env.DB.prepare(`
+      SELECT id FROM audio_generations
+      WHERE scene_id = ? AND is_active = 1
+      ORDER BY created_at DESC
+      LIMIT 1
+    `).bind(sceneId).first<{ id: number }>();
+
+    // Lazy migrate if needed
+    await lazyMigrateSceneUtterances(
+      c.env.DB,
+      sceneId,
+      scene.dialogue,
+      activeAudio?.id || null
+    );
+
+    // Get utterances with audio info
+    const { results: utteranceRows } = await c.env.DB.prepare(`
+      SELECT 
+        u.id,
+        u.scene_id,
+        u.order_no,
+        u.role,
+        u.character_key,
+        u.text,
+        u.audio_generation_id,
+        u.duration_ms,
+        u.created_at,
+        u.updated_at,
+        ag.r2_url as audio_url,
+        pcm.character_name
+      FROM scene_utterances u
+      LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+      LEFT JOIN project_character_models pcm 
+        ON u.character_key = pcm.character_key AND pcm.project_id = ?
+      WHERE u.scene_id = ?
+      ORDER BY u.order_no ASC
+    `).bind(scene.project_id, sceneId).all<any>();
+
+    // Get assigned characters for this scene
+    const { results: characterRows } = await c.env.DB.prepare(`
+      SELECT 
+        scm.character_key,
+        pcm.character_name as name,
+        pcm.voice_preset_id
+      FROM scene_character_map scm
+      LEFT JOIN project_character_models pcm 
+        ON scm.character_key = pcm.character_key AND pcm.project_id = ?
+      WHERE scm.scene_id = ?
+    `).bind(scene.project_id, sceneId).all<any>();
+
+    const utterancesList: Utterance[] = utteranceRows.map(row => ({
+      id: row.id,
+      scene_id: row.scene_id,
+      order_no: row.order_no,
+      role: row.role,
+      character_key: row.character_key,
+      text: row.text,
+      audio_generation_id: row.audio_generation_id,
+      duration_ms: row.duration_ms,
+      audio_url: row.audio_url,
+      character_name: row.character_name,
+      created_at: row.created_at,
+      updated_at: row.updated_at
+    }));
+
+    const assignedCharacters: AssignedCharacter[] = characterRows.map(row => ({
+      character_key: row.character_key,
+      name: row.name || row.character_key,
+      voice_preset_id: row.voice_preset_id
+    }));
+
+    return c.json({
+      scene_id: sceneId,
+      project_id: scene.project_id,
+      assigned_characters: assignedCharacters,
+      utterances: utterancesList
+    });
+
+  } catch (error) {
+    console.error('[GET /api/scenes/:sceneId/utterances] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to fetch utterances'), 500);
+  }
+});
+
+// =============================================================================
+// POST /api/scenes/:sceneId/utterances
+// Create a new utterance
+// =============================================================================
+
+utterances.post('/scenes/:sceneId/utterances', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    if (!Number.isFinite(sceneId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid scene id'), 400);
+    }
+
+    const body = await c.req.json().catch(() => ({} as any));
+    const { role, character_key, text } = body;
+
+    // Validate role
+    if (!role || !['narration', 'dialogue'].includes(role)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'role must be "narration" or "dialogue"'), 400);
+    }
+
+    // Validate text
+    if (!text || typeof text !== 'string' || text.trim().length === 0) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'text is required and cannot be empty'), 400);
+    }
+
+    // Get scene with project_id
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id FROM scenes WHERE id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number }>();
+
+    if (!scene) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Scene not found'), 404);
+    }
+
+    // Validate character_key based on role
+    if (role === 'narration') {
+      // narration must have null character_key
+      if (character_key !== null && character_key !== undefined) {
+        return c.json(createErrorResponse('INVALID_REQUEST', 'character_key must be null for narration'), 400);
+      }
+    } else if (role === 'dialogue') {
+      // dialogue must have character_key that exists in scene_character_map
+      if (!character_key) {
+        return c.json(createErrorResponse('INVALID_REQUEST', 'character_key is required for dialogue'), 400);
+      }
+
+      const charExists = await c.env.DB.prepare(`
+        SELECT 1 FROM scene_character_map WHERE scene_id = ? AND character_key = ?
+      `).bind(sceneId, character_key).first();
+
+      if (!charExists) {
+        return c.json(createErrorResponse('INVALID_REQUEST', `character_key "${character_key}" is not assigned to this scene`), 400);
+      }
+    }
+
+    // Get next order_no
+    const maxOrder = await c.env.DB.prepare(`
+      SELECT MAX(order_no) as max_order FROM scene_utterances WHERE scene_id = ?
+    `).bind(sceneId).first<{ max_order: number | null }>();
+
+    const nextOrderNo = (maxOrder?.max_order || 0) + 1;
+
+    // Insert utterance
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scene_utterances (
+        scene_id, order_no, role, character_key, text
+      ) VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      sceneId,
+      nextOrderNo,
+      role,
+      role === 'narration' ? null : character_key,
+      text.trim()
+    ).run();
+
+    // Get the inserted utterance
+    const inserted = await c.env.DB.prepare(`
+      SELECT 
+        u.id,
+        u.scene_id,
+        u.order_no,
+        u.role,
+        u.character_key,
+        u.text,
+        u.audio_generation_id,
+        u.duration_ms,
+        u.created_at,
+        u.updated_at,
+        pcm.character_name
+      FROM scene_utterances u
+      LEFT JOIN project_character_models pcm 
+        ON u.character_key = pcm.character_key AND pcm.project_id = ?
+      WHERE u.id = ?
+    `).bind(scene.project_id, result.meta.last_row_id).first<any>();
+
+    return c.json({
+      success: true,
+      utterance: {
+        id: inserted.id,
+        scene_id: inserted.scene_id,
+        order_no: inserted.order_no,
+        role: inserted.role,
+        character_key: inserted.character_key,
+        text: inserted.text,
+        audio_generation_id: inserted.audio_generation_id,
+        duration_ms: inserted.duration_ms,
+        audio_url: null,
+        character_name: inserted.character_name,
+        created_at: inserted.created_at,
+        updated_at: inserted.updated_at
+      }
+    }, 201);
+
+  } catch (error) {
+    console.error('[POST /api/scenes/:sceneId/utterances] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to create utterance'), 500);
+  }
+});
+
+// =============================================================================
+// PUT /api/utterances/:utteranceId
+// Update an existing utterance
+// =============================================================================
+
+utterances.put('/utterances/:utteranceId', async (c) => {
+  try {
+    const utteranceId = Number(c.req.param('utteranceId'));
+    if (!Number.isFinite(utteranceId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid utterance id'), 400);
+    }
+
+    const body = await c.req.json().catch(() => ({} as any));
+    const { role, character_key, text } = body;
+
+    // Get existing utterance with scene and project info
+    const existing = await c.env.DB.prepare(`
+      SELECT u.*, s.project_id
+      FROM scene_utterances u
+      JOIN scenes s ON u.scene_id = s.id
+      WHERE u.id = ?
+    `).bind(utteranceId).first<any>();
+
+    if (!existing) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Utterance not found'), 404);
+    }
+
+    // Build update query
+    const updates: string[] = [];
+    const values: any[] = [];
+
+    // Update role if provided
+    if (role !== undefined) {
+      if (!['narration', 'dialogue'].includes(role)) {
+        return c.json(createErrorResponse('INVALID_REQUEST', 'role must be "narration" or "dialogue"'), 400);
+      }
+      updates.push('role = ?');
+      values.push(role);
+    }
+
+    const finalRole = role !== undefined ? role : existing.role;
+
+    // Handle character_key based on role
+    if (finalRole === 'narration') {
+      // Force character_key to null for narration
+      if (character_key !== undefined || (role === 'narration' && existing.character_key !== null)) {
+        updates.push('character_key = ?');
+        values.push(null);
+      }
+    } else if (finalRole === 'dialogue') {
+      if (character_key !== undefined) {
+        // Validate character exists in scene
+        const charExists = await c.env.DB.prepare(`
+          SELECT 1 FROM scene_character_map WHERE scene_id = ? AND character_key = ?
+        `).bind(existing.scene_id, character_key).first();
+
+        if (!charExists) {
+          return c.json(createErrorResponse('INVALID_REQUEST', `character_key "${character_key}" is not assigned to this scene`), 400);
+        }
+        updates.push('character_key = ?');
+        values.push(character_key);
+      } else if (role === 'dialogue' && !existing.character_key) {
+        // Changing to dialogue but no character_key provided
+        return c.json(createErrorResponse('INVALID_REQUEST', 'character_key is required when changing to dialogue'), 400);
+      }
+    }
+
+    // Update text if provided
+    if (text !== undefined) {
+      if (typeof text !== 'string' || text.trim().length === 0) {
+        return c.json(createErrorResponse('INVALID_REQUEST', 'text cannot be empty'), 400);
+      }
+      updates.push('text = ?');
+      values.push(text.trim());
+    }
+
+    if (updates.length === 0) {
+      return c.json(createErrorResponse('NO_UPDATES', 'No fields to update'), 400);
+    }
+
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(utteranceId);
+
+    // Execute update
+    await c.env.DB.prepare(`
+      UPDATE scene_utterances
+      SET ${updates.join(', ')}
+      WHERE id = ?
+    `).bind(...values).run();
+
+    // Get updated utterance
+    const updated = await c.env.DB.prepare(`
+      SELECT 
+        u.id,
+        u.scene_id,
+        u.order_no,
+        u.role,
+        u.character_key,
+        u.text,
+        u.audio_generation_id,
+        u.duration_ms,
+        u.created_at,
+        u.updated_at,
+        ag.r2_url as audio_url,
+        pcm.character_name
+      FROM scene_utterances u
+      LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+      LEFT JOIN project_character_models pcm 
+        ON u.character_key = pcm.character_key AND pcm.project_id = ?
+      WHERE u.id = ?
+    `).bind(existing.project_id, utteranceId).first<any>();
+
+    return c.json({
+      success: true,
+      utterance: {
+        id: updated.id,
+        scene_id: updated.scene_id,
+        order_no: updated.order_no,
+        role: updated.role,
+        character_key: updated.character_key,
+        text: updated.text,
+        audio_generation_id: updated.audio_generation_id,
+        duration_ms: updated.duration_ms,
+        audio_url: updated.audio_url,
+        character_name: updated.character_name,
+        created_at: updated.created_at,
+        updated_at: updated.updated_at
+      }
+    });
+
+  } catch (error) {
+    console.error('[PUT /api/utterances/:utteranceId] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to update utterance'), 500);
+  }
+});
+
+// =============================================================================
+// DELETE /api/utterances/:utteranceId
+// Delete an utterance and re-number remaining utterances
+// =============================================================================
+
+utterances.delete('/utterances/:utteranceId', async (c) => {
+  try {
+    const utteranceId = Number(c.req.param('utteranceId'));
+    if (!Number.isFinite(utteranceId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid utterance id'), 400);
+    }
+
+    // Get existing utterance
+    const existing = await c.env.DB.prepare(`
+      SELECT id, scene_id FROM scene_utterances WHERE id = ?
+    `).bind(utteranceId).first<{ id: number; scene_id: number }>();
+
+    if (!existing) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Utterance not found'), 404);
+    }
+
+    const sceneId = existing.scene_id;
+
+    // Delete utterance
+    await c.env.DB.prepare(`
+      DELETE FROM scene_utterances WHERE id = ?
+    `).bind(utteranceId).run();
+
+    // Re-number remaining utterances
+    const { results: remaining } = await c.env.DB.prepare(`
+      SELECT id FROM scene_utterances WHERE scene_id = ? ORDER BY order_no ASC
+    `).bind(sceneId).all<{ id: number }>();
+
+    for (let i = 0; i < remaining.length; i++) {
+      await c.env.DB.prepare(`
+        UPDATE scene_utterances SET order_no = ? WHERE id = ?
+      `).bind(i + 1, remaining[i].id).run();
+    }
+
+    return c.json({
+      success: true,
+      message: 'Utterance deleted successfully',
+      deleted_utterance_id: utteranceId,
+      remaining_count: remaining.length
+    });
+
+  } catch (error) {
+    console.error('[DELETE /api/utterances/:utteranceId] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to delete utterance'), 500);
+  }
+});
+
+// =============================================================================
+// PUT /api/scenes/:sceneId/utterances/reorder
+// Reorder utterances within a scene
+// =============================================================================
+
+utterances.put('/scenes/:sceneId/utterances/reorder', async (c) => {
+  try {
+    const sceneId = Number(c.req.param('sceneId'));
+    if (!Number.isFinite(sceneId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid scene id'), 400);
+    }
+
+    const body = await c.req.json().catch(() => ({} as any));
+    const { order } = body;
+
+    // Validate order array
+    if (!Array.isArray(order) || order.length === 0) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'order must be a non-empty array of utterance ids'), 400);
+    }
+
+    // Verify scene exists
+    const scene = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE id = ?
+    `).bind(sceneId).first();
+
+    if (!scene) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Scene not found'), 404);
+    }
+
+    // Get all utterances for this scene
+    const { results: existingUtterances } = await c.env.DB.prepare(`
+      SELECT id FROM scene_utterances WHERE scene_id = ?
+    `).bind(sceneId).all<{ id: number }>();
+
+    const existingIds = new Set(existingUtterances.map(u => u.id));
+
+    // Validate all provided ids belong to this scene
+    const invalidIds = order.filter((id: number) => !existingIds.has(id));
+    if (invalidIds.length > 0) {
+      return c.json(createErrorResponse('INVALID_REQUEST', `These utterance ids do not belong to this scene: ${invalidIds.join(', ')}`), 400);
+    }
+
+    // Update order_no for each utterance
+    for (let i = 0; i < order.length; i++) {
+      await c.env.DB.prepare(`
+        UPDATE scene_utterances SET order_no = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(i + 1, order[i]).run();
+    }
+
+    // Get updated utterances
+    const { results: updatedUtterances } = await c.env.DB.prepare(`
+      SELECT id, order_no FROM scene_utterances WHERE scene_id = ? ORDER BY order_no ASC
+    `).bind(sceneId).all<{ id: number; order_no: number }>();
+
+    return c.json({
+      success: true,
+      message: 'Utterances reordered successfully',
+      scene_id: sceneId,
+      order: updatedUtterances.map(u => ({ id: u.id, order_no: u.order_no }))
+    });
+
+  } catch (error) {
+    console.error('[PUT /api/scenes/:sceneId/utterances/reorder] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to reorder utterances'), 500);
+  }
+});
+
+// =============================================================================
+// POST /api/utterances/:utteranceId/generate-audio
+// Generate audio for a specific utterance
+// =============================================================================
+
+utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
+  try {
+    const utteranceId = Number(c.req.param('utteranceId'));
+    if (!Number.isFinite(utteranceId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid utterance id'), 400);
+    }
+
+    const body = await c.req.json().catch(() => ({} as any));
+    
+    // Get utterance with scene and project info
+    const utterance = await c.env.DB.prepare(`
+      SELECT u.*, s.project_id, s.idx as scene_idx
+      FROM scene_utterances u
+      JOIN scenes s ON u.scene_id = s.id
+      WHERE u.id = ?
+    `).bind(utteranceId).first<any>();
+
+    if (!utterance) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Utterance not found'), 404);
+    }
+
+    // Determine voice settings
+    let voicePresetId: string | null = null;
+    let provider = 'google';
+    let voiceId = 'ja-JP-Neural2-B'; // Default narrator voice
+
+    if (utterance.role === 'dialogue' && utterance.character_key) {
+      // Get character's voice preset
+      const character = await c.env.DB.prepare(`
+        SELECT voice_preset_id FROM project_character_models
+        WHERE project_id = ? AND character_key = ?
+      `).bind(utterance.project_id, utterance.character_key).first<{ voice_preset_id: string | null }>();
+
+      if (character?.voice_preset_id) {
+        voicePresetId = character.voice_preset_id;
+        voiceId = voicePresetId;
+        
+        // Detect provider from voice_preset_id
+        if (voicePresetId.startsWith('elevenlabs:') || voicePresetId.startsWith('el-')) {
+          provider = 'elevenlabs';
+        } else if (voicePresetId.startsWith('fish:') || voicePresetId.startsWith('fish-')) {
+          provider = 'fish';
+        }
+      }
+    } else if (utterance.role === 'narration') {
+      // Use project narrator voice or default
+      // TODO: Get project-level narrator settings
+      // For now, use Google TTS default
+    }
+
+    // Allow override from request body
+    if (body.voice_id) voiceId = body.voice_id;
+    if (body.provider) provider = body.provider;
+
+    // Forward to existing audio generation endpoint
+    // This creates the audio_generation record and generates the audio
+    const audioGenResponse = await fetch(
+      `${new URL(c.req.url).origin}/api/scenes/${utterance.scene_id}/generate-audio`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          // Forward auth headers if present
+          ...(c.req.header('Authorization') ? { 'Authorization': c.req.header('Authorization')! } : {}),
+          ...(c.req.header('Cookie') ? { 'Cookie': c.req.header('Cookie')! } : {})
+        },
+        body: JSON.stringify({
+          voice_id: voiceId,
+          provider: provider,
+          text_override: utterance.text, // Use utterance text
+          format: body.format || 'mp3'
+        })
+      }
+    );
+
+    const audioGenResult = await audioGenResponse.json() as any;
+
+    if (!audioGenResponse.ok) {
+      return c.json(audioGenResult, audioGenResponse.status as any);
+    }
+
+    // Update utterance with audio_generation_id
+    const audioGenerationId = audioGenResult.audio_generation_id;
+    if (audioGenerationId) {
+      // Get duration from audio_generations
+      const audioGen = await c.env.DB.prepare(`
+        SELECT duration_ms FROM audio_generations WHERE id = ?
+      `).bind(audioGenerationId).first<{ duration_ms: number | null }>();
+
+      await c.env.DB.prepare(`
+        UPDATE scene_utterances
+        SET audio_generation_id = ?, duration_ms = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(audioGenerationId, audioGen?.duration_ms || null, utteranceId).run();
+    }
+
+    return c.json({
+      success: true,
+      utterance_id: utteranceId,
+      audio_generation_id: audioGenerationId,
+      status: audioGenResult.status,
+      message: 'Audio generation started for utterance'
+    }, 202);
+
+  } catch (error) {
+    console.error('[POST /api/utterances/:utteranceId/generate-audio] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to generate audio for utterance'), 500);
+  }
+});
+
+export default utterances;

@@ -1445,6 +1445,48 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           console.warn(`Failed to parse comic_data for scene ${scene.id}:`, e);
         }
         
+        // R1.5: scene_utterances から発話を取得（SSOT）
+        const { results: utteranceRows } = await c.env.DB.prepare(`
+          SELECT 
+            u.id,
+            u.order_no,
+            u.role,
+            u.character_key,
+            u.text,
+            u.audio_generation_id,
+            u.duration_ms,
+            ag.r2_url as audio_url,
+            pcm.character_name
+          FROM scene_utterances u
+          LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id AND ag.status = 'completed'
+          LEFT JOIN project_character_models pcm ON u.character_key = pcm.character_key AND pcm.project_id = ?
+          WHERE u.scene_id = ?
+          ORDER BY u.order_no ASC
+        `).bind(project.id, scene.id).all<{
+          id: number;
+          order_no: number;
+          role: string;
+          character_key: string | null;
+          text: string;
+          audio_generation_id: number | null;
+          duration_ms: number | null;
+          audio_url: string | null;
+          character_name: string | null;
+        }>();
+        
+        // Convert R2 URLs to absolute URLs
+        const utterances = utteranceRows.map(u => ({
+          id: u.id,
+          order_no: u.order_no,
+          role: u.role as 'narration' | 'dialogue',
+          character_key: u.character_key,
+          character_name: u.character_name,
+          text: u.text,
+          audio_generation_id: u.audio_generation_id,
+          duration_ms: u.duration_ms,
+          audio_url: u.audio_url ? toAbsoluteUrl(u.audio_url, siteUrl) : null,
+        }));
+        
         return {
           id: scene.id,
           idx: scene.idx,
@@ -1464,6 +1506,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           } : null,
           active_audio: activeAudio,
           comic_data: comicData,
+          // R1.5: utterances（SSOT）
+          utterances: utterances.length > 0 ? utterances : null,
         };
       })
     );

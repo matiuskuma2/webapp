@@ -186,6 +186,12 @@
             <i class="fas fa-users mr-1"></i>キャラ割り当て
           </button>
           <button 
+            data-scene-edit-tab="utterances"
+            class="px-4 py-2 font-semibold text-sm border-b-2 transition-colors scene-edit-tab-btn ${this.activeTab === 'utterances' ? 'border-purple-500 text-purple-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+          >
+            <i class="fas fa-microphone-alt mr-1"></i>音声
+          </button>
+          <button 
             data-scene-edit-tab="traits"
             class="px-4 py-2 font-semibold text-sm border-b-2 transition-colors scene-edit-tab-btn ${this.activeTab === 'traits' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
           >
@@ -205,7 +211,7 @@
     
     /**
      * Switch between tabs
-     * @param {string} tab - 'characters' | 'traits'
+     * @param {string} tab - 'characters' | 'traits' | 'utterances'
      */
     switchTab(tab) {
       this.activeTab = tab;
@@ -215,6 +221,8 @@
         const isActive = btn.dataset.sceneEditTab === tab;
         btn.classList.toggle('border-blue-500', isActive && tab === 'characters');
         btn.classList.toggle('text-blue-600', isActive && tab === 'characters');
+        btn.classList.toggle('border-purple-500', isActive && tab === 'utterances');
+        btn.classList.toggle('text-purple-600', isActive && tab === 'utterances');
         btn.classList.toggle('border-indigo-500', isActive && tab === 'traits');
         btn.classList.toggle('text-indigo-600', isActive && tab === 'traits');
         btn.classList.toggle('border-transparent', !isActive);
@@ -224,9 +232,16 @@
       // Show/hide tab content
       const charTab = document.getElementById('scene-edit-tab-characters');
       const traitTab = document.getElementById('scene-edit-tab-traits');
+      const uttTab = document.getElementById('scene-edit-tab-utterances');
       
       if (charTab) charTab.classList.toggle('hidden', tab !== 'characters');
       if (traitTab) traitTab.classList.toggle('hidden', tab !== 'traits');
+      if (uttTab) uttTab.classList.toggle('hidden', tab !== 'utterances');
+      
+      // Load utterances when switching to that tab
+      if (tab === 'utterances' && window.UtterancesTab && this.currentSceneId) {
+        window.UtterancesTab.load(this.currentSceneId);
+      }
     },
     
     /**
