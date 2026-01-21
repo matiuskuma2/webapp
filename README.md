@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-20（キャラクター特徴管理 + シーン別オーバーライド + 画像生成改善）
+- **最終更新**: 2026-01-21（R1.5 複数話者音声 + scene_utterances SSOT + 音声タブUI）
 
 ---
 
@@ -590,6 +590,56 @@ scenes
 - `GET /api/scenes/:id/character-traits` - シーン別オーバーライド取得
 - `POST /api/scenes/:id/character-traits` - シーン別オーバーライド追加
 - `DELETE /api/scenes/:id/character-traits/:key` - シーン別オーバーライド削除
+
+---
+
+## 2026-01-21 R1.5 追加機能
+
+### 複数話者音声（scene_utterances SSOT）
+
+#### 概要
+シーン内の発話を「誰が」「何を」「どの順番で」喋るかを管理するSSOTシステム。
+音声とテロップの両方に使用される単一情報源。
+
+#### データモデル
+```sql
+scene_utterances
+├── id (PK)
+├── scene_id (FK → scenes.id)
+├── order_no (シーン内の再生順)
+├── role ('narration' | 'dialogue')
+├── character_key (dialogueの場合必須)
+├── text (発話テキスト/字幕)
+├── audio_generation_id (FK → audio_generations.id)
+├── duration_ms (音声長さキャッシュ)
+└── created_at, updated_at
+```
+
+#### 機能
+1. **Lazy Migration**: シーンの音声タブを開くと、既存の`dialogue`から自動的にナレーションutteranceを1件作成
+2. **複数話者**: narration（ナレーター）とdialogue（キャラセリフ）を混在可能
+3. **発話単位の音声生成**: 各utteranceに個別に音声を生成可能
+4. **並び替え**: ドラッグ&ドロップでorder_noを変更可能
+
+#### API
+- `GET /api/scenes/:sceneId/utterances` - 発話一覧取得（lazy migrate含む）
+- `POST /api/scenes/:sceneId/utterances` - 発話追加
+- `PUT /api/utterances/:id` - 発話更新
+- `DELETE /api/utterances/:id` - 発話削除
+- `PUT /api/scenes/:sceneId/utterances/reorder` - 並び替え
+- `POST /api/utterances/:id/generate-audio` - 発話単位の音声生成
+
+#### UI
+- **SceneEditModal**: 「キャラ割り当て」「音声」「特徴変化」の3タブ構成
+- **音声タブ**: 発話カード表示、追加/編集/削除/並び替え、音声生成/再生
+
+#### SSOT ルール（動画生成時）
+1. `scene_utterances`が存在 → `voices[]`として出力
+2. `scene_utterances`なし → 既存の`active_audio`をfallbackでnarration変換
+3. `duration_ms` = Σ(voices[].duration_ms) + padding（音声なしは推定値）
+
+#### マイグレーション
+- `0022_create_scene_utterances.sql`
 
 ---
 
