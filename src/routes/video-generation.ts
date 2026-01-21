@@ -2126,4 +2126,700 @@ videoGeneration.get('/error-logs/recent', async (c) => {
   return c.json({ error_logs: errorLogs || [] });
 });
 
+// ====================================================================
+// R2-A: Render Kit API
+// シーンの描画に必要な全データを一括取得
+// ====================================================================
+
+videoGeneration.get('/:sceneId/render-kit', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  if (isNaN(sceneId)) {
+    return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
+  }
+
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+
+  const session = await c.env.DB.prepare(`
+    SELECT u.id as user_id FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number }>();
+
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+
+  // Get scene basic info with R2 fields
+  const scene = await c.env.DB.prepare(`
+    SELECT s.id, s.idx, s.role, s.title, s.dialogue, s.display_asset_type,
+           s.text_render_mode, s.motion_preset, s.motion_params_json,
+           p.id as project_id, p.user_id as project_user_id
+    FROM scenes s
+    JOIN projects p ON s.project_id = p.id
+    WHERE s.id = ?
+  `).bind(sceneId).first<{
+    id: number;
+    idx: number;
+    role: string;
+    title: string;
+    dialogue: string;
+    display_asset_type: string;
+    text_render_mode: string;
+    motion_preset: string;
+    motion_params_json: string | null;
+    project_id: number;
+    project_user_id: number;
+  }>();
+
+  if (!scene) {
+    return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
+  }
+
+  // Permission check
+  if (scene.project_user_id !== session.user_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+
+  // Get utterances with timing calculation
+  const { results: rawUtterances } = await c.env.DB.prepare(`
+    SELECT 
+      su.id, su.order_no, su.role, su.character_key, su.text,
+      su.audio_generation_id,
+      ag.r2_url as audio_url,
+      ag.duration_ms,
+      pcm.display_name as character_name
+    FROM scene_utterances su
+    LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id AND ag.status = 'completed'
+    LEFT JOIN project_character_models pcm ON su.character_key = pcm.character_key AND pcm.project_id = ?
+    WHERE su.scene_id = ?
+    ORDER BY su.order_no ASC
+  `).bind(scene.project_id, sceneId).all<{
+    id: number;
+    order_no: number;
+    role: string;
+    character_key: string | null;
+    text: string;
+    audio_generation_id: number | null;
+    audio_url: string | null;
+    duration_ms: number | null;
+    character_name: string | null;
+  }>();
+
+  // Calculate start_ms / end_ms for each utterance
+  let currentMs = 0;
+  const utterances = (rawUtterances || []).map((u) => {
+    const duration = u.duration_ms || Math.max(2000, (u.text?.length || 0) * 300);
+    const start_ms = currentMs;
+    const end_ms = currentMs + duration;
+    currentMs = end_ms;
+
+    return {
+      id: u.id,
+      order_no: u.order_no,
+      role: u.role,
+      character_key: u.character_key,
+      character_name: u.character_name,
+      text: u.text,
+      audio_generation_id: u.audio_generation_id,
+      audio_url: toAbsoluteUrl(u.audio_url, siteUrl),
+      duration_ms: duration,
+      start_ms,
+      end_ms,
+    };
+  });
+
+  // Get balloons
+  const { results: rawBalloons } = await c.env.DB.prepare(`
+    SELECT 
+      id, utterance_id, display_mode,
+      x, y, w, h, shape,
+      tail_enabled, tail_tip_x, tail_tip_y,
+      writing_mode, text_align, font_family, font_weight,
+      font_size, line_height, padding,
+      bg_color, text_color, border_color, border_width,
+      start_ms, end_ms, z_index
+    FROM scene_balloons
+    WHERE scene_id = ?
+    ORDER BY z_index ASC
+  `).bind(sceneId).all<{
+    id: number;
+    utterance_id: number | null;
+    display_mode: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    shape: string;
+    tail_enabled: number;
+    tail_tip_x: number;
+    tail_tip_y: number;
+    writing_mode: string;
+    text_align: string;
+    font_family: string;
+    font_weight: number;
+    font_size: number;
+    line_height: number;
+    padding: number;
+    bg_color: string;
+    text_color: string;
+    border_color: string;
+    border_width: number;
+    start_ms: number | null;
+    end_ms: number | null;
+    z_index: number;
+  }>();
+
+  const balloons = (rawBalloons || []).map((b) => ({
+    id: b.id,
+    utterance_id: b.utterance_id,
+    display_mode: b.display_mode,
+    position: { x: b.x, y: b.y },
+    size: { w: b.w, h: b.h },
+    shape: b.shape,
+    tail: {
+      enabled: b.tail_enabled === 1,
+      tip_x: b.tail_tip_x,
+      tip_y: b.tail_tip_y,
+    },
+    style: {
+      writing_mode: b.writing_mode,
+      text_align: b.text_align,
+      font_family: b.font_family,
+      font_weight: b.font_weight,
+      font_size: b.font_size,
+      line_height: b.line_height,
+      padding: b.padding,
+      bg_color: b.bg_color,
+      text_color: b.text_color,
+      border_color: b.border_color,
+      border_width: b.border_width,
+    },
+    timing: b.display_mode === 'manual_window' ? { start_ms: b.start_ms, end_ms: b.end_ms } : null,
+    z_index: b.z_index,
+  }));
+
+  // Get telops (R2-B)
+  const { results: telops } = await c.env.DB.prepare(`
+    SELECT * FROM scene_telops WHERE scene_id = ? ORDER BY order_no ASC
+  `).bind(sceneId).all();
+
+  // Get motion (R2-C)
+  const motion = await c.env.DB.prepare(`
+    SELECT * FROM scene_motion WHERE scene_id = ?
+  `).bind(sceneId).first();
+
+  // Orphan check
+  const utteranceIds = new Set(utterances.map((u) => u.id));
+  const balloonUtteranceIds = new Set(balloons.filter((b) => b.utterance_id).map((b) => b.utterance_id));
+
+  const balloonsWithoutUtterance = balloons
+    .filter((b) => b.utterance_id && !utteranceIds.has(b.utterance_id))
+    .map((b) => b.id);
+
+  const utterancesWithoutBalloon = utterances
+    .filter((u) => !balloonUtteranceIds.has(u.id))
+    .map((u) => u.id);
+
+  return c.json({
+    scene: {
+      id: scene.id,
+      idx: scene.idx,
+      role: scene.role,
+      title: scene.title,
+      dialogue: scene.dialogue,
+      display_asset_type: scene.display_asset_type,
+      text_render_mode: scene.text_render_mode || 'remotion',
+      motion_preset: scene.motion_preset || 'kenburns',
+    },
+    utterances,
+    balloons,
+    telops: telops || [],
+    motion: motion || null,
+    orphaned: {
+      balloons_without_utterance: balloonsWithoutUtterance,
+      utterances_without_balloon: utterancesWithoutBalloon,
+    },
+  });
+});
+
+// ====================================================================
+// PATCH /api/scenes/:sceneId/render-settings
+// text_render_mode と motion_preset を更新
+// ====================================================================
+
+videoGeneration.patch('/:sceneId/render-settings', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  if (isNaN(sceneId)) {
+    return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
+  }
+
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+
+  const session = await c.env.DB.prepare(`
+    SELECT u.id as user_id FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number }>();
+
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+
+  // Permission check
+  const scene = await c.env.DB.prepare(`
+    SELECT p.user_id FROM scenes s
+    JOIN projects p ON s.project_id = p.id
+    WHERE s.id = ?
+  `).bind(sceneId).first<{ user_id: number }>();
+
+  if (!scene) {
+    return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
+  }
+
+  if (scene.user_id !== session.user_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  const body = await c.req.json<{
+    text_render_mode?: 'remotion' | 'baked' | 'none';
+    motion_preset?: 'none' | 'kenburns' | 'pan' | 'parallax';
+  }>();
+
+  const updates: string[] = [];
+  const values: any[] = [];
+
+  if (body.text_render_mode) {
+    if (!['remotion', 'baked', 'none'].includes(body.text_render_mode)) {
+      return c.json({ error: { code: 'INVALID_TEXT_RENDER_MODE', message: 'Invalid text_render_mode' } }, 400);
+    }
+    updates.push('text_render_mode = ?');
+    values.push(body.text_render_mode);
+  }
+
+  if (body.motion_preset) {
+    if (!['none', 'kenburns', 'pan', 'parallax'].includes(body.motion_preset)) {
+      return c.json({ error: { code: 'INVALID_MOTION_PRESET', message: 'Invalid motion_preset' } }, 400);
+    }
+    updates.push('motion_preset = ?');
+    values.push(body.motion_preset);
+  }
+
+  if (updates.length === 0) {
+    return c.json({ error: { code: 'NO_UPDATES', message: 'No valid fields to update' } }, 400);
+  }
+
+  updates.push('updated_at = CURRENT_TIMESTAMP');
+  values.push(sceneId);
+
+  await c.env.DB.prepare(`
+    UPDATE scenes SET ${updates.join(', ')} WHERE id = ?
+  `).bind(...values).run();
+
+  return c.json({ success: true });
+});
+
+// ====================================================================
+// R2-A: Balloons CRUD API
+// ====================================================================
+
+// POST /api/scenes/:sceneId/balloons - 吹き出し作成
+videoGeneration.post('/:sceneId/balloons', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  if (isNaN(sceneId)) {
+    return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
+  }
+
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+
+  const session = await c.env.DB.prepare(`
+    SELECT u.id as user_id FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number }>();
+
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+
+  // Permission check
+  const scene = await c.env.DB.prepare(`
+    SELECT p.user_id FROM scenes s
+    JOIN projects p ON s.project_id = p.id
+    WHERE s.id = ?
+  `).bind(sceneId).first<{ user_id: number }>();
+
+  if (!scene) {
+    return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
+  }
+
+  if (scene.user_id !== session.user_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  const body = await c.req.json<{
+    utterance_id?: number | null;
+    display_mode?: 'voice_window' | 'manual_window';
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    shape?: string;
+    tail_enabled?: boolean;
+    tail_tip_x?: number;
+    tail_tip_y?: number;
+    style?: {
+      writing_mode?: string;
+      text_align?: string;
+      font_family?: string;
+      font_weight?: number;
+      font_size?: number;
+      line_height?: number;
+      padding?: number;
+      bg_color?: string;
+      text_color?: string;
+      border_color?: string;
+      border_width?: number;
+    };
+    start_ms?: number | null;
+    end_ms?: number | null;
+    z_index?: number;
+  }>();
+
+  // Validation
+  const displayMode = body.display_mode || 'voice_window';
+
+  if (displayMode === 'voice_window' && !body.utterance_id) {
+    return c.json({ error: { code: 'UTTERANCE_REQUIRED', message: 'utterance_id is required for voice_window mode' } }, 400);
+  }
+
+  if (displayMode === 'manual_window' && (body.start_ms == null || body.end_ms == null)) {
+    return c.json({ error: { code: 'TIMING_REQUIRED', message: 'start_ms and end_ms are required for manual_window mode' } }, 400);
+  }
+
+  // Validate utterance belongs to scene
+  if (body.utterance_id) {
+    const utterance = await c.env.DB.prepare(`
+      SELECT id FROM scene_utterances WHERE id = ? AND scene_id = ?
+    `).bind(body.utterance_id, sceneId).first();
+
+    if (!utterance) {
+      return c.json({ error: { code: 'INVALID_UTTERANCE', message: 'Utterance not found in this scene' } }, 400);
+    }
+  }
+
+  // Validate coordinates
+  const x = body.x ?? 0.5;
+  const y = body.y ?? 0.5;
+  const w = body.w ?? 0.3;
+  const h = body.h ?? 0.2;
+
+  if (x < 0 || x > 1 || y < 0 || y > 1 || w < 0 || w > 1 || h < 0 || h > 1) {
+    return c.json({ error: { code: 'INVALID_COORDINATES', message: 'Coordinates must be between 0 and 1' } }, 400);
+  }
+
+  // Validate shape
+  const validShapes = ['round', 'square', 'thought', 'shout', 'caption', 'speech_round', 'speech_oval', 'thought_oval', 'mono_box_v', 'telop_bar'];
+  const shape = body.shape || 'round';
+  if (!validShapes.includes(shape)) {
+    return c.json({ error: { code: 'INVALID_SHAPE', message: 'Invalid shape' } }, 400);
+  }
+
+  const style = body.style || {};
+
+  const result = await c.env.DB.prepare(`
+    INSERT INTO scene_balloons (
+      scene_id, utterance_id, display_mode,
+      x, y, w, h, shape,
+      tail_enabled, tail_tip_x, tail_tip_y,
+      writing_mode, text_align, font_family, font_weight,
+      font_size, line_height, padding,
+      bg_color, text_color, border_color, border_width,
+      start_ms, end_ms, z_index
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    sceneId,
+    body.utterance_id || null,
+    displayMode,
+    x, y, w, h,
+    shape,
+    body.tail_enabled !== false ? 1 : 0,
+    body.tail_tip_x ?? 0,
+    body.tail_tip_y ?? 0.3,
+    style.writing_mode || 'horizontal',
+    style.text_align || 'center',
+    style.font_family || 'gothic',
+    style.font_weight ?? 700,
+    style.font_size ?? 24,
+    style.line_height ?? 1.4,
+    style.padding ?? 12,
+    style.bg_color || '#FFFFFF',
+    style.text_color || '#000000',
+    style.border_color || '#000000',
+    style.border_width ?? 2,
+    body.start_ms ?? null,
+    body.end_ms ?? null,
+    body.z_index ?? 10
+  ).run();
+
+  return c.json({ success: true, balloon_id: result.meta.last_row_id }, 201);
+});
+
+// PUT /api/scenes/:sceneId/balloons/:balloonId - 吹き出し更新
+videoGeneration.put('/:sceneId/balloons/:balloonId', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  const balloonId = parseInt(c.req.param('balloonId'), 10);
+
+  if (isNaN(sceneId) || isNaN(balloonId)) {
+    return c.json({ error: { code: 'INVALID_ID', message: 'Invalid scene or balloon ID' } }, 400);
+  }
+
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+
+  const session = await c.env.DB.prepare(`
+    SELECT u.id as user_id FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number }>();
+
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+
+  // Permission & existence check
+  const balloon = await c.env.DB.prepare(`
+    SELECT b.id, p.user_id FROM scene_balloons b
+    JOIN scenes s ON b.scene_id = s.id
+    JOIN projects p ON s.project_id = p.id
+    WHERE b.id = ? AND b.scene_id = ?
+  `).bind(balloonId, sceneId).first<{ id: number; user_id: number }>();
+
+  if (!balloon) {
+    return c.json({ error: { code: 'BALLOON_NOT_FOUND', message: 'Balloon not found' } }, 404);
+  }
+
+  if (balloon.user_id !== session.user_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  const body = await c.req.json<{
+    utterance_id?: number | null;
+    display_mode?: 'voice_window' | 'manual_window';
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    shape?: string;
+    tail_enabled?: boolean;
+    tail_tip_x?: number;
+    tail_tip_y?: number;
+    style?: {
+      writing_mode?: string;
+      text_align?: string;
+      font_family?: string;
+      font_weight?: number;
+      font_size?: number;
+      line_height?: number;
+      padding?: number;
+      bg_color?: string;
+      text_color?: string;
+      border_color?: string;
+      border_width?: number;
+    };
+    start_ms?: number | null;
+    end_ms?: number | null;
+    z_index?: number;
+  }>();
+
+  const updates: string[] = [];
+  const values: any[] = [];
+
+  // Build update query dynamically
+  if (body.utterance_id !== undefined) {
+    if (body.utterance_id !== null) {
+      const utterance = await c.env.DB.prepare(`
+        SELECT id FROM scene_utterances WHERE id = ? AND scene_id = ?
+      `).bind(body.utterance_id, sceneId).first();
+      if (!utterance) {
+        return c.json({ error: { code: 'INVALID_UTTERANCE', message: 'Utterance not found in this scene' } }, 400);
+      }
+    }
+    updates.push('utterance_id = ?');
+    values.push(body.utterance_id);
+  }
+
+  if (body.display_mode) {
+    updates.push('display_mode = ?');
+    values.push(body.display_mode);
+  }
+
+  if (body.x !== undefined) { updates.push('x = ?'); values.push(body.x); }
+  if (body.y !== undefined) { updates.push('y = ?'); values.push(body.y); }
+  if (body.w !== undefined) { updates.push('w = ?'); values.push(body.w); }
+  if (body.h !== undefined) { updates.push('h = ?'); values.push(body.h); }
+  if (body.shape !== undefined) { updates.push('shape = ?'); values.push(body.shape); }
+  if (body.tail_enabled !== undefined) { updates.push('tail_enabled = ?'); values.push(body.tail_enabled ? 1 : 0); }
+  if (body.tail_tip_x !== undefined) { updates.push('tail_tip_x = ?'); values.push(body.tail_tip_x); }
+  if (body.tail_tip_y !== undefined) { updates.push('tail_tip_y = ?'); values.push(body.tail_tip_y); }
+
+  if (body.style) {
+    if (body.style.writing_mode) { updates.push('writing_mode = ?'); values.push(body.style.writing_mode); }
+    if (body.style.text_align) { updates.push('text_align = ?'); values.push(body.style.text_align); }
+    if (body.style.font_family) { updates.push('font_family = ?'); values.push(body.style.font_family); }
+    if (body.style.font_weight !== undefined) { updates.push('font_weight = ?'); values.push(body.style.font_weight); }
+    if (body.style.font_size !== undefined) { updates.push('font_size = ?'); values.push(body.style.font_size); }
+    if (body.style.line_height !== undefined) { updates.push('line_height = ?'); values.push(body.style.line_height); }
+    if (body.style.padding !== undefined) { updates.push('padding = ?'); values.push(body.style.padding); }
+    if (body.style.bg_color) { updates.push('bg_color = ?'); values.push(body.style.bg_color); }
+    if (body.style.text_color) { updates.push('text_color = ?'); values.push(body.style.text_color); }
+    if (body.style.border_color) { updates.push('border_color = ?'); values.push(body.style.border_color); }
+    if (body.style.border_width !== undefined) { updates.push('border_width = ?'); values.push(body.style.border_width); }
+  }
+
+  if (body.start_ms !== undefined) { updates.push('start_ms = ?'); values.push(body.start_ms); }
+  if (body.end_ms !== undefined) { updates.push('end_ms = ?'); values.push(body.end_ms); }
+  if (body.z_index !== undefined) { updates.push('z_index = ?'); values.push(body.z_index); }
+
+  if (updates.length === 0) {
+    return c.json({ error: { code: 'NO_UPDATES', message: 'No valid fields to update' } }, 400);
+  }
+
+  updates.push('updated_at = CURRENT_TIMESTAMP');
+  values.push(balloonId);
+
+  await c.env.DB.prepare(`
+    UPDATE scene_balloons SET ${updates.join(', ')} WHERE id = ?
+  `).bind(...values).run();
+
+  return c.json({ success: true });
+});
+
+// DELETE /api/scenes/:sceneId/balloons/:balloonId - 吹き出し削除
+videoGeneration.delete('/:sceneId/balloons/:balloonId', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  const balloonId = parseInt(c.req.param('balloonId'), 10);
+
+  if (isNaN(sceneId) || isNaN(balloonId)) {
+    return c.json({ error: { code: 'INVALID_ID', message: 'Invalid scene or balloon ID' } }, 400);
+  }
+
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+
+  const session = await c.env.DB.prepare(`
+    SELECT u.id as user_id FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number }>();
+
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+
+  // Permission check
+  const balloon = await c.env.DB.prepare(`
+    SELECT b.id, p.user_id FROM scene_balloons b
+    JOIN scenes s ON b.scene_id = s.id
+    JOIN projects p ON s.project_id = p.id
+    WHERE b.id = ? AND b.scene_id = ?
+  `).bind(balloonId, sceneId).first<{ id: number; user_id: number }>();
+
+  if (!balloon) {
+    return c.json({ error: { code: 'BALLOON_NOT_FOUND', message: 'Balloon not found' } }, 404);
+  }
+
+  if (balloon.user_id !== session.user_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  await c.env.DB.prepare(`
+    DELETE FROM scene_balloons WHERE id = ?
+  `).bind(balloonId).run();
+
+  return c.json({ success: true });
+});
+
+// GET /api/scenes/:sceneId/balloons - 吹き出し一覧取得
+videoGeneration.get('/:sceneId/balloons', async (c) => {
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  if (isNaN(sceneId)) {
+    return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
+  }
+
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Not authenticated' } }, 401);
+  }
+
+  const session = await c.env.DB.prepare(`
+    SELECT u.id as user_id FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number }>();
+
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+
+  // Permission check
+  const scene = await c.env.DB.prepare(`
+    SELECT p.user_id FROM scenes s
+    JOIN projects p ON s.project_id = p.id
+    WHERE s.id = ?
+  `).bind(sceneId).first<{ user_id: number }>();
+
+  if (!scene) {
+    return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
+  }
+
+  if (scene.user_id !== session.user_id) {
+    return c.json({ error: { code: 'FORBIDDEN', message: 'Access denied' } }, 403);
+  }
+
+  const { results: balloons } = await c.env.DB.prepare(`
+    SELECT 
+      b.id, b.utterance_id, b.display_mode,
+      b.x, b.y, b.w, b.h, b.shape,
+      b.tail_enabled, b.tail_tip_x, b.tail_tip_y,
+      b.writing_mode, b.text_align, b.font_family, b.font_weight,
+      b.font_size, b.line_height, b.padding,
+      b.bg_color, b.text_color, b.border_color, b.border_width,
+      b.start_ms, b.end_ms, b.z_index,
+      su.text as utterance_text
+    FROM scene_balloons b
+    LEFT JOIN scene_utterances su ON b.utterance_id = su.id
+    WHERE b.scene_id = ?
+    ORDER BY b.z_index ASC
+  `).bind(sceneId).all();
+
+  return c.json({ balloons: balloons || [] });
+});
+
 export default videoGeneration;
