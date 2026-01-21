@@ -1042,7 +1042,9 @@ export function buildProjectJson(
         tail_pad_ms: 0,
       },
       // R2: text_render_mode
-      text_render_mode: scene.text_render_mode || 'remotion',
+      // SSOT: comic の場合は baked をデフォルト（二重事故防止）
+      text_render_mode: scene.text_render_mode || 
+        (scene.display_asset_type === 'comic' ? 'baked' : 'remotion'),
       assets: {
         image: imageUrl ? {
           url: imageUrl,

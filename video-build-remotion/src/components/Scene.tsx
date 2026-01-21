@@ -11,12 +11,16 @@ interface SceneProps {
 }
 
 /**
- * Scene Component - R1.5 対応
+ * Scene Component - R1.5/R2 対応
  * 
  * ## R1.5 変更点
  * - voices[] 配列をサポート（複数話者音声）
  * - 字幕は voice.text から表示
  * - 後方互換: audio 単体もサポート
+ * 
+ * ## R2 変更点
+ * - text_render_mode 対応（baked時は字幕描画しない）
+ * - balloons 配列サポート（remotion時のみ描画）
  */
 export const Scene: React.FC<SceneProps> = ({ 
   scene, 
@@ -28,12 +32,21 @@ export const Scene: React.FC<SceneProps> = ({
   
   const durationFrames = msToFrames(scene.timing.duration_ms, fps);
   
+  // ========================================
+  // R2: text_render_mode による描画制御
+  // ========================================
+  const textRenderMode = scene.text_render_mode || 'remotion';
+  
+  // baked/none の場合は字幕を描画しない（二重事故防止）
+  const shouldRenderSubtitle = showSubtitle && textRenderMode === 'remotion';
+  
   // Debug: 最初のフレームでログ出力
   if (frame === 0) {
     console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
     console.log(`[Scene ${scene.idx}] Image URL: ${scene.assets?.image?.url}`);
     console.log(`[Scene ${scene.idx}] Duration frames: ${durationFrames}`);
     console.log(`[Scene ${scene.idx}] Voices count: ${scene.assets?.voices?.length || 0}`);
+    console.log(`[Scene ${scene.idx}] text_render_mode: ${textRenderMode}`);
   }
   
   // フェードイン・アウト（15フレーム = 0.5秒 @30fps）
@@ -118,8 +131,8 @@ export const Scene: React.FC<SceneProps> = ({
             </Sequence>
           );
         })}
-        {/* 字幕表示 */}
-        {showSubtitle && subtitleText && (
+        {/* 字幕表示 - R2: baked/none時は描画しない */}
+        {shouldRenderSubtitle && subtitleText && (
           <Subtitle
             text={subtitleText}
             durationFrames={durationFrames}
@@ -178,8 +191,8 @@ export const Scene: React.FC<SceneProps> = ({
         );
       })}
       
-      {/* 字幕表示 */}
-      {showSubtitle && subtitleText && (
+      {/* 字幕表示 - R2: baked/none時は描画しない */}
+      {shouldRenderSubtitle && subtitleText && (
         <Subtitle
           text={subtitleText}
           durationFrames={durationFrames}

@@ -25,7 +25,46 @@ export const VoiceAssetSchema = z.object({
 export type VoiceAsset = z.infer<typeof VoiceAssetSchema>;
 
 // ====================================================================
-// ProjectScene - R1.1/R1.5 両対応
+// BalloonAsset - R2 吹き出し
+// ====================================================================
+
+export const BalloonAssetSchema = z.object({
+  id: z.string(),
+  utterance_id: z.number().optional(),
+  text: z.string(),
+  start_ms: z.number(),
+  end_ms: z.number(),
+  position: z.object({
+    x: z.number(),
+    y: z.number(),
+  }),
+  size: z.object({
+    w: z.number(),
+    h: z.number(),
+  }),
+  shape: z.enum(['round', 'square', 'thought', 'shout', 'caption', 'telop_bar']).default('round'),
+  tail: z.object({
+    enabled: z.boolean(),
+    tip_x: z.number().optional(),
+    tip_y: z.number().optional(),
+  }).optional(),
+  style: z.object({
+    writing_mode: z.enum(['horizontal', 'vertical']).optional(),
+    font_family: z.string().optional(),
+    font_weight: z.enum(['normal', 'bold']).optional(),
+    font_scale: z.number().optional(),
+    bg_color: z.string().optional(),
+    text_color: z.string().optional(),
+    border_color: z.string().optional(),
+    border_width: z.number().optional(),
+  }).optional(),
+  z_index: z.number().default(10),
+});
+
+export type BalloonAsset = z.infer<typeof BalloonAssetSchema>;
+
+// ====================================================================
+// ProjectScene - R1.1/R1.5/R2 対応
 // ====================================================================
 
 export const ProjectSceneSchema = z.object({
@@ -39,6 +78,17 @@ export const ProjectSceneSchema = z.object({
     head_pad_ms: z.number().default(0),
     tail_pad_ms: z.number().default(0),
   }),
+  /**
+   * R2: text_render_mode - 文字描画モード
+   * - 'remotion': Remotionで吹き出し/テロップ/字幕を描画
+   * - 'baked': 画像に文字が焼き込み済み → Remotionでは描画しない（二重事故防止）
+   * - 'none': 文字を一切描画しない
+   */
+  text_render_mode: z.enum(['remotion', 'baked', 'none']).default('remotion'),
+  /**
+   * R2: balloons - 吹き出し配列（remotionモード時に使用）
+   */
+  balloons: z.array(BalloonAssetSchema).optional(),
   assets: z.object({
     image: z.object({
       url: z.string(),

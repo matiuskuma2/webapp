@@ -1153,10 +1153,9 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     const projectId = parseInt(c.req.param('projectId'), 10);
     
     // シーンデータ取得
-    // Note: display_asset_type は一部のDBに存在しない可能性があるため、
-    // コード側でデフォルト値を設定
+    // R2: display_asset_type, text_render_mode を取得
     const { results: rawScenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, comic_data
+      SELECT id, idx, role, title, dialogue, comic_data, display_asset_type, text_render_mode
       FROM scenes
       WHERE project_id = ?
       ORDER BY idx ASC
