@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { AbsoluteFill, Sequence, Audio, useVideoConfig, prefetch, delayRender, continueRender } from 'remotion';
+import React from 'react';
+import { AbsoluteFill, Sequence, Audio, useVideoConfig } from 'remotion';
 import type { ProjectJson } from './schemas/project-schema';
 import { Scene } from './components/Scene';
 import { msToFrames } from './utils/timing';
@@ -10,80 +10,53 @@ interface RilarcVideoProps {
 
 export const RilarcVideo: React.FC<RilarcVideoProps> = ({ projectJson }) => {
   const { fps } = useVideoConfig();
-  const [prefetchHandle] = useState(() => delayRender('Prefetching all images'));
-  const [allImagesReady, setAllImagesReady] = useState(false);
   
-  // 全シーンの画像を事前にプリフェッチ
-  useEffect(() => {
-    const imageUrls = (projectJson?.scenes || [])
-      .map(scene => scene.assets?.image?.url)
-      .filter((url): url is string => !!url);
-    
-    console.log('[RilarcVideo] Prefetching', imageUrls.length, 'images');
-    imageUrls.forEach((url, i) => {
-      console.log(`[RilarcVideo] Image ${i + 1}:`, url);
-    });
-    
-    if (imageUrls.length === 0) {
-      setAllImagesReady(true);
-      continueRender(prefetchHandle);
-      return;
-    }
-    
-    // 全画像を並列でプリフェッチ
-    const prefetches = imageUrls.map((url) => prefetch(url, { method: 'blob-url' }));
-    
-    Promise.all(prefetches.map(p => p.waitUntilDone()))
-      .then(() => {
-        console.log('[RilarcVideo] All images prefetched successfully');
-        setAllImagesReady(true);
-        continueRender(prefetchHandle);
-      })
-      .catch((error) => {
-        console.error('[RilarcVideo] Prefetch error:', error);
-        // エラーでもレンダリングを続行
-        setAllImagesReady(true);
-        continueRender(prefetchHandle);
-      });
-    
-    // Cleanup
-    return () => {
-      prefetches.forEach(p => p.free());
-    };
-  }, [projectJson?.scenes, prefetchHandle]);
+  // Debug: projectJson の内容を確認
+  console.log('[RilarcVideo] projectJson type:', typeof projectJson);
+  console.log('[RilarcVideo] projectJson scenes count:', projectJson?.scenes?.length);
   
-  // Debug: props を確認
-  console.log('[RilarcVideo] projectJson scenes:', projectJson?.scenes?.length);
-  console.log('[RilarcVideo] allImagesReady:', allImagesReady);
+  // scenes が undefined の場合は空配列を使用
+  const scenes = projectJson?.scenes || [];
   
   // 各シーンの開始フレームを計算
-  const scenesWithFrames = (projectJson?.scenes || []).map((scene) => {
+  const scenesWithFrames = scenes.map((scene, index) => {
     const startFrame = msToFrames(scene.timing.start_ms, fps);
     const durationFrames = msToFrames(scene.timing.duration_ms, fps);
+    
+    // Debug: 各シーンのタイミングをログ
+    console.log(`[RilarcVideo] Scene ${index + 1} (idx=${scene.idx}): start_ms=${scene.timing.start_ms}, duration_ms=${scene.timing.duration_ms}`);
+    console.log(`[RilarcVideo] Scene ${index + 1}: startFrame=${startFrame}, durationFrames=${durationFrames}`);
+    console.log(`[RilarcVideo] Scene ${index + 1} image: ${scene.assets?.image?.url}`);
+    
     return { scene, startFrame, durationFrames };
   });
+  
+  console.log(`[RilarcVideo] Total scenesWithFrames: ${scenesWithFrames.length}`);
   
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
       {/* BGM（あれば） */}
-      {projectJson.assets?.bgm && (
+      {projectJson?.assets?.bgm?.url && (
         <Audio
           src={projectJson.assets.bgm.url}
-          volume={projectJson.build_settings.audio?.bgm_volume ?? 0.3}
+          volume={projectJson.build_settings?.audio?.bgm_volume ?? 0.3}
           loop
         />
       )}
       
       {/* シーン群 */}
-      {scenesWithFrames.map(({ scene, startFrame, durationFrames }) => (
-        <Sequence
-          key={scene.idx}
-          from={startFrame}
-          durationInFrames={durationFrames}
-        >
-          <Scene scene={scene} startFrame={startFrame} />
-        </Sequence>
-      ))}
+      {scenesWithFrames.map(({ scene, startFrame, durationFrames }, index) => {
+        console.log(`[RilarcVideo] Rendering Sequence for scene ${index + 1}: from=${startFrame}, duration=${durationFrames}`);
+        return (
+          <Sequence
+            key={`scene-${scene.idx}`}
+            from={startFrame}
+            durationInFrames={durationFrames}
+          >
+            <Scene scene={scene} startFrame={startFrame} />
+          </Sequence>
+        );
+      })}
     </AbsoluteFill>
   );
 };

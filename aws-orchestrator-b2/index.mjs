@@ -171,6 +171,13 @@ async function handleStart(event) {
           },
         },
         codec: "h264",
+        // 外部画像URLを使用しているため、並列度を下げて画像取得の問題を回避
+        // framesPerLambda: チャンクサイズを大きくする（デフォルト: 自動計算）
+        framesPerLambda: 600, // 約20秒分のフレームを1つのLambdaで処理
+        // maxRetries: 画像取得失敗時のリトライ回数
+        maxRetries: 3,
+        // timeoutInMilliseconds: 各Lambdaのタイムアウト
+        timeoutInMilliseconds: 180000, // 3分
         // Remotion will output to its own bucket, we'll copy to OUTPUT_BUCKET on completion
       }),
       90000, // 90 second timeout
