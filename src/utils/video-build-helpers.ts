@@ -166,6 +166,33 @@ export interface SceneData {
     duration_ms: number | null;
     audio_url?: string | null;
   }> | null;
+  // R2: text_render_mode（Remotion描画モード）
+  text_render_mode?: 'remotion' | 'baked' | 'none';
+  // R2-A: scene_balloons から読み込んだ吹き出しリスト
+  balloons?: Array<{
+    id: number;
+    utterance_id: number | null;
+    position: { x: number; y: number };
+    size: { w: number; h: number };
+    shape: 'round' | 'square' | 'thought' | 'shout' | 'caption';
+    display_mode: 'voice_window' | 'manual_window';
+    timing?: { start_ms: number | null; end_ms: number | null } | null;
+    tail: { enabled: boolean; tip_x: number; tip_y: number };
+    style: {
+      writing_mode: string;
+      text_align: string;
+      font_family: string;
+      font_weight: number;
+      font_size: number;
+      line_height: number;
+      padding: number;
+      bg_color: string;
+      text_color: string;
+      border_color: string;
+      border_width: number;
+    };
+    z_index: number;
+  }> | null;
 }
 
 export interface ProjectData {
@@ -630,6 +657,7 @@ export function validateUtterancesPreflight(
  */
 export interface VoiceAsset {
   id: string;
+  utterance_id?: number;  // R2: scene_utterances.id への参照
   role: 'narration' | 'dialogue';
   character_key?: string | null;
   character_name?: string | null;
@@ -637,11 +665,51 @@ export interface VoiceAsset {
   duration_ms: number;
   text: string;
   start_ms?: number;
+  end_ms?: number;  // R2: start_ms + duration_ms
   format?: 'mp3' | 'wav';
 }
 
 /**
- * RemotionScene_R1 - Phase R1 用シーン型
+ * BalloonAsset - R2-A 吹き出し
+ * utterance と連動して表示/非表示
+ */
+export interface BalloonAsset {
+  id: string;
+  utterance_id: number;  // 必須: scene_utterances.id への参照
+  text: string;          // utterance.text と同じ
+  // タイミング（SSOT: utterance の区間）
+  start_ms: number;
+  end_ms: number;
+  // 位置・サイズ（0-1 正規化座標）
+  position: { x: number; y: number };
+  size: { w: number; h: number };
+  // 形状
+  shape: 'round' | 'square' | 'thought' | 'shout' | 'caption';
+  // しっぽ
+  tail: {
+    enabled: boolean;
+    tip_x: number;
+    tip_y: number;
+  };
+  // スタイル
+  style: {
+    writing_mode: 'horizontal' | 'vertical';
+    text_align: 'left' | 'center' | 'right';
+    font_family: string;
+    font_weight: number;
+    font_size: number;
+    line_height: number;
+    padding: number;
+    bg_color: string;
+    text_color: string;
+    border_color: string;
+    border_width: number;
+  };
+  z_index: number;
+}
+
+/**
+ * RemotionScene_R1 - Phase R1/R2 用シーン型
  * Remotion の ProjectSceneSchema に完全準拠
  */
 export interface RemotionScene_R1 {
@@ -655,6 +723,8 @@ export interface RemotionScene_R1 {
     head_pad_ms: number;
     tail_pad_ms: number;
   };
+  /** R2: 文字描画モード（remotion=Remotion描画, baked=焼込済, none=なし） */
+  text_render_mode?: 'remotion' | 'baked' | 'none';
   assets: {
     image?: {
       url: string;
@@ -674,6 +744,8 @@ export interface RemotionScene_R1 {
       duration_ms: number;
     };
   };
+  /** R2-A: 吹き出し（utterance と同期） */
+  balloons?: BalloonAsset[];
   characters?: {
     image?: string[];
     voice?: string;
@@ -786,7 +858,8 @@ export function buildProjectJson(
     // 1. voices[] 構築 - R1.5の核心
     const voices: VoiceAsset[] = [];
     
-    // R1.5: scene_utterances があればそこから voices を構築（SSOT優先）
+    // R1.5/R2: scene_utterances があればそこから voices を構築（SSOT優先）
+    // R2: utterance_id と end_ms を追加（balloon 同期用）
     if (scene.utterances && scene.utterances.length > 0) {
       let voiceStartMs = 0;
       for (const utt of scene.utterances) {
@@ -796,6 +869,7 @@ export function buildProjectJson(
           
           voices.push({
             id: `voice-utt-${utt.id}`,
+            utterance_id: utt.id,  // R2: balloon 連動用
             role: utt.role,
             character_key: utt.character_key || null,
             character_name: utt.character_name || null,
@@ -803,6 +877,7 @@ export function buildProjectJson(
             duration_ms: utt.duration_ms,
             text: utt.text || '',
             start_ms: voiceStartMs,
+            end_ms: voiceStartMs + utt.duration_ms,  // R2
             format: 'mp3',
           });
           
@@ -817,6 +892,7 @@ export function buildProjectJson(
           
           voices.push({
             id: `voice-utt-${utt.id}`,
+            utterance_id: utt.id,  // R2: balloon 連動用
             role: utt.role,
             character_key: utt.character_key || null,
             character_name: utt.character_name || null,
@@ -824,6 +900,7 @@ export function buildProjectJson(
             duration_ms: estimatedDuration,
             text: utt.text || '',
             start_ms: voiceStartMs,
+            end_ms: voiceStartMs + estimatedDuration,  // R2
             format: 'mp3',
           });
           
@@ -887,7 +964,72 @@ export function buildProjectJson(
       };
     }
     
-    // 6. RemotionScene_R1 構築
+    // 6. R2-A: balloons 構築（utterance と同期）
+    // voice_window モードの場合、utterance の時間窓を使用
+    const balloons: BalloonAsset[] = [];
+    if (scene.balloons && scene.balloons.length > 0 && scene.text_render_mode !== 'baked' && scene.text_render_mode !== 'none') {
+      // voices から utterance_id -> timing のマップを作成
+      const utteranceTimingMap = new Map<number, { start_ms: number; end_ms: number; text: string }>();
+      for (const v of voices) {
+        if (v.utterance_id) {
+          utteranceTimingMap.set(v.utterance_id, {
+            start_ms: v.start_ms || 0,
+            end_ms: v.end_ms || (v.start_ms || 0) + v.duration_ms,
+            text: v.text,
+          });
+        }
+      }
+      
+      for (const b of scene.balloons) {
+        // voice_window の場合は utterance のタイミングを使用
+        let balloonStartMs = 0;
+        let balloonEndMs = 0;
+        let balloonText = '';
+        
+        if (b.display_mode === 'voice_window' && b.utterance_id) {
+          const timing = utteranceTimingMap.get(b.utterance_id);
+          if (timing) {
+            balloonStartMs = timing.start_ms;
+            balloonEndMs = timing.end_ms;
+            balloonText = timing.text;
+          }
+        } else if (b.display_mode === 'manual_window' && b.timing) {
+          balloonStartMs = b.timing.start_ms || 0;
+          balloonEndMs = b.timing.end_ms || 0;
+        }
+        
+        // utterance_id が必須なので、ない場合はスキップ
+        if (!b.utterance_id) continue;
+        
+        balloons.push({
+          id: `balloon-${b.id}`,
+          utterance_id: b.utterance_id,
+          text: balloonText,
+          start_ms: balloonStartMs,
+          end_ms: balloonEndMs,
+          position: b.position,
+          size: b.size,
+          shape: b.shape,
+          tail: b.tail,
+          style: {
+            writing_mode: b.style.writing_mode as 'horizontal' | 'vertical',
+            text_align: b.style.text_align as 'left' | 'center' | 'right',
+            font_family: b.style.font_family,
+            font_weight: b.style.font_weight,
+            font_size: b.style.font_size,
+            line_height: b.style.line_height,
+            padding: b.style.padding,
+            bg_color: b.style.bg_color,
+            text_color: b.style.text_color,
+            border_color: b.style.border_color,
+            border_width: b.style.border_width,
+          },
+          z_index: b.z_index,
+        });
+      }
+    }
+    
+    // 7. RemotionScene_R1 構築
     return {
       idx: scene.idx,
       role: scene.role || 'main_point',
@@ -899,6 +1041,8 @@ export function buildProjectJson(
         head_pad_ms: 0,
         tail_pad_ms: 0,
       },
+      // R2: text_render_mode
+      text_render_mode: scene.text_render_mode || 'remotion',
       assets: {
         image: imageUrl ? {
           url: imageUrl,
@@ -908,6 +1052,8 @@ export function buildProjectJson(
         audio: audioAsset,  // 後方互換
         voices: voices.length > 0 ? voices : undefined,  // R1.5
       },
+      // R2-A: balloons
+      balloons: balloons.length > 0 ? balloons : undefined,
     };
   });
   
