@@ -496,6 +496,22 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
 // ====================================================================
 
 /**
+ * VoiceAsset - R1.5 の核心
+ * ナレーション/キャラ別音声の両方に対応
+ */
+export interface VoiceAsset {
+  id: string;
+  role: 'narration' | 'dialogue';
+  character_key?: string | null;
+  character_name?: string | null;
+  audio_url: string;
+  duration_ms: number;
+  text: string;
+  start_ms?: number;
+  format?: 'mp3' | 'wav';
+}
+
+/**
  * RemotionScene_R1 - Phase R1 用シーン型
  * Remotion の ProjectSceneSchema に完全準拠
  */
@@ -516,11 +532,14 @@ export interface RemotionScene_R1 {
       width: number;
       height: number;
     };
+    /** @deprecated R1.5では voices を使用 */
     audio?: {
       url: string;
       duration_ms: number;
       format: 'mp3' | 'wav';
     };
+    /** R1.5: 複数話者音声配列 */
+    voices?: VoiceAsset[];
     video_clip?: {
       url: string;
       duration_ms: number;
@@ -533,16 +552,18 @@ export interface RemotionScene_R1 {
 }
 
 /**
- * RemotionProjectJson_R1 - Phase R1 用プロジェクトJSON型
+ * RemotionProjectJson_R1 - Phase R1/R1.5 用プロジェクトJSON型
  * Remotion の ProjectJsonSchema に完全準拠
  */
 export interface RemotionProjectJson_R1 {
-  schema_version: '1.1';
+  schema_version: '1.1' | '1.5';
   project_id: number;
   project_title: string;
   created_at: string;
   build_settings: {
     preset: string;
+    /** R1.5: アスペクト比選択 */
+    aspect_ratio?: '9:16' | '16:9' | '1:1';
     resolution: {
       width: number;
       height: number;
@@ -567,7 +588,7 @@ export interface RemotionProjectJson_R1 {
   assets?: {
     bgm?: {
       url: string;
-      duration_ms: number;
+      duration_ms?: number;
       volume: number;
     };
   };
@@ -577,22 +598,27 @@ export interface RemotionProjectJson_R1 {
     total_duration_ms: number;
     has_audio: boolean;
     has_video_clips: boolean;
+    /** R1.5: 音声付きシーン数 */
+    scenes_with_voices?: number;
   };
 }
 
 /**
  * buildProjectJson - Remotionスキーマ完全準拠版
  * 
- * Phase R1: video-only で全シーンが繋がるMP4を出す
+ * Phase R1.5: 複数話者音声 + 画角選択対応
  * 
  * ## SSOT ルール
- * - duration_ms: audio があれば audio.duration_ms、なければ computeSceneDurationMs()
+ * - duration_ms: voices[] があれば Σ(voices[].duration_ms) + padding
  * - start_ms: 累積計算（0, n, n+m, ...）
+ * - 字幕: voices[].text から表示
  * 
- * ## Phase R1 で扱わないもの
- * - ❌ balloons / telops / bgm
- * - ❌ video_clip（generated video）
- * - ❌ comic 専用処理
+ * ## R1.5 対応
+ * - ✅ voices[] (複数話者音声)
+ * - ✅ aspect_ratio (画角選択)
+ * - ✅ BGM (入れる/入れない)
+ * - ❌ ducking (R2)
+ * - ❌ subtitles[] 分割 (R2)
  * 
  * @param project プロジェクト基本情報
  * @param scenes シーンデータ配列（idx昇順）
@@ -608,35 +634,62 @@ export function buildProjectJson(
     aspectRatio?: '9:16' | '16:9' | '1:1';
     resolution?: '720p' | '1080p';
     fps?: number;
+    schemaVersion?: '1.1' | '1.5';
   }
 ): RemotionProjectJson_R1 {
   const now = new Date().toISOString();
   const aspectRatio = options?.aspectRatio || '9:16';
   const resolution = options?.resolution || '1080p';
   const fps = options?.fps || 30;
+  const schemaVersion = options?.schemaVersion || '1.5';
   
   const resolutionSize = RESOLUTION_MAP[resolution][aspectRatio];
   
   // ========================================
-  // Phase R1 核心: start_ms 累積計算
+  // R1.5 核心: voices[] + start_ms 累積計算
   // ========================================
   let currentMs = 0;
   let hasAudio = false;
   let hasVideoClips = false;
+  let scenesWithVoices = 0;
   
   const remotionScenes: RemotionScene_R1[] = scenes.map((scene) => {
-    // 1. duration_ms 確定 (SSOT)
-    // audio があれば audio.duration_ms を優先
-    const durationMs = scene.active_audio?.duration_ms 
-      ? scene.active_audio.duration_ms + AUDIO_PADDING_MS
-      : computeSceneDurationMs(scene);
+    // 1. voices[] 構築 - R1.5の核心
+    const voices: VoiceAsset[] = [];
     
-    // 2. start_ms 累積計算 (Phase R1 の核心)
+    // 既存の audio を voice に変換（後方互換）
+    if (scene.active_audio?.audio_url) {
+      hasAudio = true;
+      scenesWithVoices++;
+      
+      voices.push({
+        id: `voice-scene${scene.idx}-0`,
+        role: 'narration',
+        character_key: null,
+        character_name: null,
+        audio_url: scene.active_audio.audio_url,
+        duration_ms: scene.active_audio.duration_ms,
+        text: scene.dialogue || '',
+        start_ms: 0,
+        format: 'mp3',
+      });
+    }
+    
+    // 2. duration_ms 確定 (SSOT)
+    // voices があれば Σ(voices[].duration_ms) + padding
+    let durationMs: number;
+    if (voices.length > 0) {
+      const voicesDuration = voices.reduce((sum, v) => sum + v.duration_ms, 0);
+      durationMs = voicesDuration + AUDIO_PADDING_MS;
+    } else {
+      durationMs = computeSceneDurationMs(scene);
+    }
+    
+    // 3. start_ms 累積計算
     const startMs = currentMs;
     currentMs += durationMs;
     
-    // 3. visual URL 取得
-    // Phase R1: image or comic（静止画として扱う）
+    // 4. visual URL 取得
     let imageUrl: string | undefined;
     const displayType = scene.display_asset_type || 'image';
     
@@ -646,10 +699,9 @@ export function buildProjectJson(
       imageUrl = scene.active_image.r2_url;
     }
     
-    // 4. audio 取得
+    // 5. legacy audio 構築（後方互換）
     let audioAsset: RemotionScene_R1['assets']['audio'] | undefined;
     if (scene.active_audio?.audio_url) {
-      hasAudio = true;
       audioAsset = {
         url: scene.active_audio.audio_url,
         duration_ms: scene.active_audio.duration_ms,
@@ -657,7 +709,7 @@ export function buildProjectJson(
       };
     }
     
-    // 5. RemotionScene_R1 構築
+    // 6. RemotionScene_R1 構築
     return {
       idx: scene.idx,
       role: scene.role || 'main_point',
@@ -675,10 +727,9 @@ export function buildProjectJson(
           width: resolutionSize.width,
           height: resolutionSize.height,
         } : undefined,
-        audio: audioAsset,
-        // Phase R1: video_clip は未対応
+        audio: audioAsset,  // 後方互換
+        voices: voices.length > 0 ? voices : undefined,  // R1.5
       },
-      // Phase R1: characters は未対応
     };
   });
   
@@ -686,12 +737,13 @@ export function buildProjectJson(
   // RemotionProjectJson_R1 構築
   // ========================================
   return {
-    schema_version: '1.1',
+    schema_version: schemaVersion,
     project_id: project.id,
     project_title: project.title,
     created_at: now,
     build_settings: {
       preset: settings.motion?.preset || 'none',
+      aspect_ratio: aspectRatio,  // R1.5
       resolution: resolutionSize,
       fps,
       codec: 'h264',
@@ -710,13 +762,20 @@ export function buildProjectJson(
       default_scene_duration_ms: DEFAULT_SCENE_DURATION_MS,
       transition_duration_ms: 300,
     },
-    // Phase R1: BGM は未対応
+    // R1.5: BGM対応
+    assets: settings.bgm?.enabled && settings.bgm?.url ? {
+      bgm: {
+        url: settings.bgm.url,
+        volume: settings.bgm.volume || 0.3,
+      },
+    } : undefined,
     scenes: remotionScenes,
     summary: {
       total_scenes: scenes.length,
       total_duration_ms: currentMs,
       has_audio: hasAudio,
       has_video_clips: hasVideoClips,
+      scenes_with_voices: scenesWithVoices,  // R1.5
     },
   };
 }

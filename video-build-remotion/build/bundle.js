@@ -158,31 +158,55 @@ const Subtitle = ({
 
 
 
-const Scene = ({ scene, showSubtitle = true, subtitleStyle = "default" }) => {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+const Scene = ({
+  scene,
+  showSubtitle = true,
+  subtitleStyle = "default"
+}) => {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
   const frame = (0,esm.useCurrentFrame)();
   const { fps } = (0,esm.useVideoConfig)();
   const durationFrames = msToFrames(scene.timing.duration_ms, fps);
-  const relativeFrame = frame;
   if (frame === 0) {
     console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
     console.log(`[Scene ${scene.idx}] Image URL: ${(_b = (_a = scene.assets) == null ? void 0 : _a.image) == null ? void 0 : _b.url}`);
     console.log(`[Scene ${scene.idx}] Duration frames: ${durationFrames}`);
+    console.log(`[Scene ${scene.idx}] Voices count: ${((_d = (_c = scene.assets) == null ? void 0 : _c.voices) == null ? void 0 : _d.length) || 0}`);
   }
   const fadeFrames = Math.min(15, Math.floor(durationFrames / 4));
   const opacity = (0,esm.interpolate)(
-    relativeFrame,
+    frame,
     [0, fadeFrames, durationFrames - fadeFrames, durationFrames],
     [0, 1, 1, 0],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
   const scale = (0,esm.interpolate)(
-    relativeFrame,
+    frame,
     [0, durationFrames],
     [1, 1.05],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
-  if ((_d = (_c = scene.assets) == null ? void 0 : _c.video_clip) == null ? void 0 : _d.url) {
+  const voices = ((_e = scene.assets) == null ? void 0 : _e.voices) || [];
+  const hasVoices = voices.length > 0;
+  const effectiveVoices = hasVoices ? voices : ((_g = (_f = scene.assets) == null ? void 0 : _f.audio) == null ? void 0 : _g.url) ? [{
+    id: `legacy-audio-${scene.idx}`,
+    role: "narration",
+    character_key: null,
+    character_name: null,
+    audio_url: scene.assets.audio.url,
+    duration_ms: scene.assets.audio.duration_ms,
+    text: scene.dialogue || "",
+    start_ms: 0,
+    format: scene.assets.audio.format || "mp3"
+  }] : [];
+  const currentMs = frame / fps * 1e3;
+  const currentVoice = effectiveVoices.find((voice) => {
+    const startMs = voice.start_ms ?? 0;
+    const endMs = startMs + voice.duration_ms;
+    return currentMs >= startMs && currentMs < endMs;
+  });
+  const subtitleText = (currentVoice == null ? void 0 : currentVoice.text) || (showSubtitle && !hasVoices ? scene.dialogue : "");
+  if ((_i = (_h = scene.assets) == null ? void 0 : _h.video_clip) == null ? void 0 : _i.url) {
     return /* @__PURE__ */ (0,jsx_runtime.jsxs)(esm.AbsoluteFill, { style: { opacity }, children: [
       /* @__PURE__ */ (0,jsx_runtime.jsx)(
         esm.Video,
@@ -195,11 +219,23 @@ const Scene = ({ scene, showSubtitle = true, subtitleStyle = "default" }) => {
           }
         }
       ),
-      ((_f = (_e = scene.assets) == null ? void 0 : _e.audio) == null ? void 0 : _f.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url }),
-      showSubtitle && scene.dialogue && /* @__PURE__ */ (0,jsx_runtime.jsx)(
+      effectiveVoices.map((voice) => {
+        const voiceStartFrame = msToFrames(voice.start_ms ?? 0, fps);
+        const voiceDurationFrames = msToFrames(voice.duration_ms, fps);
+        return /* @__PURE__ */ (0,jsx_runtime.jsx)(
+          esm.Sequence,
+          {
+            from: voiceStartFrame,
+            durationInFrames: voiceDurationFrames,
+            children: /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: voice.audio_url })
+          },
+          voice.id
+        );
+      }),
+      showSubtitle && subtitleText && /* @__PURE__ */ (0,jsx_runtime.jsx)(
         Subtitle,
         {
-          text: scene.dialogue,
+          text: subtitleText,
           durationFrames,
           style: subtitleStyle,
           position: "bottom"
@@ -207,7 +243,7 @@ const Scene = ({ scene, showSubtitle = true, subtitleStyle = "default" }) => {
       )
     ] });
   }
-  const imageUrl = (_h = (_g = scene.assets) == null ? void 0 : _g.image) == null ? void 0 : _h.url;
+  const imageUrl = (_k = (_j = scene.assets) == null ? void 0 : _j.image) == null ? void 0 : _k.url;
   return /* @__PURE__ */ (0,jsx_runtime.jsxs)(esm.AbsoluteFill, { style: { opacity, backgroundColor: "black" }, children: [
     imageUrl ? /* @__PURE__ */ (0,jsx_runtime.jsx)(
       esm.Img,
@@ -220,27 +256,36 @@ const Scene = ({ scene, showSubtitle = true, subtitleStyle = "default" }) => {
           transform: `scale(${scale})`
         }
       }
-    ) : (
-      // 画像URLがない場合はプレースホルダー表示
-      /* @__PURE__ */ (0,jsx_runtime.jsxs)("div", { style: {
-        width: "100%",
-        height: "100%",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        color: "white",
-        fontSize: 48
-      }, children: [
-        "Scene ",
-        scene.idx,
-        " - No Image"
-      ] })
-    ),
-    ((_j = (_i = scene.assets) == null ? void 0 : _i.audio) == null ? void 0 : _j.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url }),
-    showSubtitle && scene.dialogue && /* @__PURE__ */ (0,jsx_runtime.jsx)(
+    ) : /* @__PURE__ */ (0,jsx_runtime.jsxs)("div", { style: {
+      width: "100%",
+      height: "100%",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      color: "white",
+      fontSize: 48
+    }, children: [
+      "Scene ",
+      scene.idx,
+      " - No Image"
+    ] }),
+    effectiveVoices.map((voice) => {
+      const voiceStartFrame = msToFrames(voice.start_ms ?? 0, fps);
+      const voiceDurationFrames = msToFrames(voice.duration_ms, fps);
+      return /* @__PURE__ */ (0,jsx_runtime.jsx)(
+        esm.Sequence,
+        {
+          from: voiceStartFrame,
+          durationInFrames: voiceDurationFrames,
+          children: /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: voice.audio_url })
+        },
+        voice.id
+      );
+    }),
+    showSubtitle && subtitleText && /* @__PURE__ */ (0,jsx_runtime.jsx)(
       Subtitle,
       {
-        text: scene.dialogue,
+        text: subtitleText,
         durationFrames,
         style: subtitleStyle,
         position: "bottom"

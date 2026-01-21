@@ -1,4 +1,32 @@
+/**
+ * Project Schema - R1.5 Compatible
+ * 
+ * 後方互換性を維持しつつ R1.5 の voices[] をサポート
+ */
+
 import { z } from 'zod';
+
+// ====================================================================
+// VoiceAsset - R1.5
+// ====================================================================
+
+export const VoiceAssetSchema = z.object({
+  id: z.string(),
+  role: z.enum(['narration', 'dialogue']),
+  character_key: z.string().optional().nullable(),
+  character_name: z.string().optional().nullable(),
+  audio_url: z.string(),
+  duration_ms: z.number(),
+  text: z.string(),
+  start_ms: z.number().optional(),
+  format: z.enum(['mp3', 'wav']).default('mp3'),
+});
+
+export type VoiceAsset = z.infer<typeof VoiceAssetSchema>;
+
+// ====================================================================
+// ProjectScene - R1.1/R1.5 両対応
+// ====================================================================
 
 export const ProjectSceneSchema = z.object({
   idx: z.number(),
@@ -17,11 +45,14 @@ export const ProjectSceneSchema = z.object({
       width: z.number(),
       height: z.number(),
     }).optional(),
+    /** @deprecated R1.5では voices を使用 */
     audio: z.object({
       url: z.string(),
       duration_ms: z.number(),
       format: z.enum(['mp3', 'wav']),
     }).optional(),
+    /** R1.5: 複数話者音声配列 */
+    voices: z.array(VoiceAssetSchema).optional(),
     video_clip: z.object({
       url: z.string(),
       duration_ms: z.number(),
@@ -33,14 +64,20 @@ export const ProjectSceneSchema = z.object({
   }).optional(),
 });
 
+// ====================================================================
+// ProjectJson - R1.1/R1.5 両対応
+// ====================================================================
+
 export const ProjectJsonSchema = z.object({
-  schema_version: z.literal('1.1'),
+  schema_version: z.union([z.literal('1.1'), z.literal('1.5')]),
   project_id: z.number(),
   project_title: z.string(),
   created_at: z.string(),
   
   build_settings: z.object({
     preset: z.string(),
+    /** R1.5: アスペクト比選択 */
+    aspect_ratio: z.enum(['9:16', '16:9', '1:1']).optional(),
     resolution: z.object({
       width: z.number(),
       height: z.number(),
@@ -67,7 +104,7 @@ export const ProjectJsonSchema = z.object({
   assets: z.object({
     bgm: z.object({
       url: z.string(),
-      duration_ms: z.number(),
+      duration_ms: z.number().optional(),
       volume: z.number(),
     }).optional(),
   }).optional(),
@@ -79,6 +116,7 @@ export const ProjectJsonSchema = z.object({
     total_duration_ms: z.number(),
     has_audio: z.boolean(),
     has_video_clips: z.boolean(),
+    scenes_with_voices: z.number().optional(),
   }),
 });
 
