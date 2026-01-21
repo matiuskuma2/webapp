@@ -6,9 +6,15 @@ import { msToFrames } from './utils/timing';
 
 interface RilarcVideoProps {
   projectJson: ProjectJson;
+  showSubtitle?: boolean;
+  subtitleStyle?: 'default' | 'cinematic' | 'news' | 'minimal';
 }
 
-export const RilarcVideo: React.FC<RilarcVideoProps> = ({ projectJson }) => {
+export const RilarcVideo: React.FC<RilarcVideoProps> = ({ 
+  projectJson, 
+  showSubtitle = true,
+  subtitleStyle = 'default'
+}) => {
   const { fps } = useVideoConfig();
   
   // Debug: projectJson の内容を確認
@@ -53,7 +59,11 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({ projectJson }) => {
             from={startFrame}
             durationInFrames={durationFrames}
           >
-            <Scene scene={scene} />
+            <Scene 
+              scene={scene} 
+              showSubtitle={showSubtitle}
+              subtitleStyle={subtitleStyle}
+            />
           </Sequence>
         );
       })}

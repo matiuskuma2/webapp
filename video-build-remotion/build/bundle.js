@@ -2,7 +2,7 @@
 /******/ 	"use strict";
 /******/ 	var __webpack_modules__ = ({
 
-/***/ 3851:
+/***/ 9870:
 /***/ ((__unused_webpack_module, __unused_webpack___webpack_exports__, __webpack_require__) => {
 
 
@@ -22,12 +22,143 @@ function calculateTotalFrames(totalDurationMs, fps) {
   return msToFrames(totalDurationMs, fps);
 }
 
+;// ./src/components/Subtitle.tsx
+
+
+
+const Subtitle = ({
+  text,
+  durationFrames,
+  style = "default",
+  position = "bottom",
+  fontSize = 42
+}) => {
+  const frame = (0,esm.useCurrentFrame)();
+  const { fps } = (0,esm.useVideoConfig)();
+  if (!text || text.trim() === "") {
+    return null;
+  }
+  const fadeInFrames = 10;
+  const fadeOutFrames = 10;
+  const opacity = (0,esm.interpolate)(
+    frame,
+    [0, fadeInFrames, durationFrames - fadeOutFrames, durationFrames],
+    [0, 1, 1, 0],
+    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
+  );
+  const entrance = (0,esm.spring)({
+    frame,
+    fps,
+    config: {
+      damping: 100,
+      stiffness: 200,
+      mass: 0.5
+    }
+  });
+  const translateY = (0,esm.interpolate)(entrance, [0, 1], [20, 0]);
+  const positionStyles = {
+    bottom: {
+      bottom: 80,
+      left: 0,
+      right: 0
+    },
+    center: {
+      top: "50%",
+      left: 0,
+      right: 0,
+      transform: `translateY(-50%) translateY(${translateY}px)`
+    },
+    top: {
+      top: 80,
+      left: 0,
+      right: 0
+    }
+  };
+  const getStylePreset = () => {
+    const baseStyle = {
+      position: "absolute",
+      ...positionStyles[position],
+      display: "flex",
+      justifyContent: "center",
+      alignItems: "center",
+      padding: "0 40px",
+      opacity,
+      transform: position !== "center" ? `translateY(${translateY}px)` : void 0
+    };
+    return baseStyle;
+  };
+  const getTextStyle = () => {
+    switch (style) {
+      case "cinematic":
+        return {
+          color: "white",
+          fontSize,
+          fontWeight: "400",
+          fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+          textAlign: "center",
+          lineHeight: 1.6,
+          letterSpacing: "0.05em",
+          textShadow: "2px 2px 8px rgba(0,0,0,0.8), 0 0 20px rgba(0,0,0,0.5)",
+          maxWidth: "90%"
+        };
+      case "news":
+        return {
+          color: "white",
+          fontSize,
+          fontWeight: "700",
+          fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+          textAlign: "center",
+          lineHeight: 1.4,
+          backgroundColor: "rgba(0, 0, 0, 0.7)",
+          padding: "12px 24px",
+          borderRadius: 4,
+          maxWidth: "90%"
+        };
+      case "minimal":
+        return {
+          color: "white",
+          fontSize: fontSize * 0.9,
+          fontWeight: "300",
+          fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+          textAlign: "center",
+          lineHeight: 1.5,
+          textShadow: "1px 1px 4px rgba(0,0,0,0.9)",
+          maxWidth: "85%"
+        };
+      default:
+        return {
+          color: "white",
+          fontSize,
+          fontWeight: "600",
+          fontFamily: "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+          textAlign: "center",
+          lineHeight: 1.5,
+          // 縁取り効果（複数のtext-shadowで実現）
+          textShadow: `
+            -2px -2px 0 #000,
+            2px -2px 0 #000,
+            -2px 2px 0 #000,
+            2px 2px 0 #000,
+            -2px 0 0 #000,
+            2px 0 0 #000,
+            0 -2px 0 #000,
+            0 2px 0 #000,
+            0 0 10px rgba(0,0,0,0.8)
+          `,
+          maxWidth: "90%"
+        };
+    }
+  };
+  return /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { style: getStylePreset(), children: /* @__PURE__ */ (0,jsx_runtime.jsx)("div", { style: getTextStyle(), children: text }) });
+};
+
 ;// ./src/components/Scene.tsx
 
 
 
 
-const Scene = ({ scene }) => {
+
+const Scene = ({ scene, showSubtitle = true, subtitleStyle = "default" }) => {
   var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
   const frame = (0,esm.useCurrentFrame)();
   const { fps } = (0,esm.useVideoConfig)();
@@ -64,7 +195,16 @@ const Scene = ({ scene }) => {
           }
         }
       ),
-      ((_f = (_e = scene.assets) == null ? void 0 : _e.audio) == null ? void 0 : _f.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url })
+      ((_f = (_e = scene.assets) == null ? void 0 : _e.audio) == null ? void 0 : _f.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url }),
+      showSubtitle && scene.dialogue && /* @__PURE__ */ (0,jsx_runtime.jsx)(
+        Subtitle,
+        {
+          text: scene.dialogue,
+          durationFrames,
+          style: subtitleStyle,
+          position: "bottom"
+        }
+      )
     ] });
   }
   const imageUrl = (_h = (_g = scene.assets) == null ? void 0 : _g.image) == null ? void 0 : _h.url;
@@ -96,7 +236,16 @@ const Scene = ({ scene }) => {
         " - No Image"
       ] })
     ),
-    ((_j = (_i = scene.assets) == null ? void 0 : _i.audio) == null ? void 0 : _j.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url })
+    ((_j = (_i = scene.assets) == null ? void 0 : _i.audio) == null ? void 0 : _j.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url }),
+    showSubtitle && scene.dialogue && /* @__PURE__ */ (0,jsx_runtime.jsx)(
+      Subtitle,
+      {
+        text: scene.dialogue,
+        durationFrames,
+        style: subtitleStyle,
+        position: "bottom"
+      }
+    )
   ] });
 };
 
@@ -106,7 +255,11 @@ const Scene = ({ scene }) => {
 
 
 
-const RilarcVideo = ({ projectJson }) => {
+const RilarcVideo = ({
+  projectJson,
+  showSubtitle = true,
+  subtitleStyle = "default"
+}) => {
   var _a, _b, _c, _d, _e;
   const { fps } = (0,esm.useVideoConfig)();
   console.log("[RilarcVideo] projectJson type:", typeof projectJson);
@@ -138,7 +291,14 @@ const RilarcVideo = ({ projectJson }) => {
         {
           from: startFrame,
           durationInFrames: durationFrames,
-          children: /* @__PURE__ */ (0,jsx_runtime.jsx)(Scene, { scene })
+          children: /* @__PURE__ */ (0,jsx_runtime.jsx)(
+            Scene,
+            {
+              scene,
+              showSubtitle,
+              subtitleStyle
+            }
+          )
         },
         `scene-${scene.idx}`
       );
@@ -27548,7 +27708,7 @@ var NoReactInternals = {
 /******/ 	// Load entry module and return exports
 /******/ 	// This entry module is referenced by other modules so it can't be inlined
 /******/ 	__webpack_require__(6507);
-/******/ 	__webpack_require__(3851);
+/******/ 	__webpack_require__(9870);
 /******/ 	__webpack_require__(3610);
 /******/ 	var __webpack_exports__ = __webpack_require__(3482);
 /******/ 	

@@ -2,13 +2,16 @@ import React from 'react';
 import { AbsoluteFill, Img, Audio, Video, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
 import type { ProjectScene } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
+import { Subtitle } from './Subtitle';
 
 interface SceneProps {
   scene: ProjectScene;
   // startFrame は不要 - Sequence 内では useCurrentFrame() が相対フレームを返す
+  showSubtitle?: boolean;
+  subtitleStyle?: 'default' | 'cinematic' | 'news' | 'minimal';
 }
 
-export const Scene: React.FC<SceneProps> = ({ scene }) => {
+export const Scene: React.FC<SceneProps> = ({ scene, showSubtitle = true, subtitleStyle = 'default' }) => {
   // Sequence 内では useCurrentFrame() は既に相対フレームを返す
   // 重要：Sequence の from が 555 でも、Sequence 内の frame は 0 から始まる
   const frame = useCurrentFrame();
@@ -57,6 +60,15 @@ export const Scene: React.FC<SceneProps> = ({ scene }) => {
         {scene.assets?.audio?.url && (
           <Audio src={scene.assets.audio.url} />
         )}
+        {/* テロップ表示 */}
+        {showSubtitle && scene.dialogue && (
+          <Subtitle
+            text={scene.dialogue}
+            durationFrames={durationFrames}
+            style={subtitleStyle}
+            position="bottom"
+          />
+        )}
       </AbsoluteFill>
     );
   }
@@ -92,6 +104,15 @@ export const Scene: React.FC<SceneProps> = ({ scene }) => {
       )}
       {scene.assets?.audio?.url && (
         <Audio src={scene.assets.audio.url} />
+      )}
+      {/* テロップ表示 */}
+      {showSubtitle && scene.dialogue && (
+        <Subtitle
+          text={scene.dialogue}
+          durationFrames={durationFrames}
+          style={subtitleStyle}
+          position="bottom"
+        />
       )}
     </AbsoluteFill>
   );
