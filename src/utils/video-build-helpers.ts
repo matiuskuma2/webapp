@@ -504,6 +504,123 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
 }
 
 // ====================================================================
+// Phase R1.6: Utterances Preflight 検証
+// ====================================================================
+
+/**
+ * UtteranceError - 発話単位のエラー詳細
+ */
+export interface UtteranceError {
+  scene_id: number;
+  scene_idx: number;
+  utterance_id?: number;
+  type: 'NO_UTTERANCES' | 'TEXT_EMPTY' | 'AUDIO_MISSING';
+  message: string;
+}
+
+/**
+ * UtterancePreflightResult - utterances 検証結果
+ */
+export interface UtterancePreflightResult {
+  can_generate: boolean;
+  errors: UtteranceError[];
+  summary: {
+    total_scenes: number;
+    invalid_scenes: number;
+    invalid_utterances: number;
+  };
+}
+
+/**
+ * validateUtterancesPreflight - R1.6 utterance 単位の検証
+ * 
+ * チェック条件:
+ * A. utterances が存在するか (scene_utterances.length > 0)
+ * B. 各 utterance に text があるか (text.trim().length > 0)
+ * C. 各 utterance に音声が生成済みか (audio_generation_id != null && status = 'completed')
+ * 
+ * @returns UtterancePreflightResult
+ */
+export function validateUtterancesPreflight(
+  scenes: Array<{
+    id: number;
+    idx: number;
+    utterances?: Array<{
+      id: number;
+      text: string;
+      audio_generation_id: number | null;
+      audio_status?: string;  // 'completed' | 'pending' | 'generating' | 'failed'
+    }> | null;
+  }>
+): UtterancePreflightResult {
+  const errors: UtteranceError[] = [];
+  const invalidSceneIds = new Set<number>();
+  let invalidUtteranceCount = 0;
+
+  for (const scene of scenes) {
+    const utterances = scene.utterances || [];
+
+    // A. utterances が存在するか
+    if (utterances.length === 0) {
+      errors.push({
+        scene_id: scene.id,
+        scene_idx: scene.idx,
+        type: 'NO_UTTERANCES',
+        message: `シーン${scene.idx}に発話がありません`,
+      });
+      invalidSceneIds.add(scene.id);
+      continue;  // このシーンはスキップ
+    }
+
+    // B & C. 各 utterance のチェック
+    for (const utterance of utterances) {
+      // B. text があるか
+      if (!utterance.text || utterance.text.trim().length === 0) {
+        errors.push({
+          scene_id: scene.id,
+          scene_idx: scene.idx,
+          utterance_id: utterance.id,
+          type: 'TEXT_EMPTY',
+          message: `シーン${scene.idx}の発話にテキストがありません`,
+        });
+        invalidSceneIds.add(scene.id);
+        invalidUtteranceCount++;
+        continue;
+      }
+
+      // C. 音声が生成済みか
+      const hasCompletedAudio = utterance.audio_generation_id != null && utterance.audio_status === 'completed';
+      if (!hasCompletedAudio) {
+        // テキストを短縮して表示（最大20文字）
+        const textPreview = utterance.text.length > 20 
+          ? utterance.text.substring(0, 20) + '…' 
+          : utterance.text;
+        
+        errors.push({
+          scene_id: scene.id,
+          scene_idx: scene.idx,
+          utterance_id: utterance.id,
+          type: 'AUDIO_MISSING',
+          message: `シーン${scene.idx}の「${textPreview}」に音声がありません`,
+        });
+        invalidSceneIds.add(scene.id);
+        invalidUtteranceCount++;
+      }
+    }
+  }
+
+  return {
+    can_generate: errors.length === 0 && scenes.length > 0,
+    errors,
+    summary: {
+      total_scenes: scenes.length,
+      invalid_scenes: invalidSceneIds.size,
+      invalid_utterances: invalidUtteranceCount,
+    },
+  };
+}
+
+// ====================================================================
 // Phase R1: Remotionスキーマ準拠 ProjectJson 生成
 // ====================================================================
 

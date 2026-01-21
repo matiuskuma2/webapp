@@ -161,6 +161,13 @@ CREATE TABLE IF NOT EXISTS scenes (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   chunk_id INTEGER REFERENCES text_chunks(id) ON DELETE SET NULL,
   run_id INTEGER REFERENCES runs(id) ON DELETE CASCADE,
+  -- Phase1.7: 漫画機能と表示素材タイプ
+  display_asset_type TEXT NOT NULL DEFAULT 'image' CHECK (display_asset_type IN ('image', 'comic', 'video')),
+  comic_data TEXT,
+  -- Phase X-3: speech_type (narration/dialogue)
+  speech_type TEXT NOT NULL DEFAULT 'narration' CHECK (speech_type IN ('narration', 'dialogue')),
+  -- Phase X-5: prompt customization flag
+  is_prompt_customized INTEGER NOT NULL DEFAULT 0,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE (project_id, idx)
 );
@@ -194,6 +201,8 @@ CREATE TABLE IF NOT EXISTS project_character_models (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   aliases_json TEXT NULL,
+  -- Phase X-5: B層 story traits（物語共通の特徴）
+  story_traits TEXT,
   FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
   UNIQUE(project_id, character_key)
 );
@@ -223,6 +232,21 @@ CREATE TABLE IF NOT EXISTS scene_character_map (
   FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
   UNIQUE(scene_id, character_key, role)
 );
+
+-- Phase X-5: Scene-specific character trait overrides (C層)
+CREATE TABLE IF NOT EXISTS scene_character_traits (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scene_id INTEGER NOT NULL,
+  character_key TEXT NOT NULL,
+  trait_description TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE,
+  UNIQUE(scene_id, character_key)
+);
+
+-- project_character_models に story_traits を追加
+-- (これは ALTER TABLE で追加する必要があるが、新規作成なので定義に含める)
 
 -- ============================================================
 -- World Settings
@@ -295,6 +319,8 @@ CREATE TABLE IF NOT EXISTS image_generations (
   provider TEXT NOT NULL DEFAULT 'gemini',
   model TEXT NOT NULL DEFAULT 'gemini-3-pro-image-preview',
   is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+  -- Phase1.7: asset_type for differentiating AI images vs comic images
+  asset_type TEXT NOT NULL DEFAULT 'ai' CHECK (asset_type IN ('ai', 'comic', 'uploaded')),
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE
 );

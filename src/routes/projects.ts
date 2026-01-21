@@ -448,6 +448,24 @@ projects.get('/:id/scenes', async (c) => {
             WHERE scene_id = ?
           `).bind(scene.id).all()
 
+          // R1.6: scene_utterances の状態取得（preflight用）
+          const { results: utteranceRows } = await c.env.DB.prepare(`
+            SELECT 
+              u.id,
+              u.text,
+              u.audio_generation_id,
+              ag.status as audio_status
+            FROM scene_utterances u
+            LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+            WHERE u.scene_id = ?
+            ORDER BY u.order_no ASC
+          `).bind(scene.id).all<{
+            id: number;
+            text: string;
+            audio_generation_id: number | null;
+            audio_status: string | null;
+          }>()
+
           // キャラクターの特徴情報をマージ（A/B/C層）
           const { results: charDetails } = await c.env.DB.prepare(`
             SELECT character_key, appearance_description, story_traits
@@ -538,7 +556,24 @@ projects.get('/:id/scenes', async (c) => {
               character_key: voiceCharacter.character_key,
               character_name: voiceCharacter.character_name,
               voice_preset_id: voiceCharacter.voice_preset_id
-            } : null
+            } : null,
+            // R1.6: utterance_status for preflight check in UI
+            utterance_status: (() => {
+              const total = utteranceRows.length;
+              const withAudio = utteranceRows.filter(
+                (u: any) => u.audio_generation_id && u.audio_status === 'completed'
+              ).length;
+              const withText = utteranceRows.filter(
+                (u: any) => u.text && u.text.trim().length > 0
+              ).length;
+              const isReady = total > 0 && withText === total && withAudio === total;
+              return {
+                total,
+                with_audio: withAudio,
+                with_text: withText,
+                is_ready: isReady
+              };
+            })()
           }
         })
       )

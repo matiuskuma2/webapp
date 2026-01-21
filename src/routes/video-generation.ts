@@ -1136,20 +1136,27 @@ videoGeneration.get('/video-builds/usage', async (c) => {
 
 /**
  * GET /api/projects/:projectId/video-builds/preflight
- * Preflight check for video build (素材検証)
+ * Preflight check for video build (素材検証 + R1.6 utterances検証)
  * 
  * ビルド開始前にUIがこのエンドポイントを呼び出して、
- * 素材が揃っているかを確認する
+ * 素材が揃っているか、utterances に音声があるかを確認する
+ * 
+ * R1.6 追加チェック:
+ * - 各シーンに utterances が存在するか
+ * - 各 utterance に text があるか
+ * - 各 utterance に音声が生成済みか
  */
 videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => {
-  const { validateProjectAssets } = await import('../utils/video-build-helpers');
+  const { validateProjectAssets, validateUtterancesPreflight } = await import('../utils/video-build-helpers');
   
   try {
     const projectId = parseInt(c.req.param('projectId'), 10);
     
     // シーンデータ取得
+    // Note: display_asset_type は一部のDBに存在しない可能性があるため、
+    // コード側でデフォルト値を設定
     const { results: rawScenes } = await c.env.DB.prepare(`
-      SELECT id, idx, role, title, dialogue, display_asset_type, comic_data
+      SELECT id, idx, role, title, dialogue, comic_data
       FROM scenes
       WHERE project_id = ?
       ORDER BY idx ASC
@@ -1158,15 +1165,17 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     if (!rawScenes || rawScenes.length === 0) {
       return c.json({
         is_ready: false,
+        can_generate: false,
         ready_count: 0,
         total_count: 0,
         missing: [],
         warnings: [],
+        utterance_errors: [],
         message: 'プロジェクトにシーンがありません',
       });
     }
     
-    // シーンごとに素材情報を取得
+    // シーンごとに素材情報 + utterances を取得
     const scenesWithAssets = await Promise.all(
       rawScenes.map(async (scene: any) => {
         // アクティブAI画像
@@ -1218,6 +1227,28 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           // ignore
         }
         
+        // R1.6: scene_utterances を取得（audio_generations の status を含む）
+        const { results: utteranceRows } = await c.env.DB.prepare(`
+          SELECT 
+            u.id,
+            u.order_no,
+            u.role,
+            u.text,
+            u.audio_generation_id,
+            ag.status as audio_status
+          FROM scene_utterances u
+          LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+          WHERE u.scene_id = ?
+          ORDER BY u.order_no ASC
+        `).bind(scene.id).all<{
+          id: number;
+          order_no: number;
+          role: string;
+          text: string;
+          audio_generation_id: number | null;
+          audio_status: string | null;
+        }>();
+        
         return {
           id: scene.id,
           idx: scene.idx,
@@ -1237,25 +1268,44 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           } : null,
           active_audio: activeAudio,
           comic_data: comicData,
+          // R1.6: utterances with audio_status
+          utterances: utteranceRows.map(u => ({
+            id: u.id,
+            text: u.text,
+            audio_generation_id: u.audio_generation_id,
+            audio_status: u.audio_status || null,
+          })),
         };
       })
     );
     
-    // Preflight検証
-    const validation = validateProjectAssets(scenesWithAssets);
+    // 素材 Preflight検証（画像/漫画/動画）
+    const assetValidation = validateProjectAssets(scenesWithAssets);
+    
+    // R1.6: Utterances Preflight検証
+    const utteranceValidation = validateUtterancesPreflight(scenesWithAssets);
+    
+    // 全体の判定: 素材OK AND utterances OK
+    const canGenerate = assetValidation.is_ready && utteranceValidation.can_generate;
     
     return c.json({
-      is_ready: validation.is_ready,
-      ready_count: validation.ready_count,
-      total_count: validation.total_count,
-      missing: validation.missing,
-      warnings: validation.warnings,
+      // 後方互換: is_ready は素材のみの判定
+      is_ready: assetValidation.is_ready,
+      ready_count: assetValidation.ready_count,
+      total_count: assetValidation.total_count,
+      missing: assetValidation.missing,
+      warnings: assetValidation.warnings,
+      // R1.6: utterances 検証結果
+      can_generate: canGenerate,
+      utterance_errors: utteranceValidation.errors,
+      utterance_summary: utteranceValidation.summary,
     });
     
   } catch (error) {
     console.error('[VideoBuild] Preflight error:', error);
     return c.json({ 
       is_ready: false,
+      can_generate: false,
       error: { code: 'INTERNAL_ERROR', message: 'Failed to run preflight check' }
     }, 500);
   }

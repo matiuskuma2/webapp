@@ -2783,11 +2783,26 @@ function renderSceneCardHeader(scene, imageStatus) {
   let statusBadge = getSceneStatusBadge(safeStatus);
   let roleText = getRoleText(sceneRole);
   
+  // R1.6: 音声状態バッジ（utterance_status）
+  const utteranceStatus = safeScene.utterance_status || { total: 0, with_audio: 0, is_ready: false };
+  let audioBadge = '';
+  if (utteranceStatus.total === 0) {
+    // 発話なし → 赤バッジ（クリックで音声タブを開く）
+    audioBadge = '<button onclick="openSceneEditModal(' + sceneId + ', \'audio\')" class="px-2 py-0.5 bg-red-100 text-red-800 rounded-full text-xs font-semibold hover:bg-red-200 transition-colors" title="発話がありません。クリックして音声タブを開く"><i class="fas fa-microphone-slash mr-1"></i>音声なし</button>';
+  } else if (!utteranceStatus.is_ready) {
+    // 一部音声未生成 → 赤バッジ
+    audioBadge = '<button onclick="openSceneEditModal(' + sceneId + ', \'audio\')" class="px-2 py-0.5 bg-red-100 text-red-800 rounded-full text-xs font-semibold hover:bg-red-200 transition-colors" title="' + utteranceStatus.with_audio + '/' + utteranceStatus.total + '件音声生成済み。クリックして音声タブを開く"><i class="fas fa-volume-mute mr-1"></i>' + utteranceStatus.with_audio + '/' + utteranceStatus.total + '</button>';
+  } else {
+    // 全て音声生成済み → 緑バッジ
+    audioBadge = '<span class="px-2 py-0.5 bg-green-100 text-green-800 rounded-full text-xs font-semibold" title="全発話の音声生成完了"><i class="fas fa-volume-up mr-1"></i>' + utteranceStatus.total + '件</span>';
+  }
+  
   return '<div class="bg-gradient-to-r ' + headerClass + ' px-4 py-3 flex items-center justify-between flex-wrap gap-2">' +
     '<div class="flex items-center gap-2">' +
       '<span class="text-white font-bold text-lg">#' + sceneIdx + '</span>' +
       '<span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">' + roleText + '</span>' +
       comicBadge +
+      audioBadge +
     '</div>' +
     '<div class="flex items-center gap-2 flex-wrap">' +
       '<button onclick="' + editBtnOnclick + '" class="px-3 py-1.5 ' + editBtnClass + ' rounded-lg text-white text-xs font-semibold transition-colors" title="' + editBtnTitle + '" ' + editBtnDisabled + '>' +
@@ -5458,9 +5473,40 @@ function autoResumeGeneratingScenes(scenes) {
  * Phase 2-3: Open scene edit modal
  * @param {number} sceneId 
  */
-function openSceneEditModal(sceneId) {
+function openSceneEditModal(sceneId, initialTab) {
   if (window.SceneEditModal) {
     window.SceneEditModal.open(sceneId);
+    
+    // R1.6: If initialTab specified, switch to that tab after modal opens
+    if (initialTab && window.SceneEditModal.switchTab) {
+      setTimeout(() => {
+        // Map 'audio' to 'utterances' for backward compatibility
+        const tabName = initialTab === 'audio' ? 'utterances' : initialTab;
+        window.SceneEditModal.switchTab(tabName);
+      }, 300);
+    }
+  } else {
+    console.error('[SceneEdit] SceneEditModal not loaded');
+    alert('シーン編集機能が読み込まれていません');
+  }
+}
+
+/**
+ * R1.6: Open scene edit modal and switch to voice tab
+ * Used from video build preflight errors
+ * @param {number} sceneId 
+ */
+function openSceneEditModalToVoiceTab(sceneId) {
+  if (window.SceneEditModal) {
+    // モーダルを開く
+    window.SceneEditModal.open(sceneId);
+    
+    // 少し待ってから音声タブに切り替え
+    setTimeout(() => {
+      if (window.SceneEditModal.switchTab) {
+        window.SceneEditModal.switchTab('voice');
+      }
+    }, 300);
   } else {
     console.error('[SceneEdit] SceneEditModal not loaded');
     alert('シーン編集機能が読み込まれていません');
@@ -6217,7 +6263,7 @@ async function refreshVideoBuildUsage() {
 
 /**
  * Check and update video build requirements
- * Phase R1: 新しい preflight API を使用
+ * Phase R1.6: 新しい preflight API を使用（utterances チェック含む）
  */
 async function updateVideoBuildRequirements() {
   const reqEl = document.getElementById('videoBuildRequirements');
@@ -6228,7 +6274,7 @@ async function updateVideoBuildRequirements() {
   const isAtLimit = (usage.monthly_builds || 0) >= 30;
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
-  let html = '<div class="space-y-1">';
+  let html = '<div class="space-y-2">';
   
   // Call preflight API for accurate check
   try {
@@ -6238,9 +6284,11 @@ async function updateVideoBuildRequirements() {
     // Store preflight result for button state
     window.videoBuildPreflightCache = preflight;
     
+    // 1. シーン数チェック
     if (preflight.total_count === 0) {
       html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>シーンがありません</div>';
     } else if (!preflight.is_ready) {
+      // 2. 素材チェック（画像/漫画/動画）
       html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>素材が不足しています（' + preflight.ready_count + '/' + preflight.total_count + '）</div>';
       
       // Show missing details
@@ -6254,13 +6302,47 @@ async function updateVideoBuildRequirements() {
         }
         html += '</div>';
       }
+    } else if (!preflight.can_generate) {
+      // 3. R1.6: utterances チェック（音声エラー）
+      html += '<div class="flex items-center text-red-600"><i class="fas fa-volume-mute mr-2"></i>⚠ 動画を生成できません</div>';
+      
+      // Show utterance errors with clickable links
+      if (preflight.utterance_errors && preflight.utterance_errors.length > 0) {
+        html += '<div class="ml-4 mt-1 text-sm space-y-1">';
+        // 最大5件まで表示
+        preflight.utterance_errors.slice(0, 5).forEach(err => {
+          const icon = err.type === 'NO_UTTERANCES' ? 'fa-comment-slash' 
+                     : err.type === 'TEXT_EMPTY' ? 'fa-font' 
+                     : 'fa-microphone-slash';
+          // R1.6: クリックでシーン編集モーダルの音声タブを開く
+          html += '<div class="flex items-start text-red-500 hover:text-red-700 cursor-pointer group" onclick="openSceneEditModalToVoiceTab(' + err.scene_id + ')">';
+          html += '<i class="fas ' + icon + ' mr-2 mt-0.5 text-xs"></i>';
+          html += '<span class="group-hover:underline">' + escapeHtml(err.message) + '</span>';
+          html += '<i class="fas fa-external-link-alt ml-2 text-xs opacity-50 group-hover:opacity-100"></i>';
+          html += '</div>';
+        });
+        if (preflight.utterance_errors.length > 5) {
+          html += '<div class="text-gray-400">• 他 ' + (preflight.utterance_errors.length - 5) + ' 件...</div>';
+        }
+        html += '</div>';
+        
+        // サマリー + 修正ガイド
+        if (preflight.utterance_summary) {
+          const summary = preflight.utterance_summary;
+          html += '<div class="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">';
+          html += '<div class="font-semibold mb-1">' + summary.invalid_scenes + '/' + summary.total_scenes + ' シーンに問題があります</div>';
+          html += '<div class="text-red-600">上記のエラーをクリックして、音声タブで発話を追加・音声生成してください。</div>';
+          html += '</div>';
+        }
+      }
     } else {
+      // 4. 全てOK
       html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + preflight.total_count + 'シーン準備完了</div>';
-    }
-    
-    // Show warnings (audio missing etc)
-    if (preflight.warnings && preflight.warnings.length > 0) {
-      html += '<div class="flex items-center text-amber-500 mt-1"><i class="fas fa-info-circle mr-2"></i>音声未生成: ' + preflight.warnings.length + 'シーン（動画生成は可能）</div>';
+      
+      // Show warnings (optional info)
+      if (preflight.warnings && preflight.warnings.length > 0) {
+        html += '<div class="flex items-center text-gray-400 text-sm mt-1"><i class="fas fa-info-circle mr-2"></i>警告: ' + preflight.warnings.length + '件（生成可能）</div>';
+      }
     }
     
     // Scene count warning (Phase 1: warn for large videos)
@@ -6288,10 +6370,12 @@ async function updateVideoBuildRequirements() {
     
     window.videoBuildPreflightCache = {
       is_ready: hasScenes && scenesReady === scenes.length,
+      can_generate: false,  // R1.6: fallback では false
       ready_count: scenesReady,
       total_count: scenes.length,
       missing: [],
-      warnings: []
+      warnings: [],
+      utterance_errors: []
     };
     
     if (!hasScenes) {
@@ -6299,7 +6383,7 @@ async function updateVideoBuildRequirements() {
     } else if (scenesReady < scenes.length) {
       html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>素材が不足しています（' + scenesReady + '/' + scenes.length + '）</div>';
     } else {
-      html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + scenes.length + 'シーン準備完了</div>';
+      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>プリフライトチェックに失敗しました</div>';
     }
   }
   
@@ -6322,7 +6406,7 @@ async function updateVideoBuildRequirements() {
 
 /**
  * Update video build button state
- * Phase R1: Use preflight cache from updateVideoBuildRequirements()
+ * Phase R1.6: Use can_generate from preflight (utterances + 素材)
  */
 function updateVideoBuildButtonState() {
   const btn = document.getElementById('btnStartVideoBuild');
@@ -6331,7 +6415,9 @@ function updateVideoBuildButtonState() {
   // Use preflight cache (SSOT-based validation)
   const preflight = window.videoBuildPreflightCache || {};
   const hasScenes = (preflight.total_count || 0) > 0;
-  const allScenesReady = preflight.is_ready === true;
+  
+  // R1.6: can_generate は素材 + utterances の両方がOKの場合のみ true
+  const canGenerate = preflight.can_generate === true;
   
   const usage = window.videoBuildUsageCache || {};
   const isAtLimit = (usage.monthly_builds || 0) >= 30;
@@ -6341,13 +6427,20 @@ function updateVideoBuildButtonState() {
   const SCENE_LIMIT_THRESHOLD = 100;
   const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
   
-  const canStart = allScenesReady && !isAtLimit && !hasConcurrent && !exceedsSceneLimit;
+  // R1.6: canStart は can_generate を使用
+  const canStart = canGenerate && !isAtLimit && !hasConcurrent && !exceedsSceneLimit;
   btn.disabled = !canStart;
   
   console.log('[VideoBuild] Button state:', { 
-    canStart, allScenesReady, isAtLimit, hasConcurrent, exceedsSceneLimit,
-    preflight_ready: preflight.is_ready,
-    preflight_count: preflight.ready_count + '/' + preflight.total_count
+    canStart, 
+    canGenerate,
+    isAtLimit, 
+    hasConcurrent, 
+    exceedsSceneLimit,
+    preflight_is_ready: preflight.is_ready,
+    preflight_can_generate: preflight.can_generate,
+    preflight_count: preflight.ready_count + '/' + preflight.total_count,
+    utterance_errors: preflight.utterance_errors?.length || 0
   });
   
   // Also enable/disable Video Build tab
