@@ -1,5 +1,5 @@
-import React from 'react';
-import { AbsoluteFill, Sequence, Audio, useVideoConfig, getInputProps } from 'remotion';
+import React, { useEffect, useState } from 'react';
+import { AbsoluteFill, Sequence, Audio, useVideoConfig, prefetch, delayRender, continueRender } from 'remotion';
 import type { ProjectJson } from './schemas/project-schema';
 import { Scene } from './components/Scene';
 import { msToFrames } from './utils/timing';
@@ -8,19 +8,53 @@ interface RilarcVideoProps {
   projectJson: ProjectJson;
 }
 
-export const RilarcVideo: React.FC<RilarcVideoProps> = (props) => {
+export const RilarcVideo: React.FC<RilarcVideoProps> = ({ projectJson }) => {
   const { fps } = useVideoConfig();
+  const [prefetchHandle] = useState(() => delayRender('Prefetching all images'));
+  const [allImagesReady, setAllImagesReady] = useState(false);
   
-  // CRITICAL: getInputProps() を使用して確実に inputProps を取得
-  // Lambda 環境では props が正しく渡されない場合があるため
-  const inputProps = getInputProps() as { projectJson?: ProjectJson };
-  const projectJson = inputProps?.projectJson || props.projectJson;
+  // 全シーンの画像を事前にプリフェッチ
+  useEffect(() => {
+    const imageUrls = (projectJson?.scenes || [])
+      .map(scene => scene.assets?.image?.url)
+      .filter((url): url is string => !!url);
+    
+    console.log('[RilarcVideo] Prefetching', imageUrls.length, 'images');
+    imageUrls.forEach((url, i) => {
+      console.log(`[RilarcVideo] Image ${i + 1}:`, url);
+    });
+    
+    if (imageUrls.length === 0) {
+      setAllImagesReady(true);
+      continueRender(prefetchHandle);
+      return;
+    }
+    
+    // 全画像を並列でプリフェッチ
+    const prefetches = imageUrls.map((url) => prefetch(url, { method: 'blob-url' }));
+    
+    Promise.all(prefetches.map(p => p.waitUntilDone()))
+      .then(() => {
+        console.log('[RilarcVideo] All images prefetched successfully');
+        setAllImagesReady(true);
+        continueRender(prefetchHandle);
+      })
+      .catch((error) => {
+        console.error('[RilarcVideo] Prefetch error:', error);
+        // エラーでもレンダリングを続行
+        setAllImagesReady(true);
+        continueRender(prefetchHandle);
+      });
+    
+    // Cleanup
+    return () => {
+      prefetches.forEach(p => p.free());
+    };
+  }, [projectJson?.scenes, prefetchHandle]);
   
   // Debug: props を確認
-  console.log('[RilarcVideo] props.projectJson type:', typeof props.projectJson);
-  console.log('[RilarcVideo] inputProps.projectJson type:', typeof inputProps?.projectJson);
-  console.log('[RilarcVideo] final projectJson scenes:', projectJson?.scenes?.length);
-  console.log('[RilarcVideo] first scene image:', projectJson?.scenes?.[0]?.assets?.image?.url);
+  console.log('[RilarcVideo] projectJson scenes:', projectJson?.scenes?.length);
+  console.log('[RilarcVideo] allImagesReady:', allImagesReady);
   
   // 各シーンの開始フレームを計算
   const scenesWithFrames = (projectJson?.scenes || []).map((scene) => {
