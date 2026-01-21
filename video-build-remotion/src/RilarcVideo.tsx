@@ -53,7 +53,7 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({ projectJson }) => {
             from={startFrame}
             durationInFrames={durationFrames}
           >
-            <Scene scene={scene} startFrame={startFrame} />
+            <Scene scene={scene} />
           </Sequence>
         );
       })}

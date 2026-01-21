@@ -27,16 +27,17 @@ function calculateTotalFrames(totalDurationMs, fps) {
 
 
 
-const Scene = ({ scene, startFrame }) => {
-  var _a, _b;
+const Scene = ({ scene }) => {
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
   const frame = (0,esm.useCurrentFrame)();
   const { fps } = (0,esm.useVideoConfig)();
-  if (frame === startFrame) {
-    console.log(`[Scene ${scene.idx}] image url:`, (_b = (_a = scene.assets) == null ? void 0 : _a.image) == null ? void 0 : _b.url);
-    console.log(`[Scene ${scene.idx}] assets:`, JSON.stringify(scene.assets));
-  }
   const durationFrames = msToFrames(scene.timing.duration_ms, fps);
-  const relativeFrame = frame - startFrame;
+  const relativeFrame = frame;
+  if (frame === 0) {
+    console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
+    console.log(`[Scene ${scene.idx}] Image URL: ${(_b = (_a = scene.assets) == null ? void 0 : _a.image) == null ? void 0 : _b.url}`);
+    console.log(`[Scene ${scene.idx}] Duration frames: ${durationFrames}`);
+  }
   const fadeFrames = Math.min(15, Math.floor(durationFrames / 4));
   const opacity = (0,esm.interpolate)(
     relativeFrame,
@@ -50,7 +51,7 @@ const Scene = ({ scene, startFrame }) => {
     [1, 1.05],
     { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
   );
-  if (scene.assets.video_clip) {
+  if ((_d = (_c = scene.assets) == null ? void 0 : _c.video_clip) == null ? void 0 : _d.url) {
     return /* @__PURE__ */ (0,jsx_runtime.jsxs)(esm.AbsoluteFill, { style: { opacity }, children: [
       /* @__PURE__ */ (0,jsx_runtime.jsx)(
         esm.Video,
@@ -63,14 +64,15 @@ const Scene = ({ scene, startFrame }) => {
           }
         }
       ),
-      scene.assets.audio && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url })
+      ((_f = (_e = scene.assets) == null ? void 0 : _e.audio) == null ? void 0 : _f.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url })
     ] });
   }
+  const imageUrl = (_h = (_g = scene.assets) == null ? void 0 : _g.image) == null ? void 0 : _h.url;
   return /* @__PURE__ */ (0,jsx_runtime.jsxs)(esm.AbsoluteFill, { style: { opacity, backgroundColor: "black" }, children: [
-    scene.assets.image && /* @__PURE__ */ (0,jsx_runtime.jsx)(
+    imageUrl ? /* @__PURE__ */ (0,jsx_runtime.jsx)(
       esm.Img,
       {
-        src: scene.assets.image.url,
+        src: imageUrl,
         style: {
           width: "100%",
           height: "100%",
@@ -78,8 +80,23 @@ const Scene = ({ scene, startFrame }) => {
           transform: `scale(${scale})`
         }
       }
+    ) : (
+      // 画像URLがない場合はプレースホルダー表示
+      /* @__PURE__ */ (0,jsx_runtime.jsxs)("div", { style: {
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        color: "white",
+        fontSize: 48
+      }, children: [
+        "Scene ",
+        scene.idx,
+        " - No Image"
+      ] })
     ),
-    scene.assets.audio && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url })
+    ((_j = (_i = scene.assets) == null ? void 0 : _i.audio) == null ? void 0 : _j.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(esm.Audio, { src: scene.assets.audio.url })
   ] });
 };
 
@@ -90,37 +107,42 @@ const Scene = ({ scene, startFrame }) => {
 
 
 const RilarcVideo = ({ projectJson }) => {
-  var _a, _b, _c, _d, _e, _f, _g, _h;
+  var _a, _b, _c, _d, _e;
   const { fps } = (0,esm.useVideoConfig)();
-  console.log("[RilarcVideo] projectJson scenes:", (_a = projectJson == null ? void 0 : projectJson.scenes) == null ? void 0 : _a.length);
-  console.log("[RilarcVideo] first scene image:", (_e = (_d = (_c = (_b = projectJson == null ? void 0 : projectJson.scenes) == null ? void 0 : _b[0]) == null ? void 0 : _c.assets) == null ? void 0 : _d.image) == null ? void 0 : _e.url);
-  (_f = projectJson == null ? void 0 : projectJson.scenes) == null ? void 0 : _f.forEach((scene, i) => {
+  console.log("[RilarcVideo] projectJson type:", typeof projectJson);
+  console.log("[RilarcVideo] projectJson scenes count:", (_a = projectJson == null ? void 0 : projectJson.scenes) == null ? void 0 : _a.length);
+  const scenes = (projectJson == null ? void 0 : projectJson.scenes) || [];
+  const scenesWithFrames = scenes.map((scene, index) => {
     var _a2, _b2;
-    console.log(`[RilarcVideo] Scene ${i + 1} image:`, (_b2 = (_a2 = scene.assets) == null ? void 0 : _a2.image) == null ? void 0 : _b2.url);
-  });
-  const scenesWithFrames = ((projectJson == null ? void 0 : projectJson.scenes) || []).map((scene) => {
     const startFrame = msToFrames(scene.timing.start_ms, fps);
     const durationFrames = msToFrames(scene.timing.duration_ms, fps);
+    console.log(`[RilarcVideo] Scene ${index + 1} (idx=${scene.idx}): start_ms=${scene.timing.start_ms}, duration_ms=${scene.timing.duration_ms}`);
+    console.log(`[RilarcVideo] Scene ${index + 1}: startFrame=${startFrame}, durationFrames=${durationFrames}`);
+    console.log(`[RilarcVideo] Scene ${index + 1} image: ${(_b2 = (_a2 = scene.assets) == null ? void 0 : _a2.image) == null ? void 0 : _b2.url}`);
     return { scene, startFrame, durationFrames };
   });
+  console.log(`[RilarcVideo] Total scenesWithFrames: ${scenesWithFrames.length}`);
   return /* @__PURE__ */ (0,jsx_runtime.jsxs)(esm.AbsoluteFill, { style: { backgroundColor: "black" }, children: [
-    ((_g = projectJson.assets) == null ? void 0 : _g.bgm) && /* @__PURE__ */ (0,jsx_runtime.jsx)(
+    ((_c = (_b = projectJson == null ? void 0 : projectJson.assets) == null ? void 0 : _b.bgm) == null ? void 0 : _c.url) && /* @__PURE__ */ (0,jsx_runtime.jsx)(
       esm.Audio,
       {
         src: projectJson.assets.bgm.url,
-        volume: ((_h = projectJson.build_settings.audio) == null ? void 0 : _h.bgm_volume) ?? 0.3,
+        volume: ((_e = (_d = projectJson.build_settings) == null ? void 0 : _d.audio) == null ? void 0 : _e.bgm_volume) ?? 0.3,
         loop: true
       }
     ),
-    scenesWithFrames.map(({ scene, startFrame, durationFrames }) => /* @__PURE__ */ (0,jsx_runtime.jsx)(
-      esm.Sequence,
-      {
-        from: startFrame,
-        durationInFrames: durationFrames,
-        children: /* @__PURE__ */ (0,jsx_runtime.jsx)(Scene, { scene, startFrame })
-      },
-      scene.idx
-    ))
+    scenesWithFrames.map(({ scene, startFrame, durationFrames }, index) => {
+      console.log(`[RilarcVideo] Rendering Sequence for scene ${index + 1}: from=${startFrame}, duration=${durationFrames}`);
+      return /* @__PURE__ */ (0,jsx_runtime.jsx)(
+        esm.Sequence,
+        {
+          from: startFrame,
+          durationInFrames: durationFrames,
+          children: /* @__PURE__ */ (0,jsx_runtime.jsx)(Scene, { scene })
+        },
+        `scene-${scene.idx}`
+      );
+    })
   ] });
 };
 

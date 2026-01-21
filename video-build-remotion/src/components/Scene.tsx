@@ -5,21 +5,24 @@ import { msToFrames } from '../utils/timing';
 
 interface SceneProps {
   scene: ProjectScene;
-  startFrame: number;
+  // startFrame は不要 - Sequence 内では useCurrentFrame() が相対フレームを返す
 }
 
-export const Scene: React.FC<SceneProps> = ({ scene, startFrame }) => {
+export const Scene: React.FC<SceneProps> = ({ scene }) => {
+  // Sequence 内では useCurrentFrame() は既に相対フレームを返す
+  // 重要：Sequence の from が 555 でも、Sequence 内の frame は 0 から始まる
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   
   const durationFrames = msToFrames(scene.timing.duration_ms, fps);
-  const relativeFrame = frame - startFrame;
+  // frame は既に Sequence 内の相対フレームなので、そのまま使用
+  const relativeFrame = frame;
   
   // Debug: 最初のフレームでログ出力
-  if (relativeFrame === 0) {
-    console.log(`[Scene ${scene.idx}] Rendering first frame at absolute frame ${frame}`);
+  if (frame === 0) {
+    console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
     console.log(`[Scene ${scene.idx}] Image URL: ${scene.assets?.image?.url}`);
-    console.log(`[Scene ${scene.idx}] Has image: ${!!scene.assets?.image?.url}`);
+    console.log(`[Scene ${scene.idx}] Duration frames: ${durationFrames}`);
   }
   
   // フェードイン・アウト（15フレーム = 0.5秒 @30fps）
