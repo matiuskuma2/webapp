@@ -12,6 +12,12 @@ export const Scene: React.FC<SceneProps> = ({ scene, startFrame }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
   
+  // Debug: ログ出力（最初のフレームのみ）
+  if (frame === startFrame) {
+    console.log(`[Scene ${scene.idx}] image url:`, scene.assets?.image?.url);
+    console.log(`[Scene ${scene.idx}] assets:`, JSON.stringify(scene.assets));
+  }
+  
   const durationFrames = msToFrames(scene.timing.duration_ms, fps);
   const relativeFrame = frame - startFrame;
   

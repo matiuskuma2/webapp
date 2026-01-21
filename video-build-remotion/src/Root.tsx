@@ -104,11 +104,19 @@ export const RilarcRoot: React.FC = () => {
           const totalDurationMs = pj.summary.total_duration_ms;
           const durationInFrames = calculateTotalFrames(totalDurationMs, fps);
           
+          // Debug log
+          console.log('[calculateMetadata] projectJson scenes:', pj.scenes?.length);
+          console.log('[calculateMetadata] first scene image:', pj.scenes?.[0]?.assets?.image?.url);
+          
           return {
             durationInFrames,
             fps,
             width: pj.build_settings.resolution.width,
             height: pj.build_settings.resolution.height,
+            // CRITICAL: プロパティを明示的に返して、コンポーネントに渡す
+            props: {
+              projectJson: pj,
+            },
           };
         }}
         defaultProps={{
