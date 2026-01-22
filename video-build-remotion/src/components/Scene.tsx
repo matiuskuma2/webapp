@@ -4,6 +4,7 @@ import type { ProjectScene, VoiceAsset } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
 import { Subtitle } from './Subtitle';
 import { MotionWrapper, getMotionPreset } from './MotionWrapper';
+import { BalloonOverlay } from './BalloonOverlay';
 
 interface SceneProps {
   scene: ProjectScene;
@@ -12,7 +13,7 @@ interface SceneProps {
 }
 
 /**
- * Scene Component - R1.5/R2 対応
+ * Scene Component - R1.5/R2/A案baked 対応
  * 
  * ## R1.5 変更点
  * - voices[] 配列をサポート（複数話者音声）
@@ -21,7 +22,15 @@ interface SceneProps {
  * 
  * ## R2 変更点
  * - text_render_mode 対応（baked時は字幕描画しない）
- * - balloons 配列サポート（remotion時のみ描画）
+ * - balloons 配列サポート
+ * 
+ * ## A案 baked 変更点
+ * - text_render_mode='baked' の場合:
+ *   - bubble_image_url の画像をタイミング表示（start_ms <= t < end_ms）
+ *   - Remotionでテキスト描画は行わない
+ *   - 漫画の文字入りバブルPNGを100%維持
+ * - text_render_mode='remotion' の場合:
+ *   - balloons をスタイルに基づいてテキスト描画（従来方式）
  */
 export const Scene: React.FC<SceneProps> = ({ 
   scene, 
@@ -44,6 +53,10 @@ export const Scene: React.FC<SceneProps> = ({
   // R2-C: モーションプリセットを取得
   const motionPreset = scene.motion ? scene.motion : getMotionPreset(null); // デフォルト: kenburns_soft
   
+  // A案 baked: balloons 配列を取得
+  const balloons = scene.balloons || [];
+  const hasBalloons = balloons.length > 0;
+  
   // Debug: 最初のフレームでログ出力
   if (frame === 0) {
     console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
@@ -52,6 +65,10 @@ export const Scene: React.FC<SceneProps> = ({
     console.log(`[Scene ${scene.idx}] Voices count: ${scene.assets?.voices?.length || 0}`);
     console.log(`[Scene ${scene.idx}] text_render_mode: ${textRenderMode}`);
     console.log(`[Scene ${scene.idx}] motion preset: ${motionPreset?.id || 'default'}`);
+    console.log(`[Scene ${scene.idx}] balloons count: ${balloons.length}`);
+    if (textRenderMode === 'baked' && hasBalloons) {
+      console.log(`[Scene ${scene.idx}] A案 baked: バブル画像をタイミング表示`);
+    }
   }
   
   // フェードイン・アウト（15フレーム = 0.5秒 @30fps）
@@ -137,6 +154,16 @@ export const Scene: React.FC<SceneProps> = ({
             position="bottom"
           />
         )}
+        
+        {/* A案 baked: バルーンオーバーレイ表示 */}
+        {hasBalloons && (
+          <BalloonOverlay
+            balloons={balloons}
+            textRenderMode={textRenderMode}
+            containerWidth={1920}
+            containerHeight={1080}
+          />
+        )}
       </AbsoluteFill>
     );
   }
@@ -145,6 +172,8 @@ export const Scene: React.FC<SceneProps> = ({
   // 画像シーン
   // ========================================
   const imageUrl = scene.assets?.image?.url;
+  const imageWidth = scene.assets?.image?.width || 1920;
+  const imageHeight = scene.assets?.image?.height || 1080;
   
   return (
     <AbsoluteFill style={{ opacity, backgroundColor: 'black' }}>
@@ -197,6 +226,16 @@ export const Scene: React.FC<SceneProps> = ({
           durationFrames={durationFrames}
           style={subtitleStyle}
           position="bottom"
+        />
+      )}
+      
+      {/* A案 baked: バルーンオーバーレイ表示 */}
+      {hasBalloons && (
+        <BalloonOverlay
+          balloons={balloons}
+          textRenderMode={textRenderMode}
+          containerWidth={imageWidth}
+          containerHeight={imageHeight}
         />
       )}
     </AbsoluteFill>

@@ -78,6 +78,21 @@ export const BalloonAssetSchema = z.object({
     border_width: z.number().optional(),
   }).optional(),
   z_index: z.number().default(10),
+  /**
+   * A案 baked: 文字入りバブル画像のURL
+   * - text_render_mode='baked' の場合に使用
+   * - Remotionはこの画像を start_ms <= t < end_ms の間だけ表示
+   * - Remotion側でテキスト描画は行わない
+   */
+  bubble_image_url: z.string().optional(),
+  /**
+   * A案 baked: バブル画像のサイズ（px）
+   * - 表示時のアスペクト比維持に使用
+   */
+  bubble_image_size: z.object({
+    width: z.number(),
+    height: z.number(),
+  }).optional(),
 });
 
 export type BalloonAsset = z.infer<typeof BalloonAssetSchema>;

@@ -32,6 +32,7 @@ const defaultProjectJson: ProjectJson = {
         head_pad_ms: 0,
         tail_pad_ms: 0,
       },
+      text_render_mode: 'remotion',
       assets: {
         image: {
           url: 'https://via.placeholder.com/1080x1920/3b82f6/ffffff?text=Scene+1',
@@ -51,6 +52,7 @@ const defaultProjectJson: ProjectJson = {
         head_pad_ms: 0,
         tail_pad_ms: 0,
       },
+      text_render_mode: 'remotion',
       assets: {
         image: {
           url: 'https://via.placeholder.com/1080x1920/10b981/ffffff?text=Scene+2',
@@ -70,6 +72,7 @@ const defaultProjectJson: ProjectJson = {
         head_pad_ms: 0,
         tail_pad_ms: 0,
       },
+      text_render_mode: 'remotion',
       assets: {
         image: {
           url: 'https://via.placeholder.com/1080x1920/f59e0b/ffffff?text=Scene+3',
@@ -99,7 +102,7 @@ export const RilarcRoot: React.FC = () => {
         id="RilarcVideo"
         component={RilarcVideo}
         calculateMetadata={({ props }) => {
-          const pj = props.projectJson;
+          const pj = props.projectJson as ProjectJson;
           const fps = pj.build_settings.fps;
           const totalDurationMs = pj.summary.total_duration_ms;
           const durationInFrames = calculateTotalFrames(totalDurationMs, fps);
