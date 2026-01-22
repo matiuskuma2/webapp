@@ -234,8 +234,8 @@ admin.get('/usage', async (c) => {
   const { DB } = c.env;
   
   try {
-    // Get usage from api_usage_logs if it exists
-    const result = await DB.prepare(`
+    // 1. Get usage from api_usage_logs (video_generation, video_build, image_generation, etc.)
+    const apiResult = await DB.prepare(`
       SELECT 
         api_type,
         COUNT(*) as request_count,
@@ -243,25 +243,86 @@ admin.get('/usage', async (c) => {
       FROM api_usage_logs
       WHERE created_at > datetime('now', '-30 days')
       GROUP BY api_type
-      ORDER BY total_cost DESC
     `).all();
     
-    const summary = {
-      total_cost: 0,
-      total_requests: 0,
-      by_type: result.results || []
-    };
+    // 2. Get TTS usage from tts_usage_logs
+    const ttsResult = await DB.prepare(`
+      SELECT 
+        provider,
+        COUNT(*) as request_count,
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
+      FROM tts_usage_logs
+      WHERE created_at > datetime('now', '-30 days')
+      GROUP BY provider
+    `).all();
     
-    for (const row of (result.results || []) as { total_cost: number; request_count: number }[]) {
-      summary.total_cost += row.total_cost || 0;
-      summary.total_requests += row.request_count || 0;
+    // 3. Get usage by user (combine api_usage_logs)
+    const userResult = await DB.prepare(`
+      SELECT 
+        u.id as user_id,
+        u.name,
+        u.email,
+        COUNT(*) as request_count,
+        SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost
+      FROM api_usage_logs l
+      JOIN users u ON l.user_id = u.id
+      WHERE l.created_at > datetime('now', '-30 days')
+      GROUP BY u.id
+      ORDER BY total_cost DESC
+      LIMIT 20
+    `).all();
+    
+    // Build byType object (camelCase for frontend)
+    const byType: Record<string, { cost: number; count: number }> = {};
+    let totalCost = 0;
+    let totalRequests = 0;
+    
+    // Add API usage logs
+    for (const row of (apiResult.results || []) as { api_type: string; request_count: number; total_cost: number }[]) {
+      byType[row.api_type] = {
+        cost: row.total_cost || 0,
+        count: row.request_count || 0
+      };
+      totalCost += row.total_cost || 0;
+      totalRequests += row.request_count || 0;
     }
     
-    return c.json(summary);
+    // Add TTS usage logs (convert provider to api_type format)
+    for (const row of (ttsResult.results || []) as { provider: string; request_count: number; total_cost: number }[]) {
+      const apiType = `tts_${row.provider}`;
+      if (byType[apiType]) {
+        byType[apiType].cost += row.total_cost || 0;
+        byType[apiType].count += row.request_count || 0;
+      } else {
+        byType[apiType] = {
+          cost: row.total_cost || 0,
+          count: row.request_count || 0
+        };
+      }
+      totalCost += row.total_cost || 0;
+      totalRequests += row.request_count || 0;
+    }
+    
+    // Build byUser array (camelCase for frontend)
+    const byUser = (userResult.results || []).map((row: { user_id: number; name: string; email: string; request_count: number; total_cost: number }) => ({
+      userId: row.user_id,
+      name: row.name,
+      email: row.email,
+      requestCount: row.request_count || 0,
+      totalCost: row.total_cost || 0
+    }));
+    
+    // Return camelCase format for frontend compatibility
+    return c.json({
+      totalCost,
+      totalRequests,
+      byType,
+      byUser
+    });
   } catch (error) {
     console.error('Get usage error:', error);
     // Return empty data if table doesn't exist
-    return c.json({ total_cost: 0, total_requests: 0, by_type: [] });
+    return c.json({ totalCost: 0, totalRequests: 0, byType: {}, byUser: [] });
   }
 });
 
@@ -274,22 +335,46 @@ admin.get('/usage/daily', async (c) => {
   const days = parseInt(c.req.query('days') || '30');
   
   try {
-    const result = await DB.prepare(`
+    // Get daily totals from api_usage_logs
+    const apiResult = await DB.prepare(`
       SELECT 
         date(created_at) as date,
-        api_type,
-        COUNT(*) as request_count,
         SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM api_usage_logs
       WHERE created_at > datetime('now', '-' || ? || ' days')
-      GROUP BY date(created_at), api_type
-      ORDER BY date DESC
+      GROUP BY date(created_at)
     `).bind(days).all();
     
-    return c.json({ daily: result.results || [] });
+    // Get daily totals from tts_usage_logs
+    const ttsResult = await DB.prepare(`
+      SELECT 
+        date(created_at) as date,
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
+      FROM tts_usage_logs
+      WHERE created_at > datetime('now', '-' || ? || ' days')
+      GROUP BY date(created_at)
+    `).bind(days).all();
+    
+    // Merge daily costs
+    const dailyCosts: Record<string, number> = {};
+    
+    for (const row of (apiResult.results || []) as { date: string; total_cost: number }[]) {
+      dailyCosts[row.date] = (dailyCosts[row.date] || 0) + (row.total_cost || 0);
+    }
+    
+    for (const row of (ttsResult.results || []) as { date: string; total_cost: number }[]) {
+      dailyCosts[row.date] = (dailyCosts[row.date] || 0) + (row.total_cost || 0);
+    }
+    
+    // Convert to array sorted by date
+    const data = Object.entries(dailyCosts)
+      .map(([date, cost]) => ({ date, cost }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    
+    return c.json({ data });
   } catch (error) {
     console.error('Get daily usage error:', error);
-    return c.json({ daily: [] });
+    return c.json({ data: [] });
   }
 });
 
@@ -301,23 +386,89 @@ admin.get('/usage/sponsor', async (c) => {
   const { DB } = c.env;
   
   try {
-    const result = await DB.prepare(`
-      SELECT 
-        u.id as sponsor_id,
-        u.name as sponsor_name,
-        u.email as sponsor_email,
-        COUNT(DISTINCT l.user_id) as sponsored_users,
-        SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost
-      FROM users u
-      LEFT JOIN api_usage_logs l ON l.sponsored_by_user_id = u.id
-      WHERE u.role = 'superadmin'
-      GROUP BY u.id
+    // 1. Get all superadmins (sponsors)
+    const sponsorsResult = await DB.prepare(`
+      SELECT id, name, email FROM users WHERE role = 'superadmin'
     `).all();
     
-    return c.json({ sponsors: result.results || [] });
+    const sponsors = (sponsorsResult.results || []) as { id: number; name: string; email: string }[];
+    
+    if (sponsors.length === 0) {
+      return c.json({ sponsors: [], grandTotalCost: 0, grandTotalRequests: 0 });
+    }
+    
+    // 2. For each sponsor, get usage data
+    const sponsorDetails = [];
+    let grandTotalCost = 0;
+    let grandTotalRequests = 0;
+    
+    for (const sponsor of sponsors) {
+      // Get all users sponsored by this admin and their usage
+      const usageResult = await DB.prepare(`
+        SELECT 
+          u.id as user_id,
+          u.name as user_name,
+          u.email as user_email,
+          l.api_type,
+          COUNT(*) as request_count,
+          SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost
+        FROM api_usage_logs l
+        JOIN users u ON l.user_id = u.id
+        WHERE l.sponsored_by_user_id = ?
+        GROUP BY u.id, l.api_type
+      `).bind(sponsor.id).all();
+      
+      // Aggregate by user
+      const userMap: Record<number, {
+        user: { id: number; name: string; email: string };
+        byType: Record<string, { cost: number; count: number }>;
+        totalCost: number;
+        totalRequests: number;
+      }> = {};
+      
+      for (const row of (usageResult.results || []) as { user_id: number; user_name: string; user_email: string; api_type: string; request_count: number; total_cost: number }[]) {
+        if (!userMap[row.user_id]) {
+          userMap[row.user_id] = {
+            user: { id: row.user_id, name: row.user_name, email: row.user_email },
+            byType: {},
+            totalCost: 0,
+            totalRequests: 0
+          };
+        }
+        
+        userMap[row.user_id].byType[row.api_type] = {
+          cost: row.total_cost || 0,
+          count: row.request_count || 0
+        };
+        userMap[row.user_id].totalCost += row.total_cost || 0;
+        userMap[row.user_id].totalRequests += row.request_count || 0;
+      }
+      
+      const byUser = Object.values(userMap);
+      const sponsorTotalCost = byUser.reduce((sum, u) => sum + u.totalCost, 0);
+      const sponsorTotalRequests = byUser.reduce((sum, u) => sum + u.totalRequests, 0);
+      
+      grandTotalCost += sponsorTotalCost;
+      grandTotalRequests += sponsorTotalRequests;
+      
+      if (byUser.length > 0) {
+        sponsorDetails.push({
+          sponsor: { id: sponsor.id, name: sponsor.name, email: sponsor.email },
+          byUser,
+          totalCost: sponsorTotalCost,
+          totalRequests: sponsorTotalRequests
+        });
+      }
+    }
+    
+    return c.json({
+      sponsors: sponsorDetails,
+      grandTotalCost,
+      grandTotalRequests
+    });
   } catch (error) {
     console.error('Get sponsor usage error:', error);
-    return c.json({ sponsors: [] });
+    return c.json({ sponsors: [], grandTotalCost: 0, grandTotalRequests: 0 });
   }
 });
 
