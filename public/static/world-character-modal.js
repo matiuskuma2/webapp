@@ -1044,11 +1044,13 @@
         })
       });
       
-      if (!response.ok) {
-        throw new Error('音声生成に失敗しました');
-      }
-      
       const data = await response.json();
+      
+      if (!response.ok) {
+        // Extract error message from API response
+        const errorMsg = data?.error || data?.message || '音声生成に失敗しました';
+        throw new Error(errorMsg);
+      }
       
       if (data.audio_url) {
         const audio = new Audio(data.audio_url);
@@ -1059,7 +1061,9 @@
       }
     } catch (err) {
       console.error('[WorldCharacterModal] Voice preview failed:', err);
-      toast('音声プレビューに失敗しました', 'error');
+      // Show detailed error message to user
+      const errorMessage = err.message || '音声プレビューに失敗しました';
+      toast(errorMessage, 'error');
     } finally {
       if (btn) {
         btn.disabled = false;
