@@ -62,14 +62,19 @@ scenes.get('/:id', async (c) => {
       const forceCleanup = c.req.query('force_cleanup') === '1'
       const cleanupThresholdMinutes = forceCleanup ? 3 : 5 // force_cleanup uses shorter timeout
       
-      await c.env.DB.prepare(`
-        UPDATE image_generations
-        SET status = 'failed', 
-            error_message = 'Generation timeout (auto-cleanup)'
-        WHERE scene_id = ?
-          AND status = 'generating' 
-          AND datetime(created_at, '+' || ? || ' minutes') < datetime('now')
-      `).bind(sceneId, cleanupThresholdMinutes).run()
+      try {
+        await c.env.DB.prepare(`
+          UPDATE image_generations
+          SET status = 'failed', 
+              error_message = 'Generation timeout (auto-cleanup)'
+          WHERE scene_id = ?
+            AND status = 'generating' 
+            AND created_at < datetime('now', '-' || ? || ' minutes')
+        `).bind(sceneId, String(cleanupThresholdMinutes)).run()
+      } catch (cleanupErr) {
+        // Cleanup failure should not block the request
+        console.warn('[Scene] Auto-cleanup failed:', cleanupErr)
+      }
       
       // 最新画像情報取得（SSOT）
       const latestImage = await c.env.DB.prepare(`
