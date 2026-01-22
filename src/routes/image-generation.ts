@@ -263,6 +263,21 @@ imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
       }, 404)
     }
 
+    // ✅ IMPROVEMENT: Auto-cleanup stuck 'generating' records (5+ minutes old)
+    // This prevents UI getting stuck at 95% indefinitely
+    const cleanupResult = await c.env.DB.prepare(`
+      UPDATE image_generations
+      SET status = 'failed', 
+          error_message = 'Generation timeout (auto-cleanup on status check)'
+      WHERE status = 'generating' 
+        AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+        AND datetime(created_at, '+5 minutes') < datetime('now')
+    `).bind(projectId).run()
+    
+    if (cleanupResult.meta.changes > 0) {
+      console.log(`[Image Status] Auto-cleaned ${cleanupResult.meta.changes} stuck generating records for project ${projectId}`)
+    }
+
     const stats = await getImageGenerationStats(c.env.DB, projectId)
 
     return c.json({

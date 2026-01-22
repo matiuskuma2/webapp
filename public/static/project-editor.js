@@ -5429,15 +5429,50 @@ function pollSceneImageGeneration(sceneId) {
       // ===== TIMEOUT =====
       if (watch.attempts >= maxAttempts) {
         clearInterval(timerId);
-        // ⚠️ DON'T stop watch (allow manual resume)
         
-        showToast(`画像生成に時間がかかっています（シーン${sceneId}）。通信状況を確認してください`, 'warning');
-        console.warn(`[Poll] Scene ${sceneId} timeout after ${maxAttempts} attempts. Watch NOT removed (can resume).`);
+        console.warn(`[Poll] Scene ${sceneId} timeout after ${maxAttempts} attempts. Attempting auto-recovery...`);
         
-        // Reset attempts to allow continuation
-        watch.attempts = 0;
-        watch.startedAt = Date.now();
-        return;
+        // ✅ IMPROVEMENT: Try to recover by calling cleanup API and checking true status
+        try {
+          // 1. Call status API which will auto-cleanup stuck records on backend
+          const recoveryResponse = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board&_t=${Date.now()}&force_cleanup=1`);
+          const recoveredScene = recoveryResponse.data;
+          const recoveredStatus = recoveredScene?.latest_image?.status || 'unknown';
+          
+          console.log(`[Poll] Recovery check for scene ${sceneId}: status = ${recoveredStatus}`);
+          
+          if (recoveredStatus === 'completed') {
+            // Image was actually completed
+            stopGenerationWatch(sceneId);
+            if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+            showToast('画像生成が完了しました', 'success');
+            await updateSingleSceneCard(sceneId);
+            await checkAndUpdateProjectStatus();
+            return;
+          } else if (recoveredStatus === 'failed') {
+            // Image generation failed
+            stopGenerationWatch(sceneId);
+            if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+            showToast('画像生成がタイムアウトしました。再生成してください', 'warning');
+            await updateSingleSceneCard(sceneId);
+            return;
+          } else {
+            // Still generating - restart polling with fresh timer
+            watch.attempts = 0;
+            watch.startedAt = Date.now();
+            showToast(`画像生成を継続監視中（シーン${sceneId}）`, 'info');
+            pollSceneImageGeneration(sceneId); // Restart polling
+            return;
+          }
+        } catch (recoveryError) {
+          console.error(`[Poll] Recovery failed for scene ${sceneId}:`, recoveryError);
+          // Show warning but don't stop completely
+          stopGenerationWatch(sceneId);
+          if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+          showToast(`通信エラー。ページをリロードしてください`, 'error');
+          await updateSingleSceneCard(sceneId);
+          return;
+        }
       }
       
     } catch (error) {

@@ -57,6 +57,20 @@ scenes.get('/:id', async (c) => {
 
     // view=board の場合、画像情報とスタイル情報を含める
     if (view === 'board') {
+      // ✅ IMPROVEMENT: Auto-cleanup stuck 'generating' records (5+ minutes old)
+      // This runs on every board view request to prevent UI getting stuck at 95%
+      const forceCleanup = c.req.query('force_cleanup') === '1'
+      const cleanupThresholdMinutes = forceCleanup ? 3 : 5 // force_cleanup uses shorter timeout
+      
+      await c.env.DB.prepare(`
+        UPDATE image_generations
+        SET status = 'failed', 
+            error_message = 'Generation timeout (auto-cleanup)'
+        WHERE scene_id = ?
+          AND status = 'generating' 
+          AND datetime(created_at, '+' || ? || ' minutes') < datetime('now')
+      `).bind(sceneId, cleanupThresholdMinutes).run()
+      
       // 最新画像情報取得（SSOT）
       const latestImage = await c.env.DB.prepare(`
         SELECT 
