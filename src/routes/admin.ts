@@ -239,7 +239,7 @@ admin.get('/usage', async (c) => {
       SELECT 
         api_type,
         COUNT(*) as request_count,
-        SUM(COALESCE(cost_usd, 0)) as total_cost
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM api_usage_logs
       WHERE created_at > datetime('now', '-30 days')
       GROUP BY api_type
@@ -279,7 +279,7 @@ admin.get('/usage/daily', async (c) => {
         date(created_at) as date,
         api_type,
         COUNT(*) as request_count,
-        SUM(COALESCE(cost_usd, 0)) as total_cost
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM api_usage_logs
       WHERE created_at > datetime('now', '-' || ? || ' days')
       GROUP BY date(created_at), api_type
@@ -307,9 +307,9 @@ admin.get('/usage/sponsor', async (c) => {
         u.name as sponsor_name,
         u.email as sponsor_email,
         COUNT(DISTINCT l.user_id) as sponsored_users,
-        SUM(COALESCE(l.cost_usd, 0)) as total_cost
+        SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost
       FROM users u
-      LEFT JOIN api_usage_logs l ON l.sponsored_by = u.id
+      LEFT JOIN api_usage_logs l ON l.sponsored_by_user_id = u.id
       WHERE u.role = 'superadmin'
       GROUP BY u.id
     `).all();
@@ -337,7 +337,7 @@ admin.get('/video-builds/summary', async (c) => {
         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed,
         SUM(CASE WHEN status IN ('pending', 'processing', 'retrying') THEN 1 ELSE 0 END) as in_progress,
-        SUM(COALESCE(cost_usd, 0)) as total_cost
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM video_builds
       WHERE strftime('%Y-%m', created_at) = ?
     `).bind(month).first<{
@@ -370,7 +370,7 @@ admin.get('/video-builds/summary', async (c) => {
         COUNT(*) as total,
         SUM(CASE WHEN vb.status = 'completed' THEN 1 ELSE 0 END) as completed,
         SUM(CASE WHEN vb.status = 'failed' THEN 1 ELSE 0 END) as failed,
-        SUM(COALESCE(vb.cost_usd, 0)) as total_cost
+        SUM(COALESCE(vb.estimated_cost_usd, 0)) as total_cost
       FROM video_builds vb
       JOIN projects p ON vb.project_id = p.id
       JOIN users u ON p.user_id = u.id

@@ -136,6 +136,68 @@ async function getUserApiKey(
 }
 
 // ====================================================================
+// Helper: Cost estimation for video generation
+// ====================================================================
+// 
+// Video API pricing (as of 2024):
+// - Google Veo 2: ~$0.35/sec (generate mode), ~$0.10/sec (extend mode)
+// - Veo 2 minimum is typically 5 seconds ($1.75)
+// - Imagen 3 Video: Similar pricing
+// 
+// Remotion Lambda pricing:
+// - AWS Lambda: ~$0.0001 per GB-second
+// - Typical 30-sec video render: ~$0.002-0.005
+
+function estimateVideoCost(model: string, durationSec: number): number {
+  // Veo 2 pricing: approximately $0.35 per second
+  // This is an estimate - actual pricing may vary
+  const veoRatePerSecond = 0.35;
+  
+  switch (model?.toLowerCase()) {
+    case 'veo-2':
+    case 'veo2':
+    case 'veo-002':
+      return durationSec * veoRatePerSecond;
+    case 'imagen-3-video':
+    case 'imagen3':
+      return durationSec * 0.30; // Slightly cheaper estimate
+    default:
+      // Default to Veo 2 pricing as fallback
+      return durationSec * veoRatePerSecond;
+  }
+}
+
+// Remotion/video build cost estimate
+function estimateRemotionBuildCost(totalDurationSec: number, sceneCount: number): number {
+  // Remotion Lambda approximate costs:
+  // - Base cost per render: ~$0.005
+  // - Per second of output: ~$0.001
+  // - This is very rough - actual costs depend on Lambda memory/duration
+  const baseCost = 0.005;
+  const perSecondCost = 0.001;
+  return baseCost + (totalDurationSec * perSecondCost);
+}
+
+// Image generation cost estimate
+function estimateImageCost(provider: string, model: string): number {
+  switch (provider?.toLowerCase()) {
+    case 'gemini':
+      // Gemini Imagen 3: $0.04 per image (1024x1024)
+      // Gemini 2.0 Flash experimental: Free during preview
+      if (model?.includes('imagen')) {
+        return 0.04;
+      }
+      // Gemini experimental models are currently free
+      return 0.0;
+    case 'openai':
+      // DALL-E 3: $0.04-0.12 per image depending on size
+      return 0.04;
+    default:
+      return 0.0;
+  }
+}
+
+// ====================================================================
 // Helper: Determine billing source (user or sponsor)
 // ====================================================================
 // 
@@ -696,16 +758,22 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   // 10. api_usage_logs 記録
   // - user_id: 実行者（executor）
   // - sponsored_by_user_id: スポンサー課金時は支払い者、user課金時はNULL
+  // - estimated_cost_usd: Veo 2 pricing (~$0.35/sec for generate mode)
+  const estimatedCostUsd = estimateVideoCost(model, durationSec);
+  
   await c.env.DB.prepare(`
     INSERT INTO api_usage_logs (
       user_id, project_id, api_type, provider, model, video_engine, 
+      estimated_cost_usd, duration_seconds,
       sponsored_by_user_id, metadata_json
-    ) VALUES (?, ?, 'video_generation', 'google', ?, ?, ?, ?)
+    ) VALUES (?, ?, 'video_generation', 'google', ?, ?, ?, ?, ?, ?)
   `).bind(
     executorUserId,
     scene.project_id,
     model,
     videoEngine,
+    estimatedCostUsd,
+    durationSec,
     billingSource === 'sponsor' ? billingUserId : null,
     JSON.stringify({ 
       scene_id: sceneId, 
@@ -714,7 +782,8 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       billing_source: billingSource,
       billing_user_id: billingUserId,
       executor_user_id: executorUserId,
-      owner_user_id: scene.owner_user_id
+      owner_user_id: scene.owner_user_id,
+      estimated_cost_usd: estimatedCostUsd
     })
   ).run();
   
@@ -1831,13 +1900,22 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     ).run();
     
     // api_usage_logs 記録
+    // Calculate estimated cost based on total duration and scene count
+    const totalDurationSec = projectJson.summary?.total_duration_ms 
+      ? projectJson.summary.total_duration_ms / 1000 
+      : scenes.length * 5; // Fallback: 5 sec per scene
+    const remotionEstimatedCost = estimateRemotionBuildCost(totalDurationSec, scenes.length);
+    
     await c.env.DB.prepare(`
       INSERT INTO api_usage_logs (
-        user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json
-      ) VALUES (?, ?, 'video_build', 'remotion-lambda', 'remotion', 0.0001, ?)
+        user_id, project_id, api_type, provider, model, 
+        estimated_cost_usd, duration_seconds, metadata_json
+      ) VALUES (?, ?, 'video_build', 'remotion-lambda', 'remotion', ?, ?, ?)
     `).bind(
       userId,
       projectId,
+      remotionEstimatedCost,
+      totalDurationSec,
       JSON.stringify({
         billing_source: 'platform',
         video_build_id: videoBuildId,
@@ -1845,6 +1923,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         executor_user_id: userId,
         is_delegation: ownerUserId !== userId,
         status: 'submitted',
+        scene_count: scenes.length,
+        total_duration_sec: totalDurationSec,
+        estimated_cost_usd: remotionEstimatedCost
       })
     ).run();
     

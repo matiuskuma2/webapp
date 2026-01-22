@@ -218,6 +218,29 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
           throw new Error('r2_url is null after DB update')
         }
 
+        // Log API usage for cost tracking
+        // Gemini experimental models are currently free, but log for tracking
+        const estimatedCost = 0.0; // Gemini 3 Pro Image Preview is free during preview
+        try {
+          await c.env.DB.prepare(`
+            INSERT INTO api_usage_logs (
+              user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json
+            ) VALUES (?, ?, 'image_generation', 'gemini', 'gemini-3-pro-image-preview', ?, ?)
+          `).bind(
+            1, // Default user for now (should use actual user_id from session)
+            parseInt(projectId),
+            estimatedCost,
+            JSON.stringify({
+              scene_id: scene.id,
+              generation_id: generationId,
+              status: 'completed'
+            })
+          ).run();
+        } catch (logError) {
+          // Don't fail the main operation if logging fails
+          console.warn('[Image Gen] Failed to log API usage:', logError);
+        }
+
         successCount++
 
       } catch (sceneError) {
