@@ -360,17 +360,29 @@ projects.get('/:id/scenes', async (c) => {
       return c.json({
         project_id: parseInt(projectId),
         total_scenes: scenes.length,
-        scenes: scenes.map((scene: any) => ({
-          id: scene.id,
-          idx: scene.idx,
-          role: scene.role,
-          title: scene.title,
-          dialogue: scene.dialogue,
-          speech_type: scene.speech_type || 'narration',
-          bullets: JSON.parse(scene.bullets),
-          image_prompt: scene.image_prompt,
-          chunk_id: scene.chunk_id
-        }))
+        scenes: scenes.map((scene: any) => {
+          // Safe JSON parsing for bullets
+          let bulletsParsed: any[] = []
+          try {
+            if (scene.bullets) {
+              const parsed = JSON.parse(scene.bullets)
+              bulletsParsed = Array.isArray(parsed) ? parsed : []
+            }
+          } catch (e) {
+            bulletsParsed = []
+          }
+          return {
+            id: scene.id,
+            idx: scene.idx,
+            role: scene.role,
+            title: scene.title,
+            dialogue: scene.dialogue || '',
+            speech_type: scene.speech_type || 'narration',
+            bullets: bulletsParsed,
+            image_prompt: scene.image_prompt || '',
+            chunk_id: scene.chunk_id
+          }
+        })
       })
     }
 
@@ -476,15 +488,27 @@ projects.get('/:id/scenes', async (c) => {
           const charDetailsMap = new Map((charDetails as any[]).map((c: any) => [c.character_key, c]))
           const sceneTraitsMap = new Map((sceneTraits as any[]).map((t: any) => [t.character_key, t.trait_description]))
 
+          // Safe JSON parsing for bullets
+          let bulletsParsed: any[] = []
+          try {
+            if (scene.bullets) {
+              const parsed = JSON.parse(scene.bullets)
+              bulletsParsed = Array.isArray(parsed) ? parsed : []
+            }
+          } catch (e) {
+            console.warn(`Failed to parse bullets for scene ${scene.id}:`, e)
+            bulletsParsed = []
+          }
+
           return {
             id: scene.id,
             idx: scene.idx,
             role: scene.role,
             title: scene.title,
-            dialogue: scene.dialogue.substring(0, 100), // 最初の100文字のみ
+            dialogue: (scene.dialogue || '').substring(0, 100), // 最初の100文字のみ
             speech_type: scene.speech_type || 'narration',
-            bullets: JSON.parse(scene.bullets),
-            image_prompt: scene.image_prompt.substring(0, 100), // 最初の100文字のみ
+            bullets: bulletsParsed,
+            image_prompt: (scene.image_prompt || '').substring(0, 100), // 最初の100文字のみ
             style_preset_id: scene.style_preset_id || null,
             // Phase1.7: display_asset_type と active_comic を追加
             display_asset_type: scene.display_asset_type || 'image',
@@ -621,15 +645,26 @@ projects.get('/:id/scenes', async (c) => {
           created_at: latestRecord.created_at
         } : null
 
+        // Safe JSON parsing for bullets
+        let bulletsParsed: any[] = []
+        try {
+          if (scene.bullets) {
+            const parsed = JSON.parse(scene.bullets)
+            bulletsParsed = Array.isArray(parsed) ? parsed : []
+          }
+        } catch (e) {
+          bulletsParsed = []
+        }
+
         return {
           id: scene.id,
           idx: scene.idx,
           role: scene.role,
           title: scene.title,
-          dialogue: scene.dialogue,
+          dialogue: scene.dialogue || '',
           speech_type: scene.speech_type || 'narration',
-          bullets: JSON.parse(scene.bullets),
-          image_prompt: scene.image_prompt,
+          bullets: bulletsParsed,
+          image_prompt: scene.image_prompt || '',
           created_at: scene.created_at,
           updated_at: scene.updated_at,
           active_image: activeImage,

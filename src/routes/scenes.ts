@@ -59,18 +59,21 @@ scenes.get('/:id', async (c) => {
     if (view === 'board') {
       // ✅ IMPROVEMENT: Auto-cleanup stuck 'generating' records (5+ minutes old)
       // This runs on every board view request to prevent UI getting stuck at 95%
+      // Note: We use fixed datetime modifiers as D1 doesn't support dynamic string concat in prepared statements
       const forceCleanup = c.req.query('force_cleanup') === '1'
-      const cleanupThresholdMinutes = forceCleanup ? 3 : 5 // force_cleanup uses shorter timeout
+      const thresholdModifier = forceCleanup ? '-3 minutes' : '-5 minutes'
       
       try {
-        await c.env.DB.prepare(`
+        // D1 workaround: Use raw SQL with threshold embedded (safe since it's a fixed string, not user input)
+        const cleanupQuery = `
           UPDATE image_generations
           SET status = 'failed', 
               error_message = 'Generation timeout (auto-cleanup)'
           WHERE scene_id = ?
             AND status = 'generating' 
-            AND created_at < datetime('now', '-' || ? || ' minutes')
-        `).bind(sceneId, String(cleanupThresholdMinutes)).run()
+            AND created_at < datetime('now', '${thresholdModifier}')
+        `
+        await c.env.DB.prepare(cleanupQuery).bind(sceneId).run()
       } catch (cleanupErr) {
         // Cleanup failure should not block the request
         console.warn('[Scene] Auto-cleanup failed:', cleanupErr)
