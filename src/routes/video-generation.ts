@@ -1370,11 +1370,17 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     });
     
   } catch (error) {
-    console.error('[VideoBuild] Preflight error:', error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error('[VideoBuild] Preflight error:', errorMessage, errorStack);
     return c.json({ 
       is_ready: false,
       can_generate: false,
-      error: { code: 'INTERNAL_ERROR', message: 'Failed to run preflight check' }
+      error: { 
+        code: 'INTERNAL_ERROR', 
+        message: 'Failed to run preflight check',
+        detail: errorMessage  // エラー詳細を返す
+      }
     }, 500);
   }
 });
