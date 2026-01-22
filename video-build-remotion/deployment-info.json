@@ -1,0 +1,14 @@
+{
+  "deployedAt": "2026-01-22T11:00:00Z",
+  "region": "ap-northeast-1",
+  "serveUrl": "https://remotionlambda-apnortheast1-ucgr0eo7k7.s3.ap-northeast-1.amazonaws.com/sites/rilarc-video-build/index.html",
+  "functionName": "remotion-render-4-0-404-mem2048mb-disk2048mb-240sec",
+  "siteBucket": "remotionlambda-apnortheast1-ucgr0eo7k7",
+  "rendersBucket": "rilarc-remotion-renders-prod-202601",
+  "features": [
+    "A案 baked: BalloonOverlay (bubble_image_url タイミング表示)",
+    "text_render_mode: remotion/baked/none",
+    "voices[] R1.5 複数話者音声",
+    "MotionWrapper R2-C カメラワーク"
+  ]
+}
