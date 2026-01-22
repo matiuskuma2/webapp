@@ -184,6 +184,39 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     ).run();
 
     const audioId = insert.meta.last_row_id as number;
+    
+    // ============================================================
+    // R1.6+: utterances 自動作成（旧式音声生成からの移行サポート）
+    // ============================================================
+    // scene_utterances が0件の場合、自動でナレーション utterance を作成
+    // これにより、「音声作ったのに発話なし」問題を解消
+    try {
+      const existingUtterances = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count FROM scene_utterances WHERE scene_id = ?
+      `).bind(sceneId).first<{ count: number }>();
+      
+      if (!existingUtterances || existingUtterances.count === 0) {
+        // utterance がないので自動作成
+        await c.env.DB.prepare(`
+          INSERT INTO scene_utterances 
+            (scene_id, order_no, role, text, audio_generation_id, created_at, updated_at)
+          VALUES 
+            (?, 1, 'narration', ?, ?, datetime('now'), datetime('now'))
+        `).bind(sceneId, dialogue, audioId).run();
+        console.log(`[Audio] Auto-created utterance for scene ${sceneId} (legacy migration)`);
+      } else {
+        // utterance があるが audio_generation_id が未設定の場合、紐付け
+        // order_no=1 の utterance を更新
+        await c.env.DB.prepare(`
+          UPDATE scene_utterances 
+          SET audio_generation_id = ?, updated_at = datetime('now')
+          WHERE scene_id = ? AND order_no = 1 AND audio_generation_id IS NULL
+        `).bind(audioId, sceneId).run();
+      }
+    } catch (utteranceError) {
+      // utterance 作成失敗は警告ログのみ（音声生成自体は続行）
+      console.warn('[Audio] Failed to auto-create utterance:', utteranceError);
+    }
 
     // 4) waitUntilで生成を継続（レスポンスは即返す）
     c.executionCtx.waitUntil(

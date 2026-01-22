@@ -6466,45 +6466,62 @@ async function updateVideoBuildRequirements() {
         html += '</div>';
       }
     } else if (!preflight.can_generate) {
-      // 3. R1.6: utterances チェック（音声エラー）
-      html += '<div class="flex items-center text-red-600"><i class="fas fa-volume-mute mr-2"></i>⚠ 動画を生成できません</div>';
+      // 3. レイヤー1 エラー（本当に生成不可能なケース）
+      html += '<div class="flex items-center text-red-600"><i class="fas fa-exclamation-circle mr-2"></i>⚠ 動画を生成できません</div>';
       
-      // Show utterance errors with clickable links
-      if (preflight.utterance_errors && preflight.utterance_errors.length > 0) {
+      // 本当のエラー（レイヤー1）のみ表示
+      const criticalErrors = (preflight.utterance_errors || []).filter(err => 
+        err.type !== 'NO_UTTERANCES' && err.type !== 'AUDIO_MISSING' && err.type !== 'TEXT_EMPTY'
+      );
+      
+      if (criticalErrors.length > 0) {
         html += '<div class="ml-4 mt-1 text-sm space-y-1">';
-        // 最大5件まで表示
-        preflight.utterance_errors.slice(0, 5).forEach(err => {
-          const icon = err.type === 'NO_UTTERANCES' ? 'fa-comment-slash' 
-                     : err.type === 'TEXT_EMPTY' ? 'fa-font' 
-                     : 'fa-microphone-slash';
-          // R1.6: クリックでシーン編集モーダルの音声タブを開く
-          html += '<div class="flex items-start text-red-500 hover:text-red-700 cursor-pointer group" onclick="openSceneEditModalToVoiceTab(' + err.scene_id + ')">';
-          html += '<i class="fas ' + icon + ' mr-2 mt-0.5 text-xs"></i>';
-          html += '<span class="group-hover:underline">' + escapeHtml(err.message) + '</span>';
-          html += '<i class="fas fa-external-link-alt ml-2 text-xs opacity-50 group-hover:opacity-100"></i>';
+        criticalErrors.slice(0, 5).forEach(err => {
+          html += '<div class="flex items-start text-red-500">';
+          html += '<i class="fas fa-times-circle mr-2 mt-0.5 text-xs"></i>';
+          html += '<span>' + escapeHtml(err.message) + '</span>';
           html += '</div>';
         });
-        if (preflight.utterance_errors.length > 5) {
-          html += '<div class="text-gray-400">• 他 ' + (preflight.utterance_errors.length - 5) + ' 件...</div>';
-        }
         html += '</div>';
-        
-        // サマリー + 修正ガイド
-        if (preflight.utterance_summary) {
-          const summary = preflight.utterance_summary;
-          html += '<div class="mt-2 p-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">';
-          html += '<div class="font-semibold mb-1">' + summary.invalid_scenes + '/' + summary.total_scenes + ' シーンに問題があります</div>';
-          html += '<div class="text-red-600">上記のエラーをクリックして、音声タブで発話を追加・音声生成してください。</div>';
-          html += '</div>';
-        }
       }
     } else {
-      // 4. 全てOK
+      // 4. 生成OK（can_generate: true）
       html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + preflight.total_count + 'シーン準備完了</div>';
       
-      // Show warnings (optional info)
-      if (preflight.warnings && preflight.warnings.length > 0) {
-        html += '<div class="flex items-center text-gray-400 text-sm mt-1"><i class="fas fa-info-circle mr-2"></i>警告: ' + preflight.warnings.length + '件（生成可能）</div>';
+      // レイヤー2: 警告（生成は可能だが注意事項あり）
+      const allWarnings = [
+        ...(preflight.warnings || []),
+        ...(preflight.utterance_errors || [])
+      ];
+      
+      if (allWarnings.length > 0) {
+        html += '<div class="mt-2 p-2 bg-amber-50 border border-amber-200 rounded">';
+        html += '<div class="flex items-center text-amber-700 text-sm font-medium mb-1">';
+        html += '<i class="fas fa-info-circle mr-2"></i>';
+        html += '注意: ' + allWarnings.length + '件（生成可能）';
+        html += '</div>';
+        html += '<div class="ml-4 text-xs space-y-0.5 max-h-24 overflow-y-auto">';
+        
+        // 警告を最大5件表示
+        allWarnings.slice(0, 5).forEach(warn => {
+          const msg = warn.message || '';
+          const icon = msg.includes('音声パーツ') || warn.type === 'NO_UTTERANCES' ? 'fa-comment-slash text-amber-500'
+                     : warn.type === 'AUDIO_MISSING' || msg.includes('音声が') ? 'fa-microphone-slash text-amber-500'
+                     : msg.includes('バブル') ? 'fa-comment-dots text-amber-500'
+                     : 'fa-info-circle text-gray-400';
+          
+          html += '<div class="flex items-start text-gray-600 hover:text-gray-800 cursor-pointer group" onclick="openSceneEditModalToVoiceTab(' + (warn.scene_id || warn.scene_idx) + ')">';
+          html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
+          html += '<span class="group-hover:underline">' + escapeHtml(msg) + '</span>';
+          html += '</div>';
+        });
+        
+        if (allWarnings.length > 5) {
+          html += '<div class="text-gray-400 mt-1">他 ' + (allWarnings.length - 5) + ' 件...</div>';
+        }
+        html += '</div>';
+        html += '<div class="mt-1 text-xs text-amber-600">※ このまま生成すると、音声パーツなしのシーンは無音になります</div>';
+        html += '</div>';
       }
     }
     

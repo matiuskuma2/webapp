@@ -597,12 +597,26 @@ export interface UtterancePreflightResult {
 }
 
 /**
- * validateUtterancesPreflight - R1.6 utterance 単位の検証
+ * validateUtterancesPreflight - R1.6+ 2レイヤー検証
  * 
- * チェック条件:
- * A. utterances が存在するか (scene_utterances.length > 0)
- * B. 各 utterance に text があるか (text.trim().length > 0)
- * C. 各 utterance に音声が生成済みか (audio_generation_id != null && status = 'completed')
+ * ================================
+ * 新しい設計（2レイヤー）
+ * ================================
+ * 
+ * レイヤー1: 必須条件（can_generate を決定）
+ *   - 素材（画像/漫画/動画）がある → validateProjectAssets で判定済み
+ *   - シーンの尺（duration）が決まる
+ *     - 音声があれば → 音声長
+ *     - なければ → 無音尺（scene.duration_override_ms または DEFAULT_SCENE_DURATION_MS）
+ *   → セリフなし・風景・戦闘シーンでもOK
+ * 
+ * レイヤー2: 推奨条件（warnings に出力）
+ *   - セリフがあるのに音声パーツ（utterances）がない → 警告
+ *   - 音声パーツがあるのに音声が未生成 → 警告
+ *   - baked モードなのにバブル画像がない → 警告
+ *   → 生成は止めない（事故警告のみ）
+ * 
+ * ================================
  * 
  * @returns UtterancePreflightResult
  */
@@ -610,6 +624,9 @@ export function validateUtterancesPreflight(
   scenes: Array<{
     id: number;
     idx: number;
+    dialogue?: string;  // セリフ（旧フィールド）
+    active_audio?: { id: number; audio_url: string; duration_ms: number } | null;
+    duration_override_ms?: number | null;  // 無音尺の手動設定
     utterances?: Array<{
       id: number;
       text: string;
@@ -618,65 +635,94 @@ export function validateUtterancesPreflight(
     }> | null;
   }>
 ): UtterancePreflightResult {
-  const errors: UtteranceError[] = [];
+  const errors: UtteranceError[] = [];  // レイヤー1: 本当にNGな場合のみ
+  const warnings: UtteranceError[] = []; // レイヤー2: 推奨条件の警告
   const invalidSceneIds = new Set<number>();
   let invalidUtteranceCount = 0;
 
   for (const scene of scenes) {
     const utterances = scene.utterances || [];
+    const dialogue = scene.dialogue?.trim() || '';
+    const hasDialogue = dialogue.length > 0;
+    const hasActiveAudio = scene.active_audio != null;
+    const hasDurationOverride = scene.duration_override_ms != null && scene.duration_override_ms > 0;
 
-    // A. utterances が存在するか
-    if (utterances.length === 0) {
-      errors.push({
+    // ================================
+    // レイヤー1: 必須条件 - シーンの尺が決まるか
+    // ================================
+    // 音声がある OR 無音尺が設定されている OR デフォルト無音尺を使う
+    // → 基本的には常に成立（デフォルト尺があるため）
+    // 将来：無音尺を必須にしたい場合はここでチェック
+    
+    // 現状はデフォルト尺（DEFAULT_SCENE_DURATION_MS）を自動適用するので、
+    // レイヤー1のエラーは素材チェック以外では出さない
+
+    // ================================
+    // レイヤー2: 推奨条件 - 警告のみ
+    // ================================
+    
+    // A. セリフがあるのに utterances がない → 警告
+    if (hasDialogue && utterances.length === 0) {
+      // セリフがあるなら音声パーツを登録すべき
+      warnings.push({
         scene_id: scene.id,
         scene_idx: scene.idx,
         type: 'NO_UTTERANCES',
-        message: `シーン${scene.idx}に発話がありません`,
+        message: `シーン${scene.idx}：セリフがありますが音声パーツが未登録です`,
       });
-      invalidSceneIds.add(scene.id);
-      continue;  // このシーンはスキップ
+      // 生成は止めない（無音尺で進む）
+    }
+    
+    // B. utterances がない かつ セリフもない → 無音シーン（正常）
+    if (!hasDialogue && utterances.length === 0) {
+      // 無音シーンとして正常扱い
+      // 何も出さない（can_generate に影響しない）
+      continue;
     }
 
-    // B & C. 各 utterance のチェック
+    // C. utterances があるが、音声が未生成のものがある → 警告
     for (const utterance of utterances) {
-      // B. text があるか
+      // テキストが空 → 警告（削除忘れ？）
       if (!utterance.text || utterance.text.trim().length === 0) {
-        errors.push({
+        warnings.push({
           scene_id: scene.id,
           scene_idx: scene.idx,
           utterance_id: utterance.id,
           type: 'TEXT_EMPTY',
-          message: `シーン${scene.idx}の発話にテキストがありません`,
+          message: `シーン${scene.idx}：空の音声パーツがあります（削除推奨）`,
         });
-        invalidSceneIds.add(scene.id);
-        invalidUtteranceCount++;
         continue;
       }
 
-      // C. 音声が生成済みか
+      // 音声が未生成 → 警告
       const hasCompletedAudio = utterance.audio_generation_id != null && utterance.audio_status === 'completed';
       if (!hasCompletedAudio) {
-        // テキストを短縮して表示（最大20文字）
         const textPreview = utterance.text.length > 20 
           ? utterance.text.substring(0, 20) + '…' 
           : utterance.text;
         
-        errors.push({
+        warnings.push({
           scene_id: scene.id,
           scene_idx: scene.idx,
           utterance_id: utterance.id,
           type: 'AUDIO_MISSING',
-          message: `シーン${scene.idx}の「${textPreview}」に音声がありません`,
+          message: `シーン${scene.idx}：「${textPreview}」の音声が未生成です`,
         });
-        invalidSceneIds.add(scene.id);
         invalidUtteranceCount++;
       }
     }
   }
 
+  // ================================
+  // 判定: can_generate の決定
+  // ================================
+  // レイヤー1のエラー（errors）が0件なら生成OK
+  // レイヤー2の警告（warnings）は生成を止めない
+  const canGenerate = errors.length === 0 && scenes.length > 0;
+
   return {
-    can_generate: errors.length === 0 && scenes.length > 0,
-    errors,
+    can_generate: canGenerate,
+    errors: [...errors, ...warnings],  // 後方互換: 全部 errors に入れる（UI側で type で分類）
     summary: {
       total_scenes: scenes.length,
       invalid_scenes: invalidSceneIds.size,
