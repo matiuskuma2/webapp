@@ -373,13 +373,21 @@ window.AudioUI = {
     } catch (error) {
       console.error(`[AudioUI] Generate error for scene ${sceneId}:`, error);
       
-      // Handle specific errors
+      // Handle specific errors with detailed messages
+      const errorCode = error.response?.data?.error?.code;
+      const errorMessage = error.response?.data?.error?.message || error.message || '';
+      
       if (error.response?.status === 409) {
         this.showError(sceneId, '音声生成が既に進行中です');
-      } else if (error.response?.data?.error?.code === 'NO_DIALOGUE') {
+      } else if (errorCode === 'NO_DIALOGUE') {
         this.showError(sceneId, 'このシーンにはセリフがありません');
+      } else if (errorCode === 'TTS_FAILED' || errorCode === 'ELEVENLABS_ERROR') {
+        // Show detailed error for TTS failures (including API key issues)
+        this.showError(sceneId, errorMessage || 'TTS生成に失敗しました');
+      } else if (errorMessage.includes('Invalid API key') || errorMessage.includes('quota')) {
+        this.showError(sceneId, errorMessage);
       } else {
-        this.showError(sceneId, '音声生成の開始に失敗しました');
+        this.showError(sceneId, errorMessage || '音声生成の開始に失敗しました');
       }
       
       this.setButtonState(sceneId, 'failed', 0);

@@ -164,26 +164,35 @@ export async function generateElevenLabsTTS(
       console.error('[ElevenLabs] API error:', response.status, errorText);
       
       // Parse specific error codes and messages
-      if (response.status === 401) {
-        // Check for Free Tier abuse detection
-        try {
-          const errorJson = JSON.parse(errorText);
-          if (errorJson?.detail?.status === 'detected_unusual_activity') {
-            return { success: false, error: 'ElevenLabs Free Tier is blocked from this IP. Please use a paid subscription.' };
-          }
-        } catch (e) {
-          // Not JSON, use default message
+      let errorDetail = '';
+      try {
+        const errorJson = JSON.parse(errorText);
+        errorDetail = errorJson?.detail?.message || errorJson?.detail?.status || errorJson?.message || '';
+        console.error('[ElevenLabs] Error detail:', errorDetail);
+        
+        // Check for specific error conditions
+        if (errorJson?.detail?.status === 'detected_unusual_activity') {
+          return { success: false, error: 'ElevenLabs Free Tier is blocked from this IP. Please use a paid subscription.' };
         }
-        return { success: false, error: 'Invalid API key' };
+        if (errorJson?.detail?.status === 'quota_exceeded') {
+          return { success: false, error: 'ElevenLabs quota exceeded. Please check your subscription.' };
+        }
+      } catch (e) {
+        // Not JSON, use raw text
+        errorDetail = errorText.substring(0, 200);
+      }
+      
+      if (response.status === 401) {
+        return { success: false, error: `Invalid API key${errorDetail ? `: ${errorDetail}` : ''}` };
       }
       if (response.status === 422) {
-        return { success: false, error: 'Invalid request parameters' };
+        return { success: false, error: `Invalid request: ${errorDetail || 'Check voice_id and text'}` };
       }
       if (response.status === 429) {
         return { success: false, error: 'Rate limit exceeded. Please try again later.' };
       }
       
-      return { success: false, error: `API error: ${response.status}` };
+      return { success: false, error: `API error ${response.status}: ${errorDetail || errorText.substring(0, 100)}` };
     }
 
     const audioBuffer = await response.arrayBuffer();
