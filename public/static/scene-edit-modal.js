@@ -40,6 +40,14 @@
     aiCandidates: {}, // { character_key: extracted_traits }
     aiLoading: {}, // { character_key: boolean }
     
+    // R2-C: Motion state (separate from SSOT save)
+    motionPresets: [], // Cached presets from API
+    motionState: {
+      original: null,  // { preset_id, is_default }
+      current: null,
+      hasChanges: false
+    },
+    
     // Active tab
     activeTab: 'characters', // 'characters' | 'traits'
     
@@ -58,6 +66,23 @@
       const saveBtn = document.getElementById('save-edit-scene');
       const cancelBtn = document.getElementById('cancel-edit-scene');
       const modal = document.getElementById('scene-edit-modal');
+      
+      // R2-C: Motion preset change handler (delegated)
+      document.addEventListener('change', (e) => {
+        if (e.target.id === 'edit-motion-preset') {
+          this.onMotionPresetChange(e.target.value);
+        }
+      });
+      
+      // R2-C: Motion save button
+      document.addEventListener('click', (e) => {
+        if (e.target.closest('#save-motion-btn')) {
+          this.saveMotion();
+        }
+        if (e.target.closest('#reset-motion-btn')) {
+          this.resetMotionToDefault();
+        }
+      });
       
       if (saveBtn) {
         saveBtn.addEventListener('click', () => this.save());
@@ -140,6 +165,12 @@
         // Update header with scene index
         this.updateModalHeader();
         
+        // R2-C: Load motion presets and current motion
+        await this.loadMotionData();
+        
+        // R2-C: Render motion selector UI
+        this.renderMotionSelector();
+        
         // Render tabs
         this.renderTabs();
         
@@ -167,6 +198,226 @@
       const header = document.querySelector('#scene-edit-modal h2');
       if (header) {
         header.innerHTML = `<i class="fas fa-edit mr-2"></i>シーン #${this.currentSceneIdx} 編集`;
+      }
+    },
+    
+    // ========================================
+    // R2-C: Motion Preset Functions
+    // ========================================
+    
+    /**
+     * Load motion presets and current scene motion
+     */
+    async loadMotionData() {
+      try {
+        // Load presets (cache if already loaded)
+        if (this.motionPresets.length === 0) {
+          const presetsRes = await axios.get('/api/settings/motion-presets');
+          this.motionPresets = presetsRes.data.presets || [];
+          console.log(`[SceneEditModal] Loaded ${this.motionPresets.length} motion presets`);
+        }
+        
+        // Load current scene motion
+        const motionRes = await axios.get(`/api/scenes/${this.currentSceneId}/motion`);
+        const motionData = motionRes.data;
+        
+        this.motionState = {
+          original: {
+            preset_id: motionData.motion_preset_id,
+            is_default: motionData.is_default
+          },
+          current: motionData.motion_preset_id,
+          hasChanges: false
+        };
+        
+        console.log(`[SceneEditModal] Scene motion: ${motionData.motion_preset_id} (default: ${motionData.is_default})`);
+        
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to load motion data:', error);
+        // Fallback to defaults
+        this.motionState = {
+          original: { preset_id: 'kenburns_soft', is_default: true },
+          current: 'kenburns_soft',
+          hasChanges: false
+        };
+      }
+    },
+    
+    /**
+     * Render motion selector UI (called after basic info section)
+     */
+    renderMotionSelector() {
+      const container = document.getElementById('motion-selector-container');
+      if (!container) return;
+      
+      const currentPreset = this.motionPresets.find(p => p.id === this.motionState.current);
+      const isDefault = this.motionState.original?.is_default ?? true;
+      const displayType = this.sceneData?.display_asset_type || 'image';
+      
+      // Recommendation based on display_asset_type
+      const recommendedId = displayType === 'comic' ? 'none' : 'kenburns_soft';
+      const recommendedPreset = this.motionPresets.find(p => p.id === recommendedId);
+      
+      container.innerHTML = `
+        <div class="mb-4 p-4 border border-gray-200 rounded-lg bg-gray-50">
+          <label class="block text-sm font-semibold text-gray-700 mb-2">
+            <i class="fas fa-video mr-1 text-purple-600"></i>モーション（カメラワーク）
+          </label>
+          
+          <!-- Display type indicator -->
+          <div class="mb-2 text-xs">
+            <span class="text-gray-500">シーンタイプ:</span>
+            <span class="ml-1 px-2 py-0.5 rounded ${displayType === 'comic' ? 'bg-orange-100 text-orange-700' : displayType === 'video' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}">
+              ${displayType === 'comic' ? '📙 漫画' : displayType === 'video' ? '🎬 動画' : '🖼️ 静止画'}
+            </span>
+            ${displayType === 'comic' ? '<span class="ml-2 text-orange-600">※漫画は none 推奨（文字がずれる可能性）</span>' : ''}
+          </div>
+          
+          <!-- Preset selector -->
+          <div class="flex items-center gap-2 mb-2">
+            <select 
+              id="edit-motion-preset"
+              class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+            >
+              ${this.motionPresets.map(preset => `
+                <option 
+                  value="${this.escapeHtml(preset.id)}" 
+                  ${preset.id === this.motionState.current ? 'selected' : ''}
+                >
+                  ${this.escapeHtml(preset.name)}
+                  ${preset.id === recommendedId ? ' ★推奨' : ''}
+                </option>
+              `).join('')}
+            </select>
+            
+            <!-- Save/Reset buttons -->
+            <button 
+              type="button"
+              id="save-motion-btn"
+              class="px-3 py-2 text-sm font-semibold rounded-lg transition-colors ${this.motionState.hasChanges ? 'bg-purple-600 text-white hover:bg-purple-700' : 'bg-gray-200 text-gray-400 cursor-not-allowed'}"
+              ${!this.motionState.hasChanges ? 'disabled' : ''}
+            >
+              <i class="fas fa-check mr-1"></i>保存
+            </button>
+            ${!isDefault ? `
+              <button 
+                type="button"
+                id="reset-motion-btn"
+                class="px-3 py-2 text-sm text-gray-600 hover:text-red-600 transition-colors"
+                title="デフォルトに戻す"
+              >
+                <i class="fas fa-undo"></i>
+              </button>
+            ` : ''}
+          </div>
+          
+          <!-- Description -->
+          <div class="text-xs text-gray-500">
+            ${currentPreset ? `
+              <span class="font-medium">${this.escapeHtml(currentPreset.name)}:</span>
+              <span class="ml-1">${this.escapeHtml(currentPreset.description || '')}</span>
+            ` : ''}
+            ${isDefault ? '<span class="ml-2 text-purple-500">(デフォルト)</span>' : '<span class="ml-2 text-yellow-600">(カスタム設定)</span>'}
+          </div>
+          
+          <!-- Status message -->
+          <div id="motion-status-msg" class="mt-2 text-xs hidden"></div>
+        </div>
+      `;
+    },
+    
+    /**
+     * Handle motion preset change
+     */
+    onMotionPresetChange(presetId) {
+      this.motionState.current = presetId;
+      this.motionState.hasChanges = presetId !== this.motionState.original?.preset_id;
+      
+      // Re-render to update button state
+      this.renderMotionSelector();
+      console.log(`[SceneEditModal] Motion changed to: ${presetId}, hasChanges: ${this.motionState.hasChanges}`);
+    },
+    
+    /**
+     * Save motion preset (separate from main save)
+     */
+    async saveMotion() {
+      if (!this.currentSceneId || !this.motionState.hasChanges) return;
+      
+      const saveBtn = document.getElementById('save-motion-btn');
+      const statusMsg = document.getElementById('motion-status-msg');
+      
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>保存中...';
+      }
+      
+      try {
+        const response = await axios.put(`/api/scenes/${this.currentSceneId}/motion`, {
+          motion_preset_id: this.motionState.current
+        });
+        
+        if (response.data.success) {
+          // Update original state
+          this.motionState.original = {
+            preset_id: this.motionState.current,
+            is_default: false
+          };
+          this.motionState.hasChanges = false;
+          
+          // Show success
+          if (statusMsg) {
+            statusMsg.className = 'mt-2 text-xs text-green-600';
+            statusMsg.innerHTML = '<i class="fas fa-check-circle mr-1"></i>モーションを更新しました';
+            statusMsg.classList.remove('hidden');
+            setTimeout(() => statusMsg.classList.add('hidden'), 3000);
+          }
+          
+          this.showToast('モーションを更新しました', 'success');
+          this.renderMotionSelector();
+        } else {
+          throw new Error(response.data.error?.message || 'Save failed');
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to save motion:', error);
+        
+        if (statusMsg) {
+          statusMsg.className = 'mt-2 text-xs text-red-600';
+          statusMsg.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i>更新に失敗しました';
+          statusMsg.classList.remove('hidden');
+        }
+        
+        this.showToast('モーション更新に失敗しました', 'error');
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i class="fas fa-check mr-1"></i>保存';
+        }
+        this.renderMotionSelector();
+      }
+    },
+    
+    /**
+     * Reset motion to default
+     */
+    async resetMotionToDefault() {
+      if (!this.currentSceneId) return;
+      
+      if (!confirm('モーション設定をデフォルトに戻しますか？')) {
+        return;
+      }
+      
+      try {
+        await axios.delete(`/api/scenes/${this.currentSceneId}/motion`);
+        
+        // Reload motion data
+        await this.loadMotionData();
+        this.renderMotionSelector();
+        
+        this.showToast('デフォルトに戻しました', 'success');
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to reset motion:', error);
+        this.showToast('リセットに失敗しました', 'error');
       }
     },
     

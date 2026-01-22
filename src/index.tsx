@@ -1660,6 +1660,15 @@ app.get('/projects/:id', (c) => {
                                 placeholder="例: A beautiful forest scene."
                             ></textarea>
                         </div>
+                        
+                        <!-- R2-C: Motion Preset (dynamically populated by scene-edit-modal.js) -->
+                        <div id="motion-selector-container">
+                            <!-- Loading placeholder -->
+                            <div class="animate-pulse p-4 border border-gray-200 rounded-lg bg-gray-50">
+                                <div class="h-4 bg-gray-200 rounded w-1/4 mb-2"></div>
+                                <div class="h-10 bg-gray-200 rounded"></div>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- Tab Navigation (SSOT: single modal, two tabs) -->
