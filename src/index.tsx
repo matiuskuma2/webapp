@@ -1661,6 +1661,11 @@ app.get('/projects/:id', (c) => {
                             ></textarea>
                         </div>
                         
+                        <!-- R2-C: Rendering Result Preview (what will be output) -->
+                        <div id="rendering-preview-container">
+                            <!-- Dynamically populated by scene-edit-modal.js -->
+                        </div>
+                        
                         <!-- R2-C: Motion Preset (dynamically populated by scene-edit-modal.js) -->
                         <div id="motion-selector-container">
                             <!-- Loading placeholder -->

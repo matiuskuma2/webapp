@@ -2797,12 +2797,14 @@ function renderSceneCardHeader(scene, imageStatus) {
     audioBadge = '<span class="px-2 py-0.5 bg-green-100 text-green-800 rounded-full text-xs font-semibold" title="全発話の音声生成完了"><i class="fas fa-volume-up mr-1"></i>' + utteranceStatus.total + '件</span>';
   }
   
+  // R2-C: ステータスバー（素材/文字/音声/動き）
+  const statusBar = renderSceneStatusBar(safeScene, utteranceStatus);
+  
   return '<div class="bg-gradient-to-r ' + headerClass + ' px-4 py-3 flex items-center justify-between flex-wrap gap-2">' +
     '<div class="flex items-center gap-2">' +
       '<span class="text-white font-bold text-lg">#' + sceneIdx + '</span>' +
       '<span class="px-2 py-0.5 bg-white bg-opacity-20 rounded-full text-white text-xs font-semibold">' + roleText + '</span>' +
       comicBadge +
-      audioBadge +
     '</div>' +
     '<div class="flex items-center gap-2 flex-wrap">' +
       '<button onclick="' + editBtnOnclick + '" class="px-3 py-1.5 ' + editBtnClass + ' rounded-lg text-white text-xs font-semibold transition-colors" title="' + editBtnTitle + '" ' + editBtnDisabled + '>' +
@@ -2811,7 +2813,133 @@ function renderSceneCardHeader(scene, imageStatus) {
       comicBtn +
       '<div class="scene-status-badge-container">' + statusBadge + '</div>' +
     '</div>' +
-  '</div>';
+  '</div>' +
+  // R2-C: 「今何が出るか」一目でわかるステータスバー
+  statusBar;
+}
+
+/**
+ * R2-C: シーンの「素材/文字/音声/動き」ステータスバーを生成
+ * これがあるだけで「今どのモード？」「二重になる？」が消える
+ * @param {object} scene 
+ * @param {object} utteranceStatus 
+ * @returns {string} HTML
+ */
+function renderSceneStatusBar(scene, utteranceStatus) {
+  // === 素材タイプ ===
+  const displayAssetType = scene.display_asset_type || 'image';
+  let assetIcon, assetLabel, assetClass;
+  switch (displayAssetType) {
+    case 'comic':
+      assetIcon = '📙';
+      assetLabel = '漫画';
+      assetClass = 'bg-orange-100 text-orange-800';
+      break;
+    case 'video':
+      assetIcon = '🎬';
+      assetLabel = '動画';
+      assetClass = 'bg-blue-100 text-blue-800';
+      break;
+    default:
+      assetIcon = '🖼️';
+      assetLabel = '静止画';
+      assetClass = 'bg-green-100 text-green-800';
+  }
+  
+  // === 文字レンダリングモード ===
+  // comic → baked (焼き込み), image/video → remotion (Remotionで描画)
+  const textRenderMode = scene.text_render_mode || (displayAssetType === 'comic' ? 'baked' : 'remotion');
+  let textIcon, textLabel, textClass, textTooltip;
+  switch (textRenderMode) {
+    case 'baked':
+      textIcon = '🔥';
+      textLabel = '焼込';
+      textClass = 'bg-orange-100 text-orange-800';
+      textTooltip = '文字は画像に焼き込み済み（二重表示なし）';
+      break;
+    case 'none':
+      textIcon = '⛔';
+      textLabel = 'なし';
+      textClass = 'bg-gray-100 text-gray-600';
+      textTooltip = '文字は表示しません';
+      break;
+    default: // 'remotion'
+      textIcon = '🧾';
+      textLabel = 'Remotion';
+      textClass = 'bg-purple-100 text-purple-800';
+      textTooltip = '文字はRemotionで動的描画';
+  }
+  
+  // === 音声状態 ===
+  const total = utteranceStatus?.total || 0;
+  const withAudio = utteranceStatus?.with_audio || 0;
+  let audioIcon, audioLabel, audioClass, audioTooltip;
+  if (total === 0) {
+    audioIcon = '🔇';
+    audioLabel = '発話なし';
+    audioClass = 'bg-gray-100 text-gray-600';
+    audioTooltip = '発話が設定されていません';
+  } else if (withAudio === total) {
+    audioIcon = '🎙️';
+    audioLabel = `${total}件OK`;
+    audioClass = 'bg-green-100 text-green-800';
+    audioTooltip = `全${total}件の音声生成完了`;
+  } else {
+    audioIcon = '🎙️';
+    audioLabel = `${withAudio}/${total}`;
+    audioClass = 'bg-red-100 text-red-800';
+    audioTooltip = `${total}件中${withAudio}件の音声生成完了`;
+  }
+  
+  // === モーション ===
+  const motionPresetId = scene.motion_preset_id || (displayAssetType === 'comic' ? 'none' : 'kenburns_soft');
+  let motionIcon, motionLabel, motionClass, motionTooltip;
+  // 主要なプリセットのみラベル化
+  const motionLabels = {
+    'none': { icon: '⏸️', label: '静止', class: 'bg-gray-100 text-gray-600', tip: '動きなし' },
+    'kenburns_soft': { icon: '🎥', label: 'ゆっくりズーム', class: 'bg-purple-100 text-purple-800', tip: 'ゆっくりズーム（1.0→1.05）' },
+    'kenburns_strong': { icon: '🎥', label: '強ズーム', class: 'bg-purple-100 text-purple-800', tip: '強めズーム（1.0→1.15）' },
+    'pan_lr': { icon: '➡️', label: '左→右', class: 'bg-blue-100 text-blue-800', tip: '左から右へパン' },
+    'pan_rl': { icon: '⬅️', label: '右→左', class: 'bg-blue-100 text-blue-800', tip: '右から左へパン' },
+    'pan_tb': { icon: '⬇️', label: '上→下', class: 'bg-blue-100 text-blue-800', tip: '上から下へパン' },
+    'pan_bt': { icon: '⬆️', label: '下→上', class: 'bg-blue-100 text-blue-800', tip: '下から上へパン' }
+  };
+  const motionInfo = motionLabels[motionPresetId] || { icon: '🎥', label: motionPresetId, class: 'bg-gray-100 text-gray-600', tip: motionPresetId };
+  motionIcon = motionInfo.icon;
+  motionLabel = motionInfo.label;
+  motionClass = motionInfo.class;
+  motionTooltip = motionInfo.tip;
+  
+  // === ステータスバーHTML ===
+  return `
+    <div class="bg-gray-50 border-b border-gray-200 px-4 py-2">
+      <div class="flex flex-wrap items-center gap-3 text-xs">
+        <!-- 素材 -->
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${assetClass}" title="表示素材タイプ">
+          <span>${assetIcon}</span>
+          <span class="font-semibold">${assetLabel}</span>
+        </span>
+        
+        <!-- 文字 -->
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${textClass}" title="${textTooltip}">
+          <span>${textIcon}</span>
+          <span class="font-semibold">${textLabel}</span>
+        </span>
+        
+        <!-- 音声 -->
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${audioClass}" title="${audioTooltip}">
+          <span>${audioIcon}</span>
+          <span class="font-semibold">${audioLabel}</span>
+        </span>
+        
+        <!-- 動き -->
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${motionClass}" title="${motionTooltip}">
+          <span>${motionIcon}</span>
+          <span class="font-semibold">${motionLabel}</span>
+        </span>
+      </div>
+    </div>
+  `;
 }
 
 /**

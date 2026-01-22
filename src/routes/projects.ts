@@ -597,6 +597,17 @@ projects.get('/:id/scenes', async (c) => {
                 with_text: withText,
                 is_ready: isReady
               };
+            })(),
+            // R2-C: text_render_mode (computed from display_asset_type)
+            text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
+            // R2-C: motion preset (will be fetched separately for efficiency, return placeholder)
+            motion_preset_id: await (async () => {
+              const motionRecord = await c.env.DB.prepare(`
+                SELECT motion_preset_id FROM scene_motion WHERE scene_id = ?
+              `).bind(scene.id).first<{ motion_preset_id: string }>();
+              if (motionRecord) return motionRecord.motion_preset_id;
+              // Default based on display_asset_type
+              return (scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft';
             })()
           }
         })

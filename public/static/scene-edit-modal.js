@@ -168,6 +168,9 @@
         // R2-C: Load motion presets and current motion
         await this.loadMotionData();
         
+        // R2-C: Render rendering result preview (what will be output)
+        this.renderRenderingPreview();
+        
         // R2-C: Render motion selector UI
         this.renderMotionSelector();
         
@@ -244,6 +247,144 @@
     },
     
     /**
+     * R2-C: Render rendering result preview
+     * Shows what will actually be output - the most important info for users
+     */
+    renderRenderingPreview() {
+      const container = document.getElementById('rendering-preview-container');
+      if (!container) return;
+      
+      const displayType = this.sceneData?.display_asset_type || 'image';
+      const textRenderMode = this.sceneData?.text_render_mode || (displayType === 'comic' ? 'baked' : 'remotion');
+      const motionPresetId = this.motionState?.current || (displayType === 'comic' ? 'none' : 'kenburns_soft');
+      
+      // Find current motion preset info
+      const currentPreset = this.motionPresets.find(p => p.id === motionPresetId);
+      const motionName = currentPreset?.name || motionPresetId;
+      
+      // Utterance status
+      const utteranceTotal = this.sceneData?.utterance_status?.total || 0;
+      const utteranceWithAudio = this.sceneData?.utterance_status?.with_audio || 0;
+      const audioReady = utteranceTotal > 0 && utteranceWithAudio === utteranceTotal;
+      
+      // Build description lines
+      const lines = [];
+      
+      // 1. Asset type explanation
+      if (displayType === 'comic') {
+        lines.push({
+          icon: '📙',
+          text: 'このシーンは「漫画」です',
+          detail: '画像に吹き出し・文字が焼き込まれています',
+          class: 'text-orange-700 bg-orange-50'
+        });
+      } else if (displayType === 'video') {
+        lines.push({
+          icon: '🎬',
+          text: 'このシーンは「動画」です',
+          detail: '動画クリップがそのまま使用されます',
+          class: 'text-blue-700 bg-blue-50'
+        });
+      } else {
+        lines.push({
+          icon: '🖼️',
+          text: 'このシーンは「静止画」です',
+          detail: 'AI生成画像が使用されます',
+          class: 'text-green-700 bg-green-50'
+        });
+      }
+      
+      // 2. Text rendering explanation
+      if (textRenderMode === 'baked') {
+        lines.push({
+          icon: '🔥',
+          text: '文字は「焼き込み」です',
+          detail: '画像内の文字をそのまま表示（Remotion文字はOFF）',
+          class: 'text-orange-700 bg-orange-50'
+        });
+      } else if (textRenderMode === 'none') {
+        lines.push({
+          icon: '⛔',
+          text: '文字は「表示なし」です',
+          detail: 'このシーンでは文字を表示しません',
+          class: 'text-gray-600 bg-gray-50'
+        });
+      } else {
+        lines.push({
+          icon: '🧾',
+          text: '文字は「Remotion描画」です',
+          detail: '動画生成時にRemotionがテロップ/字幕を重ねます',
+          class: 'text-purple-700 bg-purple-50'
+        });
+      }
+      
+      // 3. Audio status
+      if (utteranceTotal === 0) {
+        lines.push({
+          icon: '🔇',
+          text: '音声：発話が設定されていません',
+          detail: '音声を追加するには「音声」タブで設定してください',
+          class: 'text-gray-600 bg-gray-50'
+        });
+      } else if (audioReady) {
+        lines.push({
+          icon: '✅',
+          text: `音声：${utteranceTotal}件すべて生成完了`,
+          detail: '動画生成が可能です',
+          class: 'text-green-700 bg-green-50'
+        });
+      } else {
+        lines.push({
+          icon: '⚠️',
+          text: `音声：${utteranceWithAudio}/${utteranceTotal}件生成済み`,
+          detail: '未生成の音声があります。「音声」タブで生成してください',
+          class: 'text-red-700 bg-red-50'
+        });
+      }
+      
+      // 4. Motion
+      const motionIcon = motionPresetId === 'none' ? '⏸️' : '🎥';
+      lines.push({
+        icon: motionIcon,
+        text: `動き：${motionName}`,
+        detail: motionPresetId === 'none' ? '静止表示（動きなし）' : `カメラワークが適用されます`,
+        class: motionPresetId === 'none' ? 'text-gray-600 bg-gray-50' : 'text-purple-700 bg-purple-50'
+      });
+      
+      // Render the preview
+      container.innerHTML = `
+        <div class="mb-4 p-4 border-2 border-indigo-300 rounded-lg bg-gradient-to-r from-indigo-50 to-purple-50">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="text-lg">🎬</span>
+            <span class="font-bold text-indigo-800">最終レンダリング結果</span>
+            <span class="text-xs text-indigo-600 bg-indigo-100 px-2 py-0.5 rounded">このシーンはこう出力されます</span>
+          </div>
+          
+          <div class="space-y-2">
+            ${lines.map(line => `
+              <div class="flex items-start gap-2 p-2 rounded ${line.class}">
+                <span class="text-lg flex-shrink-0">${line.icon}</span>
+                <div class="flex-1">
+                  <span class="font-semibold text-sm">${line.text}</span>
+                  <span class="text-xs opacity-75 ml-2">→ ${line.detail}</span>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          
+          ${displayType === 'comic' && textRenderMode !== 'baked' ? `
+            <div class="mt-3 p-2 bg-red-100 border border-red-300 rounded-lg">
+              <span class="text-red-800 text-sm font-bold">
+                <i class="fas fa-exclamation-triangle mr-1"></i>
+                注意：漫画なのにRemotionで文字を重ねると二重表示になる可能性があります
+              </span>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    },
+    
+    /**
      * Render motion selector UI (called after basic info section)
      */
     renderMotionSelector() {
@@ -259,19 +400,11 @@
       const recommendedPreset = this.motionPresets.find(p => p.id === recommendedId);
       
       container.innerHTML = `
-        <div class="mb-4 p-4 border border-gray-200 rounded-lg bg-gray-50">
+        <div class="p-4 border border-gray-200 rounded-lg bg-gray-50">
           <label class="block text-sm font-semibold text-gray-700 mb-2">
-            <i class="fas fa-video mr-1 text-purple-600"></i>モーション（カメラワーク）
+            <i class="fas fa-video mr-1 text-purple-600"></i>モーション設定
+            ${displayType === 'comic' ? '<span class="ml-2 text-xs text-orange-600">※漫画は「静止」推奨</span>' : ''}
           </label>
-          
-          <!-- Display type indicator -->
-          <div class="mb-2 text-xs">
-            <span class="text-gray-500">シーンタイプ:</span>
-            <span class="ml-1 px-2 py-0.5 rounded ${displayType === 'comic' ? 'bg-orange-100 text-orange-700' : displayType === 'video' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'}">
-              ${displayType === 'comic' ? '📙 漫画' : displayType === 'video' ? '🎬 動画' : '🖼️ 静止画'}
-            </span>
-            ${displayType === 'comic' ? '<span class="ml-2 text-orange-600">※漫画は none 推奨（文字がずれる可能性）</span>' : ''}
-          </div>
           
           <!-- Preset selector -->
           <div class="flex items-center gap-2 mb-2">
@@ -374,6 +507,7 @@
           }
           
           this.showToast('モーションを更新しました', 'success');
+          this.renderRenderingPreview(); // Update preview with new motion
           this.renderMotionSelector();
         } else {
           throw new Error(response.data.error?.message || 'Save failed');
@@ -412,6 +546,7 @@
         
         // Reload motion data
         await this.loadMotionData();
+        this.renderRenderingPreview(); // Update preview with default motion
         this.renderMotionSelector();
         
         this.showToast('デフォルトに戻しました', 'success');
