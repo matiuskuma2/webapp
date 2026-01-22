@@ -160,8 +160,6 @@ export const Scene: React.FC<SceneProps> = ({
           <BalloonOverlay
             balloons={balloons}
             textRenderMode={textRenderMode}
-            containerWidth={1920}
-            containerHeight={1080}
           />
         )}
       </AbsoluteFill>
@@ -172,8 +170,6 @@ export const Scene: React.FC<SceneProps> = ({
   // 画像シーン
   // ========================================
   const imageUrl = scene.assets?.image?.url;
-  const imageWidth = scene.assets?.image?.width || 1920;
-  const imageHeight = scene.assets?.image?.height || 1080;
   
   return (
     <AbsoluteFill style={{ opacity, backgroundColor: 'black' }}>
@@ -234,8 +230,6 @@ export const Scene: React.FC<SceneProps> = ({
         <BalloonOverlay
           balloons={balloons}
           textRenderMode={textRenderMode}
-          containerWidth={imageWidth}
-          containerHeight={imageHeight}
         />
       )}
     </AbsoluteFill>
