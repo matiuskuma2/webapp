@@ -1605,7 +1605,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           audio_url: u.audio_url ? toAbsoluteUrl(u.audio_url, siteUrl) : null,
         }));
         
-        // R2-A: scene_balloons を取得（utterance と同期で表示）
+        // R2-A/A案 baked: scene_balloons を取得（utterance と同期で表示）
+        // A案 baked: bubble_r2_url/key/size を含めて取得
         const { results: balloonRows } = await c.env.DB.prepare(`
           SELECT 
             id, utterance_id, x, y, w, h,
@@ -1614,7 +1615,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
             writing_mode, text_align,
             font_family, font_weight, font_size, line_height,
             padding, bg_color, text_color, border_color, border_width,
-            z_index
+            z_index,
+            bubble_r2_key, bubble_r2_url, bubble_width_px, bubble_height_px
           FROM scene_balloons
           WHERE scene_id = ?
           ORDER BY z_index ASC, id ASC
@@ -1644,6 +1646,11 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           border_color: string | null;
           border_width: number | null;
           z_index: number;
+          // A案 baked
+          bubble_r2_key: string | null;
+          bubble_r2_url: string | null;
+          bubble_width_px: number | null;
+          bubble_height_px: number | null;
         }>();
         
         const balloons = balloonRows.map(b => ({
@@ -1675,6 +1682,11 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
             border_width: b.border_width || 2,
           },
           z_index: b.z_index,
+          // A案 baked: バブル画像（絶対URLに変換）
+          bubble_r2_key: b.bubble_r2_key,
+          bubble_r2_url: b.bubble_r2_url ? toAbsoluteUrl(b.bubble_r2_url, siteUrl) : null,
+          bubble_width_px: b.bubble_width_px,
+          bubble_height_px: b.bubble_height_px,
         }));
         
         // R2-C: scene_motion を取得（モーションプリセット）
