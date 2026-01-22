@@ -509,8 +509,35 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
       });
     }
 
-    // 音声チェック（警告レベル）
+    // ========================================
+    // A案 baked チェック（事故ゼロ化）
+    // ========================================
     const displayType = scene.display_asset_type || 'image';
+    const textRenderMode = scene.text_render_mode || 
+      (displayType === 'comic' ? 'baked' : 'remotion');
+    
+    // Check 1: comic で remotion モード → 二重表示の警告
+    if (displayType === 'comic' && textRenderMode === 'remotion') {
+      warnings.push({
+        scene_idx: scene.idx,
+        scene_id: scene.id,
+        message: '⚠️ 漫画シーンで text_render_mode=remotion が設定されています。文字が二重に表示される可能性があります。',
+      });
+    }
+    
+    // Check 2: baked モードなのに bubble_r2_url がないバルーンがある
+    if (textRenderMode === 'baked' && scene.balloons && scene.balloons.length > 0) {
+      const balloonsWithoutImage = scene.balloons.filter(b => !b.bubble_r2_url);
+      if (balloonsWithoutImage.length > 0) {
+        warnings.push({
+          scene_idx: scene.idx,
+          scene_id: scene.id,
+          message: `⚠️ bakedモードですが、バブル画像が未設定です（${balloonsWithoutImage.length}/${scene.balloons.length}件）。これらのバルーンは表示されません。`,
+        });
+      }
+    }
+
+    // 音声チェック（警告レベル）
     if (displayType === 'comic') {
       const utterances = scene.comic_data?.utterances || [];
       const missingAudioCount = utterances.filter(u => !u.audio_url).length;
