@@ -192,6 +192,11 @@ export interface SceneData {
       border_width: number;
     };
     z_index: number;
+    // A案 baked: 文字入りバブル画像
+    bubble_r2_key?: string | null;
+    bubble_r2_url?: string | null;
+    bubble_width_px?: number | null;
+    bubble_height_px?: number | null;
   }> | null;
   // R2-C: モーションプリセット（scene_motion から読み込み）
   motion?: {
@@ -678,6 +683,10 @@ export interface VoiceAsset {
 /**
  * BalloonAsset - R2-A 吹き出し
  * utterance と連動して表示/非表示
+ * 
+ * A案 baked 対応:
+ *   - bubble_image_url が存在する場合: 画像をそのまま表示（文字描画なし）
+ *   - bubble_image_url がない場合: text + style を使って Remotion で描画
  */
 export interface BalloonAsset {
   id: string;
@@ -697,7 +706,7 @@ export interface BalloonAsset {
     tip_x: number;
     tip_y: number;
   };
-  // スタイル
+  // スタイル（text_render_mode='remotion' の場合に使用）
   style: {
     writing_mode: 'horizontal' | 'vertical';
     text_align: 'left' | 'center' | 'right';
@@ -712,6 +721,17 @@ export interface BalloonAsset {
     border_width: number;
   };
   z_index: number;
+  
+  // ========================================
+  // A案 baked 専用フィールド
+  // ========================================
+  /** 文字入りバブル画像URL（baked モード時に使用） */
+  bubble_image_url?: string;
+  /** バブル画像の実サイズ（ピクセル） */
+  bubble_image_size?: {
+    width: number;
+    height: number;
+  };
 }
 
 /**
@@ -983,10 +1003,20 @@ export function buildProjectJson(
       };
     }
     
-    // 6. R2-A: balloons 構築（utterance と同期）
-    // voice_window モードの場合、utterance の時間窓を使用
+    // 6. R2-A/A案 baked: balloons 構築（utterance と同期）
+    // ========================================
+    // A案 baked の処理ルール:
+    //   - text_render_mode='remotion': style を使って Remotion で文字描画
+    //   - text_render_mode='baked': bubble_image_url を使って画像表示（文字描画なし）
+    //   - text_render_mode='none': balloons 出力しない
+    // ========================================
+    const textRenderMode = scene.text_render_mode || 
+      (scene.display_asset_type === 'comic' ? 'baked' : 'remotion');
+    
     const balloons: BalloonAsset[] = [];
-    if (scene.balloons && scene.balloons.length > 0 && scene.text_render_mode !== 'baked' && scene.text_render_mode !== 'none') {
+    
+    // text_render_mode='none' の場合は balloons を出力しない
+    if (scene.balloons && scene.balloons.length > 0 && textRenderMode !== 'none') {
       // voices から utterance_id -> timing のマップを作成
       const utteranceTimingMap = new Map<number, { start_ms: number; end_ms: number; text: string }>();
       for (const v of voices) {
@@ -1020,6 +1050,13 @@ export function buildProjectJson(
         // utterance_id が必須なので、ない場合はスキップ
         if (!b.utterance_id) continue;
         
+        // A案 baked: bubble_r2_url がある場合のみ balloons に追加
+        // （baked モードでは画像がないと表示できない）
+        if (textRenderMode === 'baked' && !b.bubble_r2_url) {
+          console.warn(`[buildProjectJson] Balloon ${b.id} has no bubble_r2_url in baked mode, skipping`);
+          continue;
+        }
+        
         balloons.push({
           id: `balloon-${b.id}`,
           utterance_id: b.utterance_id,
@@ -1044,6 +1081,12 @@ export function buildProjectJson(
             border_width: b.style.border_width,
           },
           z_index: b.z_index,
+          // A案 baked: バブル画像URL（baked モード時に使用）
+          bubble_image_url: b.bubble_r2_url || undefined,
+          bubble_image_size: (b.bubble_width_px && b.bubble_height_px) ? {
+            width: b.bubble_width_px,
+            height: b.bubble_height_px,
+          } : undefined,
         });
       }
     }

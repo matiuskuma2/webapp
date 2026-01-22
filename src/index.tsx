@@ -25,6 +25,7 @@ import auth from './routes/auth' // Authentication
 import admin from './routes/admin' // Admin API routes
 import comic from './routes/comic' // Phase1.5: Comic editor API
 import utterances from './routes/utterances' // R1.5: Scene utterances API
+import sceneBalloons from './routes/scene-balloons' // A案 baked: Balloon image management
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -61,6 +62,7 @@ app.route('/api/scenes', sceneCharacters) // For /api/scenes/:sceneId/characters
 app.route('/api/scenes', videoGeneration) // For /api/scenes/:sceneId/videos - MUST be before generic /api/scenes/:id
 app.route('/api/scenes', comic) // For /api/scenes/:id/comic/* - Phase1.5 comic editor
 app.route('/api', utterances) // R1.5: For /api/scenes/:sceneId/utterances, /api/utterances/:id
+app.route('/api/scene-balloons', sceneBalloons) // A案 baked: For /api/scene-balloons/:id, /api/scene-balloons/:id/upload-image
 app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate
