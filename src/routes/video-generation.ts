@@ -1608,6 +1608,32 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           z_index: b.z_index,
         }));
         
+        // R2-C: scene_motion を取得（モーションプリセット）
+        const motionRow = await c.env.DB.prepare(`
+          SELECT sm.motion_preset_id, mp.motion_type, mp.params
+          FROM scene_motion sm
+          JOIN motion_presets mp ON sm.motion_preset_id = mp.id
+          WHERE sm.scene_id = ?
+        `).bind(scene.id).first<{
+          motion_preset_id: string;
+          motion_type: string;
+          params: string;
+        }>();
+        
+        let motionData = null;
+        if (motionRow) {
+          try {
+            const params = JSON.parse(motionRow.params || '{}');
+            motionData = {
+              preset_id: motionRow.motion_preset_id,
+              motion_type: motionRow.motion_type as 'none' | 'zoom' | 'pan' | 'combined',
+              params: params,
+            };
+          } catch (e) {
+            console.warn(`Failed to parse motion params for scene ${scene.id}:`, e);
+          }
+        }
+        
         return {
           id: scene.id,
           idx: scene.idx,
@@ -1633,6 +1659,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           utterances: utterances.length > 0 ? utterances : null,
           // R2-A: balloons（utterance 連動）
           balloons: balloons.length > 0 ? balloons : null,
+          // R2-C: motion（モーションプリセット）
+          motion: motionData,
         };
       })
     );

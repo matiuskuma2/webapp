@@ -790,4 +790,41 @@ settings.delete('/user/characters/:characterKey', async (c) => {
   }
 });
 
+// ====================================================================
+// R2-C: Motion Presets API
+// ====================================================================
+
+// GET /api/settings/motion-presets - モーションプリセット一覧
+settings.get('/motion-presets', async (c) => {
+  try {
+    const { results: presets } = await c.env.DB.prepare(`
+      SELECT id, name, description, motion_type, params, sort_order
+      FROM motion_presets
+      WHERE is_active = 1
+      ORDER BY sort_order ASC, id ASC
+    `).all<{
+      id: string;
+      name: string;
+      description: string;
+      motion_type: string;
+      params: string;
+      sort_order: number;
+    }>();
+    
+    return c.json({
+      presets: presets.map(p => ({
+        id: p.id,
+        name: p.name,
+        description: p.description,
+        motion_type: p.motion_type,
+        params: JSON.parse(p.params || '{}'),
+        sort_order: p.sort_order,
+      }))
+    });
+  } catch (error) {
+    console.error('[Settings] Get motion presets error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch motion presets' } }, 500);
+  }
+});
+
 export default settings;

@@ -678,12 +678,15 @@ projects.get('/:id/scenes', async (c) => {
       total_scenes: scenes.length,
       scenes: scenesWithImages
     })
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error fetching scenes:', error)
+    console.error('Error stack:', error?.stack)
+    console.error('Error message:', error?.message)
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Failed to fetch scenes'
+        message: 'Failed to fetch scenes',
+        details: error?.message || 'Unknown error'
       }
     }, 500)
   }

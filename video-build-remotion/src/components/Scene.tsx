@@ -3,6 +3,7 @@ import { AbsoluteFill, Img, Audio, Video, Sequence, useCurrentFrame, useVideoCon
 import type { ProjectScene, VoiceAsset } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
 import { Subtitle } from './Subtitle';
+import { MotionWrapper, getMotionPreset } from './MotionWrapper';
 
 interface SceneProps {
   scene: ProjectScene;
@@ -40,6 +41,9 @@ export const Scene: React.FC<SceneProps> = ({
   // baked/none の場合は字幕を描画しない（二重事故防止）
   const shouldRenderSubtitle = showSubtitle && textRenderMode === 'remotion';
   
+  // R2-C: モーションプリセットを取得
+  const motionPreset = scene.motion ? scene.motion : getMotionPreset(null); // デフォルト: kenburns_soft
+  
   // Debug: 最初のフレームでログ出力
   if (frame === 0) {
     console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
@@ -47,6 +51,7 @@ export const Scene: React.FC<SceneProps> = ({
     console.log(`[Scene ${scene.idx}] Duration frames: ${durationFrames}`);
     console.log(`[Scene ${scene.idx}] Voices count: ${scene.assets?.voices?.length || 0}`);
     console.log(`[Scene ${scene.idx}] text_render_mode: ${textRenderMode}`);
+    console.log(`[Scene ${scene.idx}] motion preset: ${motionPreset?.id || 'default'}`);
   }
   
   // フェードイン・アウト（15フレーム = 0.5秒 @30fps）
@@ -55,14 +60,6 @@ export const Scene: React.FC<SceneProps> = ({
     frame,
     [0, fadeFrames, durationFrames - fadeFrames, durationFrames],
     [0, 1, 1, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  
-  // Ken Burns エフェクト（軽いズーム）
-  const scale = interpolate(
-    frame,
-    [0, durationFrames],
-    [1, 1.05],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
   
@@ -151,29 +148,31 @@ export const Scene: React.FC<SceneProps> = ({
   
   return (
     <AbsoluteFill style={{ opacity, backgroundColor: 'black' }}>
-      {imageUrl ? (
-        <Img
-          src={imageUrl}
-          style={{
+      {/* R2-C: MotionWrapper でカメラワークを適用 */}
+      <MotionWrapper preset={motionPreset} durationFrames={durationFrames}>
+        {imageUrl ? (
+          <Img
+            src={imageUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+            }}
+          />
+        ) : (
+          <div style={{
             width: '100%',
             height: '100%',
-            objectFit: 'cover',
-            transform: `scale(${scale})`,
-          }}
-        />
-      ) : (
-        <div style={{
-          width: '100%',
-          height: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          color: 'white',
-          fontSize: 48,
-        }}>
-          Scene {scene.idx} - No Image
-        </div>
-      )}
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontSize: 48,
+          }}>
+            Scene {scene.idx} - No Image
+          </div>
+        )}
+      </MotionWrapper>
       
       {/* R1.5: voices[] を再生 */}
       {effectiveVoices.map((voice) => {

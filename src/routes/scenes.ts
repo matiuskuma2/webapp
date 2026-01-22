@@ -678,4 +678,157 @@ scenes.get('/:id/images', async (c) => {
   }
 })
 
+// ====================================================================
+// R2-C: Scene Motion API
+// ====================================================================
+
+// GET /api/scenes/:id/motion - シーンのモーション設定取得
+scenes.get('/:id/motion', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+    
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id, display_asset_type FROM scenes WHERE id = ?
+    `).bind(sceneId).first()
+    
+    if (!scene) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Scene not found' }
+      }, 404)
+    }
+    
+    // モーション設定を取得
+    const motionSetting = await c.env.DB.prepare(`
+      SELECT sm.motion_preset_id, mp.name, mp.description, mp.motion_type, mp.params
+      FROM scene_motion sm
+      JOIN motion_presets mp ON sm.motion_preset_id = mp.id
+      WHERE sm.scene_id = ?
+    `).bind(sceneId).first<{
+      motion_preset_id: string;
+      name: string;
+      description: string;
+      motion_type: string;
+      params: string;
+    }>()
+    
+    // 設定がない場合はデフォルト値を返す
+    const displayType = (scene as any).display_asset_type || 'image'
+    const defaultPreset = displayType === 'comic' ? 'none' : 'kenburns_soft'
+    
+    if (!motionSetting) {
+      // プリセット情報を取得
+      const preset = await c.env.DB.prepare(`
+        SELECT id, name, description, motion_type, params
+        FROM motion_presets WHERE id = ?
+      `).bind(defaultPreset).first()
+      
+      return c.json({
+        scene_id: parseInt(sceneId),
+        is_default: true,
+        motion_preset_id: defaultPreset,
+        name: preset?.name || defaultPreset,
+        description: preset?.description || '',
+        motion_type: preset?.motion_type || 'zoom',
+        params: preset?.params ? JSON.parse(preset.params as string) : {},
+      })
+    }
+    
+    return c.json({
+      scene_id: parseInt(sceneId),
+      is_default: false,
+      motion_preset_id: motionSetting.motion_preset_id,
+      name: motionSetting.name,
+      description: motionSetting.description,
+      motion_type: motionSetting.motion_type,
+      params: JSON.parse(motionSetting.params || '{}'),
+    })
+  } catch (error) {
+    console.error(`[GET /api/scenes/:id/motion] Error:`, error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch motion settings' }
+    }, 500)
+  }
+})
+
+// PUT /api/scenes/:id/motion - シーンのモーション設定更新
+scenes.put('/:id/motion', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+    const body = await c.req.json<{ motion_preset_id: string }>()
+    
+    if (!body.motion_preset_id) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'motion_preset_id is required' }
+      }, 400)
+    }
+    
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE id = ?
+    `).bind(sceneId).first()
+    
+    if (!scene) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Scene not found' }
+      }, 404)
+    }
+    
+    // プリセット存在確認
+    const preset = await c.env.DB.prepare(`
+      SELECT id, name, motion_type, params FROM motion_presets WHERE id = ? AND is_active = 1
+    `).bind(body.motion_preset_id).first()
+    
+    if (!preset) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Motion preset not found' }
+      }, 404)
+    }
+    
+    // UPSERT（存在すれば更新、なければ挿入）
+    await c.env.DB.prepare(`
+      INSERT INTO scene_motion (scene_id, motion_preset_id, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(scene_id) DO UPDATE SET 
+        motion_preset_id = excluded.motion_preset_id,
+        updated_at = CURRENT_TIMESTAMP
+    `).bind(sceneId, body.motion_preset_id).run()
+    
+    return c.json({
+      success: true,
+      scene_id: parseInt(sceneId),
+      motion_preset_id: body.motion_preset_id,
+      motion_type: preset.motion_type,
+      params: JSON.parse((preset.params as string) || '{}'),
+    })
+  } catch (error) {
+    console.error(`[PUT /api/scenes/:id/motion] Error:`, error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to update motion settings' }
+    }, 500)
+  }
+})
+
+// DELETE /api/scenes/:id/motion - シーンのモーション設定削除（デフォルトに戻す）
+scenes.delete('/:id/motion', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+    
+    await c.env.DB.prepare(`
+      DELETE FROM scene_motion WHERE scene_id = ?
+    `).bind(sceneId).run()
+    
+    return c.json({
+      success: true,
+      scene_id: parseInt(sceneId),
+      message: 'Motion setting reset to default'
+    })
+  } catch (error) {
+    console.error(`[DELETE /api/scenes/:id/motion] Error:`, error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to delete motion settings' }
+    }, 500)
+  }
+})
+
 export default scenes

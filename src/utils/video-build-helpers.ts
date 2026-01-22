@@ -193,6 +193,12 @@ export interface SceneData {
     };
     z_index: number;
   }> | null;
+  // R2-C: モーションプリセット（scene_motion から読み込み）
+  motion?: {
+    preset_id: string;
+    motion_type: 'none' | 'zoom' | 'pan' | 'combined';
+    params: Record<string, number>;
+  } | null;
 }
 
 export interface ProjectData {
@@ -746,6 +752,19 @@ export interface RemotionScene_R1 {
   };
   /** R2-A: 吹き出し（utterance と同期） */
   balloons?: BalloonAsset[];
+  /** R2-C: モーションプリセット */
+  motion?: {
+    id: string;
+    motion_type: 'none' | 'zoom' | 'pan' | 'combined';
+    params: {
+      start_scale?: number;
+      end_scale?: number;
+      start_x?: number;
+      end_x?: number;
+      start_y?: number;
+      end_y?: number;
+    };
+  };
   characters?: {
     image?: string[];
     voice?: string;
@@ -1056,6 +1075,16 @@ export function buildProjectJson(
       },
       // R2-A: balloons
       balloons: balloons.length > 0 ? balloons : undefined,
+      // R2-C: motion
+      // comic は none（静止画）、image/video はプリセット or デフォルト
+      motion: scene.motion ? {
+        id: scene.motion.preset_id,
+        motion_type: scene.motion.motion_type,
+        params: scene.motion.params,
+      } : (scene.display_asset_type === 'comic' 
+        ? { id: 'none', motion_type: 'none', params: {} }
+        : { id: 'kenburns_soft', motion_type: 'zoom', params: { start_scale: 1.0, end_scale: 1.05 } }
+      ),
     };
   });
   

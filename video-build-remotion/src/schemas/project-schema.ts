@@ -25,6 +25,25 @@ export const VoiceAssetSchema = z.object({
 export type VoiceAsset = z.infer<typeof VoiceAssetSchema>;
 
 // ====================================================================
+// MotionPreset - R2-C モーションプリセット
+// ====================================================================
+
+export const MotionPresetSchema = z.object({
+  id: z.string(),
+  motion_type: z.enum(['none', 'zoom', 'pan', 'combined']),
+  params: z.object({
+    start_scale: z.number().optional(),
+    end_scale: z.number().optional(),
+    start_x: z.number().optional(),
+    end_x: z.number().optional(),
+    start_y: z.number().optional(),
+    end_y: z.number().optional(),
+  }),
+});
+
+export type MotionPreset = z.infer<typeof MotionPresetSchema>;
+
+// ====================================================================
 // BalloonAsset - R2 吹き出し
 // ====================================================================
 
@@ -89,6 +108,12 @@ export const ProjectSceneSchema = z.object({
    * R2: balloons - 吹き出し配列（remotionモード時に使用）
    */
   balloons: z.array(BalloonAssetSchema).optional(),
+  /**
+   * R2-C: motion - モーションプリセット
+   * - シーン毎のカメラワーク（Ken Burns, Pan等）
+   * - 未指定時は kenburns_soft がデフォルト適用
+   */
+  motion: MotionPresetSchema.optional(),
   assets: z.object({
     image: z.object({
       url: z.string(),
