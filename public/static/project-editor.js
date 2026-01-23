@@ -2976,6 +2976,19 @@ function renderSceneStatusBar(scene, utteranceStatus) {
           <span class="font-semibold">${durationSec}秒</span>
         </span>
         
+        <!-- R3-A: BGM（プロジェクト共通） -->
+        ${window.currentBgm ? `
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-yellow-100 text-yellow-800" title="プロジェクトBGM設定あり">
+          <span>🎵</span>
+          <span class="font-semibold">BGM</span>
+        </span>
+        ` : `
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-100 text-gray-500" title="BGM未設定（Step4で設定可能）">
+          <span>🔇</span>
+          <span class="font-semibold">BGMなし</span>
+        </span>
+        `}
+        
         <!-- 動き -->
         <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${motionClass}" title="${motionTooltip}">
           <span>${motionIcon}</span>
