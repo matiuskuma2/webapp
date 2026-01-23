@@ -6521,7 +6521,7 @@ async function updateVideoBuildRequirements() {
   
   // Usage info
   const usage = window.videoBuildUsageCache || {};
-  const isAtLimit = (usage.monthly_builds || 0) >= 30;
+  const isAtLimit = (usage.monthly_builds || 0) >= 60;
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
   let html = '<div class="space-y-2">';
@@ -6599,6 +6599,7 @@ async function updateVideoBuildRequirements() {
       }
       
       // レイヤー2: 警告（生成は可能だが注意事項あり）
+      // ※ 音声なしでも生成可能なので、クリックで誘導する機能は不要
       const allWarnings = [
         ...(preflight.warnings || []),
         ...(preflight.utterance_errors || [])
@@ -6608,11 +6609,11 @@ async function updateVideoBuildRequirements() {
         html += '<div class="mt-2 p-2 bg-amber-50 border border-amber-200 rounded">';
         html += '<div class="flex items-center text-amber-700 text-sm font-medium mb-1">';
         html += '<i class="fas fa-info-circle mr-2"></i>';
-        html += '注意: ' + allWarnings.length + '件（生成可能）';
+        html += '注意: ' + allWarnings.length + '件（このまま生成できます）';
         html += '</div>';
         html += '<div class="ml-4 text-xs space-y-0.5 max-h-24 overflow-y-auto">';
         
-        // 警告を最大5件表示
+        // 警告を最大5件表示（クリック不可、情報表示のみ）
         allWarnings.slice(0, 5).forEach(warn => {
           const msg = warn.message || '';
           const icon = msg.includes('音声パーツ') || warn.type === 'NO_UTTERANCES' ? 'fa-comment-slash text-amber-500'
@@ -6620,22 +6621,11 @@ async function updateVideoBuildRequirements() {
                      : msg.includes('バブル') ? 'fa-comment-dots text-amber-500'
                      : 'fa-info-circle text-gray-400';
           
-          // scene_id は DB の ID（576, 577 など）、scene_idx はインデックス（1, 2 など）
-          // SceneEditModal.open() は DB ID を必要とするため、scene_id を優先
-          const targetSceneId = warn.scene_id || null;
-          
-          if (targetSceneId) {
-            html += '<div class="flex items-start text-gray-600 hover:text-gray-800 cursor-pointer group" onclick="openSceneEditModalToVoiceTab(' + targetSceneId + ')">';
-            html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
-            html += '<span class="group-hover:underline">' + escapeHtml(msg) + '</span>';
-            html += '</div>';
-          } else {
-            // scene_id がない場合はクリック不可（表示のみ）
-            html += '<div class="flex items-start text-gray-500">';
-            html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
-            html += '<span>' + escapeHtml(msg) + '</span>';
-            html += '</div>';
-          }
+          // 情報表示のみ（クリックでシーン編集を開く機能は削除）
+          html += '<div class="flex items-start text-gray-500">';
+          html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
+          html += '<span>' + escapeHtml(msg) + '</span>';
+          html += '</div>';
         });
         
         if (allWarnings.length > 5) {
@@ -6647,7 +6637,7 @@ async function updateVideoBuildRequirements() {
           const audioFallback = hasBgm && hasSfx ? 'BGM + SFX' : hasBgm ? 'BGM' : 'SFX';
           html += '<div class="mt-1 text-xs text-gray-500">※ 音声パーツなしのシーンでは ' + audioFallback + ' が再生されます</div>';
         } else {
-          html += '<div class="mt-1 text-xs text-amber-600">※ このまま生成すると、音声パーツなしのシーンは無音になります</div>';
+          html += '<div class="mt-1 text-xs text-gray-500">※ 音声パーツなしのシーンは無音になります（問題なければそのまま生成できます）</div>';
         }
         html += '</div>';
       }
@@ -6728,7 +6718,7 @@ function updateVideoBuildButtonState() {
   const canGenerate = preflight.can_generate === true;
   
   const usage = window.videoBuildUsageCache || {};
-  const isAtLimit = (usage.monthly_builds || 0) >= 30;
+  const isAtLimit = (usage.monthly_builds || 0) >= 60;
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
   // Phase 1: Limit to 100 scenes until segment rendering is implemented

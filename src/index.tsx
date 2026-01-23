@@ -1276,7 +1276,7 @@ app.get('/projects/:id', (c) => {
                             <div>
                                 <span class="text-sm text-gray-600">今月の生成回数:</span>
                                 <span id="videoBuildUsageCount" class="ml-2 font-bold text-purple-700">-</span>
-                                <span class="text-gray-500">/ 30</span>
+                                <span class="text-gray-500">/ 60</span>
                             </div>
                             <div class="w-px h-8 bg-gray-300"></div>
                             <div>
