@@ -1386,6 +1386,143 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
 });
 
 /**
+ * GET /api/projects/:projectId/video-builds/preview-json
+ * Preview project.json without starting a build (for debugging)
+ * 
+ * Query params:
+ *   - scene_id: Filter to specific scene (optional)
+ */
+videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) => {
+  const { buildProjectJson } = await import('../utils/video-build-helpers');
+  
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    const sceneIdFilter = c.req.query('scene_id') ? parseInt(c.req.query('scene_id')!, 10) : null;
+    
+    // Get project
+    const project = await c.env.DB.prepare(`
+      SELECT * FROM projects WHERE id = ?
+    `).bind(projectId).first();
+    
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
+    }
+    
+    // Get scenes (optionally filtered)
+    let scenesQuery = `
+      SELECT s.id, s.idx, s.role, s.title, s.dialogue, s.display_asset_type, s.text_render_mode,
+             s.duration_override_ms
+      FROM scenes s
+      WHERE s.project_id = ?
+    `;
+    const queryParams: any[] = [projectId];
+    
+    if (sceneIdFilter) {
+      scenesQuery += ' AND s.id = ?';
+      queryParams.push(sceneIdFilter);
+    }
+    scenesQuery += ' ORDER BY s.idx ASC';
+    
+    const { results: rawScenes } = await c.env.DB.prepare(scenesQuery).bind(...queryParams).all();
+    
+    if (!rawScenes || rawScenes.length === 0) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'No scenes found' } }, 404);
+    }
+    
+    // Build full scene data with assets, utterances, balloons
+    const scenes = await Promise.all(rawScenes.map(async (scene: any) => {
+      // Active image
+      const activeImage = await c.env.DB.prepare(`
+        SELECT id, r2_key, r2_url FROM image_generations
+        WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+        LIMIT 1
+      `).bind(scene.id).first();
+      
+      // Active comic
+      const activeComic = await c.env.DB.prepare(`
+        SELECT id, r2_key, r2_url FROM image_generations
+        WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+        LIMIT 1
+      `).bind(scene.id).first();
+      
+      // Utterances
+      const { results: utterances } = await c.env.DB.prepare(`
+        SELECT su.*, ag.r2_url as audio_r2_url, ag.duration_ms as audio_duration_ms, ag.status as audio_status
+        FROM scene_utterances su
+        LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
+        WHERE su.scene_id = ?
+        ORDER BY su.order_no ASC
+      `).bind(scene.id).all();
+      
+      // Balloons
+      const { results: balloons } = await c.env.DB.prepare(`
+        SELECT * FROM scene_balloons WHERE scene_id = ? ORDER BY z_index ASC, id ASC
+      `).bind(scene.id).all();
+      
+      // Map data for buildProjectJson
+      return {
+        ...scene,
+        active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: activeImage.r2_url } : null,
+        active_comic: activeComic ? { r2_key: activeComic.r2_key, r2_url: activeComic.r2_url } : null,
+        utterances: utterances?.map((u: any) => ({
+          id: u.id,
+          role: u.role,
+          character_key: u.character_key,
+          text: u.text,
+          audio_url: u.audio_r2_url,
+          duration_ms: u.audio_duration_ms || u.duration_ms,
+        })) || [],
+        balloons: balloons?.map((b: any) => ({
+          id: b.id,
+          utterance_id: b.utterance_id,
+          display_mode: b.display_mode,
+          position: { x: b.x, y: b.y },
+          size: { w: b.w, h: b.h },
+          shape: b.shape,
+          tail: { enabled: b.tail_enabled === 1, tip_x: b.tail_tip_x, tip_y: b.tail_tip_y },
+          style: {
+            writing_mode: b.writing_mode,
+            text_align: b.text_align,
+            font_family: b.font_family,
+            font_weight: b.font_weight,
+            font_size: b.font_size,
+            line_height: b.line_height,
+            padding: b.padding,
+            bg_color: b.bg_color,
+            text_color: b.text_color,
+            border_color: b.border_color,
+            border_width: b.border_width,
+          },
+          z_index: b.z_index,
+          bubble_r2_url: b.bubble_r2_url,
+          bubble_width_px: b.bubble_width_px,
+          bubble_height_px: b.bubble_height_px,
+        })) || [],
+      };
+    }));
+    
+    // Build project.json
+    const projectJson = buildProjectJson(
+      project as any,
+      scenes,
+      {
+        preset: 'default',
+        aspect_ratio: '16:9',
+        fps: 30,
+        transition_type: 'fade',
+        transition_duration_ms: 500,
+      }
+    );
+    
+    return c.json(projectJson);
+    
+  } catch (error) {
+    console.error('[Video Build Preview JSON] Error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to generate preview JSON' } }, 500);
+  }
+});
+
+/**
  * GET /api/projects/:projectId/video-builds
  * List video builds for a project
  */
