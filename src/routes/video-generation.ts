@@ -1515,6 +1515,14 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         SELECT * FROM scene_balloons WHERE scene_id = ? ORDER BY z_index ASC, id ASC
       `).bind(scene.id).all();
       
+      // R3-B: SFX
+      const { results: sfxRows } = await c.env.DB.prepare(`
+        SELECT id, name, r2_url, duration_ms, volume, start_ms, end_ms, loop, fade_in_ms, fade_out_ms
+        FROM scene_audio_cues
+        WHERE scene_id = ? AND is_active = 1
+        ORDER BY start_ms ASC
+      `).bind(scene.id).all();
+      
       // Map data for buildProjectJson
       return {
         ...scene,
@@ -1553,6 +1561,19 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
           bubble_r2_url: b.bubble_r2_url,
           bubble_width_px: b.bubble_width_px,
           bubble_height_px: b.bubble_height_px,
+        })) || [],
+        // R3-B: SFX
+        sfx: sfxRows?.map((cue: any) => ({
+          id: cue.id,
+          name: cue.name || 'SFX',
+          r2_url: cue.r2_url,
+          duration_ms: cue.duration_ms,
+          volume: cue.volume,
+          start_ms: cue.start_ms,
+          end_ms: cue.end_ms,
+          loop: cue.loop === 1,
+          fade_in_ms: cue.fade_in_ms,
+          fade_out_ms: cue.fade_out_ms,
         })) || [],
       };
     }));
@@ -1929,6 +1950,41 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           bubble_height_px: b.bubble_height_px,
         }));
         
+        // R3-B: scene_audio_cues を取得（SFX/効果音）
+        const { results: sfxRows } = await c.env.DB.prepare(`
+          SELECT 
+            id, name, r2_key, r2_url, duration_ms,
+            volume, start_ms, end_ms, loop, fade_in_ms, fade_out_ms
+          FROM scene_audio_cues
+          WHERE scene_id = ? AND is_active = 1
+          ORDER BY start_ms ASC
+        `).bind(scene.id).all<{
+          id: number;
+          name: string | null;
+          r2_key: string | null;
+          r2_url: string | null;
+          duration_ms: number | null;
+          volume: number;
+          start_ms: number;
+          end_ms: number | null;
+          loop: number;
+          fade_in_ms: number;
+          fade_out_ms: number;
+        }>();
+        
+        const sfx = sfxRows.map(cue => ({
+          id: cue.id,
+          name: cue.name || 'SFX',
+          r2_url: cue.r2_url ? toAbsoluteUrl(cue.r2_url, siteUrl) : null,
+          duration_ms: cue.duration_ms,
+          volume: cue.volume,
+          start_ms: cue.start_ms,
+          end_ms: cue.end_ms,
+          loop: cue.loop,
+          fade_in_ms: cue.fade_in_ms,
+          fade_out_ms: cue.fade_out_ms,
+        })).filter(cue => cue.r2_url); // URL がないものは除外
+        
         // R2-C: scene_motion を取得（モーションプリセット）
         const motionRow = await c.env.DB.prepare(`
           SELECT sm.motion_preset_id, mp.motion_type, mp.params
@@ -1980,6 +2036,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           utterances: utterances.length > 0 ? utterances : null,
           // R2-A: balloons（utterance 連動）
           balloons: balloons.length > 0 ? balloons : null,
+          // R3-B: sfx（効果音）
+          sfx: sfx.length > 0 ? sfx : null,
           // R2-C: motion（モーションプリセット）
           motion: motionData,
         };

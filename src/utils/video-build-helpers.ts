@@ -878,6 +878,23 @@ export interface BalloonAsset {
 }
 
 /**
+ * R3-B: SfxAsset - 効果音アセット
+ * シーン内の特定タイミングで再生される効果音
+ */
+export interface SfxAsset {
+  id: string;           // sfx-{cue_id}
+  name: string;         // 効果音名（例: 剣の音）
+  url: string;          // 音声ファイルURL
+  start_ms: number;     // シーン内の開始時間
+  end_ms?: number;      // 終了時間（省略時はduration_msで計算）
+  duration_ms?: number; // 音声ファイルの長さ
+  volume: number;       // 0.0〜1.0
+  loop: boolean;        // ループ再生
+  fade_in_ms: number;
+  fade_out_ms: number;
+}
+
+/**
  * RemotionScene_R1 - Phase R1/R2 用シーン型
  * Remotion の ProjectSceneSchema に完全準拠
  */
@@ -915,6 +932,8 @@ export interface RemotionScene_R1 {
   };
   /** R2-A: 吹き出し（utterance と同期） */
   balloons?: BalloonAsset[];
+  /** R3-B: SFX（効果音） */
+  sfx?: SfxAsset[];
   /** R2-C: モーションプリセット */
   motion?: {
     id: string;
@@ -1261,6 +1280,19 @@ export function buildProjectJson(
       },
       // R2-A: balloons
       balloons: balloons.length > 0 ? balloons : undefined,
+      // R3-B: sfx
+      sfx: scene.sfx && scene.sfx.length > 0 ? scene.sfx.map((cue: any) => ({
+        id: `sfx-${cue.id}`,
+        name: cue.name || 'SFX',
+        url: cue.r2_url,
+        start_ms: cue.start_ms || 0,
+        end_ms: cue.end_ms ?? undefined,
+        duration_ms: cue.duration_ms ?? undefined,
+        volume: cue.volume ?? 0.8,
+        loop: cue.loop === 1 || cue.loop === true,
+        fade_in_ms: cue.fade_in_ms || 0,
+        fade_out_ms: cue.fade_out_ms || 0,
+      })) : undefined,
       // R2-C: motion
       // comic は none（静止画）、image/video はプリセット or デフォルト
       motion: scene.motion ? {
