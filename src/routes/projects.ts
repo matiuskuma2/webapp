@@ -344,10 +344,11 @@ projects.get('/:id/scenes', async (c) => {
     // シーン一覧取得（idx順、スタイル設定含む）
     // Phase1.7: display_asset_type, comic_data を追加
     // Phase X-3: speech_type を追加
+    // R3: duration_override_ms を追加
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT 
         s.id, s.idx, s.role, s.title, s.dialogue, s.speech_type, s.bullets, s.image_prompt, 
-        s.chunk_id, s.created_at, s.updated_at, s.display_asset_type, s.comic_data,
+        s.chunk_id, s.created_at, s.updated_at, s.display_asset_type, s.comic_data, s.duration_override_ms,
         sss.style_preset_id
       FROM scenes s
       LEFT JOIN scene_style_settings sss ON s.id = sss.scene_id
@@ -513,6 +514,8 @@ projects.get('/:id/scenes', async (c) => {
             // Phase1.7: display_asset_type と active_comic を追加
             display_asset_type: scene.display_asset_type || 'image',
             comic_data: comicData,
+            // R3: 無音シーンの手動尺設定
+            duration_override_ms: scene.duration_override_ms || null,
             active_image: activeRecord ? { 
               r2_key: activeRecord.r2_key,
               r2_url: activeRecord.r2_url,

@@ -122,6 +122,8 @@ export interface SceneData {
   title: string;
   dialogue: string;
   display_asset_type: 'image' | 'comic' | 'video';
+  // R3: 無音シーンの手動尺設定（ミリ秒）
+  duration_override_ms?: number | null;
   active_image?: {
     r2_key: string;
     r2_url: string;
@@ -216,10 +218,11 @@ export interface ProjectData {
 // Constants
 // ====================================================================
 
-const DEFAULT_SCENE_DURATION_MS = 3000;  // 音声がない場合のデフォルト尺
+const DEFAULT_SCENE_DURATION_MS = 5000;  // 無音シーンのデフォルト尺（R3: 5秒に統一）
 const AUDIO_PADDING_MS = 500;            // 音声尺への追加padding
 const TEXT_DURATION_MS_PER_CHAR = 300;   // 日本語テキストの推定: 300ms/文字
 const MIN_DURATION_MS = 2000;            // 最小尺
+const MAX_DURATION_MS = 600000;          // 最大尺（10分）
 
 // 解像度マッピング
 const RESOLUTION_MAP = {
@@ -298,50 +301,117 @@ export function selectSceneVisual(
 // ====================================================================
 
 /**
+ * 尺の決定理由
+ */
+export type DurationReason = 'voice' | 'video' | 'manual' | 'estimate' | 'default';
+
+/**
+ * 尺計算結果
+ */
+export interface DurationResult {
+  duration_ms: number;
+  reason: DurationReason;
+}
+
+/**
  * シーンの尺を計算
  * SSOT: この関数が尺計算の唯一のロジック
  * 
- * 優先順位:
+ * ================================
+ * 優先順位（R3 確定版）
+ * ================================
  * 1. video モード → video.duration_sec × 1000
- * 2. comic モード → utterances の合計 duration_ms + padding
- * 3. audio がある → audio.duration_ms + padding
- * 4. dialogue から推定 → text.length × 300ms
- * 5. デフォルト → 3000ms
+ * 2. scene_utterances の音声合計（R1.5+）
+ * 3. duration_override_ms（無音尺の手動設定）
+ * 4. comic_data.utterances の合計（後方互換）
+ * 5. active_audio.duration_ms（旧式音声）
+ * 6. dialogue から推定（300ms/文字）
+ * 7. デフォルト（5000ms）
+ * 
+ * 「セリフなし」でも必ず尺が返る＝生成可能
  */
 export function computeSceneDurationMs(scene: SceneData): number {
+  return computeSceneDurationMsWithReason(scene).duration_ms;
+}
+
+/**
+ * 尺計算（理由付き）- UIで「なぜこの尺か」を表示するため
+ */
+export function computeSceneDurationMsWithReason(scene: SceneData): DurationResult {
   const displayType = scene.display_asset_type || 'image';
   
   // 1. video モード: 動画の尺を使用
   if (displayType === 'video' && scene.active_video?.duration_sec) {
-    return scene.active_video.duration_sec * 1000;
+    return {
+      duration_ms: scene.active_video.duration_sec * 1000,
+      reason: 'video',
+    };
   }
   
-  // 2. comic モード: utterances の合計尺
+  // 2. scene_utterances（R1.5+）の音声合計
+  //    utterances があり、かつ duration_ms が設定されているものを合計
+  const utterances = scene.utterances || [];
+  const totalUtteranceDuration = utterances.reduce((sum, u) => {
+    // duration_ms があるもの（音声生成済み）のみ加算
+    return sum + (u.duration_ms || 0);
+  }, 0);
+  if (totalUtteranceDuration > 0) {
+    return {
+      duration_ms: totalUtteranceDuration + AUDIO_PADDING_MS,
+      reason: 'voice',
+    };
+  }
+  
+  // 3. duration_override_ms（無音尺の手動設定）
+  if (scene.duration_override_ms != null && scene.duration_override_ms > 0) {
+    const clampedDuration = Math.min(Math.max(scene.duration_override_ms, MIN_DURATION_MS), MAX_DURATION_MS);
+    return {
+      duration_ms: clampedDuration,
+      reason: 'manual',
+    };
+  }
+  
+  // 4. comic モード: comic_data.utterances の合計尺（後方互換）
   if (displayType === 'comic') {
-    const utterances = scene.comic_data?.utterances || [];
-    const totalUtteranceDuration = utterances.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
-    if (totalUtteranceDuration > 0) {
-      return totalUtteranceDuration + AUDIO_PADDING_MS;
+    const comicUtterances = scene.comic_data?.utterances || [];
+    const totalComicDuration = comicUtterances.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
+    if (totalComicDuration > 0) {
+      return {
+        duration_ms: totalComicDuration + AUDIO_PADDING_MS,
+        reason: 'voice',
+      };
     }
-    // utterances の duration_ms がない場合はテキストから推定
-    const totalText = utterances.map(u => u.text || '').join('');
+    // comic_data.utterances の duration_ms がない場合はテキストから推定
+    const totalText = comicUtterances.map(u => u.text || '').join('');
     if (totalText.length > 0) {
-      return Math.max(MIN_DURATION_MS, totalText.length * TEXT_DURATION_MS_PER_CHAR) + AUDIO_PADDING_MS;
+      return {
+        duration_ms: Math.max(MIN_DURATION_MS, totalText.length * TEXT_DURATION_MS_PER_CHAR) + AUDIO_PADDING_MS,
+        reason: 'estimate',
+      };
     }
   }
   
-  // 3. audio がある場合
+  // 5. active_audio（旧式音声）
   if (scene.active_audio?.duration_ms) {
-    return scene.active_audio.duration_ms + AUDIO_PADDING_MS;
+    return {
+      duration_ms: scene.active_audio.duration_ms + AUDIO_PADDING_MS,
+      reason: 'voice',
+    };
   }
   
-  // 4. dialogue から推定
+  // 6. dialogue から推定
   if (scene.dialogue && scene.dialogue.length > 0) {
-    return Math.max(MIN_DURATION_MS, scene.dialogue.length * TEXT_DURATION_MS_PER_CHAR) + AUDIO_PADDING_MS;
+    return {
+      duration_ms: Math.max(MIN_DURATION_MS, scene.dialogue.length * TEXT_DURATION_MS_PER_CHAR) + AUDIO_PADDING_MS,
+      reason: 'estimate',
+    };
   }
   
-  // 5. デフォルト
-  return DEFAULT_SCENE_DURATION_MS;
+  // 7. デフォルト（無音シーン）
+  return {
+    duration_ms: DEFAULT_SCENE_DURATION_MS,
+    reason: 'default',
+  };
 }
 
 // ====================================================================
@@ -1233,11 +1303,21 @@ export function buildProjectJson(
       default_scene_duration_ms: DEFAULT_SCENE_DURATION_MS,
       transition_duration_ms: 300,
     },
-    // R1.5: BGM対応
+    // R3-A: BGM対応（通しBGM with ducking）
     assets: settings.bgm?.enabled && settings.bgm?.url ? {
       bgm: {
         url: settings.bgm.url,
-        volume: settings.bgm.volume || 0.3,
+        volume: settings.bgm.volume || 0.25,
+        loop: settings.bgm.loop ?? true,
+        fade_in_ms: settings.bgm.fade_in_ms ?? 800,
+        fade_out_ms: settings.bgm.fade_out_ms ?? 800,
+        // R3-B: ducking設定（音声再生時にBGM音量を下げる）
+        ducking: settings.bgm.ducking?.enabled ? {
+          enabled: true,
+          volume: settings.bgm.ducking.volume ?? 0.12,
+          attack_ms: settings.bgm.ducking.attack_ms ?? 120,
+          release_ms: settings.bgm.ducking.release_ms ?? 220,
+        } : undefined,
       },
     } : undefined,
     scenes: remotionScenes,

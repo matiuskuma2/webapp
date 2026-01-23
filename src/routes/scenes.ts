@@ -9,9 +9,9 @@ scenes.get('/:id', async (c) => {
     const sceneId = c.req.param('id')
     const view = c.req.query('view') // 'board' 指定時のみ画像情報含む
 
-    // 基本シーン情報取得（display_asset_type追加）
+    // 基本シーン情報取得（display_asset_type追加、R3: duration_override_ms追加）
     const scene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, display_asset_type, created_at, updated_at
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, display_asset_type, duration_override_ms, created_at, updated_at
       FROM scenes
       WHERE id = ?
     `).bind(sceneId).first()
@@ -306,7 +306,7 @@ scenes.get('/:id', async (c) => {
 scenes.put('/:id', async (c) => {
   try {
     const sceneId = c.req.param('id')
-    const { title, dialogue, bullets, image_prompt, comic_data, display_asset_type } = await c.req.json()
+    const { title, dialogue, bullets, image_prompt, comic_data, display_asset_type, duration_override_ms } = await c.req.json()
 
     // シーン存在確認
     const scene = await c.env.DB.prepare(`
@@ -355,6 +355,19 @@ scenes.put('/:id', async (c) => {
       updates.push('display_asset_type = ?')
       values.push(display_asset_type)
     }
+    // R3: 無音シーンの手動尺設定
+    if (duration_override_ms !== undefined) {
+      // null/0 の場合はリセット（自動計算に戻す）
+      if (duration_override_ms === null || duration_override_ms === 0) {
+        updates.push('duration_override_ms = ?')
+        values.push(null)
+      } else {
+        // 最小1秒、最大60秒の制限
+        const clampedMs = Math.max(1000, Math.min(60000, parseInt(duration_override_ms)))
+        updates.push('duration_override_ms = ?')
+        values.push(clampedMs)
+      }
+    }
 
     if (updates.length === 0) {
       return c.json({
@@ -377,7 +390,7 @@ scenes.put('/:id', async (c) => {
 
     // 更新後のシーン取得
     const updatedScene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, updated_at
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, updated_at, duration_override_ms
       FROM scenes
       WHERE id = ?
     `).bind(sceneId).first()

@@ -31,8 +31,19 @@ export interface VideoBuildSettings {
   };
   bgm: {
     enabled: boolean;
-    track?: string;
+    track?: string;  // Legacy: track name
+    url?: string;    // R3-A: BGM file URL
     volume?: number;
+    loop?: boolean;  // R3-A: Loop BGM
+    fade_in_ms?: number;   // R3-A: Fade in duration
+    fade_out_ms?: number;  // R3-A: Fade out duration
+    // R3-B: Voice ducking settings
+    ducking?: {
+      enabled: boolean;
+      volume: number;      // Volume during voice (0.0-1.0)
+      attack_ms: number;   // Time to duck
+      release_ms: number;  // Time to restore
+    };
   };
   motion: {
     preset?: 'none' | 'gentle-zoom' | 'ken-burns';

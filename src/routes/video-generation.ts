@@ -1770,6 +1770,29 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       }, 400);
     }
     
+    // 5. R3-A: プロジェクトオーディオトラック（通しBGM）を取得
+    const activeBgm = await c.env.DB.prepare(`
+      SELECT id, r2_key, r2_url, duration_ms, volume, loop, 
+             fade_in_ms, fade_out_ms, ducking_enabled, ducking_volume,
+             ducking_attack_ms, ducking_release_ms
+      FROM project_audio_tracks
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+      LIMIT 1
+    `).bind(projectId).first<{
+      id: number;
+      r2_key: string | null;
+      r2_url: string | null;
+      duration_ms: number | null;
+      volume: number;
+      loop: number;
+      fade_in_ms: number;
+      fade_out_ms: number;
+      ducking_enabled: number;
+      ducking_volume: number;
+      ducking_attack_ms: number;
+      ducking_release_ms: number;
+    }>();
+    
     // 5. Settings構築
     const buildSettings = {
       captions: {
@@ -1778,9 +1801,21 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         show_speaker: body.captions?.show_speaker ?? true,
       },
       bgm: {
-        enabled: body.bgm?.enabled ?? body.include_bgm ?? false,
+        // R3-A: project_audio_tracks のアクティブBGMを優先使用
+        enabled: activeBgm ? true : (body.bgm?.enabled ?? body.include_bgm ?? false),
+        url: activeBgm?.r2_url ? toAbsoluteUrl(activeBgm.r2_url, siteUrl) : body.bgm?.url,
         track: body.bgm?.track,
-        volume: body.bgm?.volume ?? 0.5,
+        volume: activeBgm?.volume ?? body.bgm?.volume ?? 0.25,
+        loop: activeBgm ? activeBgm.loop === 1 : (body.bgm?.loop ?? true),
+        fade_in_ms: activeBgm?.fade_in_ms ?? body.bgm?.fade_in_ms ?? 800,
+        fade_out_ms: activeBgm?.fade_out_ms ?? body.bgm?.fade_out_ms ?? 800,
+        // R3-B: ダッキング設定
+        ducking: {
+          enabled: activeBgm ? activeBgm.ducking_enabled === 1 : (body.bgm?.ducking?.enabled ?? false),
+          volume: activeBgm?.ducking_volume ?? body.bgm?.ducking?.volume ?? 0.12,
+          attack_ms: activeBgm?.ducking_attack_ms ?? body.bgm?.ducking?.attack_ms ?? 120,
+          release_ms: activeBgm?.ducking_release_ms ?? body.bgm?.ducking?.release_ms ?? 220,
+        },
       },
       motion: {
         preset: body.motion?.preset ?? (body.include_motion ? 'gentle-zoom' : 'none'),
