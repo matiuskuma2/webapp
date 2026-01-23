@@ -104,6 +104,9 @@ async function loadProject() {
     
     // Also update tab states for Export button
     updateTabStates(currentProject.status);
+    
+    // R3-A: Load BGM status
+    loadBgmStatus();
   } catch (error) {
     console.error('Load project error:', error);
     showToast('プロジェクトの読み込みに失敗しました', 'error');
@@ -7521,3 +7524,225 @@ async function updateResetToInputVisibility(status) {
     }
   }
 }
+
+// ============================================================
+// R3-A: BGM Management Functions
+// ============================================================
+
+// Global BGM state
+window.currentBgm = null;
+
+/**
+ * Load BGM status for the current project
+ */
+async function loadBgmStatus() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/audio-tracks`);
+    const data = response.data;
+    
+    if (data.active_bgm) {
+      window.currentBgm = data.active_bgm;
+      showBgmActiveState(data.active_bgm);
+    } else {
+      window.currentBgm = null;
+      showBgmEmptyState();
+    }
+  } catch (error) {
+    console.error('[BGM] Load status error:', error);
+    showBgmEmptyState();
+  }
+}
+
+/**
+ * Handle BGM file upload
+ */
+async function handleBgmUpload(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  
+  // Validate file type
+  if (!file.type.startsWith('audio/')) {
+    showToast('音声ファイルを選択してください', 'error');
+    return;
+  }
+  
+  // Validate file size (max 50MB)
+  const maxSize = 50 * 1024 * 1024;
+  if (file.size > maxSize) {
+    showToast('ファイルサイズは50MB以下にしてください', 'error');
+    return;
+  }
+  
+  try {
+    showBgmUploadingState();
+    
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('volume', '0.25');
+    formData.append('loop', '1');
+    
+    const response = await axios.post(
+      `${API_BASE}/projects/${PROJECT_ID}/audio-tracks/bgm/upload`,
+      formData,
+      {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (progressEvent) => {
+          const progress = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+          const progressBar = document.getElementById('bgmUploadProgress');
+          if (progressBar) {
+            progressBar.style.width = `${progress}%`;
+          }
+        }
+      }
+    );
+    
+    window.currentBgm = response.data;
+    showBgmActiveState(response.data);
+    showToast('BGMをアップロードしました', 'success');
+    
+  } catch (error) {
+    console.error('[BGM] Upload error:', error);
+    showToast('BGMのアップロードに失敗しました', 'error');
+    showBgmEmptyState();
+  }
+  
+  // Reset file input
+  event.target.value = '';
+}
+
+/**
+ * Remove current BGM
+ */
+async function removeBgm() {
+  if (!window.currentBgm?.id) return;
+  
+  if (!confirm('BGMを削除しますか？')) return;
+  
+  try {
+    await axios.delete(`${API_BASE}/projects/${PROJECT_ID}/audio-tracks/${window.currentBgm.id}`);
+    window.currentBgm = null;
+    showBgmEmptyState();
+    showToast('BGMを削除しました', 'success');
+  } catch (error) {
+    console.error('[BGM] Remove error:', error);
+    showToast('BGMの削除に失敗しました', 'error');
+  }
+}
+
+/**
+ * Update BGM volume
+ */
+async function updateBgmVolume(value) {
+  const volumeLabel = document.getElementById('bgmVolumeLabel');
+  if (volumeLabel) {
+    volumeLabel.textContent = `${value}%`;
+  }
+  
+  if (!window.currentBgm?.id) return;
+  
+  try {
+    await axios.put(`${API_BASE}/projects/${PROJECT_ID}/audio-tracks/${window.currentBgm.id}`, {
+      volume: parseFloat(value) / 100
+    });
+  } catch (error) {
+    console.error('[BGM] Update volume error:', error);
+  }
+}
+
+/**
+ * Update BGM loop setting
+ */
+async function updateBgmLoop(checked) {
+  if (!window.currentBgm?.id) return;
+  
+  try {
+    await axios.put(`${API_BASE}/projects/${PROJECT_ID}/audio-tracks/${window.currentBgm.id}`, {
+      loop: checked ? 1 : 0
+    });
+  } catch (error) {
+    console.error('[BGM] Update loop error:', error);
+  }
+}
+
+/**
+ * Show empty BGM state
+ */
+function showBgmEmptyState() {
+  const emptyState = document.getElementById('bgmEmptyState');
+  const activeState = document.getElementById('bgmActiveState');
+  const uploadingState = document.getElementById('bgmUploadingState');
+  const statusCard = document.getElementById('bgmStatusCard');
+  
+  if (emptyState) emptyState.classList.remove('hidden');
+  if (activeState) activeState.classList.add('hidden');
+  if (uploadingState) uploadingState.classList.add('hidden');
+  if (statusCard) {
+    statusCard.classList.remove('border-yellow-400', 'bg-yellow-50');
+    statusCard.classList.add('border-gray-200', 'bg-gray-50');
+  }
+}
+
+/**
+ * Show uploading BGM state
+ */
+function showBgmUploadingState() {
+  const emptyState = document.getElementById('bgmEmptyState');
+  const activeState = document.getElementById('bgmActiveState');
+  const uploadingState = document.getElementById('bgmUploadingState');
+  const progressBar = document.getElementById('bgmUploadProgress');
+  
+  if (emptyState) emptyState.classList.add('hidden');
+  if (activeState) activeState.classList.add('hidden');
+  if (uploadingState) uploadingState.classList.remove('hidden');
+  if (progressBar) progressBar.style.width = '0%';
+}
+
+/**
+ * Show active BGM state
+ */
+function showBgmActiveState(bgm) {
+  const emptyState = document.getElementById('bgmEmptyState');
+  const activeState = document.getElementById('bgmActiveState');
+  const uploadingState = document.getElementById('bgmUploadingState');
+  const statusCard = document.getElementById('bgmStatusCard');
+  const fileName = document.getElementById('bgmFileName');
+  const previewPlayer = document.getElementById('bgmPreviewPlayer');
+  const volumeSlider = document.getElementById('bgmVolumeSlider');
+  const volumeLabel = document.getElementById('bgmVolumeLabel');
+  const loopToggle = document.getElementById('bgmLoopToggle');
+  
+  if (emptyState) emptyState.classList.add('hidden');
+  if (activeState) activeState.classList.remove('hidden');
+  if (uploadingState) uploadingState.classList.add('hidden');
+  
+  if (statusCard) {
+    statusCard.classList.remove('border-gray-200', 'bg-gray-50');
+    statusCard.classList.add('border-yellow-400', 'bg-yellow-50');
+  }
+  
+  // Set file info
+  if (fileName) {
+    const duration = bgm.duration_ms ? `${Math.round(bgm.duration_ms / 1000)}秒` : '';
+    fileName.textContent = duration ? `再生時間: ${duration}` : 'BGM';
+  }
+  
+  // Set audio preview
+  if (previewPlayer && bgm.r2_url) {
+    previewPlayer.src = bgm.r2_url;
+  }
+  
+  // Set volume
+  const volume = Math.round((bgm.volume ?? 0.25) * 100);
+  if (volumeSlider) volumeSlider.value = volume;
+  if (volumeLabel) volumeLabel.textContent = `${volume}%`;
+  
+  // Set loop
+  if (loopToggle) loopToggle.checked = bgm.loop === 1 || bgm.loop === true;
+}
+
+// Make functions globally available
+window.handleBgmUpload = handleBgmUpload;
+window.removeBgm = removeBgm;
+window.updateBgmVolume = updateBgmVolume;
+window.updateBgmLoop = updateBgmLoop;
+window.loadBgmStatus = loadBgmStatus;

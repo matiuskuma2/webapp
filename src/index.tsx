@@ -1007,6 +1007,111 @@ app.get('/projects/:id', (c) => {
                         <p class="text-xs text-gray-500 mt-1 ml-7">キャラクター参照画像が設定されていると一貫性が向上します</p>
                     </div>
                     
+                    <!-- Step 4: BGM Settings (R3-A) -->
+                    <div class="mb-4 pb-4 border-b border-gray-300">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-yellow-600 text-white text-xs mr-2">4</span>
+                            <i class="fas fa-music mr-1 text-yellow-600"></i>BGM設定
+                        </label>
+                        
+                        <!-- BGM Status Card -->
+                        <div id="bgmStatusCard" class="ml-7 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
+                            <!-- No BGM State -->
+                            <div id="bgmEmptyState">
+                                <div class="flex items-center gap-3 text-gray-500">
+                                    <i class="fas fa-volume-mute text-2xl"></i>
+                                    <div>
+                                        <p class="font-medium">BGM未設定</p>
+                                        <p class="text-xs">ボイスなしのシーンも音ありで生成できます</p>
+                                    </div>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="cursor-pointer px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors font-semibold inline-flex items-center gap-2">
+                                        <i class="fas fa-upload"></i>
+                                        BGMをアップロード
+                                        <input 
+                                            type="file" 
+                                            id="bgmFileInput"
+                                            accept="audio/*"
+                                            class="hidden"
+                                            onchange="handleBgmUpload(event)"
+                                        />
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- BGM Active State -->
+                            <div id="bgmActiveState" class="hidden">
+                                <div class="flex items-center gap-3 mb-3">
+                                    <i class="fas fa-music text-2xl text-yellow-600"></i>
+                                    <div class="flex-1">
+                                        <p class="font-medium text-gray-800">BGM設定済み <span class="text-green-600">✓</span></p>
+                                        <p class="text-xs text-gray-500" id="bgmFileName">-</p>
+                                    </div>
+                                    <button 
+                                        onclick="removeBgm()"
+                                        class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                        title="BGMを削除"
+                                    >
+                                        <i class="fas fa-trash"></i>
+                                    </button>
+                                </div>
+                                
+                                <!-- Audio Preview -->
+                                <audio id="bgmPreviewPlayer" controls class="w-full mb-3 h-10"></audio>
+                                
+                                <!-- Volume Control -->
+                                <div class="flex items-center gap-3">
+                                    <label class="text-sm text-gray-600 flex items-center gap-1">
+                                        <i class="fas fa-volume-up"></i>
+                                        音量:
+                                    </label>
+                                    <input 
+                                        type="range" 
+                                        id="bgmVolumeSlider"
+                                        min="0" 
+                                        max="100" 
+                                        value="25"
+                                        class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-yellow-600"
+                                        onchange="updateBgmVolume(this.value)"
+                                    />
+                                    <span id="bgmVolumeLabel" class="text-sm text-gray-700 w-10">25%</span>
+                                </div>
+                                
+                                <!-- Loop Toggle -->
+                                <div class="flex items-center gap-3 mt-3">
+                                    <label class="flex items-center gap-2 cursor-pointer">
+                                        <input 
+                                            type="checkbox" 
+                                            id="bgmLoopToggle"
+                                            checked
+                                            onchange="updateBgmLoop(this.checked)"
+                                            class="w-4 h-4 text-yellow-600 rounded focus:ring-yellow-500"
+                                        />
+                                        <span class="text-sm text-gray-700">ループ再生</span>
+                                    </label>
+                                </div>
+                            </div>
+                            
+                            <!-- Upload Progress State -->
+                            <div id="bgmUploadingState" class="hidden">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-spinner fa-spin text-2xl text-yellow-600"></i>
+                                    <div>
+                                        <p class="font-medium text-gray-800">アップロード中...</p>
+                                        <div class="w-48 h-2 bg-gray-200 rounded-full mt-1">
+                                            <div id="bgmUploadProgress" class="h-full bg-yellow-500 rounded-full transition-all" style="width: 0%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-2 ml-7">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            BGMは動画全体に適用されます。ボイス再生時は自動で音量が下がります（ダッキング）
+                        </p>
+                    </div>
+                    
                     <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                         <!-- Status Summary -->
                         <div id="builderStatusSummary" class="text-sm text-gray-600">
