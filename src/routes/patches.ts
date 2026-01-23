@@ -15,6 +15,7 @@
 
 import { Hono } from 'hono';
 import { buildProjectJson, hashProjectJson } from '../utils/video-build-helpers';
+import { logPatchOperation } from '../utils/usage-logger';
 
 type Bindings = {
   DB: D1Database;
@@ -787,6 +788,31 @@ patches.post('/projects/:projectId/patches/apply', async (c) => {
     applyStatus,
     patchRequestId
   ).run();
+
+  // Usage logging: API patch apply
+  try {
+    const projectForLog = await c.env.DB.prepare(
+      'SELECT user_id FROM projects WHERE id = ?'
+    ).bind(projectId).first<{ user_id: number }>();
+    
+    const userId = projectForLog?.user_id || 1;
+    const entities = [...new Set(patchRequest.ops.map(op => op.entity))];
+    
+    await logPatchOperation(c.env.DB, {
+      userId,
+      projectId,
+      patchRequestId,
+      operation: 'apply',
+      source: 'api',
+      opsCount: patchRequest.ops.length,
+      entities,
+      newVideoBuildId: null, // 後で更新
+      status: result.ok ? 'success' : 'failed',
+      errorMessage: result.ok ? undefined : result.errors.join('; '),
+    });
+  } catch (logError) {
+    console.error('[Patch Apply] Usage log failed:', logError);
+  }
 
   // Apply失敗の場合は即座に返す
   if (!result.ok) {
@@ -1870,6 +1896,32 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
     applyStatus,
     body.patch_request_id
   ).run();
+
+  // Usage logging: Chat edit apply
+  let loggedUserId = 1;
+  try {
+    const projectForLog = await c.env.DB.prepare(
+      'SELECT user_id FROM projects WHERE id = ?'
+    ).bind(projectId).first<{ user_id: number }>();
+    
+    loggedUserId = projectForLog?.user_id || 1;
+    const entities = [...new Set(patchRequest.ops.map(op => op.entity))];
+    
+    await logPatchOperation(c.env.DB, {
+      userId: loggedUserId,
+      projectId,
+      patchRequestId: body.patch_request_id,
+      operation: 'apply',
+      source: 'chat',
+      opsCount: patchRequest.ops.length,
+      entities,
+      newVideoBuildId: null, // 後で更新
+      status: result.ok ? 'success' : 'failed',
+      errorMessage: result.ok ? undefined : result.errors.join('; '),
+    });
+  } catch (logError) {
+    console.error('[Chat Edit Apply] Usage log failed:', logError);
+  }
 
   // Apply失敗の場合は即座に返す
   if (!result.ok) {

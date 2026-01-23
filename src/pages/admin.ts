@@ -258,6 +258,29 @@ export const adminHtml = `
                         <div class="text-gray-500 text-center py-4">読み込み中...</div>
                     </div>
                 </div>
+                
+                <!-- Operations Usage Section (Safe Chat v1) -->
+                <div class="bg-white rounded-xl shadow mt-6">
+                    <div class="p-6 border-b flex items-center justify-between">
+                        <h2 class="text-lg font-bold text-gray-800">
+                            <i class="fas fa-cogs mr-2 text-indigo-600"></i>オペレーション使用量 (Safe Chat v1)
+                        </h2>
+                        <button onclick="loadOperationsUsage()" class="px-3 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm">
+                            <i class="fas fa-sync-alt mr-1"></i>更新
+                        </button>
+                    </div>
+                    <div id="operationsUsage" class="p-6">
+                        <div class="text-gray-500 text-center py-4">読み込み中...</div>
+                    </div>
+                    <div class="border-t p-6">
+                        <h3 class="text-sm font-semibold text-gray-700 mb-4">
+                            <i class="fas fa-history mr-1"></i>最近のオペレーション
+                        </h3>
+                        <div id="recentOperations" class="space-y-2 max-h-64 overflow-y-auto">
+                            <div class="text-gray-500 text-center py-4">読み込み中...</div>
+                        </div>
+                    </div>
+                </div>
             </div>
             
             <!-- Video Build Tab (Phase C) -->
@@ -1330,6 +1353,8 @@ export const adminHtml = `
                 }
                 // Load sponsor usage data
                 loadSponsorUsage();
+                // Load operations usage data (Safe Chat v1)
+                loadOperationsUsage();
                 
             } catch (err) {
                 console.error('Failed to load cost data:', err);
@@ -1479,6 +1504,115 @@ export const adminHtml = `
                         </div>
                     \`;
                 }
+            }
+        }
+        
+        // Load operations usage data (Safe Chat v1)
+        async function loadOperationsUsage() {
+            const el = document.getElementById('operationsUsage');
+            const recentEl = document.getElementById('recentOperations');
+            if (!el) return;
+            
+            try {
+                const days = document.getElementById('costDaysSelect')?.value || '30';
+                const res = await axios.get('/api/admin/usage/operations?days=' + days);
+                const data = res.data;
+                
+                const summary = data.summary || { totalOperations: 0, totalCost: 0, periodDays: 30 };
+                const byType = data.byType || {};
+                
+                // Operation type labels
+                const opTypeLabels = {
+                    'bgm_upload': { label: 'BGMアップロード', icon: 'fas fa-music', color: 'purple' },
+                    'sfx_upload': { label: 'SFXアップロード', icon: 'fas fa-volume-up', color: 'blue' },
+                    'patch_dry_run': { label: 'パッチDry-run (API)', icon: 'fas fa-code', color: 'gray' },
+                    'patch_apply': { label: 'パッチ適用 (API)', icon: 'fas fa-check-circle', color: 'green' },
+                    'chat_edit_dry_run': { label: 'チャット修正Dry-run', icon: 'fas fa-comments', color: 'indigo' },
+                    'chat_edit_apply': { label: 'チャット修正適用', icon: 'fas fa-comment-dots', color: 'teal' },
+                    'video_build_render': { label: 'ビデオレンダリング', icon: 'fas fa-film', color: 'red' },
+                    'llm_intent': { label: 'LLM Intent生成', icon: 'fas fa-brain', color: 'pink' },
+                };
+                
+                if (Object.keys(byType).length === 0) {
+                    el.innerHTML = \`
+                        <div class="text-gray-500 text-center py-8">
+                            <i class="fas fa-cogs text-4xl text-gray-300 mb-4"></i>
+                            <p>オペレーションデータがありません</p>
+                            <p class="text-sm mt-2">BGM/SFXアップロード、パッチ適用などを行うとここに表示されます</p>
+                        </div>
+                    \`;
+                } else {
+                    let html = \`
+                        <div class="mb-4 p-4 bg-indigo-50 rounded-lg">
+                            <div class="flex items-center gap-4">
+                                <div class="text-indigo-600">
+                                    <i class="fas fa-cogs text-2xl"></i>
+                                </div>
+                                <div>
+                                    <p class="text-lg font-bold text-indigo-800">総オペレーション: \${summary.totalOperations}件</p>
+                                    <p class="text-sm text-indigo-700">推定コスト: \$\${(summary.totalCost || 0).toFixed(4)} (過去\${summary.periodDays}日)</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    \`;
+                    
+                    for (const [opType, info] of Object.entries(byType)) {
+                        const opLabel = opTypeLabels[opType] || { label: opType, icon: 'fas fa-question', color: 'gray' };
+                        html += \`
+                            <div class="p-4 bg-\${opLabel.color}-50 rounded-lg">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <i class="\${opLabel.icon} text-\${opLabel.color}-600"></i>
+                                    <span class="text-sm font-medium text-\${opLabel.color}-800">\${opLabel.label}</span>
+                                </div>
+                                <div class="text-2xl font-bold text-\${opLabel.color}-700">\${info.count || 0}</div>
+                                <div class="text-xs text-\${opLabel.color}-600">
+                                    \${info.projects || 0}プロジェクト / \${info.users || 0}ユーザー
+                                </div>
+                            </div>
+                        \`;
+                    }
+                    
+                    html += '</div>';
+                    el.innerHTML = html;
+                }
+                
+                // Recent operations
+                const recentOps = data.recentOperations || [];
+                if (recentEl) {
+                    if (recentOps.length === 0) {
+                        recentEl.innerHTML = '<div class="text-gray-500 text-center py-4">最近のオペレーションはありません</div>';
+                    } else {
+                        let recentHtml = '';
+                        for (const op of recentOps.slice(0, 20)) {
+                            const opLabel = opTypeLabels[op.type] || { label: op.type, icon: 'fas fa-question', color: 'gray' };
+                            const time = new Date(op.createdAt).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+                            recentHtml += \`
+                                <div class="flex items-center justify-between p-2 hover:bg-gray-50 rounded text-sm">
+                                    <div class="flex items-center gap-2">
+                                        <i class="\${opLabel.icon} text-\${opLabel.color}-500"></i>
+                                        <span class="font-medium">\${opLabel.label}</span>
+                                        <span class="text-gray-500">- \${escapeHtml(op.project || '-')}</span>
+                                    </div>
+                                    <div class="flex items-center gap-4">
+                                        <span class="text-gray-600">\${escapeHtml(op.user || '-')}</span>
+                                        <span class="text-gray-400 text-xs">\${time}</span>
+                                    </div>
+                                </div>
+                            \`;
+                        }
+                        recentEl.innerHTML = recentHtml;
+                    }
+                }
+                
+            } catch (err) {
+                console.error('Failed to load operations usage:', err);
+                el.innerHTML = \`
+                    <div class="text-gray-500 text-center py-8">
+                        <i class="fas fa-cogs text-4xl text-gray-300 mb-4"></i>
+                        <p>オペレーションデータがありません</p>
+                    </div>
+                \`;
             }
         }
         

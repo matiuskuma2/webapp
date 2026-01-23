@@ -16,6 +16,7 @@
  */
 
 import { Hono } from 'hono';
+import { logSfxUpload } from '../utils/usage-logger';
 
 interface Bindings {
   DB: D1Database;
@@ -159,6 +160,18 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
     ).run();
 
     const cueId = result.meta.last_row_id;
+
+    // Log usage event
+    await logSfxUpload(c.env.DB, {
+      userId: 1, // TODO: Get from session
+      projectId: scene.project_id,
+      sceneId,
+      cueId: cueId as number,
+      bytes: arrayBuffer.byteLength,
+      durationMs: null, // Audio duration detection requires ffprobe
+      format: ext,
+      status: 'success',
+    });
 
     // 作成したレコードを取得
     const cue = await c.env.DB.prepare(`

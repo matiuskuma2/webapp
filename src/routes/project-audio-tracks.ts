@@ -11,6 +11,7 @@
  */
 
 import { Hono } from 'hono';
+import { logBgmUpload } from '../utils/usage-logger';
 
 interface Bindings {
   DB: D1Database;
@@ -154,6 +155,18 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
 
     const trackId = result.meta.last_row_id;
     const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+
+    // Log usage event
+    // Note: user_id=1 is used as default; in production, get from session
+    await logBgmUpload(c.env.DB, {
+      userId: 1, // TODO: Get from session
+      projectId,
+      trackId: trackId as number,
+      bytes: arrayBuffer.byteLength,
+      durationMs: null, // Audio duration detection would require ffprobe/web-audio
+      format: ext,
+      status: 'success',
+    });
 
     return c.json({
       success: true,

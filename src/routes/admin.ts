@@ -473,6 +473,121 @@ admin.get('/usage/sponsor', async (c) => {
 });
 
 // ====================================================================
+// GET /api/admin/usage/operations - Get operation-specific usage (Safe Chat v1)
+// ====================================================================
+
+admin.get('/usage/operations', async (c) => {
+  const { DB } = c.env;
+  const days = parseInt(c.req.query('days') || '30');
+  
+  try {
+    // Safe Chat v1 operation types
+    const operationTypes = [
+      'bgm_upload',
+      'sfx_upload',
+      'patch_dry_run',
+      'patch_apply',
+      'chat_edit_dry_run',
+      'chat_edit_apply',
+      'video_build_render',
+      'llm_intent'
+    ];
+    
+    // Get operation counts and metadata
+    const operationsResult = await DB.prepare(`
+      SELECT 
+        api_type,
+        COUNT(*) as request_count,
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost,
+        COUNT(DISTINCT project_id) as unique_projects,
+        COUNT(DISTINCT user_id) as unique_users
+      FROM api_usage_logs
+      WHERE api_type IN (${operationTypes.map(() => '?').join(', ')})
+        AND created_at > datetime('now', '-' || ? || ' days')
+      GROUP BY api_type
+    `).bind(...operationTypes, days).all();
+    
+    // Get recent operations with details
+    const recentResult = await DB.prepare(`
+      SELECT 
+        l.id,
+        l.api_type,
+        l.user_id,
+        l.project_id,
+        l.estimated_cost_usd,
+        l.metadata_json,
+        l.created_at,
+        u.name as user_name,
+        u.email as user_email,
+        p.title as project_title
+      FROM api_usage_logs l
+      LEFT JOIN users u ON l.user_id = u.id
+      LEFT JOIN projects p ON l.project_id = p.id
+      WHERE l.api_type IN (${operationTypes.map(() => '?').join(', ')})
+      ORDER BY l.created_at DESC
+      LIMIT 100
+    `).bind(...operationTypes).all();
+    
+    // Parse metadata and format
+    const recentOperations = (recentResult.results || []).map((row: Record<string, unknown>) => {
+      let metadata = null;
+      try {
+        metadata = row.metadata_json ? JSON.parse(row.metadata_json as string) : null;
+      } catch { /* ignore */ }
+      
+      return {
+        id: row.id,
+        type: row.api_type,
+        user: row.user_name || row.user_email || `User #${row.user_id}`,
+        project: row.project_title || `Project #${row.project_id}`,
+        cost: row.estimated_cost_usd || 0,
+        metadata,
+        createdAt: row.created_at,
+      };
+    });
+    
+    // Build summary by type
+    const byType: Record<string, { count: number; cost: number; projects: number; users: number }> = {};
+    let totalOperations = 0;
+    let totalCost = 0;
+    
+    for (const row of (operationsResult.results || []) as { 
+      api_type: string; 
+      request_count: number; 
+      total_cost: number;
+      unique_projects: number;
+      unique_users: number;
+    }[]) {
+      byType[row.api_type] = {
+        count: row.request_count || 0,
+        cost: row.total_cost || 0,
+        projects: row.unique_projects || 0,
+        users: row.unique_users || 0,
+      };
+      totalOperations += row.request_count || 0;
+      totalCost += row.total_cost || 0;
+    }
+    
+    return c.json({
+      summary: {
+        totalOperations,
+        totalCost,
+        periodDays: days,
+      },
+      byType,
+      recentOperations,
+    });
+  } catch (error) {
+    console.error('Get operations usage error:', error);
+    return c.json({
+      summary: { totalOperations: 0, totalCost: 0, periodDays: days },
+      byType: {},
+      recentOperations: [],
+    });
+  }
+});
+
+// ====================================================================
 // GET /api/admin/video-builds/summary - Get video build summary
 // ====================================================================
 
