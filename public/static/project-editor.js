@@ -5732,19 +5732,26 @@ function openSceneEditModal(sceneId, initialTab) {
 }
 
 /**
- * R1.6: Open scene edit modal and switch to voice tab
- * Used from video build preflight errors
- * @param {number} sceneId 
+ * R1.6: Open scene edit modal and switch to utterances tab
+ * Used from video build preflight errors to address voice/audio issues
+ * @param {number} sceneId - Scene DB ID (not index)
  */
 function openSceneEditModalToVoiceTab(sceneId) {
+  if (!sceneId || sceneId < 1) {
+    console.error('[SceneEdit] Invalid sceneId:', sceneId);
+    alert('シーンIDが無効です');
+    return;
+  }
+  
   if (window.SceneEditModal) {
     // モーダルを開く
     window.SceneEditModal.open(sceneId);
     
-    // 少し待ってから音声タブに切り替え
+    // 少し待ってから発話（utterances）タブに切り替え
+    // 注: 'voice' タブは存在しない。音声編集は 'utterances' タブで行う
     setTimeout(() => {
       if (window.SceneEditModal.switchTab) {
-        window.SceneEditModal.switchTab('voice');
+        window.SceneEditModal.switchTab('utterances');
       }
     }, 300);
   } else {
@@ -6613,10 +6620,22 @@ async function updateVideoBuildRequirements() {
                      : msg.includes('バブル') ? 'fa-comment-dots text-amber-500'
                      : 'fa-info-circle text-gray-400';
           
-          html += '<div class="flex items-start text-gray-600 hover:text-gray-800 cursor-pointer group" onclick="openSceneEditModalToVoiceTab(' + (warn.scene_id || warn.scene_idx) + ')">';
-          html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
-          html += '<span class="group-hover:underline">' + escapeHtml(msg) + '</span>';
-          html += '</div>';
+          // scene_id は DB の ID（576, 577 など）、scene_idx はインデックス（1, 2 など）
+          // SceneEditModal.open() は DB ID を必要とするため、scene_id を優先
+          const targetSceneId = warn.scene_id || null;
+          
+          if (targetSceneId) {
+            html += '<div class="flex items-start text-gray-600 hover:text-gray-800 cursor-pointer group" onclick="openSceneEditModalToVoiceTab(' + targetSceneId + ')">';
+            html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
+            html += '<span class="group-hover:underline">' + escapeHtml(msg) + '</span>';
+            html += '</div>';
+          } else {
+            // scene_id がない場合はクリック不可（表示のみ）
+            html += '<div class="flex items-start text-gray-500">';
+            html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
+            html += '<span>' + escapeHtml(msg) + '</span>';
+            html += '</div>';
+          }
         });
         
         if (allWarnings.length > 5) {
