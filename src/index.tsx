@@ -27,6 +27,7 @@ import comic from './routes/comic' // Phase1.5: Comic editor API
 import utterances from './routes/utterances' // R1.5: Scene utterances API
 import sceneBalloons from './routes/scene-balloons' // A案 baked: Balloon image management
 import projectAudioTracks from './routes/project-audio-tracks' // R3-A: Project BGM
+import { sceneAudioCues } from './routes/scene-audio-cues' // R3-B: Scene SFX
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -65,6 +66,7 @@ app.route('/api/scenes', comic) // For /api/scenes/:id/comic/* - Phase1.5 comic 
 app.route('/api', utterances) // R1.5: For /api/scenes/:sceneId/utterances, /api/utterances/:id
 app.route('/api/scene-balloons', sceneBalloons) // A案 baked: For /api/scene-balloons/:id, /api/scene-balloons/:id/upload-image
 app.route('/api', projectAudioTracks) // R3-A: For /api/projects/:projectId/audio-tracks
+app.route('/api', sceneAudioCues) // R3-B: For /api/scenes/:sceneId/audio-cues
 app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
 app.route('/api/images', images) // For /api/images/:id/activate
