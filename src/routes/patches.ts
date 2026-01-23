@@ -1097,10 +1097,10 @@ async function fetchScenesWithAssets(
       ORDER BY created_at DESC LIMIT 1
     `).bind(sceneId).first<{ id: number; r2_key: string; r2_url: string }>();
 
-    // アクティブ漫画
+    // アクティブ漫画（image_generations テーブルの asset_type = 'comic'）
     const activeComic = await db.prepare(`
-      SELECT id, r2_key, r2_url FROM comic_image_generations
-      WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+      SELECT id, r2_key, r2_url FROM image_generations
+      WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic' AND r2_url IS NOT NULL
       ORDER BY created_at DESC LIMIT 1
     `).bind(sceneId).first<{ id: number; r2_key: string; r2_url: string }>();
 
