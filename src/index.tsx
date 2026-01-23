@@ -1811,6 +1811,11 @@ app.get('/projects/:id', (c) => {
                     <div id="scene-edit-tab-traits" class="hidden space-y-4">
                         <!-- Dynamically populated -->
                     </div>
+                    
+                    <!-- Tab D: SFX (R3-B) -->
+                    <div id="scene-edit-tab-sfx" class="hidden space-y-4">
+                        <!-- Dynamically populated by scene-edit-modal.js -->
+                    </div>
                 </div>
                 
                 <!-- Footer -->

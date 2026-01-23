@@ -33,7 +33,8 @@
     currentState: {
       imageCharacterKeys: [],
       voiceCharacterKey: null,
-      sceneTraits: {} // { character_key: trait_description }
+      sceneTraits: {}, // { character_key: trait_description }
+      sfxCues: [] // R3-B: SFX cues
     },
     
     // AI candidates (not saved until user clicks "use")
@@ -49,7 +50,7 @@
     },
     
     // Active tab
-    activeTab: 'characters', // 'characters' | 'traits'
+    activeTab: 'characters', // 'characters' | 'traits' | 'utterances' | 'sfx'
     
     /**
      * Initialize the modal
@@ -844,6 +845,13 @@
             <i class="fas fa-user-tag mr-1"></i>特徴変化
             ${this.hasSceneTraits() ? '<span class="ml-1 bg-yellow-400 text-yellow-800 text-xs px-1.5 py-0.5 rounded-full">!</span>' : ''}
           </button>
+          <button 
+            data-scene-edit-tab="sfx"
+            class="px-4 py-2 font-semibold text-sm border-b-2 transition-colors scene-edit-tab-btn ${this.activeTab === 'sfx' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+          >
+            <i class="fas fa-volume-up mr-1"></i>SFX
+            ${(this.currentState?.sfxCues?.length || 0) > 0 ? '<span class="ml-1 bg-pink-400 text-white text-xs px-1.5 py-0.5 rounded-full">' + this.currentState.sfxCues.length + '</span>' : ''}
+          </button>
         </div>
       `;
     },
@@ -857,7 +865,7 @@
     
     /**
      * Switch between tabs
-     * @param {string} tab - 'characters' | 'traits' | 'utterances'
+     * @param {string} tab - 'characters' | 'traits' | 'utterances' | 'sfx'
      */
     switchTab(tab) {
       this.activeTab = tab;
@@ -871,6 +879,8 @@
         btn.classList.toggle('text-purple-600', isActive && tab === 'utterances');
         btn.classList.toggle('border-indigo-500', isActive && tab === 'traits');
         btn.classList.toggle('text-indigo-600', isActive && tab === 'traits');
+        btn.classList.toggle('border-pink-500', isActive && tab === 'sfx');
+        btn.classList.toggle('text-pink-600', isActive && tab === 'sfx');
         btn.classList.toggle('border-transparent', !isActive);
         btn.classList.toggle('text-gray-500', !isActive);
       });
@@ -879,14 +889,21 @@
       const charTab = document.getElementById('scene-edit-tab-characters');
       const traitTab = document.getElementById('scene-edit-tab-traits');
       const uttTab = document.getElementById('scene-edit-tab-utterances');
+      const sfxTab = document.getElementById('scene-edit-tab-sfx');
       
       if (charTab) charTab.classList.toggle('hidden', tab !== 'characters');
       if (traitTab) traitTab.classList.toggle('hidden', tab !== 'traits');
       if (uttTab) uttTab.classList.toggle('hidden', tab !== 'utterances');
+      if (sfxTab) sfxTab.classList.toggle('hidden', tab !== 'sfx');
       
       // Load utterances when switching to that tab
       if (tab === 'utterances' && window.UtterancesTab && this.currentSceneId) {
         window.UtterancesTab.load(this.currentSceneId);
+      }
+      
+      // Load SFX when switching to that tab
+      if (tab === 'sfx' && this.currentSceneId) {
+        this.loadSfxCues();
       }
     },
     
@@ -1598,6 +1615,259 @@
       const div = document.createElement('div');
       div.textContent = str;
       return div.innerHTML;
+    },
+    
+    // ============================================================
+    // R3-B: SFX (Scene Audio Cues) Management
+    // ============================================================
+    
+    /**
+     * Load SFX cues for the current scene
+     */
+    async loadSfxCues() {
+      const container = document.getElementById('scene-edit-tab-sfx');
+      if (!container || !this.currentSceneId) return;
+      
+      container.innerHTML = `
+        <div class="p-4 text-center text-gray-500">
+          <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+        </div>
+      `;
+      
+      try {
+        const response = await axios.get(`/api/scenes/${this.currentSceneId}/audio-cues`);
+        this.currentState.sfxCues = response.data.cues || [];
+        this.renderSfxTab();
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to load SFX:', error);
+        container.innerHTML = `
+          <div class="p-4 text-center text-red-500">
+            <i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました
+          </div>
+        `;
+      }
+    },
+    
+    /**
+     * Render SFX Tab content
+     */
+    renderSfxTab() {
+      const container = document.getElementById('scene-edit-tab-sfx');
+      if (!container) return;
+      
+      const cues = this.currentState.sfxCues || [];
+      
+      container.innerHTML = `
+        <div class="p-4 border border-gray-200 rounded-lg bg-gray-50 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h4 class="font-semibold text-gray-700">
+                <i class="fas fa-volume-up mr-2 text-pink-600"></i>効果音 (SFX)
+              </h4>
+              <p class="text-xs text-gray-500 mt-1">シーン内の特定タイミングで再生される効果音を追加</p>
+            </div>
+            <label class="cursor-pointer px-4 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors font-semibold text-sm inline-flex items-center gap-2">
+              <i class="fas fa-plus"></i>
+              SFXを追加
+              <input 
+                type="file" 
+                accept="audio/*"
+                class="hidden"
+                onchange="SceneEditModal.handleSfxUpload(event)"
+              />
+            </label>
+          </div>
+          
+          ${cues.length === 0 ? `
+            <div class="text-center py-8 text-gray-400">
+              <i class="fas fa-drum text-4xl mb-3"></i>
+              <p>効果音がありません</p>
+              <p class="text-xs mt-1">剣の音、爆発、足音などを追加できます</p>
+            </div>
+          ` : `
+            <div class="space-y-3" id="sfx-cues-list">
+              ${cues.map((cue, index) => this.renderSfxCueItem(cue, index)).join('')}
+            </div>
+          `}
+        </div>
+        
+        <div class="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+          <i class="fas fa-info-circle mr-2"></i>
+          <strong>ヒント:</strong> 開始時間を設定すると、シーン開始からの相対位置で効果音が再生されます。
+        </div>
+      `;
+    },
+    
+    /**
+     * Render single SFX cue item
+     * @param {object} cue 
+     * @param {number} index 
+     * @returns {string}
+     */
+    renderSfxCueItem(cue, index) {
+      const startSec = (cue.start_ms / 1000).toFixed(1);
+      const durationSec = cue.duration_ms ? (cue.duration_ms / 1000).toFixed(1) : '?';
+      const volume = Math.round((cue.volume || 0.8) * 100);
+      
+      return `
+        <div class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg" data-cue-id="${cue.id}">
+          <div class="flex-shrink-0">
+            <span class="text-2xl">💥</span>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <input 
+                type="text" 
+                value="${this.escapeHtml(cue.name || 'SFX')}"
+                class="text-sm font-semibold text-gray-800 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-pink-500 focus:outline-none px-1 w-32"
+                onchange="SceneEditModal.updateSfxCue(${cue.id}, 'name', this.value)"
+                placeholder="効果音名"
+              />
+              <span class="text-xs text-gray-500">${durationSec}秒</span>
+            </div>
+            <div class="flex items-center gap-4 text-xs text-gray-600">
+              <label class="flex items-center gap-1">
+                <span>開始:</span>
+                <input 
+                  type="number" 
+                  value="${startSec}"
+                  min="0"
+                  step="0.1"
+                  class="w-16 px-1 py-0.5 border border-gray-300 rounded text-center"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'start_ms', Math.round(parseFloat(this.value) * 1000))"
+                />秒
+              </label>
+              <label class="flex items-center gap-1">
+                <span>音量:</span>
+                <input 
+                  type="range" 
+                  value="${volume}"
+                  min="0"
+                  max="100"
+                  class="w-16 h-2 accent-pink-500"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'volume', parseFloat(this.value) / 100)"
+                />
+                <span class="w-8">${volume}%</span>
+              </label>
+              <label class="flex items-center gap-1">
+                <input 
+                  type="checkbox" 
+                  ${cue.loop ? 'checked' : ''}
+                  class="accent-pink-500"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'loop', this.checked)"
+                />
+                <span>ループ</span>
+              </label>
+            </div>
+          </div>
+          <div class="flex-shrink-0 flex items-center gap-2">
+            ${cue.r2_url ? `
+              <audio src="${cue.r2_url}" class="h-8 w-24" controls></audio>
+            ` : ''}
+            <button 
+              onclick="SceneEditModal.deleteSfxCue(${cue.id})"
+              class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+              title="削除"
+            >
+              <i class="fas fa-trash"></i>
+            </button>
+          </div>
+        </div>
+      `;
+    },
+    
+    /**
+     * Handle SFX file upload
+     * @param {Event} event 
+     */
+    async handleSfxUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file || !this.currentSceneId) return;
+      
+      // Validate
+      if (!file.type.startsWith('audio/')) {
+        this.showToast('音声ファイルを選択してください', 'error');
+        return;
+      }
+      
+      const maxSize = 10 * 1024 * 1024; // 10MB
+      if (file.size > maxSize) {
+        this.showToast('ファイルサイズは10MB以下にしてください', 'error');
+        return;
+      }
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('name', file.name.replace(/\.[^.]+$/, '') || 'SFX');
+        formData.append('volume', '0.8');
+        formData.append('start_ms', '0');
+        
+        const response = await axios.post(
+          `/api/scenes/${this.currentSceneId}/audio-cues/upload`,
+          formData,
+          { headers: { 'Content-Type': 'multipart/form-data' } }
+        );
+        
+        // Add to local state and re-render
+        this.currentState.sfxCues.push(response.data);
+        this.renderSfxTab();
+        this.renderTabs(); // Update badge
+        this.showToast('SFXを追加しました', 'success');
+        
+      } catch (error) {
+        console.error('[SceneEditModal] SFX upload failed:', error);
+        this.showToast('アップロードに失敗しました', 'error');
+      }
+      
+      // Reset file input
+      event.target.value = '';
+    },
+    
+    /**
+     * Update SFX cue property
+     * @param {number} cueId 
+     * @param {string} field 
+     * @param {any} value 
+     */
+    async updateSfxCue(cueId, field, value) {
+      try {
+        await axios.put(`/api/scenes/${this.currentSceneId}/audio-cues/${cueId}`, {
+          [field]: value
+        });
+        
+        // Update local state
+        const cue = this.currentState.sfxCues.find(c => c.id === cueId);
+        if (cue) {
+          cue[field] = value;
+        }
+        
+      } catch (error) {
+        console.error('[SceneEditModal] SFX update failed:', error);
+        this.showToast('更新に失敗しました', 'error');
+      }
+    },
+    
+    /**
+     * Delete SFX cue
+     * @param {number} cueId 
+     */
+    async deleteSfxCue(cueId) {
+      if (!confirm('この効果音を削除しますか？')) return;
+      
+      try {
+        await axios.delete(`/api/scenes/${this.currentSceneId}/audio-cues/${cueId}`);
+        
+        // Remove from local state
+        this.currentState.sfxCues = this.currentState.sfxCues.filter(c => c.id !== cueId);
+        this.renderSfxTab();
+        this.renderTabs(); // Update badge
+        this.showToast('SFXを削除しました', 'success');
+        
+      } catch (error) {
+        console.error('[SceneEditModal] SFX delete failed:', error);
+        this.showToast('削除に失敗しました', 'error');
+      }
     }
   };
   
