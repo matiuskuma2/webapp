@@ -880,3 +880,75 @@ video_builds（拡張）
 
 ---
 
+## 2026-01-23 Safe Chat v1
+
+### 概要
+チャット修正（Safe Chat）のコスト可視化機能。すべてのオペレーションログを`api_usage_logs`に統一記録し、SuperAdmin画面で追跡可能に。
+
+### コストイベント（api_usage_logs）
+
+| api_type | provider | 用途 | ログタイミング |
+|----------|----------|------|--------------|
+| bgm_upload | r2 | BGMアップロード | POST /api/projects/:id/audio-tracks/bgm/upload |
+| sfx_upload | r2 | SFXアップロード | POST /api/scenes/:id/audio-cues/sfx/upload |
+| patch_apply | ssot | APIパッチ適用 | POST /api/projects/:id/patches/apply |
+| chat_edit_apply | ssot | チャット修正適用 | POST /api/projects/:id/chat-edits/apply |
+| video_build_render | remotion_lambda | 動画レンダリング | POST /api/video-builds/:id/refresh (完了時) |
+| llm_intent | openai等 | LLM Intent生成 | (将来実装) |
+
+### userId 正規化（NOT NULL維持）
+
+| イベント | userId 決定ルール |
+|---------|-----------------|
+| video_build_render | video_builds.owner_user_id → project.user_id → スキップ |
+| bgm_upload / sfx_upload | session.user_id (認証必須) |
+| patch_apply / chat_edit_apply | session.user_id → project.user_id |
+| backfill / cron | owner_user_id → project.user_id |
+
+### API
+- `GET /api/admin/usage/operations` - オペレーション統計（種別/プロジェクト/ユーザー別）
+- `POST /api/admin/backfill-render-logs` - 過去ビルドのログ回収
+- `POST /api/admin/cron/collect-render-logs` - Cron用回収エンドポイント
+- `GET /api/admin/orphan-builds` - userId不明ビルド一覧
+
+### Cron 回収設定
+
+#### GitHub Actions（推奨）
+`.github/workflows/cron-collect-render-logs.yml`:
+```yaml
+name: Collect Render Logs
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 03:00 UTC = 12:00 JST
+  workflow_dispatch:
+jobs:
+  collect-logs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect unlogged render events
+        run: |
+          curl -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            "https://webapp-c7n.pages.dev/api/admin/cron/collect-render-logs"
+```
+
+**必要なGitHub Secret**: `CRON_SECRET`
+
+#### 手動実行
+```bash
+curl -X POST \
+  -H "X-Cron-Secret: your-secret" \
+  "https://webapp-c7n.pages.dev/api/admin/cron/collect-render-logs"
+```
+
+### SuperAdmin UI
+管理画面 → コスト管理 → オペレーション使用量:
+- オペレーション種別ごとのカード表示（リクエスト数、推定コスト）
+- ユニークプロジェクト数/ユーザー数
+- 最近のオペレーション一覧
+
+### マイグレーション
+- `0034_add_video_builds_render_usage_logged.sql` - 二重計上防止フラグ
+
+---
+
