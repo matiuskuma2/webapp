@@ -1032,6 +1032,32 @@ app.get('/projects/:id', (c) => {
                         <p class="text-xs text-gray-500 mt-1 ml-7">キャラクター参照画像が設定されていると一貫性が向上します</p>
                     </div>
                     
+                    <!-- Step 3.5: Output Preset Selection -->
+                    <div class="mb-4 pb-4 border-b border-gray-300">
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <span class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-indigo-600 text-white text-xs mr-2">⚙</span>
+                            <i class="fas fa-tv mr-1 text-indigo-600"></i>配信先プリセット
+                        </label>
+                        <div class="flex flex-col sm:flex-row gap-2 ml-7">
+                            <select 
+                                id="outputPresetSelector"
+                                onchange="saveOutputPreset(this.value)"
+                                class="flex-1 px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm"
+                            >
+                                <option value="yt_long">📺 YouTube長尺 (16:9 横型)</option>
+                                <option value="short_vertical">📱 縦型ショート汎用 (9:16)</option>
+                                <option value="yt_shorts">🎬 YouTube Shorts (9:16)</option>
+                                <option value="reels">📸 Instagram Reels (9:16)</option>
+                                <option value="tiktok">🎵 TikTok (9:16)</option>
+                            </select>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1 ml-7">配信先に合わせてテロップ・余白・安全領域が自動調整されます</p>
+                        <div id="outputPresetPreview" class="mt-2 ml-7 text-xs text-indigo-600 hidden">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            <span id="outputPresetPreviewText"></span>
+                        </div>
+                    </div>
+                    
                     <!-- Step 4: BGM Settings (R3-A) -->
                     <div class="mb-4 pb-4 border-b border-gray-300">
                         <label class="block text-sm font-semibold text-gray-700 mb-2">

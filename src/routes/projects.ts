@@ -226,6 +226,7 @@ projects.get('/:id', async (c) => {
         p.audio_size_bytes,
         p.audio_duration_seconds,
         p.audio_r2_key,
+        p.output_preset,
         p.created_at,
         p.updated_at,
         p.source_updated_at
@@ -1377,6 +1378,112 @@ projects.put('/:id/scene-split-settings', async (c) => {
   } catch (error) {
     console.error('[Projects] Failed to save scene split settings:', error)
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to save settings' } }, 500)
+  }
+})
+
+// ====================================================================
+// Output Preset (Media Platform Targeting)
+// ====================================================================
+
+import { getOutputPreset, getAllOutputPresets, isValidPresetId, type OutputPresetId } from '../utils/output-presets'
+
+/**
+ * GET /api/projects/:id/output-preset
+ * Get current output preset for a project
+ */
+projects.get('/:id/output-preset', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
+    }
+
+    const project = await c.env.DB.prepare(`
+      SELECT output_preset FROM projects WHERE id = ?
+    `).bind(projectId).first<{ output_preset: string | null }>()
+
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
+
+    const presetId = project.output_preset || 'yt_long'
+    const preset = getOutputPreset(presetId)
+    const allPresets = getAllOutputPresets()
+
+    return c.json({
+      current_preset_id: presetId,
+      current_preset: preset,
+      available_presets: allPresets,
+    })
+  } catch (error) {
+    console.error('[Projects] Failed to get output preset:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get output preset' } }, 500)
+  }
+})
+
+/**
+ * PUT /api/projects/:id/output-preset
+ * Update output preset for a project
+ */
+projects.put('/:id/output-preset', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
+    }
+
+    const body = await c.req.json<{ preset_id: string }>()
+    const { preset_id } = body
+
+    if (!preset_id || !isValidPresetId(preset_id)) {
+      return c.json({ 
+        error: { 
+          code: 'INVALID_REQUEST', 
+          message: `Invalid preset_id. Valid values: yt_long, short_vertical, yt_shorts, reels, tiktok, custom` 
+        } 
+      }, 400)
+    }
+
+    // Check project exists
+    const project = await c.env.DB.prepare(`
+      SELECT id FROM projects WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
+
+    // Update output_preset
+    await c.env.DB.prepare(`
+      UPDATE projects SET output_preset = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(preset_id, projectId).run()
+
+    const preset = getOutputPreset(preset_id)
+
+    return c.json({
+      success: true,
+      preset_id,
+      preset,
+      message: `Output preset updated to: ${preset.label}`,
+    })
+  } catch (error) {
+    console.error('[Projects] Failed to update output preset:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update output preset' } }, 500)
+  }
+})
+
+/**
+ * GET /api/output-presets
+ * List all available output presets (no auth required)
+ */
+projects.get('/output-presets', async (c) => {
+  try {
+    const allPresets = getAllOutputPresets()
+    return c.json({ presets: allPresets })
+  } catch (error) {
+    console.error('[Projects] Failed to list output presets:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to list presets' } }, 500)
   }
 })
 

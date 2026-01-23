@@ -1400,6 +1400,14 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     `).bind(projectId).first();
     const hasBgm = activeBgm != null;
     
+    // Output Preset: プロジェクトの出力プリセットを取得
+    const { getOutputPreset } = await import('../utils/output-presets');
+    const projectPreset = await c.env.DB.prepare(`
+      SELECT output_preset FROM projects WHERE id = ?
+    `).bind(projectId).first<{ output_preset: string | null }>();
+    const outputPresetId = projectPreset?.output_preset || 'yt_long';
+    const outputPreset = getOutputPreset(outputPresetId);
+    
     // R3-B: SFX有無を確認（いずれかのシーンにSFXがあるか）
     const sfxCheck = await c.env.DB.prepare(`
       SELECT COUNT(*) as count FROM scene_audio_cues sac
@@ -1473,6 +1481,14 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           warning_count: recommendedWarnings.length + assetWarnings.length,
           has_voice: utteranceValidation.summary.total_scenes > utteranceValidation.summary.invalid_scenes,
         },
+      },
+      // Output Preset 情報
+      output_preset: {
+        id: outputPreset.id,
+        label: outputPreset.label,
+        description: outputPreset.description,
+        aspect_ratio: outputPreset.aspect_ratio,
+        resolution: outputPreset.resolution,
       },
     });
     
@@ -1777,10 +1793,10 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     
     const userId = session.user_id;
     
-    // Get project info
+    // Get project info (including output_preset)
     const project = await c.env.DB.prepare(`
-      SELECT id, user_id, title FROM projects WHERE id = ?
-    `).bind(projectId).first<{ id: number; user_id: number; title: string }>();
+      SELECT id, user_id, title, output_preset FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; user_id: number; title: string; output_preset: string | null }>();
     
     if (!project) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404);
@@ -2136,8 +2152,24 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       ducking_release_ms: number;
     }>();
     
-    // 5. Settings構築
+    // 5. Settings構築（Output preset 情報を含む）
+    // Output preset から設定を取得
+    const { getOutputPreset } = await import('../utils/output-presets');
+    const outputPresetConfig = getOutputPreset(project.output_preset);
+    
     const buildSettings = {
+      // Output preset 情報（SSOT記録）
+      output_preset: outputPresetConfig.id,
+      output_preset_config: {
+        label: outputPresetConfig.label,
+        aspect_ratio: outputPresetConfig.aspect_ratio,
+        resolution: outputPresetConfig.resolution,
+        fps: outputPresetConfig.fps,
+        text_scale: outputPresetConfig.text_scale,
+        safe_zones: outputPresetConfig.safe_zones,
+        motion_default: outputPresetConfig.motion_default,
+        telop_style: outputPresetConfig.telop_style,
+      },
       captions: {
         enabled: body.captions?.enabled ?? body.include_captions ?? true,
         position: body.captions?.position || 'bottom',
@@ -2148,33 +2180,34 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         enabled: activeBgm ? true : (body.bgm?.enabled ?? body.include_bgm ?? false),
         url: activeBgm?.r2_url ? toAbsoluteUrl(activeBgm.r2_url, siteUrl) : body.bgm?.url,
         track: body.bgm?.track,
-        volume: activeBgm?.volume ?? body.bgm?.volume ?? 0.25,
+        volume: activeBgm?.volume ?? body.bgm?.volume ?? outputPresetConfig.bgm_volume_default,
         loop: activeBgm ? activeBgm.loop === 1 : (body.bgm?.loop ?? true),
         fade_in_ms: activeBgm?.fade_in_ms ?? body.bgm?.fade_in_ms ?? 800,
         fade_out_ms: activeBgm?.fade_out_ms ?? body.bgm?.fade_out_ms ?? 800,
-        // R3-B: ダッキング設定
+        // R3-B: ダッキング設定（preset から ducking_enabled を反映）
         ducking: {
-          enabled: activeBgm ? activeBgm.ducking_enabled === 1 : (body.bgm?.ducking?.enabled ?? false),
+          enabled: activeBgm ? activeBgm.ducking_enabled === 1 : (body.bgm?.ducking?.enabled ?? outputPresetConfig.ducking_enabled),
           volume: activeBgm?.ducking_volume ?? body.bgm?.ducking?.volume ?? 0.12,
           attack_ms: activeBgm?.ducking_attack_ms ?? body.bgm?.ducking?.attack_ms ?? 120,
           release_ms: activeBgm?.ducking_release_ms ?? body.bgm?.ducking?.release_ms ?? 220,
         },
       },
       motion: {
-        preset: body.motion?.preset ?? (body.include_motion ? 'gentle-zoom' : 'none'),
+        preset: body.motion?.preset ?? outputPresetConfig.motion_default ?? 'none',
         transition: body.motion?.transition || 'crossfade',
       },
     };
     
     // 6. project.json生成
+    // Output preset から aspect_ratio / resolution / fps を取得（body で上書き可能）
     const projectJson = buildProjectJson(
       { id: project.id, title: project.title, user_id: ownerUserId },
       scenesWithAssets,
       buildSettings,
       {
-        aspectRatio: body.aspect_ratio || '9:16',
-        resolution: body.resolution || '1080p',
-        fps: body.fps || 30,
+        aspectRatio: body.aspect_ratio || outputPresetConfig.aspect_ratio,
+        resolution: body.resolution || outputPresetConfig.resolution,
+        fps: body.fps || outputPresetConfig.fps,
       }
     );
     

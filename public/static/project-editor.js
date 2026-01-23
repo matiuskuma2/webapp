@@ -108,6 +108,9 @@ async function loadProject() {
     // R3-A: Load BGM status
     loadBgmStatus();
     
+    // Load output_preset selection
+    loadOutputPreset();
+    
     // Safe Chat v1: Refresh Builder Wizard
     refreshBuilderWizard();
   } catch (error) {
@@ -8699,3 +8702,149 @@ function renderWizardCard(title, badge, desc, color) {
 
 // Export wizard function
 window.refreshBuilderWizard = refreshBuilderWizard;
+
+// ========================================
+// Output Preset Management
+// ========================================
+
+/**
+ * Output preset definitions
+ * Matches src/utils/output-presets.ts
+ */
+const OUTPUT_PRESETS = {
+  yt_long: {
+    id: 'yt_long',
+    label: 'YouTube長尺',
+    description: '16:9 横型、字幕下部、標準音圧',
+    aspect_ratio: '16:9',
+    orientation: 'landscape',
+    safe_zones: { top: 0, bottom: 80, left: 0, right: 0 },
+    text_scale: 1.0,
+    motion_default: 'kenburns_soft',
+    telop_style: 'bottom_bar',
+    bgm_volume_default: 0.25
+  },
+  short_vertical: {
+    id: 'short_vertical',
+    label: '縦型ショート汎用',
+    description: '9:16 縦型、Shorts/Reels/TikTok共通',
+    aspect_ratio: '9:16',
+    orientation: 'portrait',
+    safe_zones: { top: 60, bottom: 160, left: 20, right: 20 },
+    text_scale: 1.3,
+    motion_default: 'kenburns_medium',
+    telop_style: 'center_large',
+    bgm_volume_default: 0.20
+  },
+  yt_shorts: {
+    id: 'yt_shorts',
+    label: 'YouTube Shorts',
+    description: '9:16 縦型、YouTube UI最適化',
+    aspect_ratio: '9:16',
+    orientation: 'portrait',
+    safe_zones: { top: 50, bottom: 140, left: 20, right: 60 },
+    text_scale: 1.25,
+    motion_default: 'kenburns_medium',
+    telop_style: 'center_large',
+    bgm_volume_default: 0.20
+  },
+  reels: {
+    id: 'reels',
+    label: 'Instagram Reels',
+    description: '9:16 縦型、Instagram UI最適化',
+    aspect_ratio: '9:16',
+    orientation: 'portrait',
+    safe_zones: { top: 80, bottom: 200, left: 20, right: 20 },
+    text_scale: 1.3,
+    motion_default: 'kenburns_medium',
+    telop_style: 'center_large',
+    bgm_volume_default: 0.18
+  },
+  tiktok: {
+    id: 'tiktok',
+    label: 'TikTok',
+    description: '9:16 縦型、TikTok UI最適化',
+    aspect_ratio: '9:16',
+    orientation: 'portrait',
+    safe_zones: { top: 100, bottom: 180, left: 20, right: 80 },
+    text_scale: 1.35,
+    motion_default: 'kenburns_medium',
+    telop_style: 'top_small',
+    bgm_volume_default: 0.18
+  }
+};
+
+/**
+ * Load output_preset from API and update selector
+ */
+async function loadOutputPreset() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/output-preset`);
+    const { output_preset } = response.data;
+    
+    const selector = document.getElementById('outputPresetSelector');
+    if (selector && output_preset) {
+      selector.value = output_preset;
+      updateOutputPresetPreview(output_preset);
+    }
+  } catch (error) {
+    console.error('Failed to load output preset:', error);
+    // Default to yt_long if failed
+    const selector = document.getElementById('outputPresetSelector');
+    if (selector) {
+      selector.value = 'yt_long';
+      updateOutputPresetPreview('yt_long');
+    }
+  }
+}
+
+/**
+ * Save output_preset to API
+ */
+async function saveOutputPreset(presetId) {
+  try {
+    const response = await axios.put(`${API_BASE}/projects/${PROJECT_ID}/output-preset`, {
+      output_preset: presetId
+    });
+    
+    if (response.data.ok) {
+      showToast(`配信先プリセットを「${OUTPUT_PRESETS[presetId]?.label || presetId}」に設定しました`, 'success');
+      updateOutputPresetPreview(presetId);
+      
+      // Refresh preflight to show updated preset info
+      refreshBuilderWizard();
+    }
+  } catch (error) {
+    console.error('Failed to save output preset:', error);
+    showToast('プリセットの保存に失敗しました', 'error');
+  }
+}
+
+/**
+ * Update output preset preview display
+ */
+function updateOutputPresetPreview(presetId) {
+  const preset = OUTPUT_PRESETS[presetId];
+  const previewContainer = document.getElementById('outputPresetPreview');
+  const previewText = document.getElementById('outputPresetPreviewText');
+  
+  if (!previewContainer || !previewText || !preset) {
+    if (previewContainer) previewContainer.classList.add('hidden');
+    return;
+  }
+  
+  const orientationLabel = preset.orientation === 'landscape' ? '横型' : '縦型';
+  const details = [
+    `画角: ${preset.aspect_ratio} (${orientationLabel})`,
+    `字幕: ${preset.subtitle.position}`,
+    `音圧: ${preset.audio.loudness_target}LUFS`
+  ];
+  
+  previewText.textContent = details.join(' / ');
+  previewContainer.classList.remove('hidden');
+}
+
+// Export output preset functions
+window.loadOutputPreset = loadOutputPreset;
+window.saveOutputPreset = saveOutputPreset;
+window.updateOutputPresetPreview = updateOutputPresetPreview;
