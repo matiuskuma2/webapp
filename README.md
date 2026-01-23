@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-21（R1.5 複数話者音声 + scene_utterances SSOT + 音声タブUI）
+- **最終更新**: 2026-01-23（R3-A 通しBGM + 無音シーン尺設定 + Preflight2層検証）
 
 ---
 
@@ -640,6 +640,103 @@ scene_utterances
 
 #### マイグレーション
 - `0022_create_scene_utterances.sql`
+
+---
+
+## 2026-01-23 R3-A 追加機能
+
+### 通しBGM（project_audio_tracks）
+
+#### 概要
+プロジェクト全体を通して流れるBGMを管理。ダッキング（音声再生時にBGM音量を自動調整）対応。
+
+#### データモデル
+```sql
+project_audio_tracks
+├── id (PK)
+├── project_id (FK → projects.id)
+├── track_type ('bgm')
+├── r2_key, r2_url (R2ストレージ)
+├── duration_ms
+├── volume (0.0-1.0, default: 0.25)
+├── loop (boolean, default: true)
+├── fade_in_ms, fade_out_ms (default: 800ms)
+├── ducking_enabled (default: false)
+├── ducking_volume (0.0-1.0, default: 0.12)
+├── ducking_attack_ms, ducking_release_ms
+├── is_active
+└── created_at, updated_at
+```
+
+#### API
+- `GET /api/projects/:projectId/audio-tracks` - BGMトラック一覧
+- `POST /api/projects/:projectId/audio-tracks/bgm/upload` - BGMアップロード
+- `PUT /api/projects/:projectId/audio-tracks/:id` - BGM設定更新
+- `DELETE /api/projects/:projectId/audio-tracks/:id` - BGM削除
+
+#### Remotion統合
+`buildProjectJson`出力:
+```json
+{
+  "assets": {
+    "bgm": {
+      "url": "https://.../bgm.mp3",
+      "volume": 0.25,
+      "loop": true,
+      "fade_in_ms": 800,
+      "fade_out_ms": 800,
+      "ducking": {
+        "enabled": true,
+        "volume": 0.12,
+        "attack_ms": 120,
+        "release_ms": 220
+      }
+    }
+  }
+}
+```
+
+### 無音シーンの尺設定（duration_override_ms）
+
+#### 概要
+セリフや音声がないシーン（風景、戦闘、間のシーン等）の尺を手動設定可能に。
+
+#### データモデル
+```sql
+scenes
+└── duration_override_ms (INTEGER, NULL=自動計算)
+```
+
+#### 尺計算の優先順位（computeSceneDurationMs）
+1. **video mode**: video素材の`duration_sec × 1000`
+2. **utterances音声合計**: Σ(utterances[].duration_ms) + padding
+3. **duration_override_ms**: 手動設定値（1-60秒）
+4. **dialogue推定**: 文字数 × 300ms（最小2秒）
+5. **DEFAULT**: 5000ms
+
+#### API
+- `PUT /api/scenes/:id` - `duration_override_ms`パラメータ追加（1000-60000ms）
+
+### Preflight 2層検証
+
+#### 概要
+preflight判定を「必須条件」と「推奨/警告」の2レイヤーに分離。
+
+#### レイヤー1（必須 - can_generate に影響）
+- 素材が全シーンに存在すること
+
+#### レイヤー2（警告 - utterance_errors）
+- utterancesが未登録（「セリフがありますが音声パーツが未登録です」）
+- 音声が未生成
+
+#### 動作
+- **is_ready: true** → 素材OK
+- **can_generate: true** → 生成可能（utterance警告があっても止めない）
+- **utterance_errors** → 警告として表示、生成は許可
+
+#### マイグレーション
+- `0028_add_scene_duration_override_ms.sql`
+- `0029_create_project_audio_tracks.sql`
 
 ---
 
