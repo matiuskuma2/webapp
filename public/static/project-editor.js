@@ -6852,15 +6852,24 @@ function renderVideoBuildItem(build) {
         </div>
       `;
     } else {
-      // Valid URL
+      // Valid URL - show download and chat edit buttons
       actionHtml = `
-        <a 
-          href="${build.download_url}" 
-          target="_blank"
-          class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold flex items-center gap-2"
-        >
-          <i class="fas fa-download"></i>ダウンロード
-        </a>
+        <div class="flex items-center gap-2">
+          <button 
+            onclick="openChatEditPanel(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+            class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold flex items-center gap-2"
+            title="チャットで修正"
+          >
+            <i class="fas fa-comments"></i>修正
+          </button>
+          <a 
+            href="${build.download_url}" 
+            target="_blank"
+            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold flex items-center gap-2"
+          >
+            <i class="fas fa-download"></i>DL
+          </a>
+        </div>
       `;
       
       if (expiry) {
@@ -7988,3 +7997,576 @@ function scrollToVideoBuild(buildId) {
 window.loadPatchHistory = loadPatchHistory;
 window.togglePatchDetails = togglePatchDetails;
 window.scrollToVideoBuild = scrollToVideoBuild;
+
+// ============================================
+// Safe Chat v0: Chat Edit Panel
+// ============================================
+
+// State for chat edit panel
+window.chatEditState = {
+  buildId: null,
+  videoUrl: null,
+  patchRequestId: null,
+  dryRunResult: null,
+  messages: [],
+};
+
+/**
+ * Open the chat edit panel for a specific build
+ * @param {number} buildId 
+ * @param {string} videoUrl 
+ */
+function openChatEditPanel(buildId, videoUrl) {
+  const panel = document.getElementById('chatEditPanel');
+  const backdrop = document.getElementById('chatEditBackdrop');
+  const buildIdSpan = document.getElementById('chatEditBuildId');
+  const previewDiv = document.getElementById('chatEditPreview');
+  const video = document.getElementById('chatEditVideo');
+  const history = document.getElementById('chatEditHistory');
+  const dryRunResult = document.getElementById('chatEditDryRunResult');
+  const inputArea = document.getElementById('chatEditInputArea');
+  
+  if (!panel || !backdrop) return;
+  
+  // Reset state
+  window.chatEditState = {
+    buildId,
+    videoUrl,
+    patchRequestId: null,
+    dryRunResult: null,
+    messages: [],
+  };
+  
+  // Update UI
+  buildIdSpan.textContent = `Build #${buildId}`;
+  
+  // Show video preview if URL is available
+  if (videoUrl && video) {
+    video.querySelector('source').src = videoUrl;
+    video.load();
+    previewDiv.classList.remove('hidden');
+  } else {
+    previewDiv.classList.add('hidden');
+  }
+  
+  // Reset history to welcome message
+  history.innerHTML = `
+    <div class="bg-gray-100 rounded-lg p-3">
+      <p class="text-sm text-gray-600">
+        <i class="fas fa-info-circle mr-1 text-indigo-500"></i>
+        動画 #${buildId} の修正指示を入力してください。対応可能な修正：
+      </p>
+      <ul class="text-xs text-gray-500 mt-2 ml-4 space-y-1">
+        <li>• <strong>バブル</strong>: 「シーン2のバブル1を+300ms遅らせて」</li>
+        <li>• <strong>SFX</strong>: 「シーン3のSFX1の音量を50%に」</li>
+        <li>• <strong>BGM</strong>: 「BGM音量を20%に下げて」「BGMをループにして」</li>
+      </ul>
+      <p class="text-xs text-amber-600 mt-2">
+        <i class="fas fa-exclamation-triangle mr-1"></i>
+        テキスト変更・画像差し替えは未対応です
+      </p>
+    </div>
+  `;
+  
+  // Hide dry-run result, show input area
+  dryRunResult.classList.add('hidden');
+  inputArea.classList.remove('hidden');
+  
+  // Clear input
+  const input = document.getElementById('chatEditInput');
+  if (input) input.value = '';
+  
+  // Open panel with animation
+  backdrop.classList.remove('hidden');
+  setTimeout(() => {
+    panel.classList.remove('translate-x-full');
+  }, 10);
+  
+  // Focus input
+  setTimeout(() => {
+    if (input) input.focus();
+  }, 300);
+}
+
+/**
+ * Close the chat edit panel
+ */
+function closeChatEditPanel() {
+  const panel = document.getElementById('chatEditPanel');
+  const backdrop = document.getElementById('chatEditBackdrop');
+  
+  if (!panel || !backdrop) return;
+  
+  panel.classList.add('translate-x-full');
+  setTimeout(() => {
+    backdrop.classList.add('hidden');
+  }, 300);
+}
+
+/**
+ * Parse user message to intent (simple pattern matching for v0)
+ * @param {string} message 
+ * @returns {Object|null} Intent object or null if parsing failed
+ */
+function parseMessageToIntent(message) {
+  const actions = [];
+  const errors = [];
+  
+  // Normalize message
+  const normalizedMsg = message.toLowerCase()
+    .replace(/シーン/g, 'scene')
+    .replace(/バブル/g, 'balloon')
+    .replace(/ふきだし/g, 'balloon')
+    .replace(/吹き出し/g, 'balloon')
+    .replace(/音量/g, 'volume')
+    .replace(/％/g, '%');
+  
+  // Pattern: BGM volume (e.g., "BGM音量を20%に", "BGMを30%に")
+  const bgmVolumeMatch = message.match(/bgm.*?(\d+)\s*%/i) || message.match(/(\d+)\s*%.*?bgm/i);
+  if (bgmVolumeMatch) {
+    const volume = parseInt(bgmVolumeMatch[1]) / 100;
+    if (volume >= 0 && volume <= 1) {
+      actions.push({
+        action: 'bgm.set_volume',
+        volume: volume,
+      });
+    } else {
+      errors.push(`BGM音量は0-100%の範囲で指定してください（入力: ${bgmVolumeMatch[1]}%）`);
+    }
+  }
+  
+  // Pattern: BGM loop (e.g., "BGMをループにして", "BGMループオフ")
+  if (/bgm.*?ループ(?:オン|on|する|にして)/i.test(message)) {
+    actions.push({ action: 'bgm.set_loop', loop: true });
+  } else if (/bgm.*?ループ(?:オフ|off|しない|解除)/i.test(message)) {
+    actions.push({ action: 'bgm.set_loop', loop: false });
+  }
+  
+  // Pattern: SFX volume (e.g., "シーン2のSFX1の音量を50%に")
+  const sfxVolumeMatches = message.matchAll(/(?:scene|シーン)\s*(\d+).*?(?:sfx|効果音)\s*(\d+).*?(?:volume|音量).*?(\d+)\s*%/gi);
+  for (const match of sfxVolumeMatches) {
+    const sceneIdx = parseInt(match[1]);
+    const cueNo = parseInt(match[2]);
+    const volume = parseInt(match[3]) / 100;
+    if (volume >= 0 && volume <= 1) {
+      actions.push({
+        action: 'sfx.set_volume',
+        scene_idx: sceneIdx,
+        cue_no: cueNo,
+        volume: volume,
+      });
+    }
+  }
+  
+  // Pattern: Balloon timing adjustment (e.g., "シーン2のバブル1を+300ms")
+  const balloonTimingMatches = message.matchAll(/(?:scene|シーン)\s*(\d+).*?(?:balloon|バブル)\s*(\d+).*?([+-]?\d+)\s*ms/gi);
+  for (const match of balloonTimingMatches) {
+    const sceneIdx = parseInt(match[1]);
+    const balloonNo = parseInt(match[2]);
+    const deltaMs = parseInt(match[3]);
+    
+    // Determine if it's start or end timing
+    if (/開始|start|早|遅/.test(message)) {
+      actions.push({
+        action: 'balloon.adjust_window',
+        scene_idx: sceneIdx,
+        balloon_no: balloonNo,
+        delta_start_ms: deltaMs,
+      });
+    } else {
+      // Default to adjusting both start and end (move entire window)
+      actions.push({
+        action: 'balloon.adjust_window',
+        scene_idx: sceneIdx,
+        balloon_no: balloonNo,
+        delta_start_ms: deltaMs,
+        delta_end_ms: deltaMs,
+      });
+    }
+  }
+  
+  // Pattern: Simple balloon timing with "遅らせる" or "早める"
+  const balloonDelayMatch = message.match(/(?:scene|シーン)\s*(\d+).*?(?:balloon|バブル)\s*(\d+).*?(\d+)\s*(?:ms|ミリ秒)?.*?(?:遅|おそ|delay)/i);
+  if (balloonDelayMatch && !message.includes('+') && !message.includes('-')) {
+    actions.push({
+      action: 'balloon.adjust_window',
+      scene_idx: parseInt(balloonDelayMatch[1]),
+      balloon_no: parseInt(balloonDelayMatch[2]),
+      delta_start_ms: parseInt(balloonDelayMatch[3]),
+      delta_end_ms: parseInt(balloonDelayMatch[3]),
+    });
+  }
+  
+  const balloonEarlyMatch = message.match(/(?:scene|シーン)\s*(\d+).*?(?:balloon|バブル)\s*(\d+).*?(\d+)\s*(?:ms|ミリ秒)?.*?(?:早|はや|early)/i);
+  if (balloonEarlyMatch && !message.includes('+') && !message.includes('-')) {
+    actions.push({
+      action: 'balloon.adjust_window',
+      scene_idx: parseInt(balloonEarlyMatch[1]),
+      balloon_no: parseInt(balloonEarlyMatch[2]),
+      delta_start_ms: -parseInt(balloonEarlyMatch[3]),
+      delta_end_ms: -parseInt(balloonEarlyMatch[3]),
+    });
+  }
+  
+  if (actions.length === 0 && errors.length === 0) {
+    return {
+      ok: false,
+      error: '修正指示を解析できませんでした。例: 「BGM音量を20%に」「シーン2のバブル1を+300ms遅らせて」',
+    };
+  }
+  
+  if (errors.length > 0) {
+    return {
+      ok: false,
+      error: errors.join('\n'),
+    };
+  }
+  
+  return {
+    ok: true,
+    intent: {
+      schema: 'rilarc_intent_v1',
+      actions,
+    },
+  };
+}
+
+/**
+ * Send a chat edit message (perform dry-run)
+ */
+async function sendChatEditMessage() {
+  const input = document.getElementById('chatEditInput');
+  const sendBtn = document.getElementById('btnChatEditSend');
+  const history = document.getElementById('chatEditHistory');
+  const dryRunResultEl = document.getElementById('chatEditDryRunResult');
+  const inputArea = document.getElementById('chatEditInputArea');
+  
+  if (!input || !sendBtn) return;
+  
+  const message = input.value.trim();
+  if (!message) return;
+  
+  // Disable input
+  input.disabled = true;
+  sendBtn.disabled = true;
+  
+  // Add user message to history
+  history.innerHTML += `
+    <div class="flex justify-end">
+      <div class="bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%]">
+        <p class="text-sm">${escapeHtml(message)}</p>
+      </div>
+    </div>
+  `;
+  history.scrollTop = history.scrollHeight;
+  
+  // Parse message to intent
+  const parsed = parseMessageToIntent(message);
+  
+  if (!parsed.ok) {
+    // Show error
+    history.innerHTML += `
+      <div class="bg-red-50 rounded-lg p-3 border border-red-200">
+        <p class="text-sm text-red-700">
+          <i class="fas fa-exclamation-circle mr-1"></i>
+          ${escapeHtml(parsed.error)}
+        </p>
+      </div>
+    `;
+    input.value = '';
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+    history.scrollTop = history.scrollHeight;
+    return;
+  }
+  
+  // Add thinking message
+  const thinkingId = `thinking-${Date.now()}`;
+  history.innerHTML += `
+    <div id="${thinkingId}" class="flex justify-start">
+      <div class="bg-gray-100 rounded-lg px-3 py-2">
+        <p class="text-sm text-gray-600">
+          <i class="fas fa-spinner fa-spin mr-1"></i>
+          変更内容を確認中...
+        </p>
+      </div>
+    </div>
+  `;
+  history.scrollTop = history.scrollHeight;
+  
+  try {
+    // Call dry-run API
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/dry-run`, {
+      user_message: message,
+      intent: parsed.intent,
+      video_build_id: window.chatEditState.buildId,
+    });
+    
+    // Remove thinking message
+    const thinkingEl = document.getElementById(thinkingId);
+    if (thinkingEl) thinkingEl.remove();
+    
+    if (response.data.ok) {
+      // Success - show dry-run result
+      window.chatEditState.patchRequestId = response.data.patch_request_id;
+      window.chatEditState.dryRunResult = response.data;
+      
+      // Add success message to history
+      history.innerHTML += `
+        <div class="bg-green-50 rounded-lg p-3 border border-green-200">
+          <p class="text-sm text-green-700">
+            <i class="fas fa-check-circle mr-1"></i>
+            ${response.data.resolved_ops}件の変更を検出しました
+          </p>
+        </div>
+      `;
+      
+      // Show dry-run result panel
+      showDryRunResult(response.data);
+      
+      // Hide input area
+      inputArea.classList.add('hidden');
+      
+    } else {
+      // Dry-run failed
+      const errorMsg = response.data.errors?.join(', ') || '変更を適用できません';
+      history.innerHTML += `
+        <div class="bg-red-50 rounded-lg p-3 border border-red-200">
+          <p class="text-sm text-red-700">
+            <i class="fas fa-times-circle mr-1"></i>
+            ${escapeHtml(errorMsg)}
+          </p>
+          ${response.data.warnings?.length ? `<p class="text-xs text-amber-600 mt-1">${response.data.warnings.join(', ')}</p>` : ''}
+        </div>
+      `;
+      input.value = '';
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+    }
+    
+  } catch (error) {
+    // Remove thinking message
+    const thinkingEl = document.getElementById(thinkingId);
+    if (thinkingEl) thinkingEl.remove();
+    
+    console.error('[ChatEdit] Dry-run error:', error);
+    const errorMsg = error.response?.data?.error || error.message || '通信エラーが発生しました';
+    history.innerHTML += `
+      <div class="bg-red-50 rounded-lg p-3 border border-red-200">
+        <p class="text-sm text-red-700">
+          <i class="fas fa-exclamation-triangle mr-1"></i>
+          ${escapeHtml(errorMsg)}
+        </p>
+      </div>
+    `;
+    input.value = '';
+    input.disabled = false;
+    sendBtn.disabled = false;
+    input.focus();
+  }
+  
+  history.scrollTop = history.scrollHeight;
+}
+
+/**
+ * Show dry-run result in the panel
+ * @param {Object} result 
+ */
+function showDryRunResult(result) {
+  const dryRunResultEl = document.getElementById('chatEditDryRunResult');
+  const changesEl = document.getElementById('chatEditDryRunChanges');
+  const errorsEl = document.getElementById('chatEditDryRunErrors');
+  const statusEl = document.getElementById('chatEditDryRunStatus');
+  const applyBtn = document.getElementById('btnChatEditApply');
+  
+  if (!dryRunResultEl || !changesEl) return;
+  
+  // Update status badge
+  if (result.ok) {
+    statusEl.textContent = 'OK';
+    statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-100 text-green-700';
+    applyBtn.disabled = false;
+  } else {
+    statusEl.textContent = 'NG';
+    statusEl.className = 'text-xs px-2 py-1 rounded-full bg-red-100 text-red-700';
+    applyBtn.disabled = true;
+  }
+  
+  // Render changes
+  if (result.summary?.changes?.length > 0) {
+    changesEl.innerHTML = result.summary.changes.map(change => `
+      <div class="flex items-center gap-2 p-2 bg-white rounded border border-gray-200">
+        <span class="text-lg">
+          ${change.type === 'balloon' ? '💬' : change.type === 'sfx' ? '🔊' : '🎵'}
+        </span>
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium text-gray-800">${escapeHtml(change.target)}</p>
+          <p class="text-xs text-gray-500">${escapeHtml(change.detail)}</p>
+        </div>
+      </div>
+    `).join('');
+  } else {
+    changesEl.innerHTML = '<p class="text-sm text-gray-500">変更内容なし</p>';
+  }
+  
+  // Show errors if any
+  if (result.errors?.length > 0) {
+    errorsEl.textContent = result.errors.join('\n');
+    errorsEl.classList.remove('hidden');
+  } else {
+    errorsEl.classList.add('hidden');
+  }
+  
+  // Show warnings if any
+  if (result.warnings?.length > 0) {
+    changesEl.innerHTML += `
+      <div class="p-2 bg-amber-50 rounded border border-amber-200 text-xs text-amber-700">
+        <i class="fas fa-exclamation-triangle mr-1"></i>
+        ${result.warnings.join('<br>')}
+      </div>
+    `;
+  }
+  
+  dryRunResultEl.classList.remove('hidden');
+}
+
+/**
+ * Cancel dry-run and return to input mode
+ */
+function cancelChatEditDryRun() {
+  const dryRunResultEl = document.getElementById('chatEditDryRunResult');
+  const inputArea = document.getElementById('chatEditInputArea');
+  const input = document.getElementById('chatEditInput');
+  const sendBtn = document.getElementById('btnChatEditSend');
+  
+  // Hide dry-run result, show input area
+  dryRunResultEl.classList.add('hidden');
+  inputArea.classList.remove('hidden');
+  
+  // Re-enable input
+  input.value = '';
+  input.disabled = false;
+  sendBtn.disabled = false;
+  input.focus();
+  
+  // Clear state
+  window.chatEditState.patchRequestId = null;
+  window.chatEditState.dryRunResult = null;
+}
+
+/**
+ * Apply the chat edit (after successful dry-run)
+ */
+async function applyChatEdit() {
+  const applyBtn = document.getElementById('btnChatEditApply');
+  const history = document.getElementById('chatEditHistory');
+  
+  if (!window.chatEditState.patchRequestId) {
+    showToast('パッチIDが見つかりません', 'error');
+    return;
+  }
+  
+  applyBtn.disabled = true;
+  applyBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>適用中...';
+  
+  try {
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/apply`, {
+      patch_request_id: window.chatEditState.patchRequestId,
+    });
+    
+    if (response.data.ok) {
+      // Success - show message and close panel
+      history.innerHTML += `
+        <div class="bg-green-50 rounded-lg p-3 border border-green-200">
+          <p class="text-sm text-green-700">
+            <i class="fas fa-check-circle mr-1"></i>
+            ${response.data.applied_count}件の変更を適用しました
+          </p>
+          ${response.data.new_video_build_id ? `
+            <p class="text-sm text-green-600 mt-1">
+              <i class="fas fa-video mr-1"></i>
+              新しいビルド #${response.data.new_video_build_id} を作成しました
+            </p>
+          ` : ''}
+        </div>
+      `;
+      
+      showToast(response.data.next_action || '修正を適用しました', 'success');
+      
+      // Reload video builds list
+      await loadVideoBuilds();
+      
+      // Reload patch history
+      await loadPatchHistory();
+      
+      // Close panel after a short delay
+      setTimeout(() => {
+        closeChatEditPanel();
+        
+        // Scroll to new build if created
+        if (response.data.new_video_build_id) {
+          scrollToVideoBuild(response.data.new_video_build_id);
+        }
+      }, 1500);
+      
+    } else {
+      throw new Error(response.data.errors?.join(', ') || '適用に失敗しました');
+    }
+    
+  } catch (error) {
+    console.error('[ChatEdit] Apply error:', error);
+    const errorMsg = error.response?.data?.error || error.message || '通信エラーが発生しました';
+    
+    history.innerHTML += `
+      <div class="bg-red-50 rounded-lg p-3 border border-red-200">
+        <p class="text-sm text-red-700">
+          <i class="fas fa-times-circle mr-1"></i>
+          ${escapeHtml(errorMsg)}
+        </p>
+      </div>
+    `;
+    
+    applyBtn.disabled = false;
+    applyBtn.innerHTML = '<i class="fas fa-check mr-1"></i>適用して新ビルド生成';
+    
+    showToast('修正の適用に失敗しました', 'error');
+  }
+  
+  history.scrollTop = history.scrollHeight;
+}
+
+/**
+ * Handle Enter key in chat input
+ */
+document.addEventListener('DOMContentLoaded', () => {
+  const chatInput = document.getElementById('chatEditInput');
+  if (chatInput) {
+    chatInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatEditMessage();
+      }
+    });
+  }
+});
+
+/**
+ * Escape HTML to prevent XSS
+ * @param {string} str 
+ * @returns {string}
+ */
+function escapeHtml(str) {
+  if (!str) return '';
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// Make chat edit functions globally available
+window.openChatEditPanel = openChatEditPanel;
+window.closeChatEditPanel = closeChatEditPanel;
+window.sendChatEditMessage = sendChatEditMessage;
+window.cancelChatEditDryRun = cancelChatEditDryRun;
+window.applyChatEdit = applyChatEdit;

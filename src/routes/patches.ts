@@ -1278,4 +1278,870 @@ async function fetchScenesWithAssets(
   return scenes;
 }
 
+// ============================================================
+// Safe Chat v0: チャット経由の修正API
+// ============================================================
+
+/**
+ * Safe Chat v0 Intent Schema (rilarc_intent_v1)
+ * 
+ * LLMが出力する意図構造。ID決定はサーバー側で行う。
+ * entity/field はホワイトリストに限定。
+ */
+interface RilarcIntent {
+  schema: 'rilarc_intent_v1';
+  actions: IntentAction[];
+}
+
+type IntentAction =
+  | BalloonAdjustWindowAction
+  | BalloonAdjustPositionAction
+  | SfxAddFromLibraryAction
+  | SfxSetVolumeAction
+  | SfxSetTimingAction
+  | SfxRemoveAction
+  | BgmSetVolumeAction
+  | BgmSetLoopAction;
+
+interface BalloonAdjustWindowAction {
+  action: 'balloon.adjust_window';
+  scene_idx: number;
+  balloon_no: number;  // 1-indexed, UI表示順
+  delta_start_ms?: number;
+  delta_end_ms?: number;
+  absolute_start_ms?: number;
+  absolute_end_ms?: number;
+}
+
+interface BalloonAdjustPositionAction {
+  action: 'balloon.adjust_position';
+  scene_idx: number;
+  balloon_no: number;
+  delta_x?: number;
+  delta_y?: number;
+  absolute_x?: number;
+  absolute_y?: number;
+}
+
+interface SfxAddFromLibraryAction {
+  action: 'sfx.add_from_library';
+  scene_idx: number;
+  sfx_library_id: string;
+  start_ms: number;
+  volume?: number;
+}
+
+interface SfxSetVolumeAction {
+  action: 'sfx.set_volume';
+  scene_idx: number;
+  cue_no: number;  // 1-indexed
+  volume: number;  // 0-1
+}
+
+interface SfxSetTimingAction {
+  action: 'sfx.set_timing';
+  scene_idx: number;
+  cue_no: number;
+  delta_start_ms?: number;
+  absolute_start_ms?: number;
+  delta_end_ms?: number;
+  absolute_end_ms?: number;
+}
+
+interface SfxRemoveAction {
+  action: 'sfx.remove';
+  scene_idx: number;
+  cue_no: number;
+}
+
+interface BgmSetVolumeAction {
+  action: 'bgm.set_volume';
+  volume: number;  // 0-1
+}
+
+interface BgmSetLoopAction {
+  action: 'bgm.set_loop';
+  loop: boolean;
+}
+
+// 許可されるアクションのホワイトリスト
+const ALLOWED_CHAT_ACTIONS = new Set([
+  'balloon.adjust_window',
+  'balloon.adjust_position',
+  'sfx.add_from_library',
+  'sfx.set_volume',
+  'sfx.set_timing',
+  'sfx.remove',
+  'bgm.set_volume',
+  'bgm.set_loop',
+]);
+
+/**
+ * Intent → SafeOps 変換
+ * 
+ * 人間参照（scene_idx, balloon_no, cue_no）をDB IDに解決し、
+ * ssot_patch_v1 形式の ops に変換する
+ */
+async function resolveIntentToOps(
+  db: D1Database,
+  projectId: number,
+  intent: RilarcIntent
+): Promise<{
+  ok: boolean;
+  ops: PatchOp[];
+  errors: string[];
+  warnings: string[];
+  resolution_log: Array<{ action: string; resolved: Record<string, unknown> }>;
+}> {
+  const ops: PatchOp[] = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const resolutionLog: Array<{ action: string; resolved: Record<string, unknown> }> = [];
+
+  for (let i = 0; i < intent.actions.length; i++) {
+    const action = intent.actions[i];
+    const prefix = `actions[${i}]`;
+
+    // アクションがホワイトリストにあるか確認
+    if (!ALLOWED_CHAT_ACTIONS.has(action.action)) {
+      errors.push(`${prefix}: Action not allowed: ${action.action}`);
+      continue;
+    }
+
+    try {
+      // アクションタイプ別の処理
+      if (action.action === 'balloon.adjust_window' || action.action === 'balloon.adjust_position') {
+        const balloonAction = action as BalloonAdjustWindowAction | BalloonAdjustPositionAction;
+        
+        // scene_idx → scene_id 解決
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, balloonAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${balloonAction.scene_idx}`);
+          continue;
+        }
+
+        // balloon_no → balloon_id 解決（z_index, id順で1-indexed）
+        const balloonsResult = await db.prepare(`
+          SELECT id FROM scene_balloons 
+          WHERE scene_id = ?
+          ORDER BY z_index ASC, id ASC
+        `).bind(scene.id).all();
+
+        const balloonIndex = balloonAction.balloon_no - 1;
+        if (balloonIndex < 0 || balloonIndex >= balloonsResult.results.length) {
+          errors.push(`${prefix}: Balloon not found: scene_idx=${balloonAction.scene_idx}, balloon_no=${balloonAction.balloon_no} (available: ${balloonsResult.results.length})`);
+          continue;
+        }
+
+        const balloonId = balloonsResult.results[balloonIndex].id as number;
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: balloonAction.scene_idx,
+            scene_id: scene.id,
+            balloon_no: balloonAction.balloon_no,
+            balloon_id: balloonId,
+          },
+        });
+
+        // OPを構築
+        const setFields: Record<string, unknown> = {};
+
+        if (action.action === 'balloon.adjust_window') {
+          const windowAction = action as BalloonAdjustWindowAction;
+          if (windowAction.delta_start_ms !== undefined) {
+            setFields.start_ms = { delta_ms: windowAction.delta_start_ms };
+          }
+          if (windowAction.delta_end_ms !== undefined) {
+            setFields.end_ms = { delta_ms: windowAction.delta_end_ms };
+          }
+          if (windowAction.absolute_start_ms !== undefined) {
+            setFields.start_ms = windowAction.absolute_start_ms;
+          }
+          if (windowAction.absolute_end_ms !== undefined) {
+            setFields.end_ms = windowAction.absolute_end_ms;
+          }
+        } else {
+          const posAction = action as BalloonAdjustPositionAction;
+          if (posAction.delta_x !== undefined) {
+            setFields.x = { delta_ms: posAction.delta_x };  // Note: using delta notation even for position
+          }
+          if (posAction.delta_y !== undefined) {
+            setFields.y = { delta_ms: posAction.delta_y };
+          }
+          if (posAction.absolute_x !== undefined) {
+            setFields.x = posAction.absolute_x;
+          }
+          if (posAction.absolute_y !== undefined) {
+            setFields.y = posAction.absolute_y;
+          }
+        }
+
+        if (Object.keys(setFields).length > 0) {
+          ops.push({
+            op: 'update',
+            entity: 'scene_balloons',
+            where: { id: balloonId },
+            set: setFields,
+            reason: `Chat: ${action.action} (scene_idx=${balloonAction.scene_idx}, balloon_no=${balloonAction.balloon_no})`,
+          });
+        } else {
+          warnings.push(`${prefix}: No changes specified for ${action.action}`);
+        }
+
+      } else if (action.action === 'sfx.set_volume' || action.action === 'sfx.set_timing' || action.action === 'sfx.remove') {
+        const sfxAction = action as SfxSetVolumeAction | SfxSetTimingAction | SfxRemoveAction;
+        
+        // scene_idx → scene_id 解決
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, sfxAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${sfxAction.scene_idx}`);
+          continue;
+        }
+
+        // cue_no → cue_id 解決（start_ms順で1-indexed）
+        const cuesResult = await db.prepare(`
+          SELECT id FROM scene_audio_cues 
+          WHERE scene_id = ? AND is_active = 1
+          ORDER BY start_ms ASC, id ASC
+        `).bind(scene.id).all();
+
+        const cueIndex = sfxAction.cue_no - 1;
+        if (cueIndex < 0 || cueIndex >= cuesResult.results.length) {
+          errors.push(`${prefix}: Audio cue not found: scene_idx=${sfxAction.scene_idx}, cue_no=${sfxAction.cue_no} (available: ${cuesResult.results.length})`);
+          continue;
+        }
+
+        const cueId = cuesResult.results[cueIndex].id as number;
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: sfxAction.scene_idx,
+            scene_id: scene.id,
+            cue_no: sfxAction.cue_no,
+            cue_id: cueId,
+          },
+        });
+
+        if (action.action === 'sfx.set_volume') {
+          const volumeAction = action as SfxSetVolumeAction;
+          ops.push({
+            op: 'update',
+            entity: 'scene_audio_cues',
+            where: { id: cueId },
+            set: { volume: volumeAction.volume },
+            reason: `Chat: sfx.set_volume (scene_idx=${sfxAction.scene_idx}, cue_no=${sfxAction.cue_no})`,
+          });
+        } else if (action.action === 'sfx.set_timing') {
+          const timingAction = action as SfxSetTimingAction;
+          const setFields: Record<string, unknown> = {};
+          if (timingAction.delta_start_ms !== undefined) {
+            setFields.start_ms = { delta_ms: timingAction.delta_start_ms };
+          }
+          if (timingAction.absolute_start_ms !== undefined) {
+            setFields.start_ms = timingAction.absolute_start_ms;
+          }
+          if (timingAction.delta_end_ms !== undefined) {
+            setFields.end_ms = { delta_ms: timingAction.delta_end_ms };
+          }
+          if (timingAction.absolute_end_ms !== undefined) {
+            setFields.end_ms = timingAction.absolute_end_ms;
+          }
+          if (Object.keys(setFields).length > 0) {
+            ops.push({
+              op: 'update',
+              entity: 'scene_audio_cues',
+              where: { id: cueId },
+              set: setFields,
+              reason: `Chat: sfx.set_timing (scene_idx=${sfxAction.scene_idx}, cue_no=${sfxAction.cue_no})`,
+            });
+          }
+        } else if (action.action === 'sfx.remove') {
+          ops.push({
+            op: 'update',  // 論理削除
+            entity: 'scene_audio_cues',
+            where: { id: cueId },
+            set: { is_active: 0 },
+            reason: `Chat: sfx.remove (scene_idx=${sfxAction.scene_idx}, cue_no=${sfxAction.cue_no})`,
+          });
+        }
+
+      } else if (action.action === 'sfx.add_from_library') {
+        const addAction = action as SfxAddFromLibraryAction;
+        
+        // scene_idx → scene_id 解決
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, addAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${addAction.scene_idx}`);
+          continue;
+        }
+
+        // SFXライブラリから取得（将来はsfx_library テーブルから）
+        // 現在は固定のライブラリを想定
+        // TODO: sfx_library テーブルの実装
+        warnings.push(`${prefix}: sfx.add_from_library is not fully implemented yet. Library ID: ${addAction.sfx_library_id}`);
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: addAction.scene_idx,
+            scene_id: scene.id,
+            sfx_library_id: addAction.sfx_library_id,
+          },
+        });
+
+        // 仮実装: ライブラリIDをそのまま名前として使用
+        ops.push({
+          op: 'create',
+          entity: 'scene_audio_cues',
+          set: {
+            scene_id: scene.id,
+            cue_type: 'sfx',
+            name: `Library: ${addAction.sfx_library_id}`,
+            start_ms: addAction.start_ms,
+            volume: addAction.volume ?? 0.8,
+            is_active: 1,
+          },
+          reason: `Chat: sfx.add_from_library (scene_idx=${addAction.scene_idx})`,
+        });
+
+      } else if (action.action === 'bgm.set_volume' || action.action === 'bgm.set_loop') {
+        // プロジェクトのアクティブBGMを取得
+        const activeBgm = await db.prepare(`
+          SELECT id FROM project_audio_tracks
+          WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+          LIMIT 1
+        `).bind(projectId).first<{ id: number }>();
+
+        if (!activeBgm) {
+          errors.push(`${prefix}: No active BGM found for project`);
+          continue;
+        }
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            project_id: projectId,
+            bgm_track_id: activeBgm.id,
+          },
+        });
+
+        if (action.action === 'bgm.set_volume') {
+          const volumeAction = action as BgmSetVolumeAction;
+          ops.push({
+            op: 'update',
+            entity: 'project_audio_tracks',
+            where: { id: activeBgm.id },
+            set: { volume: volumeAction.volume },
+            reason: `Chat: bgm.set_volume`,
+          });
+        } else {
+          const loopAction = action as BgmSetLoopAction;
+          ops.push({
+            op: 'update',
+            entity: 'project_audio_tracks',
+            where: { id: activeBgm.id },
+            set: { loop: loopAction.loop ? 1 : 0 },
+            reason: `Chat: bgm.set_loop`,
+          });
+        }
+      }
+
+    } catch (error) {
+      errors.push(`${prefix}: Resolution error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    ops,
+    errors,
+    warnings,
+    resolution_log: resolutionLog,
+  };
+}
+
+/**
+ * POST /api/projects/:projectId/chat-edits/dry-run
+ * 
+ * チャット修正のdry-run
+ * - user_message から Intent を受け取る（LLMは呼ばない、クライアント側で解析済み）
+ * - Intent → SafeOps 変換
+ * - 既存の patches/dry-run と同等のバリデーション
+ */
+patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
+  const projectId = parseInt(c.req.param('projectId'), 10);
+  if (isNaN(projectId)) {
+    return c.json({ error: 'Invalid project ID' }, 400);
+  }
+
+  let body: {
+    user_message: string;
+    intent: RilarcIntent;
+    video_build_id?: number;
+  };
+  
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  // 1. Intent スキーマ確認
+  if (!body.intent || body.intent.schema !== 'rilarc_intent_v1') {
+    return c.json({ 
+      error: 'Invalid intent schema. Expected: rilarc_intent_v1',
+      received: body.intent?.schema,
+    }, 400);
+  }
+
+  if (!body.intent.actions || body.intent.actions.length === 0) {
+    return c.json({ error: 'No actions in intent' }, 400);
+  }
+
+  // 2. プロジェクト存在確認
+  const project = await c.env.DB.prepare(
+    'SELECT id FROM projects WHERE id = ?'
+  ).bind(projectId).first();
+  
+  if (!project) {
+    return c.json({ error: 'Project not found' }, 404);
+  }
+
+  // 3. Intent → SafeOps 変換
+  const resolution = await resolveIntentToOps(c.env.DB, projectId, body.intent);
+  
+  if (!resolution.ok) {
+    return c.json({
+      ok: false,
+      stage: 'intent_resolution',
+      errors: resolution.errors,
+      warnings: resolution.warnings,
+      resolution_log: resolution.resolution_log,
+    }, 400);
+  }
+
+  // 4. 既存の dry-run 実行
+  const patchRequest: PatchRequest = {
+    schema: 'ssot_patch_v1',
+    target: {
+      project_id: projectId,
+      video_build_id: body.video_build_id,
+    },
+    intent: {
+      user_message: body.user_message,
+      parsed_intent: body.intent as unknown as Record<string, unknown>,
+    },
+    ops: resolution.ops,
+  };
+
+  // 基本バリデーション
+  const validation = validatePatchRequest(patchRequest, projectId);
+  if (!validation.valid) {
+    return c.json({
+      ok: false,
+      stage: 'validation',
+      errors: validation.errors,
+      warnings: [...resolution.warnings, ...validation.warnings],
+      resolution_log: resolution.resolution_log,
+    }, 400);
+  }
+
+  // Dry-run実行
+  const dryRunResult = await executeDryRun(c.env.DB, projectId, patchRequest);
+
+  // patch_requestsに記録
+  const status = dryRunResult.ok ? 'dry_run_ok' : 'dry_run_failed';
+  
+  const insertResult = await c.env.DB.prepare(`
+    INSERT INTO patch_requests (
+      project_id, video_build_id, source, user_message, 
+      parsed_intent_json, ops_json, dry_run_result_json, status
+    ) VALUES (?, ?, 'chat', ?, ?, ?, ?, ?)
+  `).bind(
+    projectId,
+    body.video_build_id || null,
+    body.user_message,
+    JSON.stringify(body.intent),
+    JSON.stringify(resolution.ops),
+    JSON.stringify(dryRunResult),
+    status
+  ).run();
+
+  const patchRequestId = insertResult.meta.last_row_id;
+
+  // UI用のサマリー生成
+  const summary = generateDiffSummary(dryRunResult, body.intent);
+
+  return c.json({
+    ok: dryRunResult.ok,
+    patch_request_id: patchRequestId,
+    status,
+    intent_actions: body.intent.actions.length,
+    resolved_ops: resolution.ops.length,
+    resolution_log: resolution.resolution_log,
+    plan: dryRunResult.plan,
+    summary,
+    errors: [...resolution.errors, ...dryRunResult.errors],
+    warnings: [...resolution.warnings, ...dryRunResult.warnings],
+  });
+});
+
+/**
+ * POST /api/projects/:projectId/chat-edits/apply
+ * 
+ * チャット修正の適用
+ * - dry-run 済みの patch_request_id を受け取る
+ * - 既存の patches/apply と同等の処理
+ */
+patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
+  const projectId = parseInt(c.req.param('projectId'), 10);
+  if (isNaN(projectId)) {
+    return c.json({ error: 'Invalid project ID' }, 400);
+  }
+
+  let body: { patch_request_id: number };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: 'Invalid JSON body' }, 400);
+  }
+
+  if (!body.patch_request_id) {
+    return c.json({ error: 'patch_request_id is required' }, 400);
+  }
+
+  // 既存の dry-run済みリクエストを取得
+  const existing = await c.env.DB.prepare(`
+    SELECT * FROM patch_requests WHERE id = ? AND project_id = ?
+  `).bind(body.patch_request_id, projectId).first();
+
+  if (!existing) {
+    return c.json({ error: 'Patch request not found' }, 404);
+  }
+
+  if (existing.status !== 'dry_run_ok') {
+    return c.json({ 
+      error: `Patch request status is '${existing.status}', expected 'dry_run_ok'` 
+    }, 400);
+  }
+
+  // source が chat であることを確認
+  if (existing.source !== 'chat') {
+    return c.json({ 
+      error: `This endpoint is for chat edits only. Source: ${existing.source}` 
+    }, 400);
+  }
+
+  const patchRequest: PatchRequest = {
+    schema: 'ssot_patch_v1',
+    target: {
+      project_id: existing.project_id as number,
+      video_build_id: existing.video_build_id as number | undefined,
+    },
+    intent: {
+      user_message: existing.user_message as string,
+    },
+    ops: JSON.parse(existing.ops_json as string),
+  };
+
+  // Apply実行
+  const result = await executeApply(c.env.DB, body.patch_request_id, patchRequest);
+
+  // patch_requestsを更新
+  const applyStatus = result.ok ? 'apply_ok' : 'apply_failed';
+  await c.env.DB.prepare(`
+    UPDATE patch_requests 
+    SET apply_result_json = ?, status = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(
+    JSON.stringify(result),
+    applyStatus,
+    body.patch_request_id
+  ).run();
+
+  // Apply失敗の場合は即座に返す
+  if (!result.ok) {
+    return c.json({
+      ok: false,
+      patch_request_id: body.patch_request_id,
+      applied_count: result.applied_count,
+      errors: result.errors,
+      status: applyStatus,
+    });
+  }
+
+  // ============================================================
+  // Apply成功時に新ビルドを自動生成（既存のpatches/applyと同じロジック）
+  // ============================================================
+  
+  let newVideoBuildId: number | null = null;
+  let buildError: string | null = null;
+  const sourceVideoBuildId = patchRequest.target.video_build_id || null;
+
+  try {
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, user_id FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; title: string; user_id: number }>();
+
+    if (!project) {
+      throw new Error('Project not found');
+    }
+
+    const scenesWithAssets = await fetchScenesWithAssets(c.env.DB, projectId, c.env.SITE_URL);
+
+    if (scenesWithAssets.length === 0) {
+      throw new Error('No scenes found');
+    }
+
+    let buildSettings: Record<string, unknown> = {
+      motion: { preset: 'none' },
+      aspect_ratio: '9:16',
+      resolution: '1080p',
+      fps: 30,
+    };
+
+    if (sourceVideoBuildId) {
+      const sourceBuild = await c.env.DB.prepare(`
+        SELECT settings_json FROM video_builds WHERE id = ?
+      `).bind(sourceVideoBuildId).first<{ settings_json: string }>();
+      
+      if (sourceBuild?.settings_json) {
+        try {
+          buildSettings = JSON.parse(sourceBuild.settings_json);
+        } catch { /* ignore */ }
+      }
+    }
+
+    const activeBgm = await c.env.DB.prepare(`
+      SELECT id, r2_url, volume, loop FROM project_audio_tracks
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+      LIMIT 1
+    `).bind(projectId).first<{ id: number; r2_url: string; volume: number; loop: number }>();
+
+    if (activeBgm) {
+      buildSettings.bgm = {
+        enabled: true,
+        url: activeBgm.r2_url,
+        volume: activeBgm.volume ?? 0.3,
+        loop: activeBgm.loop === 1,
+      };
+    }
+
+    const projectJson = buildProjectJson(
+      { id: project.id, title: project.title, user_id: project.user_id },
+      scenesWithAssets,
+      buildSettings as any,
+      {
+        aspectRatio: (buildSettings.aspect_ratio as string) || '9:16',
+        resolution: (buildSettings.resolution as string) || '1080p',
+        fps: (buildSettings.fps as number) || 30,
+      }
+    );
+
+    const projectJsonHash = await hashProjectJson(projectJson);
+    const projectJsonString = JSON.stringify(projectJson);
+
+    const ownerUserId = project.user_id || 1;
+    const executorUserId = project.user_id || 1;
+
+    const insertResult = await c.env.DB.prepare(`
+      INSERT INTO video_builds (
+        project_id, owner_user_id, executor_user_id, 
+        settings_json, status, progress_stage, progress_message,
+        total_scenes, total_duration_ms, project_json_version, project_json_hash,
+        source_video_build_id, patch_request_id
+      ) VALUES (?, ?, ?, ?, 'validating', 'Preparing', 'チャット修正後の新ビルド準備中...', ?, ?, '1.1', ?, ?, ?)
+    `).bind(
+      projectId,
+      ownerUserId,
+      executorUserId,
+      JSON.stringify(buildSettings),
+      scenesWithAssets.length,
+      (projectJson as any).summary?.total_duration_ms ?? 0,
+      projectJsonHash,
+      sourceVideoBuildId,
+      body.patch_request_id
+    ).run();
+
+    newVideoBuildId = insertResult.meta.last_row_id as number;
+
+    const r2Key = `video-builds/${newVideoBuildId}/project.json`;
+    await c.env.R2.put(r2Key, projectJsonString, {
+      httpMetadata: { contentType: 'application/json' },
+    });
+
+    await c.env.DB.prepare(`
+      UPDATE video_builds SET project_json_r2_key = ? WHERE id = ?
+    `).bind(r2Key, newVideoBuildId).run();
+
+    const hasAwsConfig = c.env.AWS_REGION && c.env.AWS_ACCESS_KEY_ID && 
+                         c.env.AWS_SECRET_ACCESS_KEY && c.env.VIDEO_BUILD_ORCHESTRATOR_URL;
+
+    if (hasAwsConfig) {
+      try {
+        const { startVideoBuild, createVideoBuildClientConfig } = await import('../utils/aws-video-build-client');
+        const clientConfig = createVideoBuildClientConfig(c.env as any);
+        
+        if (clientConfig) {
+          await startVideoBuild(clientConfig, {
+            video_build_id: newVideoBuildId,
+            project_id: projectId,
+            owner_user_id: ownerUserId,
+            executor_user_id: executorUserId,
+            is_delegation: false,
+            project_json: projectJson,
+            build_settings: buildSettings,
+          });
+        }
+      } catch (awsError) {
+        console.warn('[Chat Edit Apply] AWS Orchestrator call failed:', awsError);
+        await c.env.DB.prepare(`
+          UPDATE video_builds 
+          SET status = 'queued', progress_message = 'AWS呼び出し保留中'
+          WHERE id = ?
+        `).bind(newVideoBuildId).run();
+      }
+    } else {
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = 'queued', progress_message = 'AWS設定なし（開発環境）'
+        WHERE id = ?
+      `).bind(newVideoBuildId).run();
+    }
+
+  } catch (buildGenError) {
+    buildError = buildGenError instanceof Error ? buildGenError.message : String(buildGenError);
+    console.error('[Chat Edit Apply] Video build generation error:', buildGenError);
+  }
+
+  return c.json({
+    ok: true,
+    patch_request_id: body.patch_request_id,
+    applied_count: result.applied_count,
+    errors: result.errors,
+    status: applyStatus,
+    new_video_build_id: newVideoBuildId,
+    build_generation_error: buildError,
+    next_action: newVideoBuildId 
+      ? `新ビルド #${newVideoBuildId} を作成しました。レンダリング進捗を確認してください。`
+      : buildError 
+        ? `パッチは適用されましたが、ビルド生成に失敗しました: ${buildError}`
+        : 'Video Build を手動で実行してください',
+  });
+});
+
+/**
+ * UI用のdiffサマリー生成
+ */
+function generateDiffSummary(
+  dryRunResult: DryRunResult, 
+  intent: RilarcIntent
+): {
+  description: string;
+  changes: Array<{
+    type: string;
+    target: string;
+    detail: string;
+  }>;
+} {
+  const changes: Array<{ type: string; target: string; detail: string }> = [];
+
+  for (let i = 0; i < intent.actions.length; i++) {
+    const action = intent.actions[i];
+    const normalizedOp = dryRunResult.plan?.ops_normalized[i];
+
+    if (action.action.startsWith('balloon.')) {
+      const balloonAction = action as BalloonAdjustWindowAction | BalloonAdjustPositionAction;
+      let detail = '';
+      
+      if (action.action === 'balloon.adjust_window') {
+        const wa = action as BalloonAdjustWindowAction;
+        if (wa.delta_start_ms) detail += `開始: ${wa.delta_start_ms > 0 ? '+' : ''}${wa.delta_start_ms}ms `;
+        if (wa.delta_end_ms) detail += `終了: ${wa.delta_end_ms > 0 ? '+' : ''}${wa.delta_end_ms}ms `;
+        if (wa.absolute_start_ms !== undefined) detail += `開始: ${wa.absolute_start_ms}ms `;
+        if (wa.absolute_end_ms !== undefined) detail += `終了: ${wa.absolute_end_ms}ms `;
+      } else {
+        const pa = action as BalloonAdjustPositionAction;
+        if (pa.delta_x) detail += `X: ${pa.delta_x > 0 ? '+' : ''}${(pa.delta_x * 100).toFixed(1)}% `;
+        if (pa.delta_y) detail += `Y: ${pa.delta_y > 0 ? '+' : ''}${(pa.delta_y * 100).toFixed(1)}% `;
+      }
+
+      changes.push({
+        type: 'balloon',
+        target: `シーン${balloonAction.scene_idx} / バブル${balloonAction.balloon_no}`,
+        detail: detail.trim() || '変更なし',
+      });
+
+    } else if (action.action.startsWith('sfx.')) {
+      if (action.action === 'sfx.set_volume') {
+        const va = action as SfxSetVolumeAction;
+        changes.push({
+          type: 'sfx',
+          target: `シーン${va.scene_idx} / SFX${va.cue_no}`,
+          detail: `音量: ${Math.round(va.volume * 100)}%`,
+        });
+      } else if (action.action === 'sfx.set_timing') {
+        const ta = action as SfxSetTimingAction;
+        let detail = '';
+        if (ta.delta_start_ms) detail += `開始: ${ta.delta_start_ms > 0 ? '+' : ''}${ta.delta_start_ms}ms `;
+        if (ta.absolute_start_ms !== undefined) detail += `開始: ${ta.absolute_start_ms}ms `;
+        changes.push({
+          type: 'sfx',
+          target: `シーン${ta.scene_idx} / SFX${ta.cue_no}`,
+          detail: detail.trim() || 'タイミング変更',
+        });
+      } else if (action.action === 'sfx.remove') {
+        const ra = action as SfxRemoveAction;
+        changes.push({
+          type: 'sfx',
+          target: `シーン${ra.scene_idx} / SFX${ra.cue_no}`,
+          detail: '削除',
+        });
+      } else if (action.action === 'sfx.add_from_library') {
+        const aa = action as SfxAddFromLibraryAction;
+        changes.push({
+          type: 'sfx',
+          target: `シーン${aa.scene_idx}`,
+          detail: `追加: ${aa.sfx_library_id} @ ${aa.start_ms}ms`,
+        });
+      }
+
+    } else if (action.action.startsWith('bgm.')) {
+      if (action.action === 'bgm.set_volume') {
+        const va = action as BgmSetVolumeAction;
+        changes.push({
+          type: 'bgm',
+          target: 'BGM',
+          detail: `音量: ${Math.round(va.volume * 100)}%`,
+        });
+      } else if (action.action === 'bgm.set_loop') {
+        const la = action as BgmSetLoopAction;
+        changes.push({
+          type: 'bgm',
+          target: 'BGM',
+          detail: `ループ: ${la.loop ? 'ON' : 'OFF'}`,
+        });
+      }
+    }
+  }
+
+  const description = changes.length > 0
+    ? `${changes.length}件の変更を適用します`
+    : '変更なし';
+
+  return { description, changes };
+}
+
 export default patches;
