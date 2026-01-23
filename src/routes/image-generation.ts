@@ -95,6 +95,145 @@ async function logImageGeneration(params: ImageGenerationLogParams): Promise<voi
   }
 }
 
+// ===== API Key Management =====
+interface ApiKeyResult {
+  apiKey: string;
+  source: 'user' | 'system';
+  userId?: number;
+}
+
+/**
+ * APIキー取得（優先順位: ユーザーキー → システムキー）
+ * クォータ超過時のフォールバックもサポート
+ */
+async function getApiKey(
+  c: { env: Bindings },
+  options?: { skipUserKey?: boolean }
+): Promise<ApiKeyResult | null> {
+  const { getCookie } = await import('hono/cookie');
+  
+  // Step 1: ユーザーAPIキーを試行（skipUserKey でなければ）
+  if (!options?.skipUserKey) {
+    try {
+      // @ts-ignore - getCookie requires Context but we only have env
+      const sessionId = typeof c.req !== 'undefined' ? getCookie(c as any, 'session') : null;
+      
+      if (sessionId) {
+        const session = await c.env.DB.prepare(`
+          SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
+        `).bind(sessionId).first<{ user_id: number }>();
+        
+        if (session) {
+          const keyRecord = await c.env.DB.prepare(`
+            SELECT encrypted_key FROM user_api_keys
+            WHERE user_id = ? AND provider = 'google'
+          `).bind(session.user_id).first<{ encrypted_key: string }>();
+          
+          if (keyRecord?.encrypted_key) {
+            try {
+              const { decryptApiKey } = await import('../utils/crypto');
+              const apiKey = await decryptApiKey(keyRecord.encrypted_key, c.env.ENCRYPTION_KEY);
+              console.log(`[Image Gen] Using USER API key for user_id=${session.user_id}`);
+              return { apiKey, source: 'user', userId: session.user_id };
+            } catch (decryptError) {
+              console.warn('[Image Gen] Failed to decrypt user API key:', decryptError);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.warn('[Image Gen] Error getting user API key:', error);
+    }
+  }
+  
+  // Step 2: システムAPIキーにフォールバック
+  if (c.env.GEMINI_API_KEY) {
+    console.log(`[Image Gen] Using SYSTEM GEMINI_API_KEY`);
+    return { apiKey: c.env.GEMINI_API_KEY, source: 'system' };
+  }
+  
+  // Step 3: キーなし
+  console.error('[Image Gen] No API key available');
+  return null;
+}
+
+/**
+ * 画像生成（クォータ超過時のフォールバック付き）
+ * ユーザーキーでクォータ超過 → システムキーで再試行
+ */
+async function generateImageWithFallback(
+  c: { env: Bindings; req?: any },
+  prompt: string,
+  referenceImages: ReferenceImage[],
+  skipDefaultInstructions: boolean
+): Promise<{
+  success: boolean;
+  imageData?: ArrayBuffer;
+  error?: string;
+  apiKeySource: 'user' | 'system';
+  userId?: number;
+}> {
+  // Step 1: APIキー取得（ユーザー優先）
+  const keyResult = await getApiKey(c);
+  
+  if (!keyResult) {
+    return {
+      success: false,
+      error: 'No API key configured. Please configure your Google API key in Settings.',
+      apiKeySource: 'system'
+    };
+  }
+  
+  // Step 2: 最初の試行
+  console.log(`[Image Gen] Attempting with ${keyResult.source} API key`);
+  const result = await generateImageWithRetry(
+    prompt,
+    keyResult.apiKey,
+    3,
+    referenceImages,
+    skipDefaultInstructions
+  );
+  
+  // Step 3: 成功または非クォータエラー → そのまま返却
+  if (result.success) {
+    return {
+      ...result,
+      apiKeySource: keyResult.source,
+      userId: keyResult.userId
+    };
+  }
+  
+  // Step 4: ユーザーキーでクォータ超過 → システムキーでリトライ
+  const isQuotaError = result.error?.toLowerCase().includes('quota') || 
+                       result.error?.toLowerCase().includes('resource_exhausted') ||
+                       result.error?.includes('429');
+  
+  if (keyResult.source === 'user' && isQuotaError && c.env.GEMINI_API_KEY) {
+    console.log(`[Image Gen] User key quota exceeded, falling back to SYSTEM key`);
+    
+    const systemResult = await generateImageWithRetry(
+      prompt,
+      c.env.GEMINI_API_KEY,
+      3,
+      referenceImages,
+      skipDefaultInstructions
+    );
+    
+    return {
+      ...systemResult,
+      apiKeySource: 'system',
+      userId: keyResult.userId  // 元のユーザーIDを保持（ログ用）
+    };
+  }
+  
+  // Step 5: リトライ不可 → 元のエラーを返却
+  return {
+    ...result,
+    apiKeySource: keyResult.source,
+    userId: keyResult.userId
+  };
+}
+
 // POST /api/projects/:id/generate-images - バッチ画像生成
 imageGeneration.post('/projects/:id/generate-images', async (c) => {
   try {
@@ -238,11 +377,11 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
         const generationId = insertResult.meta.last_row_id as number
 
-        // Gemini APIで画像生成（キャラクター参照画像付き、429リトライ付き）
-        const imageResult = await generateImageWithRetry(
+        // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
+        // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
+        const imageResult = await generateImageWithFallback(
+          c,
           finalPrompt,
-          c.env.GEMINI_API_KEY,
-          3,
           referenceImages,
           isPromptCustomized  // skipDefaultInstructions
         )
@@ -259,13 +398,13 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
           const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
           await logImageGeneration({
             env: c.env,
-            userId: 1,
+            userId: imageResult.userId ?? 1,
             projectId: parseInt(projectId),
             sceneId: scene.id as number,
             generationType: 'scene_image',
             provider: 'gemini',
             model: 'gemini-3-pro-image-preview',
-            apiKeySource: 'system',
+            apiKeySource: imageResult.apiKeySource,
             promptLength: finalPrompt.length,
             referenceImageCount: referenceImages.length,
             status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
@@ -321,13 +460,13 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
         // Log image generation to image_generation_logs
         await logImageGeneration({
           env: c.env,
-          userId: 1, // TODO: Get from session
+          userId: imageResult.userId ?? 1,
           projectId: parseInt(projectId),
           sceneId: scene.id as number,
           generationType: 'scene_image',
           provider: 'gemini',
           model: 'gemini-3-pro-image-preview',
-          apiKeySource: 'system', // Scene images always use system key
+          apiKeySource: imageResult.apiKeySource,
           promptLength: finalPrompt.length,
           referenceImageCount: referenceImages.length,
           status: 'success'
@@ -590,12 +729,12 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       UPDATE image_generations SET status = 'generating' WHERE id = ?
     `).bind(generationId).run()
 
-    // 9. Gemini APIで画像生成（キャラクター参照画像付き、429リトライ付き）
+    // 9. Gemini APIで画像生成（クォータ超過時のフォールバック付き）
     // Phase X-4: カスタムプロンプトの場合は日本語指示をスキップ
-    const imageResult = await generateImageWithRetry(
+    // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
+    const imageResult = await generateImageWithFallback(
+      c,
       finalPrompt,
-      c.env.GEMINI_API_KEY,
-      3,
       referenceImages,
       isPromptCustomized  // skipDefaultInstructions
     )
@@ -612,13 +751,13 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
       await logImageGeneration({
         env: c.env,
-        userId: 1, // TODO: Get from session
+        userId: imageResult.userId ?? 1,
         projectId: scene.project_id as number,
         sceneId: parseInt(sceneId),
         generationType: 'scene_image',
         provider: 'gemini',
         model: 'gemini-3-pro-image-preview',
-        apiKeySource: 'system',
+        apiKeySource: imageResult.apiKeySource,
         promptLength: finalPrompt.length,
         referenceImageCount: referenceImages.length,
         status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
@@ -701,13 +840,13 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     // 13. Log successful generation
     await logImageGeneration({
       env: c.env,
-      userId: 1, // TODO: Get from session
+      userId: imageResult.userId ?? 1,
       projectId: scene.project_id as number,
       sceneId: parseInt(sceneId),
       generationType: 'scene_image',
       provider: 'gemini',
       model: 'gemini-3-pro-image-preview',
-      apiKeySource: 'system',
+      apiKeySource: imageResult.apiKeySource,
       promptLength: finalPrompt.length,
       referenceImageCount: referenceImages.length,
       status: 'success'
@@ -886,11 +1025,11 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
         const generationId = insertResult.meta.last_row_id as number
 
-        // Gemini APIで画像生成（キャラクター参照画像付き）
-        const imageResult = await generateImageWithRetry(
+        // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
+        // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
+        const imageResult = await generateImageWithFallback(
+          c,
           finalPrompt,
-          c.env.GEMINI_API_KEY,
-          3,
           referenceImages,
           isPromptCustomized  // skipDefaultInstructions
         )
@@ -907,13 +1046,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
           await logImageGeneration({
             env: c.env,
-            userId: 1,
+            userId: imageResult.userId ?? 1,
             projectId: parseInt(projectId),
             sceneId: scene.id as number,
             generationType: 'scene_image',
             provider: 'gemini',
             model: 'gemini-3-pro-image-preview',
-            apiKeySource: 'system',
+            apiKeySource: imageResult.apiKeySource,
             promptLength: finalPrompt.length,
             referenceImageCount: referenceImages.length,
             status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
@@ -947,13 +1086,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
         // Log successful generation
         await logImageGeneration({
           env: c.env,
-          userId: 1,
+          userId: imageResult.userId ?? 1,
           projectId: parseInt(projectId),
           sceneId: scene.id as number,
           generationType: 'scene_image',
           provider: 'gemini',
           model: 'gemini-3-pro-image-preview',
-          apiKeySource: 'system',
+          apiKeySource: imageResult.apiKeySource,
           promptLength: finalPrompt.length,
           referenceImageCount: referenceImages.length,
           status: 'success'
