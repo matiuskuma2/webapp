@@ -168,6 +168,14 @@ scenes.get('/:id', async (c) => {
         WHERE sss.scene_id = ?
       `).bind(sceneId).first()
 
+      // R3-B: SFX数取得
+      const sfxCountResult = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count
+        FROM scene_audio_cues
+        WHERE scene_id = ? AND is_active = 1
+      `).bind(sceneId).first<{ count: number }>()
+      const sfxCount = sfxCountResult?.count || 0
+
       // キャラクター情報取得（プロジェクトIDを取得してから）
       // A/B/C層の特徴も取得: A=appearance_description, B=story_traits, C=scene_trait
       const projectId = scene.project_id
@@ -287,7 +295,9 @@ scenes.get('/:id', async (c) => {
           character_key: voiceCharacter.character_key,
           character_name: voiceCharacter.character_name,
           voice_preset_id: voiceCharacter.voice_preset_id
-        } : null
+        } : null,
+        // R3-B: SFX数
+        sfx_count: sfxCount
       })
     }
 

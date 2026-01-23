@@ -2989,6 +2989,26 @@ function renderSceneStatusBar(scene, utteranceStatus) {
         </span>
         `}
         
+        <!-- R3-B: SFX（効果音） -->
+        ${(() => {
+          const sfxCount = scene.sfx_count || 0;
+          if (sfxCount > 0) {
+            return `
+              <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-pink-100 text-pink-800" title="効果音: ${sfxCount}件設定あり">
+                <span>💥</span>
+                <span class="font-semibold">SFX ${sfxCount}</span>
+              </span>
+            `;
+          } else {
+            return `
+              <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-100 text-gray-400" title="効果音なし（シーン編集で追加可能）">
+                <span>💥</span>
+                <span class="font-semibold">SFXなし</span>
+              </span>
+            `;
+          }
+        })()}
+        
         <!-- 動き -->
         <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${motionClass}" title="${motionTooltip}">
           <span>${motionIcon}</span>

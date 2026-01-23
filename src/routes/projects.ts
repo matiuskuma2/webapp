@@ -482,6 +482,14 @@ projects.get('/:id/scenes', async (c) => {
             duration_ms: number | null;
           }>()
 
+          // R3-B: scene_audio_cues のカウント取得（SFX数）
+          const sfxCountResult = await c.env.DB.prepare(`
+            SELECT COUNT(*) as count
+            FROM scene_audio_cues
+            WHERE scene_id = ? AND is_active = 1
+          `).bind(scene.id).first<{ count: number }>()
+          const sfxCount = sfxCountResult?.count || 0
+
           // キャラクターの特徴情報をマージ（A/B/C層）
           const { results: charDetails } = await c.env.DB.prepare(`
             SELECT character_key, appearance_description, story_traits
@@ -615,6 +623,8 @@ projects.get('/:id/scenes', async (c) => {
             })(),
             // R2-C: text_render_mode (computed from display_asset_type)
             text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
+            // R3-B: SFX（効果音）数
+            sfx_count: sfxCount,
             // R2-C: motion preset (will be fetched separately for efficiency, return placeholder)
             motion_preset_id: await (async () => {
               const motionRecord = await c.env.DB.prepare(`
