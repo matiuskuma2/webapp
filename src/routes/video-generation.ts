@@ -1361,6 +1361,14 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     `).bind(projectId).first();
     const hasBgm = activeBgm != null;
     
+    // R3-B: SFX有無を確認（いずれかのシーンにSFXがあるか）
+    const sfxCheck = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM scene_audio_cues sac
+      JOIN scenes s ON sac.scene_id = s.id
+      WHERE s.project_id = ? AND sac.is_active = 1
+    `).bind(projectId).first<{ count: number }>();
+    const hasSfx = (sfxCheck?.count || 0) > 0;
+    
     // 全体の判定: 素材OKなら生成可能（utterances は警告のみ）
     // 必須条件: 素材がある
     // 推奨条件: 音声パーツがある、BGMがある
@@ -1406,10 +1414,14 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
       can_generate: canGenerate,
       utterance_errors: utteranceValidation.errors,
       utterance_summary: utteranceValidation.summary,
-      // R3-A: 新しい分類（フロントエンドで使いやすい形式）
+      // R3-A/B: 新しい分類（フロントエンドで使いやすい形式）
       validation: {
         can_generate: canGenerate,
         has_bgm: hasBgm,
+        has_sfx: hasSfx,
+        // 音ありの判定（BGM/SFX/Voice のいずれかがある）
+        // Voice判定: 有効なutteranceを持つシーン数 > 無効なシーン数 = 少なくとも1シーンに音声あり
+        has_audio: hasBgm || hasSfx || (utteranceValidation.summary.total_scenes > utteranceValidation.summary.invalid_scenes),
         // 必須エラー（赤・生成停止）
         errors: requiredErrors,
         // 推奨警告（黄・生成可能）
