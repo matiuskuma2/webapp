@@ -1173,11 +1173,37 @@ videoGeneration.get('/video-builds/usage', async (c) => {
       WHERE executor_user_id = ? AND DATE(created_at) = DATE('now')
     `).bind(userId).first<{ count: number }>();
     
-    // Count active builds
-    const activeBuilds = await c.env.DB.prepare(`
-      SELECT COUNT(*) as count FROM video_builds
-      WHERE executor_user_id = ? AND status IN ('queued', 'validating', 'submitted', 'rendering', 'uploading')
-    `).bind(userId).first<{ count: number }>();
+    // Count active builds AND get details for UI display
+    const activeBuildDetails = await c.env.DB.prepare(`
+      SELECT 
+        vb.id,
+        vb.project_id,
+        vb.status,
+        vb.progress_percent,
+        vb.progress_stage,
+        vb.progress_message,
+        vb.created_at,
+        vb.updated_at,
+        p.title as project_title
+      FROM video_builds vb
+      LEFT JOIN projects p ON vb.project_id = p.id
+      WHERE vb.executor_user_id = ? 
+        AND vb.status IN ('queued', 'validating', 'submitted', 'rendering', 'uploading')
+      ORDER BY vb.created_at DESC
+      LIMIT 5
+    `).bind(userId).all<{
+      id: number;
+      project_id: number;
+      status: string;
+      progress_percent: number;
+      progress_stage: string;
+      progress_message: string;
+      created_at: string;
+      updated_at: string;
+      project_title: string;
+    }>();
+    
+    const activeBuilds = activeBuildDetails.results || [];
     
     // Count monthly builds (for UI display)
     const monthlyBuilds = await c.env.DB.prepare(`
@@ -1189,14 +1215,26 @@ videoGeneration.get('/video-builds/usage', async (c) => {
     return c.json({
       // Legacy format for frontend compatibility
       monthly_builds: monthlyBuilds?.count || 0,
-      concurrent_builds: activeBuilds?.count || 0,
+      concurrent_builds: activeBuilds.length,
       // New detailed format
       daily_limit: dailyLimit,
       daily_used: todayBuilds?.count || 0,
       daily_remaining: Math.max(0, dailyLimit - (todayBuilds?.count || 0)),
       concurrent_limit: concurrentLimit,
-      concurrent_active: activeBuilds?.count || 0,
-      can_start: (todayBuilds?.count || 0) < dailyLimit && (activeBuilds?.count || 0) < concurrentLimit
+      concurrent_active: activeBuilds.length,
+      can_start: (todayBuilds?.count || 0) < dailyLimit && activeBuilds.length < concurrentLimit,
+      // ID57: 処理中のビルド詳細情報を追加
+      active_builds: activeBuilds.map(b => ({
+        build_id: b.id,
+        project_id: b.project_id,
+        project_title: b.project_title || `プロジェクト #${b.project_id}`,
+        status: b.status,
+        progress_percent: b.progress_percent || 0,
+        progress_stage: b.progress_stage || 'Unknown',
+        progress_message: b.progress_message || '',
+        created_at: b.created_at,
+        updated_at: b.updated_at
+      }))
     });
   } catch (error) {
     console.error('[VideoBuild] Usage error:', error);

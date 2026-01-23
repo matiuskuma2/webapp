@@ -6690,9 +6690,37 @@ async function updateVideoBuildRequirements() {
     html += '<div class="flex items-center text-red-600"><i class="fas fa-ban mr-2"></i>今月の上限に達しています</div>';
   }
   
-  // Concurrent check
+  // Concurrent check - ID57: 処理中ビルドの詳細を表示
   if (hasConcurrent) {
-    html += '<div class="flex items-center text-amber-600"><i class="fas fa-hourglass-half mr-2"></i>現在処理中のビルドがあります</div>';
+    const activeBuilds = usage.active_builds || [];
+    if (activeBuilds.length > 0) {
+      html += '<div class="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">';
+      html += '<div class="flex items-center text-amber-700 font-medium mb-2"><i class="fas fa-hourglass-half mr-2"></i>処理中のビルド (' + activeBuilds.length + '件)</div>';
+      html += '<div class="space-y-2 text-sm">';
+      activeBuilds.forEach(function(build) {
+        const statusIcon = build.status === 'rendering' ? 'fa-film' : 
+                          build.status === 'validating' ? 'fa-check-circle' :
+                          build.status === 'uploading' ? 'fa-cloud-upload-alt' : 'fa-clock';
+        const statusColor = build.status === 'rendering' ? 'text-blue-600' : 
+                           build.status === 'validating' ? 'text-yellow-600' :
+                           build.status === 'uploading' ? 'text-green-600' : 'text-gray-600';
+        html += '<div class="flex items-center justify-between bg-white p-2 rounded border">';
+        html += '<div class="flex items-center gap-2">';
+        html += '<i class="fas ' + statusIcon + ' ' + statusColor + '"></i>';
+        html += '<span class="font-medium">' + (build.project_title || 'プロジェクト #' + build.project_id) + '</span>';
+        html += '<span class="text-gray-500">#' + build.build_id + '</span>';
+        html += '</div>';
+        html += '<div class="flex items-center gap-2">';
+        html += '<span class="' + statusColor + ' font-medium">' + build.progress_percent + '%</span>';
+        html += '<span class="text-gray-400 text-xs">' + (build.progress_stage || build.status) + '</span>';
+        html += '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+      html += '</div>';
+    } else {
+      html += '<div class="flex items-center text-amber-600"><i class="fas fa-hourglass-half mr-2"></i>現在処理中のビルドがあります</div>';
+    }
   }
   
   html += '</div>';

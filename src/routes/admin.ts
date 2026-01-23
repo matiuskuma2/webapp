@@ -986,4 +986,95 @@ admin.get('/webhook-logs', async (c) => {
   }
 });
 
+// ====================================================================
+// POST /api/admin/backfill-render-logs - Backfill render usage logs for completed builds
+// ====================================================================
+
+admin.post('/backfill-render-logs', async (c) => {
+  const { DB } = c.env;
+  const { logVideoBuildRender } = await import('../utils/usage-logger');
+  
+  try {
+    const limit = parseInt(c.req.query('limit') || '100');
+    
+    // 完了済み＆ログ未記録のビルドを取得
+    const unloggedBuilds = await DB.prepare(`
+      SELECT 
+        vb.id, vb.project_id, vb.owner_user_id, 
+        vb.total_scenes, vb.total_duration_ms,
+        vb.settings_json, vb.remotion_render_id
+      FROM video_builds vb
+      WHERE vb.status = 'completed' 
+        AND vb.render_usage_logged = 0
+      ORDER BY vb.id DESC
+      LIMIT ?
+    `).bind(limit).all<{
+      id: number;
+      project_id: number;
+      owner_user_id: number | null;
+      total_scenes: number | null;
+      total_duration_ms: number | null;
+      settings_json: string | null;
+      remotion_render_id: string | null;
+    }>();
+    
+    const builds = unloggedBuilds.results || [];
+    let processedCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+    
+    for (const build of builds) {
+      try {
+        // フラグを先に立てる（二重計上防止）
+        const lockResult = await DB.prepare(`
+          UPDATE video_builds 
+          SET render_usage_logged = 1 
+          WHERE id = ? AND render_usage_logged = 0
+        `).bind(build.id).run();
+        
+        if (lockResult.meta.changes === 1) {
+          // settings_json から fps を取得
+          let fps = 30;
+          try {
+            if (build.settings_json) {
+              const settings = JSON.parse(build.settings_json);
+              fps = settings.fps ?? 30;
+            }
+          } catch { /* ignore */ }
+          
+          await logVideoBuildRender(DB, {
+            userId: build.owner_user_id || 1,
+            projectId: build.project_id,
+            videoBuildId: build.id,
+            totalScenes: build.total_scenes || 0,
+            totalDurationMs: build.total_duration_ms || 0,
+            fps,
+            status: 'success',
+          });
+          
+          processedCount++;
+        }
+      } catch (err) {
+        errorCount++;
+        errors.push(`Build ${build.id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    
+    return c.json({
+      success: true,
+      found: builds.length,
+      processed: processedCount,
+      errors: errorCount,
+      error_details: errors.slice(0, 10), // 最大10件のエラー詳細
+    });
+    
+  } catch (error) {
+    console.error('Backfill render logs error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to backfill' 
+    }, 500);
+  }
+});
+
 export default admin;
