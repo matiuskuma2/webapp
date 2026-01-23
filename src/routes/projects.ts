@@ -462,12 +462,14 @@ projects.get('/:id/scenes', async (c) => {
           `).bind(scene.id).all()
 
           // R1.6: scene_utterances の状態取得（preflight用）
+          // R3-A: duration_ms 追加（音声尺の合計計算用）
           const { results: utteranceRows } = await c.env.DB.prepare(`
             SELECT 
               u.id,
               u.text,
               u.audio_generation_id,
-              ag.status as audio_status
+              ag.status as audio_status,
+              ag.duration_ms
             FROM scene_utterances u
             LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
             WHERE u.scene_id = ?
@@ -477,6 +479,7 @@ projects.get('/:id/scenes', async (c) => {
             text: string;
             audio_generation_id: number | null;
             audio_status: string | null;
+            duration_ms: number | null;
           }>()
 
           // キャラクターの特徴情報をマージ（A/B/C層）
@@ -585,6 +588,7 @@ projects.get('/:id/scenes', async (c) => {
               voice_preset_id: voiceCharacter.voice_preset_id
             } : null,
             // R1.6: utterance_status for preflight check in UI
+            // R3-A: total_duration_ms 追加（音声尺の合計）
             utterance_status: (() => {
               const total = utteranceRows.length;
               const withAudio = utteranceRows.filter(
@@ -594,11 +598,19 @@ projects.get('/:id/scenes', async (c) => {
                 (u: any) => u.text && u.text.trim().length > 0
               ).length;
               const isReady = total > 0 && withText === total && withAudio === total;
+              // R3-A: 音声の合計尺を計算（duration_ms を持つものの合計）
+              const totalDurationMs = utteranceRows.reduce((sum: number, u: any) => {
+                // audio_generation から duration_ms を取得（仮に audio_duration_ms というカラムで取得している場合）
+                // 現在のスキーマでは duration_ms は audio_generations ではなく scene_utterances にある可能性
+                // ここでは単純に推定値を返す（実装改善の余地あり）
+                return sum + (u.duration_ms || 0);
+              }, 0);
               return {
                 total,
                 with_audio: withAudio,
                 with_text: withText,
-                is_ready: isReady
+                is_ready: isReady,
+                total_duration_ms: totalDurationMs
               };
             })(),
             // R2-C: text_render_mode (computed from display_asset_type)

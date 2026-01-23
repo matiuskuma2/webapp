@@ -1678,6 +1678,11 @@ app.get('/projects/:id', (c) => {
                                 <div class="h-10 bg-gray-200 rounded"></div>
                             </div>
                         </div>
+                        
+                        <!-- R3-A: Duration Override (for silent scenes) -->
+                        <div id="duration-override-container">
+                            <!-- Dynamically populated by scene-edit-modal.js -->
+                        </div>
                     </div>
                     
                     <!-- Tab Navigation (SSOT: single modal, two tabs) -->

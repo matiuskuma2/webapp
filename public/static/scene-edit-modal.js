@@ -174,6 +174,9 @@
         // R2-C: Render motion selector UI
         this.renderMotionSelector();
         
+        // R3-A: Render duration override UI
+        this.renderDurationOverride();
+        
         // Render tabs
         this.renderTabs();
         
@@ -342,7 +345,39 @@
         });
       }
       
-      // 4. Motion
+      // 4. Duration (R3-A)
+      const durationOverride = this.sceneData?.duration_override_ms;
+      const totalDurationMs = utteranceStatus?.total_duration_ms || 0;
+      let durationMs = 3000;
+      let durationSource = 'デフォルト';
+      let durationIcon = '⏱️';
+      let durationClass = 'text-gray-600 bg-gray-50';
+      
+      if (durationOverride && durationOverride > 0) {
+        durationMs = durationOverride;
+        durationSource = '手動設定';
+        durationIcon = '✏️';
+        durationClass = 'text-yellow-700 bg-yellow-50';
+      } else if (audioReady && totalDurationMs > 0) {
+        durationMs = totalDurationMs + 500;
+        durationSource = '音声尺';
+        durationIcon = '🎙️';
+        durationClass = 'text-green-700 bg-green-50';
+      } else if (utteranceTotal === 0) {
+        durationSource = '無音/要設定';
+        durationIcon = '⚠️';
+        durationClass = 'text-orange-700 bg-orange-50';
+      }
+      
+      const durationSec = (durationMs / 1000).toFixed(1);
+      lines.push({
+        icon: durationIcon,
+        text: `尺：${durationSec}秒`,
+        detail: `(${durationSource})`,
+        class: durationClass
+      });
+      
+      // 5. Motion
       const motionIcon = motionPresetId === 'none' ? '⏸️' : '🎥';
       lines.push({
         icon: motionIcon,
@@ -528,6 +563,231 @@
           saveBtn.innerHTML = '<i class="fas fa-check mr-1"></i>保存';
         }
         this.renderMotionSelector();
+      }
+    },
+    
+    // ========================================
+    // R3-A: Duration Override Functions
+    // ========================================
+    
+    /**
+     * R3-A: Render duration override UI
+     * For scenes without audio (silent scenes), allows manual duration setting
+     */
+    renderDurationOverride() {
+      const container = document.getElementById('duration-override-container');
+      if (!container) return;
+      
+      const utteranceStatus = this.sceneData?.utterance_status || { total: 0, with_audio: 0, total_duration_ms: 0 };
+      const hasAudio = utteranceStatus.total > 0;
+      const currentOverride = this.sceneData?.duration_override_ms || null;
+      
+      // Calculate estimated duration
+      let estimatedDurationMs = 3000; // Default 3 seconds
+      let durationSource = 'デフォルト';
+      
+      if (currentOverride && currentOverride > 0) {
+        estimatedDurationMs = currentOverride;
+        durationSource = '手動設定';
+      } else if (utteranceStatus.total_duration_ms > 0) {
+        estimatedDurationMs = utteranceStatus.total_duration_ms + 500;
+        durationSource = '音声尺';
+      }
+      
+      const estimatedDurationSec = (estimatedDurationMs / 1000).toFixed(1);
+      
+      // Only show UI for scenes without audio or with manual override
+      if (hasAudio && !currentOverride) {
+        // Has audio, no override - show info only
+        container.innerHTML = `
+          <div class="p-3 border border-gray-200 rounded-lg bg-gray-50">
+            <div class="flex items-center gap-2 text-sm text-gray-600">
+              <span class="text-lg">⏱️</span>
+              <span>シーン尺: <span class="font-semibold">${estimatedDurationSec}秒</span></span>
+              <span class="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded">音声から自動計算</span>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">
+              <i class="fas fa-info-circle mr-1"></i>
+              音声がある場合、尺は自動的に音声の長さ+0.5秒になります
+            </p>
+          </div>
+        `;
+        return;
+      }
+      
+      // Show editable duration override UI
+      const currentSec = currentOverride ? (currentOverride / 1000).toFixed(1) : '';
+      
+      container.innerHTML = `
+        <div class="p-4 border border-orange-200 rounded-lg bg-orange-50">
+          <label class="block text-sm font-semibold text-orange-800 mb-2">
+            <i class="fas fa-clock mr-1"></i>無音シーン尺設定
+            ${!hasAudio ? '<span class="ml-2 text-xs bg-orange-200 text-orange-700 px-2 py-0.5 rounded">音声なし</span>' : ''}
+          </label>
+          
+          <div class="flex items-center gap-3 mb-2">
+            <input 
+              type="number"
+              id="edit-duration-override"
+              class="w-24 px-3 py-2 border border-orange-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 text-sm"
+              placeholder="秒"
+              step="0.5"
+              min="0.5"
+              max="60"
+              value="${currentSec}"
+            />
+            <span class="text-sm text-orange-700">秒</span>
+            
+            <button 
+              type="button"
+              id="save-duration-btn"
+              class="px-3 py-2 text-sm font-semibold rounded-lg bg-orange-500 text-white hover:bg-orange-600 transition-colors"
+            >
+              <i class="fas fa-check mr-1"></i>保存
+            </button>
+            
+            ${currentOverride ? `
+              <button 
+                type="button"
+                id="clear-duration-btn"
+                class="px-3 py-2 text-sm text-gray-600 hover:text-red-600 transition-colors"
+                title="手動設定をクリア"
+              >
+                <i class="fas fa-times"></i>
+              </button>
+            ` : ''}
+          </div>
+          
+          <p class="text-xs text-orange-700">
+            <i class="fas fa-info-circle mr-1"></i>
+            音声がないシーンの表示時間を手動で設定できます（0.5～60秒）
+          </p>
+          
+          <div class="mt-2 text-xs text-gray-600 flex items-center gap-2">
+            <span>現在の予測尺:</span>
+            <span class="font-semibold">${estimatedDurationSec}秒</span>
+            <span class="text-gray-400">(${durationSource})</span>
+          </div>
+          
+          <div id="duration-status-msg" class="mt-2 text-xs hidden"></div>
+        </div>
+      `;
+      
+      // Bind events
+      this.bindDurationEvents();
+    },
+    
+    /**
+     * Bind duration override events
+     */
+    bindDurationEvents() {
+      const saveBtn = document.getElementById('save-duration-btn');
+      const clearBtn = document.getElementById('clear-duration-btn');
+      
+      if (saveBtn) {
+        saveBtn.addEventListener('click', () => this.saveDurationOverride());
+      }
+      
+      if (clearBtn) {
+        clearBtn.addEventListener('click', () => this.clearDurationOverride());
+      }
+    },
+    
+    /**
+     * Save duration override
+     */
+    async saveDurationOverride() {
+      const input = document.getElementById('edit-duration-override');
+      const statusMsg = document.getElementById('duration-status-msg');
+      const saveBtn = document.getElementById('save-duration-btn');
+      
+      if (!input || !this.currentSceneId) return;
+      
+      const seconds = parseFloat(input.value);
+      
+      // Validate
+      if (isNaN(seconds) || seconds < 0.5 || seconds > 60) {
+        if (statusMsg) {
+          statusMsg.className = 'mt-2 text-xs text-red-600';
+          statusMsg.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i>0.5～60秒の範囲で入力してください';
+          statusMsg.classList.remove('hidden');
+        }
+        return;
+      }
+      
+      const durationMs = Math.round(seconds * 1000);
+      
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>保存中...';
+      }
+      
+      try {
+        const response = await axios.put(`/api/scenes/${this.currentSceneId}`, {
+          duration_override_ms: durationMs
+        });
+        
+        if (response.data) {
+          // Update local state
+          this.sceneData.duration_override_ms = durationMs;
+          
+          if (statusMsg) {
+            statusMsg.className = 'mt-2 text-xs text-green-600';
+            statusMsg.innerHTML = '<i class="fas fa-check-circle mr-1"></i>尺を保存しました';
+            statusMsg.classList.remove('hidden');
+            setTimeout(() => statusMsg.classList.add('hidden'), 3000);
+          }
+          
+          this.showToast(`シーン尺を${seconds}秒に設定しました`, 'success');
+          
+          // Re-render to show clear button
+          this.renderDurationOverride();
+          this.renderRenderingPreview();
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to save duration:', error);
+        
+        if (statusMsg) {
+          statusMsg.className = 'mt-2 text-xs text-red-600';
+          statusMsg.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i>保存に失敗しました';
+          statusMsg.classList.remove('hidden');
+        }
+        
+        this.showToast('尺の保存に失敗しました', 'error');
+      } finally {
+        if (saveBtn) {
+          saveBtn.disabled = false;
+          saveBtn.innerHTML = '<i class="fas fa-check mr-1"></i>保存';
+        }
+      }
+    },
+    
+    /**
+     * Clear duration override
+     */
+    async clearDurationOverride() {
+      if (!this.currentSceneId) return;
+      
+      if (!confirm('手動設定をクリアして、デフォルトの尺に戻しますか？')) {
+        return;
+      }
+      
+      try {
+        await axios.put(`/api/scenes/${this.currentSceneId}`, {
+          duration_override_ms: null
+        });
+        
+        // Update local state
+        this.sceneData.duration_override_ms = null;
+        
+        this.showToast('尺をデフォルトに戻しました', 'success');
+        
+        // Re-render
+        this.renderDurationOverride();
+        this.renderRenderingPreview();
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to clear duration:', error);
+        this.showToast('クリアに失敗しました', 'error');
       }
     },
     

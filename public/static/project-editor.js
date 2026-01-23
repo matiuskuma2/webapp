@@ -2910,6 +2910,41 @@ function renderSceneStatusBar(scene, utteranceStatus) {
   motionClass = motionInfo.class;
   motionTooltip = motionInfo.tip;
   
+  // === R3-A: シーン尺（duration）計算 ===
+  // 優先順位: duration_override_ms > 音声合計 + 500ms > デフォルト3000ms
+  let durationMs = 3000; // デフォルト
+  let durationSource = 'デフォルト';
+  let durationIcon = '⏱️';
+  let durationClass = 'bg-gray-100 text-gray-600';
+  
+  if (scene.duration_override_ms && scene.duration_override_ms > 0) {
+    // 手動設定の尺（無音シーン用）
+    durationMs = scene.duration_override_ms;
+    durationSource = '手動設定';
+    durationIcon = '✏️';
+    durationClass = 'bg-yellow-100 text-yellow-800';
+  } else if (total > 0 && withAudio === total) {
+    // 全音声生成済み → 音声の合計尺 + 500ms（推定値として表示）
+    // ※実際のduration_msは各utteranceから取得する必要があるが、ここでは概算
+    // utteranceStatus.total_duration_ms があれば使用
+    const audioDurationMs = utteranceStatus.total_duration_ms;
+    if (audioDurationMs && audioDurationMs > 0) {
+      durationMs = audioDurationMs + 500;
+      durationSource = '音声尺';
+      durationIcon = '🎙️';
+      durationClass = 'bg-green-100 text-green-800';
+    }
+  } else if (total === 0) {
+    // 発話なし → デフォルトまたは手動設定を推奨
+    durationSource = '無音/要設定';
+    durationIcon = '⚠️';
+    durationClass = 'bg-orange-100 text-orange-800';
+  }
+  
+  // 尺を秒に変換（小数点1桁）
+  const durationSec = (durationMs / 1000).toFixed(1);
+  const durationTooltip = `シーン尺: ${durationSec}秒（${durationSource}）`;
+  
   // === ステータスバーHTML ===
   return `
     <div class="bg-gray-50 border-b border-gray-200 px-4 py-2">
@@ -2930,6 +2965,12 @@ function renderSceneStatusBar(scene, utteranceStatus) {
         <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${audioClass}" title="${audioTooltip}">
           <span>${audioIcon}</span>
           <span class="font-semibold">${audioLabel}</span>
+        </span>
+        
+        <!-- R3-A: 尺（duration） -->
+        <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${durationClass}" title="${durationTooltip}">
+          <span>${durationIcon}</span>
+          <span class="font-semibold">${durationSec}秒</span>
         </span>
         
         <!-- 動き -->
