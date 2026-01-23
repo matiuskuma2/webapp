@@ -1396,6 +1396,38 @@ app.get('/projects/:id', (c) => {
                         <p class="text-gray-600">読み込み中...</p>
                     </div>
                 </div>
+                
+                <!-- Patch History (R4: SSOT Patch) -->
+                <div class="bg-white rounded-lg border-2 border-gray-200 mt-6">
+                    <div class="flex items-center justify-between p-4 border-b border-gray-200">
+                        <h3 class="text-lg font-bold text-gray-800 flex items-center">
+                            <i class="fas fa-code-branch mr-2 text-indigo-600"></i>
+                            修正履歴（パッチ）
+                        </h3>
+                        <button 
+                            onclick="loadPatchHistory()"
+                            class="text-gray-600 hover:text-gray-800 transition-colors"
+                            title="更新"
+                        >
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                    </div>
+                    
+                    <div id="patchHistoryList" class="divide-y divide-gray-200">
+                        <!-- Patches will be rendered here -->
+                    </div>
+                    
+                    <div id="patchHistoryEmpty" class="hidden p-8 text-center">
+                        <i class="fas fa-history text-4xl text-gray-300 mb-3"></i>
+                        <p class="text-gray-500">修正履歴はありません</p>
+                        <p class="text-sm text-gray-400 mt-1">チャットで修正指示を出すと、ここに履歴が表示されます</p>
+                    </div>
+                    
+                    <div id="patchHistoryLoading" class="hidden p-8 text-center">
+                        <i class="fas fa-spinner fa-spin text-4xl text-indigo-600 mb-3"></i>
+                        <p class="text-gray-600">読み込み中...</p>
+                    </div>
+                </div>
             </div>
 
             <!-- Styles Tab -->

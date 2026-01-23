@@ -6475,6 +6475,9 @@ async function initVideoBuildTab() {
   
   // Start polling if there's an active build
   startVideoBuildPollingIfNeeded();
+  
+  // R4: Load patch history
+  await loadPatchHistory();
 }
 
 /**
@@ -7808,3 +7811,180 @@ window.removeBgm = removeBgm;
 window.updateBgmVolume = updateBgmVolume;
 window.updateBgmLoop = updateBgmLoop;
 window.loadBgmStatus = loadBgmStatus;
+
+// ============================================
+// R4: Patch History (SSOT Patch)
+// ============================================
+
+/**
+ * Load patch history for current project
+ */
+async function loadPatchHistory() {
+  const listEl = document.getElementById('patchHistoryList');
+  const emptyEl = document.getElementById('patchHistoryEmpty');
+  const loadingEl = document.getElementById('patchHistoryLoading');
+  
+  if (!listEl || !emptyEl || !loadingEl) return;
+  
+  // Show loading
+  listEl.innerHTML = '';
+  emptyEl.classList.add('hidden');
+  loadingEl.classList.remove('hidden');
+  
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/patches`);
+    const patches = response.data.patches || [];
+    
+    window.patchHistoryCache = patches;
+    
+    loadingEl.classList.add('hidden');
+    
+    if (patches.length === 0) {
+      emptyEl.classList.remove('hidden');
+      return;
+    }
+    
+    listEl.innerHTML = patches.map(renderPatchHistoryItem).join('');
+    
+  } catch (error) {
+    console.error('[PatchHistory] Failed to load patches:', error);
+    loadingEl.classList.add('hidden');
+    listEl.innerHTML = '<div class="p-4 text-red-600 text-center"><i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました</div>';
+  }
+}
+
+/**
+ * Render a single patch history item
+ */
+function renderPatchHistoryItem(patch) {
+  const statusInfo = getPatchStatusInfo(patch.status);
+  // Parse UTC datetime and convert to Japan timezone
+  const createdAtUtc = patch.created_at.replace(' ', 'T') + 'Z';
+  const createdAt = new Date(createdAtUtc).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  
+  // Extract change type from ops_json
+  let changeType = '-';
+  try {
+    const ops = typeof patch.ops_json === 'string' ? JSON.parse(patch.ops_json) : patch.ops_json;
+    if (Array.isArray(ops) && ops.length > 0) {
+      const entities = [...new Set(ops.map(op => op.entity))];
+      const opTypes = [...new Set(ops.map(op => op.op))];
+      changeType = `${opTypes.join('/')} ${entities.join(', ')}`;
+    }
+  } catch (e) {
+    console.warn('[PatchHistory] Failed to parse ops_json:', e);
+  }
+  
+  // Find generated video build (if any)
+  let buildLink = '';
+  if (patch.generated_video_build_id) {
+    buildLink = `
+      <a href="#" onclick="scrollToVideoBuild(${patch.generated_video_build_id})" 
+         class="text-blue-600 hover:underline text-sm">
+        <i class="fas fa-film mr-1"></i>ビルド #${patch.generated_video_build_id}
+      </a>
+    `;
+  }
+  
+  return `
+    <div class="p-4 hover:bg-gray-50 transition-colors">
+      <div class="flex items-start justify-between">
+        <div class="flex-1">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-lg" title="${statusInfo.label}">${statusInfo.icon}</span>
+            <span class="text-sm font-medium text-gray-700">#${patch.id}</span>
+            <span class="text-xs text-gray-400">${createdAt}</span>
+          </div>
+          
+          <p class="text-sm text-gray-800 mb-1">
+            ${escapeHtml(patch.user_message || '(メッセージなし)')}
+          </p>
+          
+          <div class="flex items-center gap-3 text-xs text-gray-500">
+            <span><i class="fas fa-exchange-alt mr-1"></i>${changeType}</span>
+            ${buildLink}
+          </div>
+        </div>
+        
+        <button 
+          onclick="togglePatchDetails(${patch.id})"
+          class="text-gray-400 hover:text-gray-600 p-2"
+          title="詳細を表示"
+        >
+          <i class="fas fa-chevron-down"></i>
+        </button>
+      </div>
+      
+      <div id="patchDetails-${patch.id}" class="hidden mt-3 pt-3 border-t border-gray-200">
+        <div class="text-xs text-gray-600 space-y-2">
+          <div>
+            <span class="font-semibold">ソース:</span> ${patch.source || '-'}
+          </div>
+          <div>
+            <span class="font-semibold">ステータス:</span> 
+            <span class="${statusInfo.textColor}">${statusInfo.label}</span>
+          </div>
+          <div>
+            <span class="font-semibold">操作:</span>
+            <pre class="mt-1 p-2 bg-gray-100 rounded text-xs overflow-x-auto max-h-32">${escapeHtml(JSON.stringify(patch.ops_json, null, 2) || '[]')}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Get patch status info
+ */
+function getPatchStatusInfo(status) {
+  const statusMap = {
+    draft: { icon: '📝', label: '下書き', textColor: 'text-gray-600' },
+    dry_run_ok: { icon: '✔️', label: 'プレビュー済み', textColor: 'text-blue-600' },
+    dry_run_failed: { icon: '⚠️', label: 'プレビュー失敗', textColor: 'text-amber-600' },
+    apply_ok: { icon: '✅', label: '適用済み', textColor: 'text-green-600' },
+    apply_failed: { icon: '❌', label: '適用失敗', textColor: 'text-red-600' }
+  };
+  
+  return statusMap[status] || { icon: '❓', label: status, textColor: 'text-gray-600' };
+}
+
+/**
+ * Toggle patch details visibility
+ */
+function togglePatchDetails(patchId) {
+  const detailsEl = document.getElementById(`patchDetails-${patchId}`);
+  if (detailsEl) {
+    detailsEl.classList.toggle('hidden');
+    
+    // Toggle chevron icon
+    const btn = detailsEl.previousElementSibling?.querySelector('button');
+    if (btn) {
+      const icon = btn.querySelector('i');
+      if (icon) {
+        icon.classList.toggle('fa-chevron-down');
+        icon.classList.toggle('fa-chevron-up');
+      }
+    }
+  }
+}
+
+/**
+ * Scroll to a specific video build in the list
+ */
+function scrollToVideoBuild(buildId) {
+  // Find build element
+  const buildEl = document.querySelector(`[data-build-id="${buildId}"]`);
+  if (buildEl) {
+    buildEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    buildEl.classList.add('ring-2', 'ring-blue-400');
+    setTimeout(() => {
+      buildEl.classList.remove('ring-2', 'ring-blue-400');
+    }, 2000);
+  }
+}
+
+// Make patch functions globally available
+window.loadPatchHistory = loadPatchHistory;
+window.togglePatchDetails = togglePatchDetails;
+window.scrollToVideoBuild = scrollToVideoBuild;

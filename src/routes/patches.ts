@@ -987,20 +987,40 @@ patches.get('/projects/:projectId/patches', async (c) => {
   const limit = Math.min(parseInt(c.req.query('limit') || '20', 10), 100);
   const offset = parseInt(c.req.query('offset') || '0', 10);
 
+  // Get patches with ops_json for UI display
   const patches = await c.env.DB.prepare(`
-    SELECT id, project_id, video_build_id, source, user_message, status, created_at, updated_at
-    FROM patch_requests
-    WHERE project_id = ?
-    ORDER BY created_at DESC
+    SELECT 
+      pr.id, pr.project_id, pr.video_build_id, pr.source, 
+      pr.user_message, pr.ops_json, pr.status, 
+      pr.created_at, pr.updated_at,
+      vb.id as generated_video_build_id
+    FROM patch_requests pr
+    LEFT JOIN video_builds vb ON vb.patch_request_id = pr.id
+    WHERE pr.project_id = ?
+    ORDER BY pr.created_at DESC
     LIMIT ? OFFSET ?
   `).bind(projectId, limit, offset).all();
+
+  // Parse ops_json for each patch
+  const patchesWithParsedOps = patches.results.map((p: Record<string, unknown>) => {
+    let ops_json = [];
+    try {
+      ops_json = p.ops_json ? JSON.parse(p.ops_json as string) : [];
+    } catch {
+      ops_json = [];
+    }
+    return {
+      ...p,
+      ops_json,
+    };
+  });
 
   const total = await c.env.DB.prepare(`
     SELECT COUNT(*) as count FROM patch_requests WHERE project_id = ?
   `).bind(projectId).first<{ count: number }>();
 
   return c.json({
-    patches: patches.results,
+    patches: patchesWithParsedOps,
     total: total?.count || 0,
     limit,
     offset,
