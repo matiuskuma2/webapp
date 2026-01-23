@@ -1107,7 +1107,7 @@ async function fetchScenesWithAssets(
     // Utterances（音声パーツ）
     const utteranceRows = await db.prepare(`
       SELECT 
-        su.id, su.order_no, su.speaker_type, su.character_key, su.text,
+        su.id, su.order_no, su.role, su.character_key, su.text,
         su.audio_generation_id, su.duration_ms, ag.status as audio_status, ag.r2_url as audio_url
       FROM scene_utterances su
       LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
@@ -1177,7 +1177,7 @@ async function fetchScenesWithAssets(
     sceneData.utterances = utteranceRows.results.map(u => ({
       id: u.id,
       order_no: u.order_no,
-      speaker_type: u.speaker_type,
+      role: u.role,  // 'narration' | 'dialogue'
       character_key: u.character_key,
       text: u.text,
       duration_ms: u.duration_ms || 0,
