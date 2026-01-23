@@ -1353,8 +1353,47 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     // R1.6: Utterances Preflight検証
     const utteranceValidation = validateUtterancesPreflight(scenesWithAssets);
     
-    // 全体の判定: 素材OK AND utterances OK
-    const canGenerate = assetValidation.is_ready && utteranceValidation.can_generate;
+    // R3-A: BGM有無を確認
+    const activeBgm = await c.env.DB.prepare(`
+      SELECT id FROM project_audio_tracks
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+      LIMIT 1
+    `).bind(projectId).first();
+    const hasBgm = activeBgm != null;
+    
+    // 全体の判定: 素材OKなら生成可能（utterances は警告のみ）
+    // 必須条件: 素材がある
+    // 推奨条件: 音声パーツがある、BGMがある
+    const canGenerate = assetValidation.is_ready;
+    
+    // 警告を「必須」と「推奨」に分類
+    // 必須エラー（赤・生成停止）: 素材不足
+    const requiredErrors = assetValidation.missing.map(m => ({
+      type: 'ASSET_MISSING' as const,
+      level: 'error' as const,
+      scene_id: m.scene_id,
+      scene_idx: m.scene_idx,
+      message: `シーン${m.scene_idx}：${m.required_asset === 'active_comic.r2_url' ? '漫画画像' : '画像'}がありません`,
+    }));
+    
+    // 推奨警告（黄・生成は止めない）: 音声パーツ関連
+    const recommendedWarnings = utteranceValidation.errors.map(e => ({
+      ...e,
+      level: 'warning' as const,
+      // BGMがある場合はメッセージを調整
+      message: hasBgm && e.type === 'NO_UTTERANCES'
+        ? e.message.replace('（ボイスなしでも生成可）', '（BGMで再生されます）')
+        : e.message,
+    }));
+    
+    // 素材の警告も推奨として追加
+    const assetWarnings = assetValidation.warnings.map(w => ({
+      type: 'ASSET_WARNING' as const,
+      level: 'warning' as const,
+      scene_id: w.scene_id,
+      scene_idx: w.scene_idx,
+      message: w.message,
+    }));
     
     return c.json({
       // 後方互換: is_ready は素材のみの判定
@@ -1363,10 +1402,27 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
       total_count: assetValidation.total_count,
       missing: assetValidation.missing,
       warnings: assetValidation.warnings,
-      // R1.6: utterances 検証結果
+      // R1.6: utterances 検証結果（後方互換）
       can_generate: canGenerate,
       utterance_errors: utteranceValidation.errors,
       utterance_summary: utteranceValidation.summary,
+      // R3-A: 新しい分類（フロントエンドで使いやすい形式）
+      validation: {
+        can_generate: canGenerate,
+        has_bgm: hasBgm,
+        // 必須エラー（赤・生成停止）
+        errors: requiredErrors,
+        // 推奨警告（黄・生成可能）
+        warnings: [...recommendedWarnings, ...assetWarnings],
+        // サマリー
+        summary: {
+          total_scenes: assetValidation.total_count,
+          ready_scenes: assetValidation.ready_count,
+          error_count: requiredErrors.length,
+          warning_count: recommendedWarnings.length + assetWarnings.length,
+          has_voice: utteranceValidation.summary.total_scenes > utteranceValidation.summary.invalid_scenes,
+        },
+      },
     });
     
   } catch (error) {
