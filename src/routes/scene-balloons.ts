@@ -30,17 +30,20 @@ sceneBalloons.get('/:balloonId', async (c) => {
   }
   
   try {
+    // JOINを最小限に: scene_utterances に speaker_type がない、audio_generations に start_ms/end_ms がない
     const balloon = await c.env.DB.prepare(`
       SELECT 
         sb.*,
         su.text as utterance_text,
-        su.speaker_type,
+        su.role,
         su.character_key,
-        ag.start_ms as audio_start_ms,
-        ag.end_ms as audio_end_ms
+        su.duration_ms as utterance_duration_ms,
+        ag.duration_ms as audio_duration_ms,
+        ag.r2_url as audio_url,
+        ag.status as audio_status
       FROM scene_balloons sb
       LEFT JOIN scene_utterances su ON sb.utterance_id = su.id
-      LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id AND ag.status = 'completed'
+      LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
       WHERE sb.id = ?
     `).bind(balloonId).first();
     
@@ -66,14 +69,16 @@ sceneBalloons.get('/scene/:sceneId', async (c) => {
   }
   
   try {
+    // JOINを最小限に: scene_utterances に speaker_type がない、audio_generations に start_ms/end_ms がない
     const result = await c.env.DB.prepare(`
       SELECT 
         sb.*,
         su.text as utterance_text,
-        su.speaker_type,
+        su.role,
         su.character_key,
-        ag.start_ms as audio_start_ms,
-        ag.end_ms as audio_end_ms,
+        su.duration_ms as utterance_duration_ms,
+        ag.duration_ms as audio_duration_ms,
+        ag.r2_url as audio_url,
         ag.status as audio_status
       FROM scene_balloons sb
       LEFT JOIN scene_utterances su ON sb.utterance_id = su.id

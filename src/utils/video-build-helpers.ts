@@ -1065,9 +1065,9 @@ export function buildProjectJson(
           
           voiceStartMs += utt.duration_ms;
         } else {
-          // 音声なしでもテキストがあればvoicesに追加（字幕用）
-          // start_ms は推定値を使用
-          const estimatedDuration = Math.max(
+          // R2-A: 音声なしでも voices に追加（balloon 同期用・字幕用）
+          // 優先順位: 1) utt.duration_ms (SSOT)  2) テキスト長ベースの推定値
+          const durationMsValue = utt.duration_ms || Math.max(
             MIN_DURATION_MS,
             (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
           );
@@ -1079,14 +1079,14 @@ export function buildProjectJson(
             character_key: utt.character_key || null,
             character_name: utt.character_name || null,
             audio_url: '', // 空の場合は再生しない
-            duration_ms: estimatedDuration,
+            duration_ms: durationMsValue,
             text: utt.text || '',
             start_ms: voiceStartMs,
-            end_ms: voiceStartMs + estimatedDuration,  // R2
+            end_ms: voiceStartMs + durationMsValue,  // R2
             format: 'mp3',
           });
           
-          voiceStartMs += estimatedDuration;
+          voiceStartMs += durationMsValue;
         }
       }
       
