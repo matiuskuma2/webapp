@@ -139,7 +139,7 @@ comic.post('/:id/comic/publish', async (c) => {
       published: {
         image_generation_id: imageGenerationId,
         published_at: new Date().toISOString(),
-        utterances: publishedUtterances,  // 最大3発話を保存
+        utterances: publishedUtterances,  // 最大3音声パーツを保存
         bubbles: publishedBubbles         // 吹き出し情報も保存（textStyle/timing付き）
       },
       base_image_generation_id: base_image_generation_id || existingComicData.base_image_generation_id || null

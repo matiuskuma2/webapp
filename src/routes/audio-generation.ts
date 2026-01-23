@@ -118,7 +118,7 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     // Fish Audio requires 32000 or 44100 Hz for mp3, Google TTS uses 24000 Hz
     const defaultSampleRate = provider === 'fish' ? 44100 : 24000;
     const sampleRate = Number(body.sample_rate ?? defaultSampleRate);
-    // Phase1.7: text_override で任意のテキストを指定可能（漫画発話用）
+    // Phase1.7: text_override で任意のテキストを指定可能（漫画音声パーツ用）
     const textOverride = body.text_override as string | undefined;
 
     if (!voiceId) {
@@ -149,7 +149,7 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     if (!scene) {
       return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'), 404);
     }
-    // Phase1.7: text_override が指定されている場合はそちらを使用（漫画発話用）
+    // Phase1.7: text_override が指定されている場合はそちらを使用（漫画音声パーツ用）
     const dialogue = textOverride?.trim() || (scene.dialogue ?? '').trim();
     if (!dialogue) {
       return c.json(createErrorResponse(ERROR_CODES.NO_DIALOGUE, 'Scene has no dialogue or text_override'), 400);
@@ -189,7 +189,7 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     // R1.6+: utterances 自動作成（旧式音声生成からの移行サポート）
     // ============================================================
     // scene_utterances が0件の場合、自動でナレーション utterance を作成
-    // これにより、「音声作ったのに発話なし」問題を解消
+    // これにより、「音声作ったのに音声パーツなし」問題を解消
     try {
       const existingUtterances = await c.env.DB.prepare(`
         SELECT COUNT(*) as count FROM scene_utterances WHERE scene_id = ?

@@ -156,7 +156,7 @@ export interface SceneData {
     }>;
     base_image_generation_id?: number;
   } | null;
-  // R1.5: scene_utterances から読み込んだ発話リスト
+  // R1.5: scene_utterances から読み込んだ音声パーツリスト
   utterances?: Array<{
     id: number;
     order_no: number;
@@ -615,7 +615,7 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
         warnings.push({
           scene_idx: scene.idx,
           scene_id: scene.id,
-          message: `発話音声が未生成です（${missingAudioCount}/${utterances.length}件）`,
+          message: `音声パーツが未生成です（${missingAudioCount}/${utterances.length}件）※ボイスなしでも動画生成可`,
         });
       }
     } else {
@@ -643,7 +643,7 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
 // ====================================================================
 
 /**
- * UtteranceError - 発話単位のエラー詳細
+ * UtteranceError - 音声パーツ単位のエラー詳細
  */
 export interface UtteranceError {
   scene_id: number;
@@ -738,7 +738,7 @@ export function validateUtterancesPreflight(
         scene_id: scene.id,
         scene_idx: scene.idx,
         type: 'NO_UTTERANCES',
-        message: `シーン${scene.idx}：セリフがありますが音声パーツが未登録です`,
+        message: `シーン${scene.idx}：セリフがありますが音声パーツが未登録です（ボイスなしでも生成可）`,
       });
       // 生成は止めない（無音尺で進む）
     }
@@ -759,7 +759,7 @@ export function validateUtterancesPreflight(
           scene_idx: scene.idx,
           utterance_id: utterance.id,
           type: 'TEXT_EMPTY',
-          message: `シーン${scene.idx}：空の音声パーツがあります（削除推奨）`,
+          message: `シーン${scene.idx}：空の音声パーツがあります（削除推奨、無視して生成可）`,
         });
         continue;
       }
@@ -776,7 +776,7 @@ export function validateUtterancesPreflight(
           scene_idx: scene.idx,
           utterance_id: utterance.id,
           type: 'AUDIO_MISSING',
-          message: `シーン${scene.idx}：「${textPreview}」の音声が未生成です`,
+          message: `シーン${scene.idx}：「${textPreview}」の音声が未生成です（無音で生成されます）`,
         });
         invalidUtteranceCount++;
       }

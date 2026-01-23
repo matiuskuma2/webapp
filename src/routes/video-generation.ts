@@ -1706,7 +1706,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           console.warn(`Failed to parse comic_data for scene ${scene.id}:`, e);
         }
         
-        // R1.5: scene_utterances から発話を取得（SSOT）
+        // R1.5: scene_utterances から音声パーツを取得（SSOT）
         const { results: utteranceRows } = await c.env.DB.prepare(`
           SELECT 
             u.id,
