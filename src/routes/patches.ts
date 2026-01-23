@@ -1119,7 +1119,10 @@ async function fetchScenesWithAssets(
     const balloonRows = await db.prepare(`
       SELECT 
         id, utterance_id, x, y, w, h, shape, display_mode,
-        start_ms, end_ms, bubble_r2_url, bubble_width_px, bubble_height_px, z_index
+        start_ms, end_ms, bubble_r2_url, bubble_width_px, bubble_height_px, z_index,
+        tail_enabled, tail_tip_x, tail_tip_y,
+        writing_mode, text_align, font_family, font_weight, font_size, line_height,
+        padding, bg_color, text_color, border_color, border_width
       FROM scene_balloons
       WHERE scene_id = ?
       ORDER BY z_index ASC, id ASC
@@ -1196,6 +1199,24 @@ async function fetchScenesWithAssets(
       timing: b.display_mode === 'manual_window' 
         ? { start_ms: b.start_ms, end_ms: b.end_ms }
         : null,
+      tail: {
+        enabled: b.tail_enabled === 1,
+        tip_x: b.tail_tip_x ?? 0.5,
+        tip_y: b.tail_tip_y ?? 1.2,
+      },
+      style: {
+        writing_mode: b.writing_mode || 'horizontal',
+        text_align: b.text_align || 'center',
+        font_family: b.font_family || 'sans-serif',
+        font_weight: b.font_weight ?? 700,
+        font_size: b.font_size ?? 24,
+        line_height: b.line_height ?? 1.4,
+        padding: b.padding ?? 12,
+        bg_color: b.bg_color || '#FFFFFF',
+        text_color: b.text_color || '#000000',
+        border_color: b.border_color || '#000000',
+        border_width: b.border_width ?? 2,
+      },
       z_index: b.z_index,
       bubble_r2_url: toAbsoluteUrl(b.bubble_r2_url as string | null, siteUrl),
       bubble_width_px: b.bubble_width_px,
