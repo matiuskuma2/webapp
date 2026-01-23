@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-23（R3-A 通しBGM + 無音シーン尺設定 + Preflight2層検証）
+- **最終更新**: 2026-01-23（R3-B SFX + R4 SSOT Patch API + apply後自動ビルド生成）
 
 ---
 
@@ -737,6 +737,117 @@ preflight判定を「必須条件」と「推奨/警告」の2レイヤーに分
 #### マイグレーション
 - `0028_add_scene_duration_override_ms.sql`
 - `0029_create_project_audio_tracks.sql`
+
+---
+
+## 2026-01-23 R3-B/R4 追加機能
+
+### R3-B: シーン別SFX（scene_audio_cues）
+
+#### 概要
+シーンに効果音（SFX）を追加するSSOTシステム。BGMと並行して、シーン固有の音響演出が可能。
+
+#### データモデル
+```sql
+scene_audio_cues
+├── id (PK)
+├── scene_id (FK → scenes.id)
+├── cue_type ('sfx')
+├── name (効果音名)
+├── r2_key, r2_url (R2ストレージ)
+├── start_ms (開始時刻)
+├── end_ms, duration_ms (終了/尺)
+├── volume (0.0-1.0, default: 0.8)
+├── loop (boolean)
+├── fade_in_ms, fade_out_ms
+├── is_active
+└── created_at, updated_at
+```
+
+#### API
+- `GET /api/scenes/:sceneId/audio-cues` - SFX一覧取得
+- `POST /api/scenes/:sceneId/audio-cues/sfx/upload` - SFXアップロード
+- `PUT /api/scenes/:sceneId/audio-cues/:id` - SFX設定更新
+- `DELETE /api/scenes/:sceneId/audio-cues/:id` - SFX削除
+
+#### Audio SSOT（最終3レイヤー構成）
+1. **BGM**: `project_audio_tracks`（プロジェクト全体）
+2. **SFX**: `scene_audio_cues`（シーン単位）
+3. **Voice**: `scene_utterances`（発話単位）
+
+#### Preflight UI
+- 🎵 BGM / 🔊 SFX(N) / 🎙 Voice(N) の形式で音声状態を1行表示
+- 無音の場合は 🔇 音なし（警告表示）
+
+#### マイグレーション
+- `0031_create_scene_audio_cues.sql`
+
+---
+
+### R4: SSOT Patch API（チャット修正）
+
+#### 概要
+チャット指示をSSOTパッチとして適用するAPI。dry-run → apply の2段階フローで安全に変更を適用。
+
+#### データモデル
+```sql
+patch_requests
+├── id (PK)
+├── project_id (FK → projects.id)
+├── video_build_id (ソースビルドID、NULL可)
+├── source ('chat' | 'api')
+├── user_message (ユーザー指示)
+├── ops_json (パッチ操作配列)
+├── status ('draft' | 'dry_run_ok' | 'dry_run_failed' | 'apply_ok' | 'apply_failed')
+├── dry_run_result_json, apply_result_json
+└── created_at, updated_at
+
+patch_effects
+├── id (PK)
+├── patch_request_id (FK)
+├── entity, record_id, op
+├── before_json, after_json (変更前後のスナップショット)
+└── created_at
+
+video_builds（拡張）
+├── source_video_build_id (派生元ビルド)
+└── patch_request_id (適用されたパッチ)
+```
+
+#### API
+- `POST /api/projects/:id/patches/dry-run` - プレビュー実行
+- `POST /api/projects/:id/patches/apply` - パッチ適用（+ 新ビルド自動生成）
+- `GET /api/projects/:id/patches` - パッチ履歴一覧
+- `GET /api/projects/:id/patches/:patchId` - パッチ詳細
+
+#### 許可エンティティ（ホワイトリスト）
+- `scene_balloons`: タイミング・位置・サイズ
+- `scene_audio_cues`: SFXタイミング・音量
+- `scene_motion`: モーションプリセット
+- `project_audio_tracks`: BGM音量・有効/無効
+- `scene_utterances`: 音声タイミング
+
+#### 禁止フィールド（セキュリティ）
+- `r2_key`, `r2_url`（ストレージ直接操作禁止）
+- `audio_generation_id`（FK操作禁止）
+- `text`, `character_key`（コンテンツ操作制限）
+
+#### apply後の自動ビルド生成
+パッチ適用成功時に自動で新しい`video_build`を作成:
+1. `patch_request.status` = `apply_ok` に更新
+2. 新しい`video_build`作成（`patch_request_id`を記録）
+3. `project.json`を再生成してR2に保存
+4. レスポンスに`new_video_build_id`を返却
+
+#### UI
+- VideoBuildタブ内に「修正履歴（パッチ）」セクション
+- 日時、メッセージ、変更タイプ、ステータス表示
+- 生成されたビルドへのリンク
+- 詳細展開で操作内容（ops_json）表示
+
+#### マイグレーション
+- `0032_create_patch_requests.sql`
+- `0033_add_video_builds_patch_columns.sql`
 
 ---
 
