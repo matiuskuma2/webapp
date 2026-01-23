@@ -918,34 +918,74 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
     // Build full prompt for character portrait
     const fullPrompt = `Create a detailed portrait of a character: ${prompt}. High quality, professional illustration style, clear face visible, upper body portrait, neutral or simple background, anime/illustration style preferred for character consistency.`;
 
-    // Call Gemini API
-    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-    
+    // Helper function to call Gemini API
+    const callGeminiApi = async (keyToUse: string): Promise<Response> => {
+      const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+      return fetch(geminiUrl, {
+        method: 'POST',
+        headers: {
+          'x-goog-api-key': keyToUse,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                { text: fullPrompt }
+              ]
+            }
+          ],
+          generationConfig: {
+            responseModalities: ['Image'],
+            imageConfig: {
+              aspectRatio: '1:1',
+              imageSize: '1K'
+            }
+          }
+        })
+      });
+    };
+
+    // Call Gemini API with quota fallback
     console.log(`[Characters] Calling Gemini API: model=${model}, keySource=${apiKeySource}, promptLength=${prompt.length}`);
     
-    const response = await fetch(geminiUrl, {
-      method: 'POST',
-      headers: {
-        'x-goog-api-key': apiKey,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              { text: fullPrompt }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseModalities: ['Image'],
-          imageConfig: {
-            aspectRatio: '1:1',
-            imageSize: '1K'
-          }
-        }
-      })
-    });
+    let response = await callGeminiApi(apiKey);
+    let currentKeySource = apiKeySource;
+
+    // If user key quota exceeded and system key is available, try with system key
+    if (!response.ok && apiKeySource === 'user' && c.env.GEMINI_API_KEY) {
+      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string } };
+      const errorMessage = errorData?.error?.message || '';
+      const isQuotaExceeded = errorMessage.toLowerCase().includes('quota') || 
+                             errorMessage.toLowerCase().includes('resource_exhausted') ||
+                             response.status === 429;
+      
+      if (isQuotaExceeded) {
+        console.log(`[Characters] User key quota exceeded, falling back to SYSTEM key`);
+        
+        // Log the user key failure
+        await logImageGeneration({
+          env: c.env,
+          userId,
+          projectId,
+          characterKey,
+          generationType: 'character_preview',
+          provider,
+          model,
+          apiKeySource: 'user',
+          promptLength: prompt.length,
+          imageSize: '1:1',
+          imageQuality: '1K',
+          status: 'quota_exceeded',
+          errorMessage: 'User key quota exceeded, retrying with system key',
+          errorCode: 'QUOTA_EXCEEDED_FALLBACK'
+        });
+        
+        // Retry with system key
+        response = await callGeminiApi(c.env.GEMINI_API_KEY);
+        currentKeySource = 'system';
+      }
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string; status?: string } };
@@ -963,7 +1003,7 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
         generationType: 'character_preview',
         provider,
         model,
-        apiKeySource,
+        apiKeySource: currentKeySource,
         promptLength: prompt.length,
         imageSize: '1:1',
         imageQuality: '1K',
@@ -974,7 +1014,7 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
       
       // Add helpful message for quota errors
       if (isQuotaExceeded) {
-        const helpMessage = apiKeySource === 'system'
+        const helpMessage = currentKeySource === 'system'
           ? 'System API key quota exceeded. Please try again later or configure your own Google API key in Settings.'
           : 'Your API key quota exceeded. Please try again later or enable billing on your Google Cloud project.';
         return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, helpMessage), 429);
@@ -982,6 +1022,9 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
       
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, errorMessage), 500);
     }
+    
+    // Update apiKeySource for logging
+    apiKeySource = currentKeySource;
 
     const result = await response.json() as {
       candidates?: Array<{
