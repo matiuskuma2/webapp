@@ -879,8 +879,9 @@ patches.post('/projects/:projectId/patches/apply', async (c) => {
     const projectJsonString = JSON.stringify(projectJson);
 
     // 6. video_buildsレコード作成
-    const ownerUserId = project.user_id;
-    const executorUserId = project.user_id; // パッチ適用者（将来は認証から取得）
+    // user_id が NULL の場合はデフォルト値 1 を使用（テストデータ対応）
+    const ownerUserId = project.user_id || 1;
+    const executorUserId = project.user_id || 1; // パッチ適用者（将来は認証から取得）
 
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO video_builds (
