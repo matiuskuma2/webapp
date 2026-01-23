@@ -9,9 +9,9 @@ scenes.get('/:id', async (c) => {
     const sceneId = c.req.param('id')
     const view = c.req.query('view') // 'board' 指定時のみ画像情報含む
 
-    // 基本シーン情報取得（display_asset_type追加、R3: duration_override_ms追加）
+    // 基本シーン情報取得（display_asset_type追加、R3: duration_override_ms追加、R2-A: text_render_mode追加）
     const scene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, display_asset_type, duration_override_ms, created_at, updated_at
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, comic_data, display_asset_type, text_render_mode, duration_override_ms, created_at, updated_at
       FROM scenes
       WHERE id = ?
     `).bind(sceneId).first()
@@ -52,7 +52,10 @@ scenes.get('/:id', async (c) => {
       ...scene,
       bullets: bulletsArr,
       comic_data: comicData,
-      display_asset_type: scene.display_asset_type || 'image'
+      display_asset_type: scene.display_asset_type || 'image',
+      // R2-A: A案 baked 対応 - comic の場合は baked をデフォルト（二重描画防止）
+      text_render_mode: scene.text_render_mode || 
+        ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion')
     }
 
     // view=board の場合、画像情報とスタイル情報を含める
