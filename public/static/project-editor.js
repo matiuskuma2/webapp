@@ -6565,6 +6565,29 @@ async function updateVideoBuildRequirements() {
       // 4. 生成OK（can_generate: true）
       html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + preflight.total_count + 'シーン準備完了</div>';
       
+      // R3-B: 音声状態の表示（BGM/SFX/Voice）
+      const validation = preflight.validation || {};
+      const hasBgm = validation.has_bgm || false;
+      const hasSfx = validation.has_sfx || false;
+      const hasVoice = validation.summary?.has_voice || false;
+      const hasAnyAudio = hasBgm || hasSfx || hasVoice;
+      
+      // 音声レイヤー状態を構築
+      const audioLayers = [];
+      if (hasBgm) audioLayers.push('<span class="text-purple-600"><i class="fas fa-music mr-1"></i>BGM</span>');
+      if (hasSfx) audioLayers.push('<span class="text-blue-600"><i class="fas fa-volume-up mr-1"></i>SFX</span>');
+      if (hasVoice) audioLayers.push('<span class="text-green-600"><i class="fas fa-microphone mr-1"></i>Voice</span>');
+      
+      if (hasAnyAudio) {
+        html += '<div class="mt-1 flex items-center text-sm text-gray-600">';
+        html += '<span class="mr-2">🎵 音声:</span>' + audioLayers.join(' + ');
+        html += '</div>';
+      } else {
+        html += '<div class="mt-1 flex items-center text-sm text-amber-600">';
+        html += '<i class="fas fa-volume-mute mr-2"></i>音声なし（無音動画になります）';
+        html += '</div>';
+      }
+      
       // レイヤー2: 警告（生成は可能だが注意事項あり）
       const allWarnings = [
         ...(preflight.warnings || []),
@@ -6597,7 +6620,13 @@ async function updateVideoBuildRequirements() {
           html += '<div class="text-gray-400 mt-1">他 ' + (allWarnings.length - 5) + ' 件...</div>';
         }
         html += '</div>';
-        html += '<div class="mt-1 text-xs text-amber-600">※ このまま生成すると、音声パーツなしのシーンは無音になります</div>';
+        // BGM/SFXがある場合は無音ではなくBGM/SFXが流れることを説明
+        if (hasBgm || hasSfx) {
+          const audioFallback = hasBgm && hasSfx ? 'BGM + SFX' : hasBgm ? 'BGM' : 'SFX';
+          html += '<div class="mt-1 text-xs text-gray-500">※ 音声パーツなしのシーンでは ' + audioFallback + ' が再生されます</div>';
+        } else {
+          html += '<div class="mt-1 text-xs text-amber-600">※ このまま生成すると、音声パーツなしのシーンは無音になります</div>';
+        }
         html += '</div>';
       }
     }
