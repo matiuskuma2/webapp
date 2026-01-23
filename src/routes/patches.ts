@@ -145,10 +145,10 @@ const ALLOWED_ENTITIES: Record<string, {
     scene_id_field: 'scene_id',
     allowed_fields: [
       'duration_ms',                 // 尺（手動調整用）
-      'order_index',                 // 順序
+      'order_no',                    // 順序
       // 注: text, speaker_type, character_key は慎重に扱う
     ],
-    required_for_create: ['scene_id', 'order_index'],
+    required_for_create: ['scene_id', 'order_no'],
   },
 };
 
@@ -1107,12 +1107,12 @@ async function fetchScenesWithAssets(
     // Utterances（音声パーツ）
     const utteranceRows = await db.prepare(`
       SELECT 
-        su.id, su.order_index, su.speaker_type, su.character_key, su.text,
-        su.audio_generation_id, ag.duration_ms, ag.status as audio_status, ag.r2_url as audio_url
+        su.id, su.order_no, su.speaker_type, su.character_key, su.text,
+        su.audio_generation_id, su.duration_ms, ag.status as audio_status, ag.r2_url as audio_url
       FROM scene_utterances su
       LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
       WHERE su.scene_id = ?
-      ORDER BY su.order_index ASC
+      ORDER BY su.order_no ASC
     `).bind(sceneId).all();
 
     // Balloons
@@ -1176,7 +1176,7 @@ async function fetchScenesWithAssets(
     // Utterances
     sceneData.utterances = utteranceRows.results.map(u => ({
       id: u.id,
-      order_index: u.order_index,
+      order_no: u.order_no,
       speaker_type: u.speaker_type,
       character_key: u.character_key,
       text: u.text,
