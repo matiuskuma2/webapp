@@ -20,6 +20,7 @@ import { createAwsVideoClient, type VideoEngine, type BillingSource } from '../u
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
+import { logVideoBuildRender } from '../utils/usage-logger';
 
 /**
  * Default SITE_URL for webapp
@@ -2426,6 +2427,72 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
         buildId
       ).run();
       
+      // === Safe Chat v1: video_build_render ログ記録（完了時のみ、1回だけ） ===
+      try {
+        // 現在のビルド情報を取得（render_usage_logged フラグと settings_json）
+        const buildForLog = await c.env.DB.prepare(`
+          SELECT id, project_id, owner_user_id, render_usage_logged, 
+                 settings_json, total_scenes, total_duration_ms, 
+                 remotion_render_id, project_json_hash
+          FROM video_builds WHERE id = ?
+        `).bind(buildId).first<{
+          id: number;
+          project_id: number;
+          owner_user_id: number | null;
+          render_usage_logged: number;
+          settings_json: string | null;
+          total_scenes: number | null;
+          total_duration_ms: number | null;
+          remotion_render_id: string | null;
+          project_json_hash: string | null;
+        }>();
+        
+        // まだログ未記録の場合のみ処理（二重計上防止）
+        if (buildForLog && buildForLog.render_usage_logged === 0) {
+          // 先にフラグを立てる（二重計上の完全防止）
+          const lockResult = await c.env.DB.prepare(`
+            UPDATE video_builds 
+            SET render_usage_logged = 1 
+            WHERE id = ? AND render_usage_logged = 0
+          `).bind(buildId).run();
+          
+          // 自分が初回フラグを取れた場合のみログを書く
+          if (lockResult.meta.changes === 1) {
+            // settings_json から fps/resolution/aspect_ratio を取得
+            let fps = 30;
+            let aspectRatio = '9:16';
+            let resolution = '1080p';
+            try {
+              if (buildForLog.settings_json) {
+                const settings = JSON.parse(buildForLog.settings_json);
+                fps = settings.fps ?? 30;
+                aspectRatio = settings.aspect_ratio ?? '9:16';
+                resolution = settings.resolution ?? '1080p';
+              }
+            } catch { /* ignore parse error */ }
+            
+            const durationMs = awsResponse.output.duration_ms || buildForLog.total_duration_ms || 0;
+            const totalScenes = buildForLog.total_scenes || 0;
+            
+            await logVideoBuildRender(c.env.DB, {
+              userId: buildForLog.owner_user_id || 1,
+              projectId: buildForLog.project_id,
+              videoBuildId: buildId,
+              totalScenes,
+              totalDurationMs: durationMs,
+              fps,
+              renderTimeMs: null, // 後で計算可能
+              status: 'success',
+            });
+            
+            console.log(`[VideoBuild] Render usage logged: build=${buildId}, duration=${durationMs}ms, scenes=${totalScenes}`);
+          }
+        }
+      } catch (logError) {
+        // ログ記録の失敗はビルド完了自体には影響させない
+        console.error('[VideoBuild] Failed to log render usage:', logError);
+      }
+      
     } else if (awsStatus === 'failed') {
       // 失敗: エラー情報を更新
       await c.env.DB.prepare(`
@@ -2443,6 +2510,47 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
         awsResponse.error?.message || 'Video rendering failed',
         buildId
       ).run();
+      
+      // === Safe Chat v1: video_build_render 失敗ログ記録（失敗時も1回だけ） ===
+      try {
+        const buildForLog = await c.env.DB.prepare(`
+          SELECT id, project_id, owner_user_id, render_usage_logged, 
+                 total_scenes, total_duration_ms
+          FROM video_builds WHERE id = ?
+        `).bind(buildId).first<{
+          id: number;
+          project_id: number;
+          owner_user_id: number | null;
+          render_usage_logged: number;
+          total_scenes: number | null;
+          total_duration_ms: number | null;
+        }>();
+        
+        if (buildForLog && buildForLog.render_usage_logged === 0) {
+          const lockResult = await c.env.DB.prepare(`
+            UPDATE video_builds 
+            SET render_usage_logged = 1 
+            WHERE id = ? AND render_usage_logged = 0
+          `).bind(buildId).run();
+          
+          if (lockResult.meta.changes === 1) {
+            await logVideoBuildRender(c.env.DB, {
+              userId: buildForLog.owner_user_id || 1,
+              projectId: buildForLog.project_id,
+              videoBuildId: buildId,
+              totalScenes: buildForLog.total_scenes || 0,
+              totalDurationMs: buildForLog.total_duration_ms || 0,
+              status: 'failed',
+              errorCode: awsResponse.error?.code || 'RENDER_FAILED',
+              errorMessage: awsResponse.error?.message || 'Video rendering failed',
+            });
+            
+            console.log(`[VideoBuild] Render failure logged: build=${buildId}`);
+          }
+        }
+      } catch (logError) {
+        console.error('[VideoBuild] Failed to log render failure:', logError);
+      }
       
     } else if (shouldQueryAws) {
       // 進行中: プログレス更新
