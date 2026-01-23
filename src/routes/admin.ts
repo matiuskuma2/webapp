@@ -989,6 +989,7 @@ admin.get('/webhook-logs', async (c) => {
 // ====================================================================
 // POST /api/admin/backfill-render-logs - Backfill render usage logs for completed builds
 // ====================================================================
+// userId 正規化: owner_user_id → project.user_id → スキップ（異常データ）
 
 admin.post('/backfill-render-logs', async (c) => {
   const { DB } = c.env;
@@ -997,13 +998,15 @@ admin.post('/backfill-render-logs', async (c) => {
   try {
     const limit = parseInt(c.req.query('limit') || '100');
     
-    // 完了済み＆ログ未記録のビルドを取得
+    // 完了済み＆ログ未記録のビルドを取得（project.user_id も JOIN で取得）
     const unloggedBuilds = await DB.prepare(`
       SELECT 
         vb.id, vb.project_id, vb.owner_user_id, 
         vb.total_scenes, vb.total_duration_ms,
-        vb.settings_json, vb.remotion_render_id
+        vb.settings_json, vb.remotion_render_id,
+        p.user_id AS project_owner_user_id
       FROM video_builds vb
+      LEFT JOIN projects p ON vb.project_id = p.id
       WHERE vb.status = 'completed' 
         AND vb.render_usage_logged = 0
       ORDER BY vb.id DESC
@@ -1016,15 +1019,29 @@ admin.post('/backfill-render-logs', async (c) => {
       total_duration_ms: number | null;
       settings_json: string | null;
       remotion_render_id: string | null;
+      project_owner_user_id: number | null;
     }>();
     
     const builds = unloggedBuilds.results || [];
     let processedCount = 0;
     let errorCount = 0;
+    let skippedCount = 0;
     const errors: string[] = [];
+    const skipped: string[] = [];
     
     for (const build of builds) {
       try {
+        // userId 正規化: owner_user_id → project.user_id → スキップ
+        const userId = build.owner_user_id || build.project_owner_user_id;
+        
+        if (!userId) {
+          // 異常データ: user_id が特定できない → スキップ
+          skippedCount++;
+          skipped.push(`Build ${build.id}: No owner_user_id or project.user_id found`);
+          console.warn(`[backfill] Skipping build ${build.id}: No user_id available`);
+          continue;
+        }
+        
         // フラグを先に立てる（二重計上防止）
         const lockResult = await DB.prepare(`
           UPDATE video_builds 
@@ -1043,7 +1060,7 @@ admin.post('/backfill-render-logs', async (c) => {
           } catch { /* ignore */ }
           
           await logVideoBuildRender(DB, {
-            userId: build.owner_user_id || 1,
+            userId,
             projectId: build.project_id,
             videoBuildId: build.id,
             totalScenes: build.total_scenes || 0,
@@ -1064,7 +1081,9 @@ admin.post('/backfill-render-logs', async (c) => {
       success: true,
       found: builds.length,
       processed: processedCount,
+      skipped: skippedCount,
       errors: errorCount,
+      skipped_details: skipped.slice(0, 10), // 最大10件のスキップ詳細
       error_details: errors.slice(0, 10), // 最大10件のエラー詳細
     });
     
@@ -1073,6 +1092,223 @@ admin.post('/backfill-render-logs', async (c) => {
     return c.json({ 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to backfill' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/admin/cron/collect-render-logs - Cron 回収用エンドポイント
+// ====================================================================
+// Workers Cron または外部からの定期呼び出しで使用
+// completed/failed かつ render_usage_logged=0 のビルドを回収
+// 認証: Cron-Secret ヘッダーまたは SuperAdmin セッション
+
+admin.post('/cron/collect-render-logs', async (c) => {
+  const { DB } = c.env;
+  const { logVideoBuildRender } = await import('../utils/usage-logger');
+  
+  // 認証: Cron-Secret または SuperAdmin セッション
+  const cronSecret = c.req.header('X-Cron-Secret');
+  const expectedSecret = c.env.CRON_SECRET || 'default-cron-secret-change-me';
+  
+  // Cron-Secret が一致しない場合はセッション認証を試行
+  if (cronSecret !== expectedSecret) {
+    const sessionCookie = getCookie(c, 'session');
+    if (!sessionCookie) {
+      return c.json({ error: 'UNAUTHORIZED', message: 'Cron secret or session required' }, 401);
+    }
+    
+    const sessionResult = await DB.prepare(`
+      SELECT u.id, u.role FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.token = ? AND s.expires_at > datetime('now')
+    `).bind(sessionCookie).first<{ id: number; role: string }>();
+    
+    if (!sessionResult || sessionResult.role !== 'superadmin') {
+      return c.json({ error: 'FORBIDDEN', message: 'SuperAdmin required' }, 403);
+    }
+  }
+  
+  try {
+    // completed または failed かつ render_usage_logged=0 のビルドを取得
+    const unloggedBuilds = await DB.prepare(`
+      SELECT 
+        vb.id, vb.project_id, vb.owner_user_id, vb.status,
+        vb.total_scenes, vb.total_duration_ms,
+        vb.settings_json, vb.remotion_render_id,
+        vb.error_code, vb.error_message,
+        p.user_id AS project_owner_user_id
+      FROM video_builds vb
+      LEFT JOIN projects p ON vb.project_id = p.id
+      WHERE vb.status IN ('completed', 'failed')
+        AND vb.render_usage_logged = 0
+      ORDER BY vb.id DESC
+      LIMIT 50
+    `).all<{
+      id: number;
+      project_id: number;
+      owner_user_id: number | null;
+      status: string;
+      total_scenes: number | null;
+      total_duration_ms: number | null;
+      settings_json: string | null;
+      remotion_render_id: string | null;
+      error_code: string | null;
+      error_message: string | null;
+      project_owner_user_id: number | null;
+    }>();
+    
+    const builds = unloggedBuilds.results || [];
+    let processedCount = 0;
+    let errorCount = 0;
+    let skippedCount = 0;
+    const processed: number[] = [];
+    const errors: string[] = [];
+    const skipped: string[] = [];
+    
+    for (const build of builds) {
+      try {
+        // userId 正規化: owner_user_id → project.user_id → スキップ
+        const userId = build.owner_user_id || build.project_owner_user_id;
+        
+        if (!userId) {
+          skippedCount++;
+          skipped.push(`Build ${build.id}: No user_id available`);
+          console.warn(`[cron] Skipping build ${build.id}: No user_id available`);
+          continue;
+        }
+        
+        // フラグを先に立てる（二重計上防止）
+        const lockResult = await DB.prepare(`
+          UPDATE video_builds 
+          SET render_usage_logged = 1 
+          WHERE id = ? AND render_usage_logged = 0
+        `).bind(build.id).run();
+        
+        if (lockResult.meta.changes === 1) {
+          // settings_json から fps, aspect_ratio, resolution を取得
+          let fps = 30;
+          let aspectRatio = '9:16';
+          let resolution = '1080p';
+          try {
+            if (build.settings_json) {
+              const settings = JSON.parse(build.settings_json);
+              fps = settings.fps ?? 30;
+              aspectRatio = settings.aspect_ratio ?? '9:16';
+              resolution = settings.resolution ?? '1080p';
+            }
+          } catch { /* ignore */ }
+          
+          await logVideoBuildRender(DB, {
+            userId,
+            projectId: build.project_id,
+            videoBuildId: build.id,
+            totalScenes: build.total_scenes || 0,
+            totalDurationMs: build.total_duration_ms || 0,
+            fps,
+            status: build.status === 'completed' ? 'success' : 'failed',
+            errorCode: build.error_code || undefined,
+            errorMessage: build.error_message || undefined,
+            remotionRenderId: build.remotion_render_id || undefined,
+            aspectRatio,
+            resolution,
+          });
+          
+          processed.push(build.id);
+          processedCount++;
+          console.log(`[cron] Logged render for build ${build.id} (${build.status})`);
+        }
+      } catch (err) {
+        errorCount++;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        errors.push(`Build ${build.id}: ${errMsg}`);
+        console.error(`[cron] Error processing build ${build.id}:`, err);
+      }
+    }
+    
+    const result = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      found: builds.length,
+      processed: processedCount,
+      skipped: skippedCount,
+      errors: errorCount,
+      processed_ids: processed,
+      skipped_details: skipped.slice(0, 10),
+      error_details: errors.slice(0, 10),
+    };
+    
+    console.log('[cron] Collect render logs completed:', result);
+    return c.json(result);
+    
+  } catch (error) {
+    console.error('Cron collect render logs error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to collect' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/admin/orphan-builds - 異常データ（user_id 不明）の一覧
+// ====================================================================
+// SuperAdmin でのモニタリング用
+
+admin.get('/orphan-builds', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    // user_id が特定できないビルドを取得
+    const orphanBuilds = await DB.prepare(`
+      SELECT 
+        vb.id, vb.project_id, vb.owner_user_id, vb.status,
+        vb.total_scenes, vb.total_duration_ms,
+        vb.render_usage_logged, vb.created_at,
+        p.user_id AS project_owner_user_id,
+        p.title AS project_title
+      FROM video_builds vb
+      LEFT JOIN projects p ON vb.project_id = p.id
+      WHERE vb.owner_user_id IS NULL AND p.user_id IS NULL
+      ORDER BY vb.id DESC
+      LIMIT 100
+    `).all<{
+      id: number;
+      project_id: number;
+      owner_user_id: number | null;
+      status: string;
+      total_scenes: number | null;
+      total_duration_ms: number | null;
+      render_usage_logged: number;
+      created_at: string;
+      project_owner_user_id: number | null;
+      project_title: string | null;
+    }>();
+    
+    const builds = orphanBuilds.results || [];
+    
+    return c.json({
+      success: true,
+      count: builds.length,
+      builds: builds.map(b => ({
+        id: b.id,
+        project_id: b.project_id,
+        project_title: b.project_title,
+        status: b.status,
+        owner_user_id: b.owner_user_id,
+        project_owner_user_id: b.project_owner_user_id,
+        render_usage_logged: b.render_usage_logged === 1,
+        total_scenes: b.total_scenes,
+        total_duration_ms: b.total_duration_ms,
+        created_at: b.created_at,
+      })),
+    });
+    
+  } catch (error) {
+    console.error('Get orphan builds error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get orphan builds' 
     }, 500);
   }
 });

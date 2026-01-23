@@ -793,23 +793,28 @@ patches.post('/projects/:projectId/patches/apply', async (c) => {
   try {
     const projectForLog = await c.env.DB.prepare(
       'SELECT user_id FROM projects WHERE id = ?'
-    ).bind(projectId).first<{ user_id: number }>();
+    ).bind(projectId).first<{ user_id: number | null }>();
     
-    const userId = projectForLog?.user_id || 1;
-    const entities = [...new Set(patchRequest.ops.map(op => op.entity))];
+    const resolvedUserId = projectForLog?.user_id;
     
-    await logPatchOperation(c.env.DB, {
-      userId,
-      projectId,
-      patchRequestId,
-      operation: 'apply',
-      source: 'api',
-      opsCount: patchRequest.ops.length,
-      entities,
-      newVideoBuildId: null, // 後で更新
-      status: result.ok ? 'success' : 'failed',
-      errorMessage: result.ok ? undefined : result.errors.join('; '),
-    });
+    if (!resolvedUserId) {
+      console.error(`[Patch Apply] Cannot determine user_id for project=${projectId}, skipping usage log`);
+    } else {
+      const entities = [...new Set(patchRequest.ops.map(op => op.entity))];
+      
+      await logPatchOperation(c.env.DB, {
+        userId: resolvedUserId,
+        projectId,
+        patchRequestId,
+        operation: 'apply',
+        source: 'api',
+        opsCount: patchRequest.ops.length,
+        entities,
+        newVideoBuildId: null, // 後で更新
+        status: result.ok ? 'success' : 'failed',
+        errorMessage: result.ok ? undefined : result.errors.join('; '),
+      });
+    }
   } catch (logError) {
     console.error('[Patch Apply] Usage log failed:', logError);
   }
@@ -905,9 +910,12 @@ patches.post('/projects/:projectId/patches/apply', async (c) => {
     const projectJsonString = JSON.stringify(projectJson);
 
     // 6. video_buildsレコード作成
-    // user_id が NULL の場合はデフォルト値 1 を使用（テストデータ対応）
-    const ownerUserId = project.user_id || 1;
-    const executorUserId = project.user_id || 1; // パッチ適用者（将来は認証から取得）
+    // user_id が NULL の場合はエラー（データ整合性違反）
+    if (!project.user_id) {
+      throw new Error(`Project ${projectId} has no user_id, cannot create video build`);
+    }
+    const ownerUserId = project.user_id;
+    const executorUserId = project.user_id; // パッチ適用者（将来は認証から取得）
 
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO video_builds (
@@ -1898,27 +1906,31 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
   ).run();
 
   // Usage logging: Chat edit apply
-  let loggedUserId = 1;
   try {
     const projectForLog = await c.env.DB.prepare(
       'SELECT user_id FROM projects WHERE id = ?'
-    ).bind(projectId).first<{ user_id: number }>();
+    ).bind(projectId).first<{ user_id: number | null }>();
     
-    loggedUserId = projectForLog?.user_id || 1;
-    const entities = [...new Set(patchRequest.ops.map(op => op.entity))];
+    const resolvedUserId = projectForLog?.user_id;
     
-    await logPatchOperation(c.env.DB, {
-      userId: loggedUserId,
-      projectId,
-      patchRequestId: body.patch_request_id,
-      operation: 'apply',
-      source: 'chat',
-      opsCount: patchRequest.ops.length,
-      entities,
-      newVideoBuildId: null, // 後で更新
-      status: result.ok ? 'success' : 'failed',
-      errorMessage: result.ok ? undefined : result.errors.join('; '),
-    });
+    if (!resolvedUserId) {
+      console.error(`[Chat Edit Apply] Cannot determine user_id for project=${projectId}, skipping usage log`);
+    } else {
+      const entities = [...new Set(patchRequest.ops.map(op => op.entity))];
+      
+      await logPatchOperation(c.env.DB, {
+        userId: resolvedUserId,
+        projectId,
+        patchRequestId: body.patch_request_id,
+        operation: 'apply',
+        source: 'chat',
+        opsCount: patchRequest.ops.length,
+        entities,
+        newVideoBuildId: null, // 後で更新
+        status: result.ok ? 'success' : 'failed',
+        errorMessage: result.ok ? undefined : result.errors.join('; '),
+      });
+    }
   } catch (logError) {
     console.error('[Chat Edit Apply] Usage log failed:', logError);
   }
@@ -2005,8 +2017,12 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
     const projectJsonHash = await hashProjectJson(projectJson);
     const projectJsonString = JSON.stringify(projectJson);
 
-    const ownerUserId = project.user_id || 1;
-    const executorUserId = project.user_id || 1;
+    // user_id が NULL の場合はエラー（データ整合性違反）
+    if (!project.user_id) {
+      throw new Error(`Project ${projectId} has no user_id, cannot create video build`);
+    }
+    const ownerUserId = project.user_id;
+    const executorUserId = project.user_id;
 
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO video_builds (

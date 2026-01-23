@@ -2469,10 +2469,13 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
       try {
         // 現在のビルド情報を取得（render_usage_logged フラグと settings_json）
         const buildForLog = await c.env.DB.prepare(`
-          SELECT id, project_id, owner_user_id, render_usage_logged, 
-                 settings_json, total_scenes, total_duration_ms, 
-                 remotion_render_id, project_json_hash
-          FROM video_builds WHERE id = ?
+          SELECT vb.id, vb.project_id, vb.owner_user_id, vb.render_usage_logged, 
+                 vb.settings_json, vb.total_scenes, vb.total_duration_ms, 
+                 vb.remotion_render_id, vb.project_json_hash,
+                 p.user_id as project_owner_id
+          FROM video_builds vb
+          LEFT JOIN projects p ON vb.project_id = p.id
+          WHERE vb.id = ?
         `).bind(buildId).first<{
           id: number;
           project_id: number;
@@ -2483,47 +2486,57 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
           total_duration_ms: number | null;
           remotion_render_id: string | null;
           project_json_hash: string | null;
+          project_owner_id: number | null;
         }>();
         
         // まだログ未記録の場合のみ処理（二重計上防止）
         if (buildForLog && buildForLog.render_usage_logged === 0) {
-          // 先にフラグを立てる（二重計上の完全防止）
-          const lockResult = await c.env.DB.prepare(`
-            UPDATE video_builds 
-            SET render_usage_logged = 1 
-            WHERE id = ? AND render_usage_logged = 0
-          `).bind(buildId).run();
+          // userId を確実に決定（owner_user_id → project.user_id の順でフォールバック）
+          const resolvedUserId = buildForLog.owner_user_id || buildForLog.project_owner_id;
           
-          // 自分が初回フラグを取れた場合のみログを書く
-          if (lockResult.meta.changes === 1) {
-            // settings_json から fps/resolution/aspect_ratio を取得
-            let fps = 30;
-            let aspectRatio = '9:16';
-            let resolution = '1080p';
-            try {
-              if (buildForLog.settings_json) {
-                const settings = JSON.parse(buildForLog.settings_json);
-                fps = settings.fps ?? 30;
-                aspectRatio = settings.aspect_ratio ?? '9:16';
-                resolution = settings.resolution ?? '1080p';
-              }
-            } catch { /* ignore parse error */ }
+          if (!resolvedUserId) {
+            // user_id が決定できない場合はログせずにエラー記録
+            console.error(`[VideoBuild] Cannot determine user_id for build=${buildId}, skipping usage log`);
+            // フラグは立てない（後で回収可能にする）
+          } else {
+            // 先にフラグを立てる（二重計上の完全防止）
+            const lockResult = await c.env.DB.prepare(`
+              UPDATE video_builds 
+              SET render_usage_logged = 1 
+              WHERE id = ? AND render_usage_logged = 0
+            `).bind(buildId).run();
             
-            const durationMs = awsResponse.output.duration_ms || buildForLog.total_duration_ms || 0;
-            const totalScenes = buildForLog.total_scenes || 0;
-            
-            await logVideoBuildRender(c.env.DB, {
-              userId: buildForLog.owner_user_id || 1,
-              projectId: buildForLog.project_id,
-              videoBuildId: buildId,
-              totalScenes,
-              totalDurationMs: durationMs,
-              fps,
-              renderTimeMs: null, // 後で計算可能
-              status: 'success',
-            });
-            
-            console.log(`[VideoBuild] Render usage logged: build=${buildId}, duration=${durationMs}ms, scenes=${totalScenes}`);
+            // 自分が初回フラグを取れた場合のみログを書く
+            if (lockResult.meta.changes === 1) {
+              // settings_json から fps/resolution/aspect_ratio を取得
+              let fps = 30;
+              let aspectRatio = '9:16';
+              let resolution = '1080p';
+              try {
+                if (buildForLog.settings_json) {
+                  const settings = JSON.parse(buildForLog.settings_json);
+                  fps = settings.fps ?? 30;
+                  aspectRatio = settings.aspect_ratio ?? '9:16';
+                  resolution = settings.resolution ?? '1080p';
+                }
+              } catch { /* ignore parse error */ }
+              
+              const durationMs = awsResponse.output.duration_ms || buildForLog.total_duration_ms || 0;
+              const totalScenes = buildForLog.total_scenes || 0;
+              
+              await logVideoBuildRender(c.env.DB, {
+                userId: resolvedUserId,
+                projectId: buildForLog.project_id,
+                videoBuildId: buildId,
+                totalScenes,
+                totalDurationMs: durationMs,
+                fps,
+                renderTimeMs: null, // 後で計算可能
+                status: 'success',
+              });
+              
+              console.log(`[VideoBuild] Render usage logged: build=${buildId}, user=${resolvedUserId}, duration=${durationMs}ms, scenes=${totalScenes}`);
+            }
           }
         }
       } catch (logError) {
@@ -2552,9 +2565,12 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
       // === Safe Chat v1: video_build_render 失敗ログ記録（失敗時も1回だけ） ===
       try {
         const buildForLog = await c.env.DB.prepare(`
-          SELECT id, project_id, owner_user_id, render_usage_logged, 
-                 total_scenes, total_duration_ms
-          FROM video_builds WHERE id = ?
+          SELECT vb.id, vb.project_id, vb.owner_user_id, vb.render_usage_logged, 
+                 vb.total_scenes, vb.total_duration_ms,
+                 p.user_id as project_owner_id
+          FROM video_builds vb
+          LEFT JOIN projects p ON vb.project_id = p.id
+          WHERE vb.id = ?
         `).bind(buildId).first<{
           id: number;
           project_id: number;
@@ -2562,28 +2578,36 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
           render_usage_logged: number;
           total_scenes: number | null;
           total_duration_ms: number | null;
+          project_owner_id: number | null;
         }>();
         
         if (buildForLog && buildForLog.render_usage_logged === 0) {
-          const lockResult = await c.env.DB.prepare(`
-            UPDATE video_builds 
-            SET render_usage_logged = 1 
-            WHERE id = ? AND render_usage_logged = 0
-          `).bind(buildId).run();
+          // userId を確実に決定
+          const resolvedUserId = buildForLog.owner_user_id || buildForLog.project_owner_id;
           
-          if (lockResult.meta.changes === 1) {
-            await logVideoBuildRender(c.env.DB, {
-              userId: buildForLog.owner_user_id || 1,
-              projectId: buildForLog.project_id,
-              videoBuildId: buildId,
-              totalScenes: buildForLog.total_scenes || 0,
-              totalDurationMs: buildForLog.total_duration_ms || 0,
-              status: 'failed',
-              errorCode: awsResponse.error?.code || 'RENDER_FAILED',
-              errorMessage: awsResponse.error?.message || 'Video rendering failed',
-            });
+          if (!resolvedUserId) {
+            console.error(`[VideoBuild] Cannot determine user_id for failed build=${buildId}, skipping usage log`);
+          } else {
+            const lockResult = await c.env.DB.prepare(`
+              UPDATE video_builds 
+              SET render_usage_logged = 1 
+              WHERE id = ? AND render_usage_logged = 0
+            `).bind(buildId).run();
             
-            console.log(`[VideoBuild] Render failure logged: build=${buildId}`);
+            if (lockResult.meta.changes === 1) {
+              await logVideoBuildRender(c.env.DB, {
+                userId: resolvedUserId,
+                projectId: buildForLog.project_id,
+                videoBuildId: buildId,
+                totalScenes: buildForLog.total_scenes || 0,
+                totalDurationMs: buildForLog.total_duration_ms || 0,
+                status: 'failed',
+                errorCode: awsResponse.error?.code || 'RENDER_FAILED',
+                errorMessage: awsResponse.error?.message || 'Video rendering failed',
+              });
+              
+              console.log(`[VideoBuild] Render failure logged: build=${buildId}, user=${resolvedUserId}`);
+            }
           }
         }
       } catch (logError) {

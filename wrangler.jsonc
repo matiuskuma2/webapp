@@ -19,4 +19,9 @@
       "bucket_name": "webapp-bucket"
     }
   ]
+  // Environment Variables (set via Cloudflare Dashboard or wrangler secret):
+  // - CRON_SECRET: Secret for authenticating cron job requests
+  //   Usage: curl -X POST -H "X-Cron-Secret: your-secret" https://webapp-c7n.pages.dev/api/admin/cron/collect-render-logs
+  // - AWS_REGION, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY: AWS credentials for video rendering
+  // - VIDEO_BUILD_ORCHESTRATOR_URL: AWS Lambda orchestrator URL
 }
