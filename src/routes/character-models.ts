@@ -746,32 +746,125 @@ app.post('/projects/:projectId/characters/:characterKey/update', async (c) => {
   }
 });
 
+// ===== Image Generation Logging =====
+interface ImageGenerationLogParams {
+  env: Bindings;
+  userId?: number;
+  projectId?: number;
+  sceneId?: number;
+  characterKey?: string;
+  generationType: 'scene_image' | 'character_preview' | 'character_reference';
+  provider: string;
+  model: string;
+  apiKeySource: 'user' | 'system' | 'sponsor';
+  sponsorUserId?: number;
+  promptLength?: number;
+  imageCount?: number;
+  imageSize?: string;
+  imageQuality?: string;
+  status: 'success' | 'failed' | 'quota_exceeded';
+  errorMessage?: string;
+  errorCode?: string;
+  referenceImageCount?: number;
+}
+
+// コスト推定関数（画像生成）
+function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
+  // Gemini Imagen: ~$0.04/image, Gemini experimental: free during preview
+  // OpenAI DALL-E 3: ~$0.04/image
+  if (provider === 'gemini') {
+    if (model.includes('imagen')) return 0.04 * imageCount;
+    // gemini-3-pro-image-preview is experimental/free
+    return 0;
+  }
+  if (provider === 'openai') {
+    if (model.includes('dall-e-3')) return 0.04 * imageCount;
+  }
+  return 0;
+}
+
+// 画像生成ログ記録
+async function logImageGeneration(params: ImageGenerationLogParams): Promise<void> {
+  try {
+    const estimatedCost = estimateImageGenerationCost(params.provider, params.model, params.imageCount);
+    
+    await params.env.DB.prepare(`
+      INSERT INTO image_generation_logs (
+        user_id, project_id, scene_id, character_key,
+        generation_type, provider, model,
+        api_key_source, sponsor_user_id,
+        prompt_length, image_count, image_size, image_quality,
+        estimated_cost_usd, billing_unit, billing_amount,
+        status, error_message, error_code,
+        reference_image_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      params.userId ?? 1, // デフォルトユーザー
+      params.projectId ?? null,
+      params.sceneId ?? null,
+      params.characterKey ?? null,
+      params.generationType,
+      params.provider,
+      params.model,
+      params.apiKeySource,
+      params.sponsorUserId ?? null,
+      params.promptLength ?? null,
+      params.imageCount ?? 1,
+      params.imageSize ?? null,
+      params.imageQuality ?? null,
+      estimatedCost,
+      'image', // billing_unit
+      params.imageCount ?? 1, // billing_amount
+      params.status,
+      params.errorMessage ?? null,
+      params.errorCode ?? null,
+      params.referenceImageCount ?? 0
+    ).run();
+    
+    console.log(`[Image Generation] Logged: type=${params.generationType}, provider=${params.provider}, keySource=${params.apiKeySource}, cost=$${estimatedCost.toFixed(4)}, status=${params.status}`);
+  } catch (error) {
+    // ログ記録の失敗は無視（本体処理に影響させない）
+    console.error('[Image Generation] Failed to log:', error);
+  }
+}
+
 /**
  * POST /api/projects/:projectId/characters/generate-preview
  * Generate a preview image for character (AI generation)
+ * 
+ * API Key Priority:
+ * 1. User's registered Google API key (from user_api_keys table)
+ * 2. System GEMINI_API_KEY (fallback)
  */
 app.post('/projects/:projectId/characters/generate-preview', async (c) => {
+  const projectId = Number(c.req.param('projectId'));
+  let userId: number | undefined;
+  let apiKeySource: 'user' | 'system' = 'system';
+  const model = 'gemini-3-pro-image-preview';
+  const provider = 'gemini';
+  
   try {
-    const projectId = Number(c.req.param('projectId'));
-    const { prompt } = await c.req.json();
+    const { prompt, characterKey } = await c.req.json() as { prompt?: string; characterKey?: string };
 
     if (!prompt || prompt.trim() === '') {
       return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Prompt is required'), 400);
     }
 
-    // Get API key from user settings
+    // Get session and user info
     const { getCookie } = await import('hono/cookie');
     const sessionId = getCookie(c, 'session');
     
     let apiKey: string | null = null;
     
-    // Try to get from user settings
+    // Step 1: Try to get user's API key
     if (sessionId) {
       const session = await c.env.DB.prepare(`
         SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
       `).bind(sessionId).first<{ user_id: number }>();
       
       if (session) {
+        userId = session.user_id;
+        
         const keyRecord = await c.env.DB.prepare(`
           SELECT encrypted_key FROM user_api_keys
           WHERE user_id = ? AND provider = 'google'
@@ -779,30 +872,56 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
         
         if (keyRecord?.encrypted_key) {
           try {
-            // Import key utilities
             const { decryptApiKey } = await import('../utils/crypto');
             apiKey = await decryptApiKey(keyRecord.encrypted_key, c.env.ENCRYPTION_KEY);
+            apiKeySource = 'user';
+            console.log(`[Characters] Using USER API key for user_id=${userId}`);
           } catch (decryptError) {
-            console.warn('[Characters] Failed to decrypt API key:', decryptError);
+            console.warn('[Characters] Failed to decrypt user API key:', decryptError);
           }
         }
       }
     }
     
-    // Fallback to environment variable
+    // Step 2: Fallback to system key (GEMINI_API_KEY only - GOOGLE_API_KEY not defined in bindings)
     if (!apiKey) {
-      apiKey = c.env.GOOGLE_API_KEY || c.env.GEMINI_API_KEY;
+      if (c.env.GEMINI_API_KEY) {
+        apiKey = c.env.GEMINI_API_KEY;
+        apiKeySource = 'system';
+        console.log(`[Characters] Using SYSTEM GEMINI_API_KEY (user key not found or not configured)`);
+      }
     }
     
+    // Step 3: No key available
     if (!apiKey) {
-      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'No API key configured for image generation'), 400);
+      console.error('[Characters] No API key available - user has no key and system key not configured');
+      
+      // Log the failure
+      await logImageGeneration({
+        env: c.env,
+        userId,
+        projectId,
+        characterKey,
+        generationType: 'character_preview',
+        provider,
+        model,
+        apiKeySource,
+        promptLength: prompt.length,
+        status: 'failed',
+        errorMessage: 'No API key configured',
+        errorCode: 'NO_API_KEY'
+      });
+      
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'No API key configured for image generation. Please configure your Google API key in Settings.'), 400);
     }
 
     // Build full prompt for character portrait
     const fullPrompt = `Create a detailed portrait of a character: ${prompt}. High quality, professional illustration style, clear face visible, upper body portrait, neutral or simple background, anime/illustration style preferred for character consistency.`;
 
-    // Call Gemini API (same endpoint as image-generation.ts)
-    const geminiUrl = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent';
+    // Call Gemini API
+    const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    
+    console.log(`[Characters] Calling Gemini API: model=${model}, keySource=${apiKeySource}, promptLength=${prompt.length}`);
     
     const response = await fetch(geminiUrl, {
       method: 'POST',
@@ -829,10 +948,38 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string } };
+      const errorData = await response.json().catch(() => ({})) as { error?: { message?: string; code?: string; status?: string } };
       console.error('[Characters] Gemini API error:', response.status, JSON.stringify(errorData));
       
       const errorMessage = errorData?.error?.message || `Image generation failed (HTTP ${response.status})`;
+      const isQuotaExceeded = errorMessage.toLowerCase().includes('quota') || response.status === 429;
+      
+      // Log the failure with details
+      await logImageGeneration({
+        env: c.env,
+        userId,
+        projectId,
+        characterKey,
+        generationType: 'character_preview',
+        provider,
+        model,
+        apiKeySource,
+        promptLength: prompt.length,
+        imageSize: '1:1',
+        imageQuality: '1K',
+        status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
+        errorMessage,
+        errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : `HTTP_${response.status}`
+      });
+      
+      // Add helpful message for quota errors
+      if (isQuotaExceeded) {
+        const helpMessage = apiKeySource === 'system'
+          ? 'System API key quota exceeded. Please try again later or configure your own Google API key in Settings.'
+          : 'Your API key quota exceeded. Please try again later or enable billing on your Google Cloud project.';
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, helpMessage), 429);
+      }
+      
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, errorMessage), 500);
     }
 
@@ -860,8 +1007,42 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
     
     if (!base64Image) {
       console.error('[Characters] No image in response:', JSON.stringify(result).substring(0, 500));
+      
+      await logImageGeneration({
+        env: c.env,
+        userId,
+        projectId,
+        characterKey,
+        generationType: 'character_preview',
+        provider,
+        model,
+        apiKeySource,
+        promptLength: prompt.length,
+        imageSize: '1:1',
+        imageQuality: '1K',
+        status: 'failed',
+        errorMessage: 'No image in API response',
+        errorCode: 'NO_IMAGE_IN_RESPONSE'
+      });
+      
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'No image generated'), 500);
     }
+
+    // Log successful generation
+    await logImageGeneration({
+      env: c.env,
+      userId,
+      projectId,
+      characterKey,
+      generationType: 'character_preview',
+      provider,
+      model,
+      apiKeySource,
+      promptLength: prompt.length,
+      imageSize: '1:1',
+      imageQuality: '1K',
+      status: 'success'
+    });
 
     // Convert base64 to binary
     const binaryData = Uint8Array.from(atob(base64Image), c => c.charCodeAt(0));
@@ -875,6 +1056,21 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
     });
   } catch (error) {
     console.error('[Characters] Generate preview error:', error);
+    
+    // Log the error
+    await logImageGeneration({
+      env: c.env,
+      userId,
+      projectId,
+      generationType: 'character_preview',
+      provider,
+      model,
+      apiKeySource,
+      status: 'failed',
+      errorMessage: error instanceof Error ? error.message : 'Unknown error',
+      errorCode: 'INTERNAL_ERROR'
+    });
+    
     return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to generate preview'), 500);
   }
 });

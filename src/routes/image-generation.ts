@@ -13,6 +13,88 @@ interface ReferenceImage {
 
 const imageGeneration = new Hono<{ Bindings: Bindings }>()
 
+// ===== Image Generation Logging =====
+interface ImageGenerationLogParams {
+  env: Bindings;
+  userId?: number;
+  projectId?: number;
+  sceneId?: number;
+  characterKey?: string;
+  generationType: 'scene_image' | 'character_preview' | 'character_reference';
+  provider: string;
+  model: string;
+  apiKeySource: 'user' | 'system' | 'sponsor';
+  sponsorUserId?: number;
+  promptLength?: number;
+  imageCount?: number;
+  imageSize?: string;
+  imageQuality?: string;
+  status: 'success' | 'failed' | 'quota_exceeded';
+  errorMessage?: string;
+  errorCode?: string;
+  referenceImageCount?: number;
+}
+
+// コスト推定関数（画像生成）
+function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
+  // Gemini Imagen: ~$0.04/image, Gemini experimental: free during preview
+  // OpenAI DALL-E 3: ~$0.04/image
+  if (provider === 'gemini') {
+    if (model.includes('imagen')) return 0.04 * imageCount;
+    // gemini-3-pro-image-preview is experimental/free
+    return 0;
+  }
+  if (provider === 'openai') {
+    if (model.includes('dall-e-3')) return 0.04 * imageCount;
+  }
+  return 0;
+}
+
+// 画像生成ログ記録
+async function logImageGeneration(params: ImageGenerationLogParams): Promise<void> {
+  try {
+    const estimatedCost = estimateImageGenerationCost(params.provider, params.model, params.imageCount);
+    
+    await params.env.DB.prepare(`
+      INSERT INTO image_generation_logs (
+        user_id, project_id, scene_id, character_key,
+        generation_type, provider, model,
+        api_key_source, sponsor_user_id,
+        prompt_length, image_count, image_size, image_quality,
+        estimated_cost_usd, billing_unit, billing_amount,
+        status, error_message, error_code,
+        reference_image_count
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      params.userId ?? 1, // デフォルトユーザー
+      params.projectId ?? null,
+      params.sceneId ?? null,
+      params.characterKey ?? null,
+      params.generationType,
+      params.provider,
+      params.model,
+      params.apiKeySource,
+      params.sponsorUserId ?? null,
+      params.promptLength ?? null,
+      params.imageCount ?? 1,
+      params.imageSize ?? null,
+      params.imageQuality ?? null,
+      estimatedCost,
+      'image', // billing_unit
+      params.imageCount ?? 1, // billing_amount
+      params.status,
+      params.errorMessage ?? null,
+      params.errorCode ?? null,
+      params.referenceImageCount ?? 0
+    ).run();
+    
+    console.log(`[Image Generation] Logged: type=${params.generationType}, scene=${params.sceneId}, keySource=${params.apiKeySource}, cost=$${estimatedCost.toFixed(4)}, status=${params.status}`);
+  } catch (error) {
+    // ログ記録の失敗は無視（本体処理に影響させない）
+    console.error('[Image Generation] Failed to log:', error);
+  }
+}
+
 // POST /api/projects/:id/generate-images - バッチ画像生成
 imageGeneration.post('/projects/:id/generate-images', async (c) => {
   try {
@@ -173,6 +255,24 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
             WHERE id = ?
           `).bind(imageResult.error || 'Unknown error', generationId).run()
 
+          // Log failed generation
+          const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
+          await logImageGeneration({
+            env: c.env,
+            userId: 1,
+            projectId: parseInt(projectId),
+            sceneId: scene.id as number,
+            generationType: 'scene_image',
+            provider: 'gemini',
+            model: 'gemini-3-pro-image-preview',
+            apiKeySource: 'system',
+            promptLength: finalPrompt.length,
+            referenceImageCount: referenceImages.length,
+            status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
+            errorMessage: imageResult.error || 'Unknown error',
+            errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+          });
+
           failedCount++
           continue
         }
@@ -218,28 +318,20 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
           throw new Error('r2_url is null after DB update')
         }
 
-        // Log API usage for cost tracking
-        // Gemini experimental models are currently free, but log for tracking
-        const estimatedCost = 0.0; // Gemini 3 Pro Image Preview is free during preview
-        try {
-          await c.env.DB.prepare(`
-            INSERT INTO api_usage_logs (
-              user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json
-            ) VALUES (?, ?, 'image_generation', 'gemini', 'gemini-3-pro-image-preview', ?, ?)
-          `).bind(
-            1, // Default user for now (should use actual user_id from session)
-            parseInt(projectId),
-            estimatedCost,
-            JSON.stringify({
-              scene_id: scene.id,
-              generation_id: generationId,
-              status: 'completed'
-            })
-          ).run();
-        } catch (logError) {
-          // Don't fail the main operation if logging fails
-          console.warn('[Image Gen] Failed to log API usage:', logError);
-        }
+        // Log image generation to image_generation_logs
+        await logImageGeneration({
+          env: c.env,
+          userId: 1, // TODO: Get from session
+          projectId: parseInt(projectId),
+          sceneId: scene.id as number,
+          generationType: 'scene_image',
+          provider: 'gemini',
+          model: 'gemini-3-pro-image-preview',
+          apiKeySource: 'system', // Scene images always use system key
+          promptLength: finalPrompt.length,
+          referenceImageCount: referenceImages.length,
+          status: 'success'
+        });
 
         successCount++
 
@@ -516,6 +608,24 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         WHERE id = ?
       `).bind(imageResult.error || 'Unknown error', generationId).run()
 
+      // Log failed generation
+      const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
+      await logImageGeneration({
+        env: c.env,
+        userId: 1, // TODO: Get from session
+        projectId: scene.project_id as number,
+        sceneId: parseInt(sceneId),
+        generationType: 'scene_image',
+        provider: 'gemini',
+        model: 'gemini-3-pro-image-preview',
+        apiKeySource: 'system',
+        promptLength: finalPrompt.length,
+        referenceImageCount: referenceImages.length,
+        status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
+        errorMessage: imageResult.error || 'Unknown error',
+        errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+      });
+
       return c.json({
         error: {
           code: 'GENERATION_FAILED',
@@ -588,7 +698,22 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       throw new Error('r2_url is null after DB update')
     }
 
-    // 13. レスポンス返却
+    // 13. Log successful generation
+    await logImageGeneration({
+      env: c.env,
+      userId: 1, // TODO: Get from session
+      projectId: scene.project_id as number,
+      sceneId: parseInt(sceneId),
+      generationType: 'scene_image',
+      provider: 'gemini',
+      model: 'gemini-3-pro-image-preview',
+      apiKeySource: 'system',
+      promptLength: finalPrompt.length,
+      referenceImageCount: referenceImages.length,
+      status: 'success'
+    });
+
+    // 14. レスポンス返却
     return c.json({
       scene_id: parseInt(sceneId),
       image_generation_id: generationId,
@@ -778,6 +903,24 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
             WHERE id = ?
           `).bind(imageResult.error || 'Unknown error', generationId).run()
           
+          // Log failed generation
+          const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
+          await logImageGeneration({
+            env: c.env,
+            userId: 1,
+            projectId: parseInt(projectId),
+            sceneId: scene.id as number,
+            generationType: 'scene_image',
+            provider: 'gemini',
+            model: 'gemini-3-pro-image-preview',
+            apiKeySource: 'system',
+            promptLength: finalPrompt.length,
+            referenceImageCount: referenceImages.length,
+            status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
+            errorMessage: imageResult.error || 'Unknown error',
+            errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+          });
+          
           failedCount++
           continue
         }
@@ -800,6 +943,21 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1
           WHERE id = ?
         `).bind(r2Key, r2Url, generationId).run()
+
+        // Log successful generation
+        await logImageGeneration({
+          env: c.env,
+          userId: 1,
+          projectId: parseInt(projectId),
+          sceneId: scene.id as number,
+          generationType: 'scene_image',
+          provider: 'gemini',
+          model: 'gemini-3-pro-image-preview',
+          apiKeySource: 'system',
+          promptLength: finalPrompt.length,
+          referenceImageCount: referenceImages.length,
+          status: 'success'
+        });
 
         successCount++
 

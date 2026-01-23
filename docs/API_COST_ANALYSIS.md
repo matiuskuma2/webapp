@@ -1,6 +1,6 @@
 # API コスト分析ドキュメント
 
-**最終更新**: 2026-01-23
+**最終更新**: 2026-01-23 (v2)
 **対象システム**: RILARC Scenario Generator (webapp)
 
 ---
@@ -43,17 +43,19 @@ const imageResult = await generateImageWithRetry(
 - **エンドポイント**: `POST /api/projects/:projectId/characters/generate-preview`
 - **ソースファイル**: `src/routes/character-models.ts`
 - **使用モデル**: `gemini-3-pro-image-preview`
-- **APIキー選択ロジック**:
+- **APIキー選択ロジック** (v2 改善済み):
   1. ユーザーの `user_api_keys` テーブルから `provider='google'` を検索
-  2. 見つかれば復号して使用（**ユーザー負担**）
-  3. 見つからなければ `c.env.GEMINI_API_KEY` を使用（**システム負担**）
+  2. 見つかれば復号して使用（**ユーザー負担**）→ ログに `api_key_source='user'` で記録
+  3. 見つからなければ `c.env.GEMINI_API_KEY` を使用（**システム負担**）→ ログに `api_key_source='system'` で記録
 - **コスト負担**: **ユーザー（優先）→ システム（フォールバック）**
+- **ログ記録**: `image_generation_logs` テーブルに詳細記録（v2 新規追加）
 
 ```typescript
-// character-models.ts:766-795
+// character-models.ts (v2 改善版)
 let apiKey: string | null = null;
+let apiKeySource: 'user' | 'system' = 'system';
 
-// Try to get from user settings
+// Step 1: Try to get user's API key
 if (sessionId) {
   const keyRecord = await c.env.DB.prepare(`
     SELECT encrypted_key FROM user_api_keys
@@ -62,16 +64,40 @@ if (sessionId) {
   
   if (keyRecord?.encrypted_key) {
     apiKey = await decryptApiKey(keyRecord.encrypted_key, c.env.ENCRYPTION_KEY);
+    apiKeySource = 'user';
+    console.log(`[Characters] Using USER API key for user_id=${userId}`);
   }
 }
 
-// Fallback to environment variable
+// Step 2: Fallback to system key (GEMINI_API_KEY only)
+// Note: GOOGLE_API_KEY is not defined in bindings.ts
 if (!apiKey) {
-  apiKey = c.env.GOOGLE_API_KEY || c.env.GEMINI_API_KEY;
+  if (c.env.GEMINI_API_KEY) {
+    apiKey = c.env.GEMINI_API_KEY;
+    apiKeySource = 'system';
+    console.log(`[Characters] Using SYSTEM GEMINI_API_KEY (user key not found)`);
+  }
 }
+
+// Log generation attempt to image_generation_logs
+await logImageGeneration({
+  env: c.env,
+  userId,
+  projectId,
+  characterKey,
+  generationType: 'character_preview',
+  provider: 'gemini',
+  model: 'gemini-3-pro-image-preview',
+  apiKeySource,  // ← 'user' or 'system'
+  status: result.success ? 'success' : (isQuotaExceeded ? 'quota_exceeded' : 'failed'),
+  // ...
+});
 ```
 
-**⚠️ 重要**: キャラクター画像生成でエラー「Quota exceeded」が発生した場合、これはシステムのGemini APIキーの無料枠が超過した可能性があります。ユーザーにAPIキーを登録してもらうことで、システムキーの使用を避けられます。
+**⚠️ 重要**: 
+- キャラクター画像生成でエラー「Quota exceeded」が発生した場合、どのキー（ユーザー or システム）でエラーになったかを `image_generation_logs.api_key_source` で確認可能
+- `GOOGLE_API_KEY` は `bindings.ts` に定義されていないため、フォールバックは `GEMINI_API_KEY` のみ
+- ユーザーにAPIキーを登録してもらうことで、システムキーの使用を回避可能
 
 ---
 
@@ -262,6 +288,77 @@ CREATE TABLE tts_usage_logs (
 );
 ```
 
+### image_generation_logs テーブル (v2 新規追加)
+画像生成の使用量とAPIキーソースを記録。
+
+```sql
+CREATE TABLE image_generation_logs (
+  id INTEGER PRIMARY KEY,
+  
+  -- 識別子
+  user_id INTEGER NOT NULL,               -- リクエストしたユーザー
+  project_id INTEGER,                     -- プロジェクトID
+  scene_id INTEGER,                       -- シーンID
+  character_key TEXT,                     -- キャラクターキー
+  
+  -- 画像生成タイプ
+  generation_type TEXT NOT NULL,          -- 'scene_image' | 'character_preview' | 'character_reference'
+  
+  -- プロバイダ情報
+  provider TEXT NOT NULL,                 -- 'gemini' | 'openai'
+  model TEXT NOT NULL,                    -- 'gemini-3-pro-image-preview' など
+  
+  -- APIキーソース (重要: コスト負担者の特定)
+  api_key_source TEXT NOT NULL,           -- 'user' | 'system' | 'sponsor'
+  sponsor_user_id INTEGER,                -- スポンサーの場合、スポンサーユーザーID
+  
+  -- 生成パラメータ
+  prompt_length INTEGER,
+  image_count INTEGER DEFAULT 1,
+  image_size TEXT,                        -- '1:1' | '16:9' など
+  image_quality TEXT,                     -- '1K' | '2K' など
+  
+  -- 課金情報
+  estimated_cost_usd REAL DEFAULT 0,
+  billing_unit TEXT,                      -- 'image' | 'request'
+  billing_amount INTEGER DEFAULT 1,
+  
+  -- 結果
+  status TEXT NOT NULL,                   -- 'success' | 'failed' | 'quota_exceeded'
+  error_message TEXT,
+  error_code TEXT,                        -- 'QUOTA_EXCEEDED' | 'RATE_LIMITED' など
+  
+  -- 追加メタデータ
+  reference_image_count INTEGER DEFAULT 0,
+  metadata_json TEXT,
+  
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+#### APIキーソースの追跡クエリ例
+
+```sql
+-- キーソース別の使用量集計
+SELECT 
+  DATE(created_at) as date,
+  api_key_source,
+  generation_type,
+  COUNT(*) as count,
+  SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as success_count,
+  SUM(CASE WHEN status = 'quota_exceeded' THEN 1 ELSE 0 END) as quota_exceeded_count,
+  SUM(estimated_cost_usd) as total_cost
+FROM image_generation_logs
+GROUP BY date, api_key_source, generation_type
+ORDER BY date DESC;
+
+-- システムキーでクォータ超過が発生した回数
+SELECT COUNT(*) as quota_exceeded_by_system
+FROM image_generation_logs
+WHERE api_key_source = 'system' 
+  AND status = 'quota_exceeded';
+```
+
 ---
 
 ## 4. 環境変数一覧
@@ -347,6 +444,7 @@ ORDER BY date DESC;
 
 ## 更新履歴
 
-| 日付 | 内容 |
-|------|------|
-| 2026-01-23 | 初版作成。全APIのコスト構造を分析・文書化 |
+| 日付 | バージョン | 内容 |
+|------|-----------|------|
+| 2026-01-23 | v2 | `image_generation_logs` テーブル追加。APIキーソース（user/system/sponsor）の追跡機能を実装。`GOOGLE_API_KEY` フォールバック参照の問題を特定・文書化 |
+| 2026-01-23 | v1 | 初版作成。全APIのコスト構造を分析・文書化 |
