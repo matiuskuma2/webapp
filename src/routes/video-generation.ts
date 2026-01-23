@@ -1501,7 +1501,31 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
       };
     }));
     
-    // Build project.json
+    // R3-A: アクティブBGMを取得
+    const activeBgm = await c.env.DB.prepare(`
+      SELECT id, r2_key, r2_url, duration_ms, volume, loop, 
+             fade_in_ms, fade_out_ms, ducking_enabled, ducking_volume,
+             ducking_attack_ms, ducking_release_ms
+      FROM project_audio_tracks
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+      LIMIT 1
+    `).bind(projectId).first<{
+      id: number;
+      r2_url: string | null;
+      volume: number;
+      loop: number;
+      fade_in_ms: number;
+      fade_out_ms: number;
+      ducking_enabled: number;
+      ducking_volume: number;
+      ducking_attack_ms: number;
+      ducking_release_ms: number;
+    }>();
+    
+    const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+    const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+    
+    // Build project.json with BGM settings
     const projectJson = buildProjectJson(
       project as any,
       scenes,
@@ -1511,6 +1535,23 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         fps: 30,
         transition_type: 'fade',
         transition_duration_ms: 500,
+        // R3-A: BGM設定
+        bgm: activeBgm ? {
+          enabled: true,
+          url: activeBgm.r2_url?.startsWith('/') 
+            ? `${siteUrl}${activeBgm.r2_url}` 
+            : activeBgm.r2_url || undefined,
+          volume: activeBgm.volume,
+          loop: activeBgm.loop === 1,
+          fade_in_ms: activeBgm.fade_in_ms,
+          fade_out_ms: activeBgm.fade_out_ms,
+          ducking: activeBgm.ducking_enabled === 1 ? {
+            enabled: true,
+            volume: activeBgm.ducking_volume,
+            attack_ms: activeBgm.ducking_attack_ms,
+            release_ms: activeBgm.ducking_release_ms,
+          } : undefined,
+        } : undefined,
       }
     );
     
