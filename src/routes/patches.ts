@@ -14,11 +14,17 @@
  */
 
 import { Hono } from 'hono';
+import { buildProjectJson, hashProjectJson } from '../utils/video-build-helpers';
 
 type Bindings = {
   DB: D1Database;
   R2: R2Bucket;
   SITE_URL?: string;
+  // AWS Video Build 関連
+  AWS_REGION?: string;
+  AWS_ACCESS_KEY_ID?: string;
+  AWS_SECRET_ACCESS_KEY?: string;
+  VIDEO_BUILD_ORCHESTRATOR_URL?: string;
 };
 
 const patches = new Hono<{ Bindings: Bindings }>();
@@ -771,25 +777,199 @@ patches.post('/projects/:projectId/patches/apply', async (c) => {
   const result = await executeApply(c.env.DB, patchRequestId, patchRequest);
 
   // patch_requestsを更新
-  const status = result.ok ? 'apply_ok' : 'apply_failed';
+  const applyStatus = result.ok ? 'apply_ok' : 'apply_failed';
   await c.env.DB.prepare(`
     UPDATE patch_requests 
     SET apply_result_json = ?, status = ?, updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).bind(
     JSON.stringify(result),
-    status,
+    applyStatus,
     patchRequestId
   ).run();
 
+  // Apply失敗の場合は即座に返す
+  if (!result.ok) {
+    return c.json({
+      ok: false,
+      patch_request_id: patchRequestId,
+      applied_count: result.applied_count,
+      errors: result.errors,
+      status: applyStatus,
+      next_action: null,
+    });
+  }
+
+  // ============================================================
+  // R4: Apply成功時に新ビルドを自動生成
+  // ============================================================
+  
+  let newVideoBuildId: number | null = null;
+  let buildError: string | null = null;
+  const sourceVideoBuildId = patchRequest.target.video_build_id || null;
+
+  try {
+    // 1. プロジェクト情報取得
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, user_id FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; title: string; user_id: number }>();
+
+    if (!project) {
+      throw new Error('Project not found');
+    }
+
+    // 2. シーンデータ取得（video-generation.ts と同じロジック）
+    const scenesWithAssets = await fetchScenesWithAssets(c.env.DB, projectId, c.env.SITE_URL);
+
+    if (scenesWithAssets.length === 0) {
+      throw new Error('No scenes found');
+    }
+
+    // 3. 元ビルドの設定を取得（あれば）、なければデフォルト
+    let buildSettings: Record<string, unknown> = {
+      motion: { preset: 'none' },
+      aspect_ratio: '9:16',
+      resolution: '1080p',
+      fps: 30,
+    };
+
+    if (sourceVideoBuildId) {
+      const sourceBuild = await c.env.DB.prepare(`
+        SELECT settings_json FROM video_builds WHERE id = ?
+      `).bind(sourceVideoBuildId).first<{ settings_json: string }>();
+      
+      if (sourceBuild?.settings_json) {
+        try {
+          buildSettings = JSON.parse(sourceBuild.settings_json);
+        } catch {
+          // パース失敗時はデフォルトを使用
+        }
+      }
+    }
+
+    // 4. BGM設定取得
+    const activeBgm = await c.env.DB.prepare(`
+      SELECT id, r2_url, volume, loop FROM project_audio_tracks
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+      LIMIT 1
+    `).bind(projectId).first<{ id: number; r2_url: string; volume: number; loop: number }>();
+
+    if (activeBgm) {
+      buildSettings.bgm = {
+        enabled: true,
+        url: activeBgm.r2_url,
+        volume: activeBgm.volume ?? 0.3,
+        loop: activeBgm.loop === 1,
+      };
+    }
+
+    // 5. project.json生成
+    const projectJson = buildProjectJson(
+      { id: project.id, title: project.title, user_id: project.user_id },
+      scenesWithAssets,
+      buildSettings as any,
+      {
+        aspectRatio: (buildSettings.aspect_ratio as string) || '9:16',
+        resolution: (buildSettings.resolution as string) || '1080p',
+        fps: (buildSettings.fps as number) || 30,
+      }
+    );
+
+    const projectJsonHash = await hashProjectJson(projectJson);
+    const projectJsonString = JSON.stringify(projectJson);
+
+    // 6. video_buildsレコード作成
+    const ownerUserId = project.user_id;
+    const executorUserId = project.user_id; // パッチ適用者（将来は認証から取得）
+
+    const insertResult = await c.env.DB.prepare(`
+      INSERT INTO video_builds (
+        project_id, owner_user_id, executor_user_id, 
+        settings_json, status, progress_stage, progress_message,
+        total_scenes, total_duration_ms, project_json_version, project_json_hash,
+        source_video_build_id, patch_request_id
+      ) VALUES (?, ?, ?, ?, 'validating', 'Preparing', 'パッチ適用後の新ビルド準備中...', ?, ?, '1.1', ?, ?, ?)
+    `).bind(
+      projectId,
+      ownerUserId,
+      executorUserId,
+      JSON.stringify(buildSettings),
+      scenesWithAssets.length,
+      (projectJson as any).summary?.total_duration_ms ?? 0,
+      projectJsonHash,
+      sourceVideoBuildId,
+      patchRequestId
+    ).run();
+
+    newVideoBuildId = insertResult.meta.last_row_id as number;
+
+    // 7. R2にproject.jsonを保存
+    const r2Key = `video-builds/${newVideoBuildId}/project.json`;
+    await c.env.R2.put(r2Key, projectJsonString, {
+      httpMetadata: { contentType: 'application/json' },
+    });
+
+    await c.env.DB.prepare(`
+      UPDATE video_builds SET project_json_r2_key = ? WHERE id = ?
+    `).bind(r2Key, newVideoBuildId).run();
+
+    // 8. AWS Orchestrator呼び出し（オプション - 設定がなければスキップ）
+    const hasAwsConfig = c.env.AWS_REGION && c.env.AWS_ACCESS_KEY_ID && 
+                         c.env.AWS_SECRET_ACCESS_KEY && c.env.VIDEO_BUILD_ORCHESTRATOR_URL;
+
+    if (hasAwsConfig) {
+      try {
+        const { startVideoBuild, createVideoBuildClientConfig } = await import('../utils/aws-video-build-client');
+        const clientConfig = createVideoBuildClientConfig(c.env as any);
+        
+        if (clientConfig) {
+          await startVideoBuild(clientConfig, {
+            video_build_id: newVideoBuildId,
+            project_id: projectId,
+            owner_user_id: ownerUserId,
+            executor_user_id: executorUserId,
+            is_delegation: false,
+            project_json: projectJson,
+            build_settings: buildSettings,
+          });
+        }
+      } catch (awsError) {
+        // AWS呼び出し失敗はビルド自体の失敗にしない（手動リトライ可能）
+        console.warn('[Patch Apply] AWS Orchestrator call failed:', awsError);
+        await c.env.DB.prepare(`
+          UPDATE video_builds 
+          SET status = 'queued', progress_message = 'AWS呼び出し保留中（手動で開始してください）'
+          WHERE id = ?
+        `).bind(newVideoBuildId).run();
+      }
+    } else {
+      // AWS設定なし - ステータスをqueuedに
+      await c.env.DB.prepare(`
+        UPDATE video_builds 
+        SET status = 'queued', progress_message = 'AWS設定なし（開発環境）'
+        WHERE id = ?
+      `).bind(newVideoBuildId).run();
+    }
+
+  } catch (buildGenError) {
+    buildError = buildGenError instanceof Error ? buildGenError.message : String(buildGenError);
+    console.error('[Patch Apply] Video build generation error:', buildGenError);
+  }
+
   return c.json({
-    ok: result.ok,
+    ok: true,
     patch_request_id: patchRequestId,
     applied_count: result.applied_count,
     errors: result.errors,
-    status,
-    // 次のステップ案内
-    next_action: result.ok ? 'Video Build を再実行して変更を反映してください' : null,
+    status: applyStatus,
+    // 新ビルド情報
+    new_video_build_id: newVideoBuildId,
+    build_generation_error: buildError,
+    next_action: newVideoBuildId 
+      ? `新ビルド #${newVideoBuildId} を作成しました。レンダリング進捗を確認してください。`
+      : buildError 
+        ? `パッチは適用されましたが、ビルド生成に失敗しました: ${buildError}`
+        : 'Video Build を手動で実行してください',
   });
 });
 
@@ -870,5 +1050,190 @@ patches.get('/projects/:projectId/patches/:patchId', async (c) => {
     })),
   });
 });
+
+// ============================================================
+// ヘルパー関数: シーンデータ取得（video-generation.ts と同等のロジック）
+// ============================================================
+
+const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+
+function toAbsoluteUrl(relativeUrl: string | null, siteUrl?: string): string | null {
+  if (!relativeUrl) return null;
+  if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
+    return relativeUrl;
+  }
+  const baseUrl = siteUrl || DEFAULT_SITE_URL;
+  return `${baseUrl}${relativeUrl.startsWith('/') ? '' : '/'}${relativeUrl}`;
+}
+
+/**
+ * シーンデータを取得（video-generation.ts の preview-json と同等）
+ * 新ビルド生成に必要な最小限のデータを取得
+ */
+async function fetchScenesWithAssets(
+  db: D1Database,
+  projectId: number,
+  siteUrl?: string
+): Promise<any[]> {
+  // シーン一覧取得
+  const scenesResult = await db.prepare(`
+    SELECT 
+      s.id, s.idx, s.role, s.title, s.dialogue,
+      s.display_asset_type, s.text_render_mode, s.duration_override_ms
+    FROM scenes s
+    WHERE s.project_id = ?
+    ORDER BY s.idx ASC
+  `).bind(projectId).all();
+
+  const scenes: any[] = [];
+
+  for (const scene of scenesResult.results) {
+    const sceneId = scene.id as number;
+
+    // アクティブ画像
+    const activeImage = await db.prepare(`
+      SELECT id, r2_key, r2_url FROM image_generations
+      WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(sceneId).first<{ id: number; r2_key: string; r2_url: string }>();
+
+    // アクティブ漫画
+    const activeComic = await db.prepare(`
+      SELECT id, r2_key, r2_url FROM comic_image_generations
+      WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(sceneId).first<{ id: number; r2_key: string; r2_url: string }>();
+
+    // Utterances（音声パーツ）
+    const utteranceRows = await db.prepare(`
+      SELECT 
+        su.id, su.order_index, su.speaker_type, su.character_key, su.text,
+        su.audio_generation_id, ag.duration_ms, ag.status as audio_status, ag.r2_url as audio_url
+      FROM scene_utterances su
+      LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
+      WHERE su.scene_id = ?
+      ORDER BY su.order_index ASC
+    `).bind(sceneId).all();
+
+    // Balloons
+    const balloonRows = await db.prepare(`
+      SELECT 
+        id, utterance_id, x, y, w, h, shape, display_mode,
+        start_ms, end_ms, bubble_r2_url, bubble_width_px, bubble_height_px, z_index
+      FROM scene_balloons
+      WHERE scene_id = ?
+      ORDER BY z_index ASC, id ASC
+    `).bind(sceneId).all();
+
+    // SFX
+    const sfxRows = await db.prepare(`
+      SELECT id, name, r2_url, start_ms, end_ms, volume, loop, fade_in_ms, fade_out_ms
+      FROM scene_audio_cues
+      WHERE scene_id = ? AND is_active = 1
+      ORDER BY start_ms ASC
+    `).bind(sceneId).all();
+
+    // Motion
+    const motionRow = await db.prepare(`
+      SELECT sm.motion_preset_id, mp.motion_type, sm.custom_params
+      FROM scene_motion sm
+      LEFT JOIN motion_presets mp ON sm.motion_preset_id = mp.id
+      WHERE sm.scene_id = ?
+    `).bind(sceneId).first<{ motion_preset_id: string; motion_type: string; custom_params: string }>();
+
+    // display_asset_type と text_render_mode
+    const displayAssetType = (scene.display_asset_type as string) || 'image';
+    const textRenderMode = (scene.text_render_mode as string) || 
+      (displayAssetType === 'comic' ? 'baked' : 'remotion');
+
+    // シーンデータ構築
+    const sceneData: any = {
+      id: sceneId,
+      idx: scene.idx,
+      role: scene.role || '',
+      title: scene.title || '',
+      dialogue: scene.dialogue || '',
+      display_asset_type: displayAssetType,
+      text_render_mode: textRenderMode,
+      duration_override_ms: scene.duration_override_ms || null,
+    };
+
+    // 画像
+    if (displayAssetType === 'comic' && activeComic) {
+      sceneData.active_comic = {
+        id: activeComic.id,
+        r2_key: activeComic.r2_key,
+        r2_url: toAbsoluteUrl(activeComic.r2_url, siteUrl),
+      };
+    } else if (activeImage) {
+      sceneData.active_image = {
+        id: activeImage.id,
+        r2_key: activeImage.r2_key,
+        r2_url: toAbsoluteUrl(activeImage.r2_url, siteUrl),
+      };
+    }
+
+    // Utterances
+    sceneData.utterances = utteranceRows.results.map(u => ({
+      id: u.id,
+      order_index: u.order_index,
+      speaker_type: u.speaker_type,
+      character_key: u.character_key,
+      text: u.text,
+      duration_ms: u.duration_ms || 0,
+      audio_status: u.audio_status,
+      audio_url: toAbsoluteUrl(u.audio_url as string | null, siteUrl),
+    }));
+
+    // Balloons
+    sceneData.balloons = balloonRows.results.map(b => ({
+      id: b.id,
+      utterance_id: b.utterance_id,
+      position: { x: b.x, y: b.y },
+      size: { w: b.w, h: b.h },
+      shape: b.shape,
+      display_mode: b.display_mode,
+      timing: b.display_mode === 'manual_window' 
+        ? { start_ms: b.start_ms, end_ms: b.end_ms }
+        : null,
+      z_index: b.z_index,
+      bubble_r2_url: toAbsoluteUrl(b.bubble_r2_url as string | null, siteUrl),
+      bubble_width_px: b.bubble_width_px,
+      bubble_height_px: b.bubble_height_px,
+    }));
+
+    // SFX
+    sceneData.sfx = sfxRows.results.map(s => ({
+      id: s.id,
+      name: s.name,
+      url: toAbsoluteUrl(s.r2_url as string | null, siteUrl),
+      start_ms: s.start_ms,
+      end_ms: s.end_ms,
+      volume: s.volume,
+      loop: s.loop === 1,
+      fade_in_ms: s.fade_in_ms,
+      fade_out_ms: s.fade_out_ms,
+    }));
+
+    // Motion
+    if (motionRow) {
+      let params = {};
+      if (motionRow.custom_params) {
+        try {
+          params = JSON.parse(motionRow.custom_params);
+        } catch { /* ignore */ }
+      }
+      sceneData.motion = {
+        preset_id: motionRow.motion_preset_id,
+        motion_type: motionRow.motion_type || 'none',
+        params,
+      };
+    }
+
+    scenes.push(sceneData);
+  }
+
+  return scenes;
+}
 
 export default patches;
