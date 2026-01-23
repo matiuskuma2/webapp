@@ -922,14 +922,35 @@ app.get('/projects/:id', (c) => {
                     制作ボード（Builder）
                 </h2>
                 
+                <!-- Video Build Wizard (preflight-based) -->
+                <div id="builderWizard" class="mb-4 p-4 bg-white rounded-xl border-2 border-indigo-200 shadow-sm">
+                    <div class="flex items-center justify-between gap-3">
+                        <div class="flex items-center gap-2">
+                            <i class="fas fa-route text-indigo-600 text-lg"></i>
+                            <div>
+                                <div class="font-bold text-gray-800">動画生成の流れ（次にやること）</div>
+                                <div class="text-xs text-gray-500">preflightに基づいて自動表示</div>
+                            </div>
+                        </div>
+                        <button onclick="refreshBuilderWizard()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs hover:bg-indigo-700 transition-colors">
+                            <i class="fas fa-sync-alt mr-1"></i>更新
+                        </button>
+                    </div>
+
+                    <div id="builderWizardSteps" class="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+                        <div class="text-gray-400 text-sm p-2">読み込み中...</div>
+                    </div>
+                    <div id="builderWizardTips" class="mt-3 text-xs text-gray-600"></div>
+                </div>
+
                 <!-- Top Action Bar (Phase F-5: Improved workflow order) -->
                 <div class="mb-6 p-4 bg-gray-50 rounded-lg border-2 border-gray-200">
-                    <!-- Workflow Guide -->
+                    <!-- Workflow Guide (compact) -->
                     <div class="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
                         <p class="text-sm text-blue-800">
                             <i class="fas fa-info-circle mr-2"></i>
-                            <strong>推奨ワークフロー:</strong>
-                            ① キャラ割り当て → ② スタイル設定 → ③ 画像生成
+                            <strong>素材準備:</strong>
+                            ① キャラ割り当て → ② スタイル設定 → ③ 画像生成 → <strong class="text-purple-700">④ 動画ビルド</strong>
                         </p>
                     </div>
                     
@@ -1762,109 +1783,153 @@ app.get('/projects/:id', (c) => {
         </div>
     </div>
 
-    <!-- Safe Chat v0: Chat Edit Slide Panel -->
-    <div id="chatEditPanel" class="fixed inset-y-0 right-0 w-full max-w-md bg-white shadow-2xl transform translate-x-full transition-transform duration-300 ease-in-out z-40">
-        <div class="flex flex-col h-full">
-            <!-- Header -->
-            <div class="bg-gradient-to-r from-indigo-600 to-purple-600 px-4 py-3 flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                    <i class="fas fa-comments text-white"></i>
-                    <h2 class="text-lg font-bold text-white">チャットで修正</h2>
-                    <span id="chatEditBuildId" class="text-xs bg-white/20 text-white px-2 py-0.5 rounded-full"></span>
-                </div>
-                <button onclick="closeChatEditPanel()" class="text-white hover:bg-white/20 p-2 rounded transition-colors">
-                    <i class="fas fa-times"></i>
-                </button>
-            </div>
-            
-            <!-- Build Preview -->
-            <div id="chatEditPreview" class="bg-gray-900 p-2 hidden">
-                <video id="chatEditVideo" controls class="w-full rounded" preload="metadata">
-                    <source src="" type="video/mp4">
-                </video>
-            </div>
-            
-            <!-- Chat History -->
-            <div id="chatEditHistory" class="flex-1 overflow-y-auto p-4 space-y-4">
-                <!-- Welcome message -->
-                <div class="bg-gray-100 rounded-lg p-3">
-                    <p class="text-sm text-gray-600">
-                        <i class="fas fa-info-circle mr-1 text-indigo-500"></i>
-                        動画の修正指示を入力してください。対応可能な修正：
-                    </p>
-                    <ul class="text-xs text-gray-500 mt-2 ml-4 space-y-1">
-                        <li>• <strong>バブル</strong>: 表示タイミング・位置の調整</li>
-                        <li>• <strong>SFX</strong>: 音量・タイミングの変更、削除</li>
-                        <li>• <strong>BGM</strong>: 音量・ループ設定</li>
-                    </ul>
-                    <p class="text-xs text-amber-600 mt-2">
-                        <i class="fas fa-exclamation-triangle mr-1"></i>
-                        テキスト変更・画像差し替えは未対応です
-                    </p>
-                </div>
-            </div>
-            
-            <!-- Dry-run Result (shown after dry-run) -->
-            <div id="chatEditDryRunResult" class="hidden border-t border-gray-200 p-4 bg-gray-50 max-h-60 overflow-y-auto">
-                <div class="flex items-center justify-between mb-2">
-                    <h4 class="font-semibold text-gray-800 flex items-center gap-2">
-                        <i class="fas fa-search-plus text-blue-600"></i>
-                        変更プレビュー
-                    </h4>
-                    <span id="chatEditDryRunStatus" class="text-xs px-2 py-1 rounded-full"></span>
-                </div>
-                <div id="chatEditDryRunChanges" class="space-y-2">
-                    <!-- Changes will be rendered here -->
-                </div>
-                <div id="chatEditDryRunErrors" class="hidden mt-3 p-2 bg-red-50 rounded border border-red-200 text-xs text-red-700">
-                </div>
-                <div class="flex gap-2 mt-3">
-                    <button 
-                        id="btnChatEditApply"
-                        onclick="applyChatEdit()"
-                        class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-50"
-                    >
-                        <i class="fas fa-check"></i>
-                        適用して新ビルド生成
-                    </button>
-                    <button 
-                        onclick="cancelChatEditDryRun()"
-                        class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm"
-                    >
-                        キャンセル
-                    </button>
-                </div>
-            </div>
-            
-            <!-- Input Area -->
-            <div id="chatEditInputArea" class="border-t border-gray-200 p-4">
-                <div class="flex gap-2">
-                    <div class="flex-1">
-                        <textarea 
-                            id="chatEditInput"
-                            rows="2"
-                            class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm resize-none"
-                            placeholder="例: バブル1を+500ms遅らせて、BGM音量を20%に"
-                        ></textarea>
+    <!-- Safe Chat v1: Chat Edit Modal (CENTER POPUP) -->
+    <div id="chatEditModal" class="hidden fixed inset-0 z-50">
+        <!-- Backdrop -->
+        <div id="chatEditBackdrop" class="absolute inset-0 bg-black/50" onclick="closeChatEditModal()"></div>
+
+        <!-- Modal -->
+        <div class="relative min-h-screen flex items-center justify-center p-4">
+            <div class="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <i class="fas fa-comments text-white text-lg"></i>
+                        <div>
+                            <h3 class="text-white font-bold text-lg leading-tight">チャットで修正</h3>
+                            <p class="text-white/80 text-xs">
+                                <span id="chatEditBuildLabel">Build # -</span>
+                                <span class="mx-2">•</span>
+                                <span id="chatEditProjectLabel">Project -</span>
+                            </p>
+                        </div>
                     </div>
-                    <button 
-                        id="btnChatEditSend"
-                        onclick="sendChatEditMessage()"
-                        class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors disabled:opacity-50"
-                    >
-                        <i class="fas fa-paper-plane"></i>
+                    <button class="text-white/90 hover:bg-white/15 p-2 rounded-lg transition-colors" onclick="closeChatEditModal()">
+                        <i class="fas fa-times text-lg"></i>
                     </button>
                 </div>
-                <div class="flex items-center gap-2 mt-2 text-xs text-gray-500">
-                    <i class="fas fa-keyboard"></i>
-                    <span>Enter で送信（Shift+Enter で改行）</span>
+
+                <!-- Body -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-0">
+                    <!-- Left: Video Preview -->
+                    <div class="bg-gray-950 p-4">
+                        <div class="text-xs text-gray-300 mb-2 flex items-center gap-2">
+                            <i class="fas fa-film"></i>
+                            <span>プレビュー（完成動画）</span>
+                        </div>
+
+                        <div class="rounded-lg overflow-hidden border border-white/10">
+                            <video id="chatEditVideo" controls class="w-full" preload="metadata">
+                                <source id="chatEditVideoSrc" src="" type="video/mp4" />
+                            </video>
+                        </div>
+
+                        <div class="mt-3 text-xs text-gray-400 leading-relaxed">
+                            <div class="font-semibold text-gray-300 mb-1">対応する修正:</div>
+                            <ul class="list-disc ml-4 space-y-0.5">
+                                <li>バブル: タイミング・位置調整</li>
+                                <li>SFX: 音量・タイミング変更</li>
+                                <li>BGM: 音量・ループ設定</li>
+                            </ul>
+                            <div class="mt-2 text-amber-400/80">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>
+                                画像差し替え・テキスト変更は未対応
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Chat -->
+                    <div class="p-4 flex flex-col max-h-[70vh]">
+                        <!-- Guidance -->
+                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-700">
+                            <div class="font-semibold text-gray-800 mb-1">
+                                <i class="fas fa-lightbulb text-amber-500 mr-1"></i>例:
+                            </div>
+                            <ul class="list-disc ml-5 space-y-1">
+                                <li>「シーン2のバブル1を+300ms遅らせて」</li>
+                                <li>「シーン3のSFX1の音量を50%に」</li>
+                                <li>「BGM音量を20%に」「BGMをループON」</li>
+                            </ul>
+                        </div>
+
+                        <!-- History -->
+                        <div id="chatEditHistory" class="flex-1 overflow-y-auto mt-3 space-y-3 pr-1 min-h-[150px]"></div>
+
+                        <!-- Dry-run Result -->
+                        <div id="chatEditDryRunBox" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3">
+                            <div class="flex items-center justify-between">
+                                <div class="font-semibold text-amber-900 text-sm flex items-center gap-2">
+                                    <i class="fas fa-search-plus"></i>
+                                    変更プレビュー（dry-run）
+                                </div>
+                                <span id="chatEditDryRunBadge" class="text-xs px-2 py-1 rounded-full bg-amber-200 text-amber-900">-</span>
+                            </div>
+
+                            <div id="chatEditDryRunChanges" class="mt-2 space-y-2 max-h-32 overflow-y-auto"></div>
+
+                            <div id="chatEditDryRunErrors" class="hidden mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2"></div>
+
+                            <div class="mt-3 flex gap-2">
+                                <button
+                                    id="btnChatEditApply"
+                                    class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold disabled:opacity-50"
+                                    onclick="applyChatEdit()"
+                                >
+                                    <i class="fas fa-check mr-1"></i>適用して新ビルド生成
+                                </button>
+                                <button
+                                    class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm"
+                                    onclick="cancelChatEditDryRun()"
+                                >
+                                    キャンセル
+                                </button>
+                            </div>
+
+                            <div class="mt-2 text-xs text-gray-600">
+                                <i class="fas fa-info-circle text-blue-500 mr-1"></i>
+                                元のビルドは残ります。新しいビルド #XX を作成してレンダリングします。
+                            </div>
+                        </div>
+
+                        <!-- Input -->
+                        <div class="mt-3 border-t pt-3">
+                            <div class="flex gap-2">
+                                <textarea
+                                    id="chatEditInput"
+                                    rows="2"
+                                    class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm resize-none"
+                                    placeholder="修正指示を入力（Enterで送信 / Shift+Enterで改行）"
+                                ></textarea>
+                                <button
+                                    id="btnChatEditSend"
+                                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                                    onclick="sendChatEditMessage()"
+                                >
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </div>
+                            <div class="mt-2 text-xs text-gray-500 flex items-center gap-2">
+                                <i class="fas fa-shield-alt text-green-500"></i>
+                                <span>安全な修正のみ適用（dry-run → apply）</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
+
+                <!-- Footer -->
+                <div class="px-5 py-3 bg-gray-50 border-t flex items-center justify-between">
+                    <div class="text-xs text-gray-500">
+                        <span class="font-semibold">Safe Chat v1</span> (SSOT Patch)
+                    </div>
+                    <button class="text-sm text-gray-700 hover:text-gray-900" onclick="closeChatEditModal()">
+                        閉じる
+                    </button>
+                </div>
+
             </div>
         </div>
     </div>
-    
-    <!-- Chat Edit Panel Backdrop -->
-    <div id="chatEditBackdrop" class="fixed inset-0 bg-black bg-opacity-50 hidden z-30" onclick="closeChatEditPanel()"></div>
 
     <!-- Phase 2-3: Scene Edit Modal -->
     <div id="scene-edit-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50" style="overflow-y: auto;">

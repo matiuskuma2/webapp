@@ -107,6 +107,9 @@ async function loadProject() {
     
     // R3-A: Load BGM status
     loadBgmStatus();
+    
+    // Safe Chat v1: Refresh Builder Wizard
+    refreshBuilderWizard();
   } catch (error) {
     console.error('Load project error:', error);
     showToast('プロジェクトの読み込みに失敗しました', 'error');
@@ -6893,7 +6896,7 @@ function renderVideoBuildItem(build) {
       actionHtml = `
         <div class="flex items-center gap-2">
           <button 
-            onclick="openChatEditPanel(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+            onclick="openChatEditModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
             class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold flex items-center gap-2"
             title="チャットで修正"
           >
@@ -8049,95 +8052,75 @@ window.chatEditState = {
 };
 
 /**
- * Open the chat edit panel for a specific build
+ * Open the chat edit modal for a specific build (v1 Center Popup)
  * @param {number} buildId 
  * @param {string} videoUrl 
  */
-function openChatEditPanel(buildId, videoUrl) {
-  const panel = document.getElementById('chatEditPanel');
-  const backdrop = document.getElementById('chatEditBackdrop');
-  const buildIdSpan = document.getElementById('chatEditBuildId');
-  const previewDiv = document.getElementById('chatEditPreview');
-  const video = document.getElementById('chatEditVideo');
-  const history = document.getElementById('chatEditHistory');
-  const dryRunResult = document.getElementById('chatEditDryRunResult');
-  const inputArea = document.getElementById('chatEditInputArea');
-  
-  if (!panel || !backdrop) return;
-  
+function openChatEditModal(buildId, videoUrl) {
+  const modal = document.getElementById('chatEditModal');
+  if (!modal) return;
+
   // Reset state
   window.chatEditState = {
     buildId,
-    videoUrl,
+    projectId: PROJECT_ID,
+    videoUrl: videoUrl || null,
     patchRequestId: null,
     dryRunResult: null,
-    messages: [],
   };
-  
-  // Update UI
-  buildIdSpan.textContent = `Build #${buildId}`;
-  
-  // Show video preview if URL is available
-  if (videoUrl && video) {
-    video.querySelector('source').src = videoUrl;
+
+  // Update header labels
+  const buildLabel = document.getElementById('chatEditBuildLabel');
+  const projectLabel = document.getElementById('chatEditProjectLabel');
+  if (buildLabel) buildLabel.textContent = `Build #${buildId}`;
+  if (projectLabel) projectLabel.textContent = `Project #${PROJECT_ID}`;
+
+  // Set video source
+  const videoSrc = document.getElementById('chatEditVideoSrc');
+  const video = document.getElementById('chatEditVideo');
+  if (videoSrc && videoUrl) {
+    videoSrc.src = videoUrl;
     video.load();
-    previewDiv.classList.remove('hidden');
-  } else {
-    previewDiv.classList.add('hidden');
   }
-  
-  // Reset history to welcome message
-  history.innerHTML = `
-    <div class="bg-gray-100 rounded-lg p-3">
-      <p class="text-sm text-gray-600">
-        <i class="fas fa-info-circle mr-1 text-indigo-500"></i>
-        動画 #${buildId} の修正指示を入力してください。対応可能な修正：
-      </p>
-      <ul class="text-xs text-gray-500 mt-2 ml-4 space-y-1">
-        <li>• <strong>バブル</strong>: 「シーン2のバブル1を+300ms遅らせて」</li>
-        <li>• <strong>SFX</strong>: 「シーン3のSFX1の音量を50%に」</li>
-        <li>• <strong>BGM</strong>: 「BGM音量を20%に下げて」「BGMをループにして」</li>
-      </ul>
-      <p class="text-xs text-amber-600 mt-2">
-        <i class="fas fa-exclamation-triangle mr-1"></i>
-        テキスト変更・画像差し替えは未対応です
-      </p>
-    </div>
-  `;
-  
-  // Hide dry-run result, show input area
-  dryRunResult.classList.add('hidden');
-  inputArea.classList.remove('hidden');
-  
+
+  // Reset history
+  const history = document.getElementById('chatEditHistory');
+  if (history) history.innerHTML = '';
+
+  // Hide dry-run box
+  const dryBox = document.getElementById('chatEditDryRunBox');
+  if (dryBox) dryBox.classList.add('hidden');
+
   // Clear input
   const input = document.getElementById('chatEditInput');
   if (input) input.value = '';
-  
-  // Open panel with animation
-  backdrop.classList.remove('hidden');
-  setTimeout(() => {
-    panel.classList.remove('translate-x-full');
-  }, 10);
-  
-  // Focus input
-  setTimeout(() => {
-    if (input) input.focus();
-  }, 300);
+
+  // Show modal
+  modal.classList.remove('hidden');
+  document.body.classList.add('overflow-hidden');
+
+  // Focus input after animation
+  setTimeout(() => input?.focus(), 100);
+}
+
+// Backward compatibility alias
+function openChatEditPanel(buildId, videoUrl) {
+  openChatEditModal(buildId, videoUrl);
 }
 
 /**
- * Close the chat edit panel
+ * Close the chat edit modal
  */
+function closeChatEditModal() {
+  const modal = document.getElementById('chatEditModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  document.body.classList.remove('overflow-hidden');
+}
+
+// Backward compatibility alias
 function closeChatEditPanel() {
-  const panel = document.getElementById('chatEditPanel');
-  const backdrop = document.getElementById('chatEditBackdrop');
-  
-  if (!panel || !backdrop) return;
-  
-  panel.classList.add('translate-x-full');
-  setTimeout(() => {
-    backdrop.classList.add('hidden');
-  }, 300);
+  closeChatEditModal();
 }
 
 /**
@@ -8269,16 +8252,14 @@ function parseMessageToIntent(message) {
 }
 
 /**
- * Send a chat edit message (perform dry-run)
+ * Send a chat edit message (perform dry-run) - v1 Modal
  */
 async function sendChatEditMessage() {
   const input = document.getElementById('chatEditInput');
   const sendBtn = document.getElementById('btnChatEditSend');
   const history = document.getElementById('chatEditHistory');
-  const dryRunResultEl = document.getElementById('chatEditDryRunResult');
-  const inputArea = document.getElementById('chatEditInputArea');
   
-  if (!input || !sendBtn) return;
+  if (!input || !sendBtn || !history) return;
   
   const message = input.value.trim();
   if (!message) return;
@@ -8359,11 +8340,8 @@ async function sendChatEditMessage() {
         </div>
       `;
       
-      // Show dry-run result panel
+      // Show dry-run result panel (v1: dry-run box appears, input stays visible)
       showDryRunResult(response.data);
-      
-      // Hide input area
-      inputArea.classList.add('hidden');
       
     } else {
       // Dry-run failed
@@ -8408,33 +8386,34 @@ async function sendChatEditMessage() {
 }
 
 /**
- * Show dry-run result in the panel
+ * Show dry-run result in the modal (v1)
  * @param {Object} result 
  */
 function showDryRunResult(result) {
-  const dryRunResultEl = document.getElementById('chatEditDryRunResult');
+  // v1 Modal elements
+  const dryBox = document.getElementById('chatEditDryRunBox');
+  const badge = document.getElementById('chatEditDryRunBadge');
   const changesEl = document.getElementById('chatEditDryRunChanges');
   const errorsEl = document.getElementById('chatEditDryRunErrors');
-  const statusEl = document.getElementById('chatEditDryRunStatus');
   const applyBtn = document.getElementById('btnChatEditApply');
   
-  if (!dryRunResultEl || !changesEl) return;
+  if (!dryBox || !changesEl) return;
   
   // Update status badge
   if (result.ok) {
-    statusEl.textContent = 'OK';
-    statusEl.className = 'text-xs px-2 py-1 rounded-full bg-green-100 text-green-700';
+    badge.textContent = `${result.resolved_ops || 0}件 OK`;
+    badge.className = 'text-xs px-2 py-1 rounded-full bg-green-200 text-green-900';
     applyBtn.disabled = false;
   } else {
-    statusEl.textContent = 'NG';
-    statusEl.className = 'text-xs px-2 py-1 rounded-full bg-red-100 text-red-700';
+    badge.textContent = 'NG';
+    badge.className = 'text-xs px-2 py-1 rounded-full bg-red-200 text-red-900';
     applyBtn.disabled = true;
   }
   
   // Render changes
   if (result.summary?.changes?.length > 0) {
     changesEl.innerHTML = result.summary.changes.map(change => `
-      <div class="flex items-center gap-2 p-2 bg-white rounded border border-gray-200">
+      <div class="flex items-center gap-2 p-2 bg-white rounded-lg border border-gray-200">
         <span class="text-lg">
           ${change.type === 'balloon' ? '💬' : change.type === 'sfx' ? '🔊' : '🎵'}
         </span>
@@ -8459,34 +8438,35 @@ function showDryRunResult(result) {
   // Show warnings if any
   if (result.warnings?.length > 0) {
     changesEl.innerHTML += `
-      <div class="p-2 bg-amber-50 rounded border border-amber-200 text-xs text-amber-700">
+      <div class="p-2 bg-amber-50 rounded-lg border border-amber-200 text-xs text-amber-700">
         <i class="fas fa-exclamation-triangle mr-1"></i>
         ${result.warnings.join('<br>')}
       </div>
     `;
   }
   
-  dryRunResultEl.classList.remove('hidden');
+  dryBox.classList.remove('hidden');
 }
 
 /**
- * Cancel dry-run and return to input mode
+ * Cancel dry-run and return to input mode (v1 Modal)
  */
 function cancelChatEditDryRun() {
-  const dryRunResultEl = document.getElementById('chatEditDryRunResult');
-  const inputArea = document.getElementById('chatEditInputArea');
+  // v1 Modal elements
+  const dryBox = document.getElementById('chatEditDryRunBox');
   const input = document.getElementById('chatEditInput');
   const sendBtn = document.getElementById('btnChatEditSend');
   
-  // Hide dry-run result, show input area
-  dryRunResultEl.classList.add('hidden');
-  inputArea.classList.remove('hidden');
+  // Hide dry-run box
+  if (dryBox) dryBox.classList.add('hidden');
   
   // Re-enable input
-  input.value = '';
-  input.disabled = false;
-  sendBtn.disabled = false;
-  input.focus();
+  if (input) {
+    input.value = '';
+    input.disabled = false;
+    input.focus();
+  }
+  if (sendBtn) sendBtn.disabled = false;
   
   // Clear state
   window.chatEditState.patchRequestId = null;
@@ -8538,9 +8518,9 @@ async function applyChatEdit() {
       // Reload patch history
       await loadPatchHistory();
       
-      // Close panel after a short delay
+      // Close modal after a short delay
       setTimeout(() => {
-        closeChatEditPanel();
+        closeChatEditModal();
         
         // Scroll to new build if created
         if (response.data.new_video_build_id) {
@@ -8601,9 +8581,121 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
-// Make chat edit functions globally available
-window.openChatEditPanel = openChatEditPanel;
-window.closeChatEditPanel = closeChatEditPanel;
+// Make chat edit functions globally available (v1 Modal)
+window.openChatEditModal = openChatEditModal;
+window.closeChatEditModal = closeChatEditModal;
+window.openChatEditPanel = openChatEditPanel;   // Backward compatibility
+window.closeChatEditPanel = closeChatEditPanel; // Backward compatibility
 window.sendChatEditMessage = sendChatEditMessage;
 window.cancelChatEditDryRun = cancelChatEditDryRun;
 window.applyChatEdit = applyChatEdit;
+
+// ===============================
+// Safe Chat v1: Builder Wizard (preflight-based)
+// ===============================
+
+/**
+ * Refresh the Builder Wizard UI based on preflight validation
+ */
+async function refreshBuilderWizard() {
+  const stepsEl = document.getElementById('builderWizardSteps');
+  const tipsEl = document.getElementById('builderWizardTips');
+  if (!stepsEl || !tipsEl) return;
+
+  stepsEl.innerHTML = '<div class="text-gray-400 text-sm p-2">読み込み中...</div>';
+  tipsEl.textContent = '';
+
+  try {
+    const res = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/video-builds/preflight`);
+    const v = res.data.validation || {};
+
+    // Extract validation data
+    const errors = v.errors || [];
+    const warnings = v.warnings || [];
+    const hasBgm = v.has_bgm === true;
+    const hasSfx = v.has_sfx === true;
+    const hasVoice = v.summary?.has_voice === true;
+    const canGenerate = res.data.can_generate === true;
+
+    // Build step cards
+    const stepCards = [];
+
+    // Step 1: 素材
+    stepCards.push(renderWizardCard(
+      '1) 素材',
+      errors.length === 0 ? '✅ OK' : '🔴 NG',
+      errors.length === 0 ? '画像/漫画/動画が揃っています' : errors[0] || '素材が足りません',
+      errors.length === 0 ? 'green' : 'red'
+    ));
+
+    // Step 2: 音（BGM/SFX/Voice）
+    const audioLayers = [hasBgm && 'BGM', hasSfx && 'SFX', hasVoice && 'Voice'].filter(Boolean);
+    stepCards.push(renderWizardCard(
+      '2) 音',
+      audioLayers.length ? '✅ OK' : '🟡 任意',
+      audioLayers.length ? `音あり: ${audioLayers.join(' + ')}` : '音なしでも生成可（無音）',
+      audioLayers.length ? 'green' : 'amber'
+    ));
+
+    // Step 3: 表現（バブル/モーション）
+    stepCards.push(renderWizardCard(
+      '3) 表現',
+      '🔧 調整可',
+      'バブル/モーションは生成後も修正OK',
+      'indigo'
+    ));
+
+    // Step 4: 生成
+    stepCards.push(renderWizardCard(
+      '4) 動画ビルド',
+      canGenerate ? '🚀 実行可' : '⏸ 待機',
+      canGenerate ? 'Video Build タブで生成' : 'まず素材エラーを解消',
+      canGenerate ? 'purple' : 'gray'
+    ));
+
+    stepsEl.innerHTML = stepCards.join('');
+
+    // Tips
+    if (errors.length > 0) {
+      tipsEl.innerHTML = '<span class="text-red-600"><i class="fas fa-exclamation-circle mr-1"></i><b>必須:</b> 素材が不足しています。赤い警告のシーンを修正してください。</span>';
+    } else if (!audioLayers.length) {
+      tipsEl.innerHTML = '<span class="text-amber-600"><i class="fas fa-lightbulb mr-1"></i><b>推奨:</b> BGMを設定すると、セリフなしシーンでも「音あり動画」になります。</span>';
+    } else if (warnings.length > 0) {
+      tipsEl.innerHTML = `<span class="text-amber-600"><i class="fas fa-info-circle mr-1"></i>${warnings[0]}</span>`;
+    } else {
+      tipsEl.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>生成準備OK。生成後は「チャットで修正」でタイミング調整できます。</span>';
+    }
+
+  } catch (e) {
+    console.warn('[Wizard] Preflight fetch failed:', e);
+    stepsEl.innerHTML = '<div class="text-gray-500 text-sm p-2">プロジェクトが完了状態になると表示されます</div>';
+    tipsEl.innerHTML = '';
+  }
+}
+
+/**
+ * Render a wizard step card
+ */
+function renderWizardCard(title, badge, desc, color) {
+  const colorMap = {
+    green: 'border-green-200 bg-green-50 text-green-800',
+    red: 'border-red-200 bg-red-50 text-red-800',
+    amber: 'border-amber-200 bg-amber-50 text-amber-800',
+    indigo: 'border-indigo-200 bg-indigo-50 text-indigo-800',
+    purple: 'border-purple-200 bg-purple-50 text-purple-800',
+    gray: 'border-gray-200 bg-gray-50 text-gray-600',
+  };
+  const cls = colorMap[color] || colorMap.indigo;
+  return `
+    <div class="p-3 rounded-xl border ${cls}">
+      <div class="flex items-center justify-between">
+        <div class="font-semibold text-sm">${title}</div>
+        <span class="text-xs px-2 py-0.5 rounded-full bg-white/60 border">${badge}</span>
+      </div>
+      <div class="mt-2 text-xs">${desc}</div>
+    </div>
+  `;
+}
+
+// Export wizard function
+window.refreshBuilderWizard = refreshBuilderWizard;
