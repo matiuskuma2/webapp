@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-23（R3-B SFX + R4 SSOT Patch API + apply後自動ビルド生成）
+- **最終更新**: 2026-01-24（AWS Orchestrator コードレビュー & Bug Fix）
 
 ---
 
