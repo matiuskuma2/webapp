@@ -1026,14 +1026,6 @@
       return;
     }
     
-    // Check if it's a Google voice (not ElevenLabs or Fish)
-    const isElevenLabs = voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-');
-    const isFish = voiceId.startsWith('fish:') || voiceId.startsWith('fish-');
-    if (!isElevenLabs && !isFish) {
-      toast('Google音声のプレビューは準備中です。ElevenLabs音声（el-で始まる）を選択してください。', 'warning');
-      return;
-    }
-    
     const btn = document.getElementById('wc-voice-preview-btn');
     if (btn) {
       btn.disabled = true;

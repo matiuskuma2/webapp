@@ -635,7 +635,11 @@ audioGeneration.post('/tts/preview', async (c) => {
         return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'FISH_AUDIO_API_TOKEN is not set'), 500);
       }
       
-      const referenceId = voice_id.replace('fish:', '').replace('fish-', '');
+      // Use preset lookup for reference_id (e.g., 'fish-nanamin' -> '71bf4cb71cd44df6aa603d51db8f92ff')
+      const referenceId = await getFishReferenceId(voice_id);
+      if (!referenceId) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, `Unknown Fish Audio voice: ${voice_id}`), 400);
+      }
       const fishResult = await generateFishTTS(c.env.FISH_AUDIO_API_TOKEN, {
         text: sampleText,
         reference_id: referenceId,
@@ -651,17 +655,16 @@ audioGeneration.post('/tts/preview', async (c) => {
         audio_url: `data:audio/mpeg;base64,${base64}`
       });
     } else {
-      // Google TTS - requires separate GOOGLE_TTS_API_KEY (not GEMINI_API_KEY)
-      // NOTE: Google Text-to-Speech API is a separate service from Gemini AI
-      const googleTtsKey = c.env.GOOGLE_TTS_API_KEY;
+      // Google TTS - can use either GOOGLE_TTS_API_KEY or GEMINI_API_KEY (same as actual TTS generation)
+      const googleTtsKey = c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY;
       if (!googleTtsKey) {
         // Fallback: Return informative message that Google TTS preview is not available
-        console.warn('[TTS Preview] GOOGLE_TTS_API_KEY not set. Google TTS preview is not available.');
+        console.warn('[TTS Preview] Neither GOOGLE_TTS_API_KEY nor GEMINI_API_KEY is set.');
         return c.json({
           success: false,
           error: {
             code: 'TTS_NOT_CONFIGURED',
-            message: 'Google TTS preview is not available. Please use ElevenLabs voices (prefix: el-) for preview, or configure GOOGLE_TTS_API_KEY.'
+            message: 'Google TTS preview is not available. Please configure GOOGLE_TTS_API_KEY or GEMINI_API_KEY.'
           }
         }, 400);
       }
