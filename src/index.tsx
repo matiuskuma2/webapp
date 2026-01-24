@@ -28,6 +28,7 @@ import utterances from './routes/utterances' // R1.5: Scene utterances API
 import sceneBalloons from './routes/scene-balloons' // A案 baked: Balloon image management
 import projectAudioTracks from './routes/project-audio-tracks' // R3-A: Project BGM
 import { sceneAudioCues } from './routes/scene-audio-cues' // R3-B: Scene SFX
+import webhooks from './routes/webhooks' // AWS Orchestrator webhooks
 import patches from './routes/patches' // R4: SSOT Patch API (chat edit)
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
@@ -93,6 +94,9 @@ app.route('/api', characterModels) // For /api/projects/:projectId/characters
 
 // Video I2V routes
 app.route('/api', videoGeneration) // For /api/scenes/:sceneId/generate-video, /api/videos/:videoId/*
+
+// Webhooks (explicit route for AWS Orchestrator callbacks)
+app.route('/api/webhooks', webhooks) // For /api/webhooks/video-build
 
 // Settings routes (API key management)
 app.route('/api', settings) // For /api/settings/api-keys/*
