@@ -651,10 +651,19 @@ audioGeneration.post('/tts/preview', async (c) => {
         audio_url: `data:audio/mpeg;base64,${base64}`
       });
     } else {
-      // Google TTS
-      const googleTtsKey = c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY;
+      // Google TTS - requires separate GOOGLE_TTS_API_KEY (not GEMINI_API_KEY)
+      // NOTE: Google Text-to-Speech API is a separate service from Gemini AI
+      const googleTtsKey = c.env.GOOGLE_TTS_API_KEY;
       if (!googleTtsKey) {
-        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'GOOGLE_TTS_API_KEY is not set'), 500);
+        // Fallback: Return informative message that Google TTS preview is not available
+        console.warn('[TTS Preview] GOOGLE_TTS_API_KEY not set. Google TTS preview is not available.');
+        return c.json({
+          success: false,
+          error: {
+            code: 'TTS_NOT_CONFIGURED',
+            message: 'Google TTS preview is not available. Please use ElevenLabs voices (prefix: el-) for preview, or configure GOOGLE_TTS_API_KEY.'
+          }
+        }, 400);
       }
 
       const ttsUrl = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleTtsKey}`;
@@ -677,6 +686,16 @@ audioGeneration.post('/tts/preview', async (c) => {
       if (!ttsResponse.ok) {
         const errorText = await ttsResponse.text();
         console.error('[TTS Preview] Google TTS error:', errorText);
+        // Check for specific API blocked error
+        if (errorText.includes('API_KEY_SERVICE_BLOCKED')) {
+          return c.json({
+            success: false,
+            error: {
+              code: 'TTS_API_BLOCKED',
+              message: 'Google TTS API is blocked for this key. Please enable Cloud Text-to-Speech API in Google Cloud Console.'
+            }
+          }, 403);
+        }
         return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'TTS generation failed'), 500);
       }
 

@@ -794,8 +794,8 @@ settings.delete('/user/characters/:characterKey', async (c) => {
 // R2-C: Motion Presets API
 // ====================================================================
 
-// GET /api/settings/motion-presets - モーションプリセット一覧
-settings.get('/motion-presets', async (c) => {
+// Motion presets handler (shared by both routes)
+async function handleGetMotionPresets(c: any) {
   try {
     const { results: presets } = await c.env.DB.prepare(`
       SELECT id, name, description, motion_type, params, sort_order
@@ -812,7 +812,7 @@ settings.get('/motion-presets', async (c) => {
     }>();
     
     return c.json({
-      presets: presets.map(p => ({
+      presets: presets.map((p: { id: string; name: string; description: string; motion_type: string; params: string; sort_order: number }) => ({
         id: p.id,
         name: p.name,
         description: p.description,
@@ -825,6 +825,12 @@ settings.get('/motion-presets', async (c) => {
     console.error('[Settings] Get motion presets error:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch motion presets' } }, 500);
   }
-});
+}
+
+// GET /api/settings/motion-presets - モーションプリセット一覧 (frontend expects this path)
+settings.get('/settings/motion-presets', handleGetMotionPresets);
+
+// GET /api/motion-presets - モーションプリセット一覧 (legacy path)
+settings.get('/motion-presets', handleGetMotionPresets);
 
 export default settings;

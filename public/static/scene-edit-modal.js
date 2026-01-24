@@ -348,6 +348,8 @@
       
       // 4. Duration (R3-A)
       const durationOverride = this.sceneData?.duration_override_ms;
+      // Note: utteranceStatus is obtained from sceneData.utterance_status
+      const utteranceStatus = this.sceneData?.utterance_status || { total: 0, with_audio: 0, total_duration_ms: 0 };
       const totalDurationMs = utteranceStatus?.total_duration_ms || 0;
       let durationMs = 3000;
       let durationSource = 'デフォルト';
