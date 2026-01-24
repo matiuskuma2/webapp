@@ -1416,6 +1416,29 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     `).bind(projectId).first<{ count: number }>();
     const hasSfx = (sfxCheck?.count || 0) > 0;
     
+    // バルーン表示ポリシーのサマリーを取得（display_policy SSOT）
+    const { results: balloonPolicyRows } = await c.env.DB.prepare(`
+      SELECT 
+        COALESCE(sb.display_policy, 'voice_window') as policy,
+        COUNT(*) as count
+      FROM scene_balloons sb
+      JOIN scenes s ON sb.scene_id = s.id
+      WHERE s.project_id = ?
+      GROUP BY COALESCE(sb.display_policy, 'voice_window')
+    `).bind(projectId).all<{ policy: string; count: number }>();
+    
+    const balloonPolicySummary = {
+      always_on: 0,
+      voice_window: 0,
+      manual_window: 0,
+    };
+    for (const row of balloonPolicyRows) {
+      if (row.policy === 'always_on') balloonPolicySummary.always_on = row.count;
+      else if (row.policy === 'manual_window') balloonPolicySummary.manual_window = row.count;
+      else balloonPolicySummary.voice_window = row.count;
+    }
+    const totalBalloons = balloonPolicySummary.always_on + balloonPolicySummary.voice_window + balloonPolicySummary.manual_window;
+    
     // 全体の判定: 素材OKなら生成可能（utterances は警告のみ）
     // 必須条件: 素材がある
     // 推奨条件: 音声パーツがある、BGMがある
@@ -1489,6 +1512,12 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
         description: outputPreset.description,
         aspect_ratio: outputPreset.aspect_ratio,
         resolution: outputPreset.resolution,
+        balloon_policy_default: outputPreset.balloon_policy_default,
+      },
+      // バルーン表示ポリシーのサマリー（UI表示用）
+      balloon_policy_summary: {
+        ...balloonPolicySummary,
+        total: totalBalloons,
       },
     });
     

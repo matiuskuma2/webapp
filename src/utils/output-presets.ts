@@ -7,6 +7,9 @@
 
 export type OutputPresetId = 'yt_long' | 'short_vertical' | 'yt_shorts' | 'reels' | 'tiktok' | 'custom';
 
+// Display policy types for balloons
+export type BalloonDisplayPolicy = 'always_on' | 'voice_window' | 'manual_window';
+
 export interface SafeZones {
   top: number;      // px from top to avoid UI overlays
   bottom: number;   // px from bottom
@@ -23,7 +26,7 @@ export interface OutputPresetConfig {
   fps: 30 | 60;
   text_scale: number;           // 1.0 = normal, 1.2 = 20% larger
   safe_zones: SafeZones;
-  balloon_policy_default: 'voice_window' | 'always_on';
+  balloon_policy_default: BalloonDisplayPolicy;
   motion_default: 'none' | 'kenburns_soft' | 'kenburns_medium';
   telop_style: 'bottom_bar' | 'center_large' | 'top_small';
   bgm_volume_default: number;   // 0.0 - 1.0
@@ -59,7 +62,7 @@ export const OUTPUT_PRESETS: Record<OutputPresetId, OutputPresetConfig> = {
     fps: 30,
     text_scale: 1.3,
     safe_zones: { top: 60, bottom: 160, left: 20, right: 20 },
-    balloon_policy_default: 'voice_window',
+    balloon_policy_default: 'always_on',  // 縦型は出しっぱなしがデフォルト
     motion_default: 'kenburns_medium',
     telop_style: 'center_large',
     bgm_volume_default: 0.20,
@@ -75,7 +78,7 @@ export const OUTPUT_PRESETS: Record<OutputPresetId, OutputPresetConfig> = {
     fps: 30,
     text_scale: 1.25,
     safe_zones: { top: 50, bottom: 140, left: 20, right: 60 }, // 右にシェア等ボタン
-    balloon_policy_default: 'voice_window',
+    balloon_policy_default: 'always_on',  // Shortsは出しっぱなしがデフォルト
     motion_default: 'kenburns_medium',
     telop_style: 'center_large',
     bgm_volume_default: 0.20,
@@ -91,7 +94,7 @@ export const OUTPUT_PRESETS: Record<OutputPresetId, OutputPresetConfig> = {
     fps: 30,
     text_scale: 1.3,
     safe_zones: { top: 80, bottom: 200, left: 20, right: 20 }, // 下部にUI被り多め
-    balloon_policy_default: 'voice_window',
+    balloon_policy_default: 'always_on',  // Reelsは出しっぱなしがデフォルト
     motion_default: 'kenburns_medium',
     telop_style: 'center_large',
     bgm_volume_default: 0.18,
@@ -107,7 +110,7 @@ export const OUTPUT_PRESETS: Record<OutputPresetId, OutputPresetConfig> = {
     fps: 30,
     text_scale: 1.35,
     safe_zones: { top: 100, bottom: 180, left: 20, right: 80 }, // 右にUIボタン多い
-    balloon_policy_default: 'voice_window',
+    balloon_policy_default: 'always_on',  // TikTokは出しっぱなしがデフォルト
     motion_default: 'kenburns_medium',
     telop_style: 'top_small',
     bgm_volume_default: 0.18,

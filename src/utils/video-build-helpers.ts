@@ -1192,25 +1192,60 @@ export function buildProjectJson(
       }
       
       for (const b of scene.balloons) {
-        // voice_window の場合は utterance のタイミングを使用
+        // display_policy を優先（SSOT）、無ければ display_mode から互換判定
+        const policy: 'always_on' | 'voice_window' | 'manual_window' =
+          (b.display_policy as 'always_on' | 'voice_window' | 'manual_window') ??
+          (b.display_mode === 'manual_window' ? 'manual_window' : 'voice_window');
+        
         let balloonStartMs = 0;
         let balloonEndMs = 0;
         let balloonText = '';
         
-        if (b.display_mode === 'voice_window' && b.utterance_id) {
-          const timing = utteranceTimingMap.get(b.utterance_id);
-          if (timing) {
-            balloonStartMs = timing.start_ms;
-            balloonEndMs = timing.end_ms;
-            balloonText = timing.text;
+        if (policy === 'always_on') {
+          // ★ 常時表示: シーン全体（0 〜 sceneDurationMs）
+          balloonStartMs = 0;
+          balloonEndMs = durationMs;
+          // テキストは utterance から取得（あれば）
+          if (b.utterance_id) {
+            const timing = utteranceTimingMap.get(b.utterance_id);
+            if (timing) balloonText = timing.text;
           }
-        } else if (b.display_mode === 'manual_window' && b.timing) {
-          balloonStartMs = b.timing.start_ms || 0;
-          balloonEndMs = b.timing.end_ms || 0;
+        } else if (policy === 'manual_window') {
+          // ★ 手動指定: start_ms/end_ms を使用
+          balloonStartMs = b.timing?.start_ms ?? 0;
+          balloonEndMs = b.timing?.end_ms ?? durationMs;
+          // テキストは utterance から取得（あれば）
+          if (b.utterance_id) {
+            const timing = utteranceTimingMap.get(b.utterance_id);
+            if (timing) balloonText = timing.text;
+          }
+        } else {
+          // voice_window: utterance のタイミングを使用
+          if (b.utterance_id) {
+            const timing = utteranceTimingMap.get(b.utterance_id);
+            if (timing) {
+              balloonStartMs = timing.start_ms;
+              balloonEndMs = timing.end_ms;
+              balloonText = timing.text;
+            } else {
+              // utterance が見つからない場合、always_on にフォールバック
+              console.warn(`[buildProjectJson] Balloon ${b.id}: utterance ${b.utterance_id} not found, falling back to always_on`);
+              balloonStartMs = 0;
+              balloonEndMs = durationMs;
+            }
+          } else {
+            // utterance_id がない voice_window は always_on にフォールバック
+            console.warn(`[buildProjectJson] Balloon ${b.id}: voice_window without utterance_id, falling back to always_on`);
+            balloonStartMs = 0;
+            balloonEndMs = durationMs;
+          }
         }
         
-        // utterance_id が必須なので、ない場合はスキップ
-        if (!b.utterance_id) continue;
+        // end <= start は無効なのでスキップ（事故防止）
+        if (balloonEndMs <= balloonStartMs) {
+          console.warn(`[buildProjectJson] Balloon ${b.id}: invalid timing (start=${balloonStartMs}, end=${balloonEndMs}), skipping`);
+          continue;
+        }
         
         // A案 baked: bubble_r2_url がある場合のみ balloons に追加
         // （baked モードでは画像がないと表示できない）
@@ -1225,6 +1260,8 @@ export function buildProjectJson(
           text: balloonText,
           start_ms: balloonStartMs,
           end_ms: balloonEndMs,
+          // ★ display_policy を明示（SSOT、Remotion/UI で参照可能）
+          display_policy: policy,
           position: b.position,
           size: b.size,
           shape: b.shape,

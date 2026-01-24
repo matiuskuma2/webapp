@@ -1879,6 +1879,30 @@ app.get('/projects/:id', (c) => {
                             </ul>
                         </div>
 
+                        <!-- Quick Actions (Balloon policy) -->
+                        <div class="mt-2 bg-white border border-gray-200 rounded-xl p-3">
+                            <div class="text-xs font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-bolt text-amber-500 mr-1"></i>クイック指示（クリックで入力）
+                            </div>
+                            <div class="flex flex-wrap gap-2">
+                                <button type="button"
+                                    class="px-3 py-1.5 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                    onclick="insertChatTemplate('シーン2のバブル1を「喋ってる時だけ表示」にして')">
+                                    💬 喋ってる時だけ
+                                </button>
+                                <button type="button"
+                                    class="px-3 py-1.5 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                    onclick="insertChatTemplate('シーン2のバブル1を「出しっぱなし」にして')">
+                                    💬 出しっぱなし
+                                </button>
+                                <button type="button"
+                                    class="px-3 py-1.5 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                    onclick="insertChatTemplate('BGM音量を20%に')">
+                                    🎵 BGM音量
+                                </button>
+                            </div>
+                        </div>
+
                         <!-- History -->
                         <div id="chatEditHistory" class="flex-1 overflow-y-auto mt-3 space-y-3 pr-1 min-h-[150px]"></div>
 

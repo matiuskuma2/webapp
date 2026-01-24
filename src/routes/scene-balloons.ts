@@ -11,6 +11,7 @@
  */
 
 import { Hono } from 'hono';
+import { getOutputPreset, type BalloonDisplayPolicy } from '../utils/output-presets';
 
 type Bindings = {
   DB: D1Database;
@@ -18,6 +19,35 @@ type Bindings = {
 };
 
 const sceneBalloons = new Hono<{ Bindings: Bindings }>();
+
+// Valid display_policy values
+const VALID_DISPLAY_POLICIES: BalloonDisplayPolicy[] = ['always_on', 'voice_window', 'manual_window'];
+
+/**
+ * Validate display_policy and related fields
+ * manual_window requires valid start_ms and end_ms
+ */
+function validateDisplayPolicy(policy: string | undefined, startMs: number | null | undefined, endMs: number | null | undefined): { valid: boolean; error?: string } {
+  if (!policy) return { valid: true }; // No policy change
+  
+  if (!VALID_DISPLAY_POLICIES.includes(policy as BalloonDisplayPolicy)) {
+    return { valid: false, error: `Invalid display_policy: ${policy}. Must be one of: ${VALID_DISPLAY_POLICIES.join(', ')}` };
+  }
+  
+  if (policy === 'manual_window') {
+    if (typeof startMs !== 'number' || typeof endMs !== 'number') {
+      return { valid: false, error: 'manual_window requires start_ms and end_ms as numbers' };
+    }
+    if (startMs < 0) {
+      return { valid: false, error: 'start_ms must be >= 0' };
+    }
+    if (endMs <= startMs) {
+      return { valid: false, error: 'end_ms must be greater than start_ms' };
+    }
+  }
+  
+  return { valid: true };
+}
 
 // ====================================================================
 // GET /api/scene-balloons/:balloonId - バルーン情報取得
@@ -275,6 +305,12 @@ sceneBalloons.put('/:balloonId', async (c) => {
   try {
     const body = await c.req.json();
     
+    // display_policy バリデーション（manual_window の場合は start_ms/end_ms 必須）
+    const policyValidation = validateDisplayPolicy(body.display_policy, body.start_ms, body.end_ms);
+    if (!policyValidation.valid) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: policyValidation.error } }, 400);
+    }
+    
     // 更新可能フィールド
     const allowedFields = [
       'x', 'y', 'w', 'h',
@@ -282,7 +318,7 @@ sceneBalloons.put('/:balloonId', async (c) => {
       'writing_mode', 'text_align',
       'font_family', 'font_weight', 'font_size', 'line_height',
       'padding', 'bg_color', 'text_color', 'border_color', 'border_width',
-      'display_mode', 'start_ms', 'end_ms', 'z_index',
+      'display_mode', 'display_policy', 'start_ms', 'end_ms', 'z_index',
       'bubble_width_px', 'bubble_height_px'
     ];
     
@@ -295,6 +331,9 @@ sceneBalloons.put('/:balloonId', async (c) => {
         values.push(body[field]);
       }
     }
+    
+    // always_on/voice_window に切り替える時、start_ms/end_ms は残しておく（将来の復元用）
+    // Remotion側で display_policy を見て無視する
     
     if (updates.length === 0) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'No valid fields to update' } }, 400);
@@ -336,22 +375,36 @@ sceneBalloons.post('/', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'scene_id is required' } }, 400);
     }
     
-    // シーン存在確認
+    // シーン存在確認 + プロジェクト取得（output_preset を参照するため）
     const scene = await c.env.DB.prepare(`
-      SELECT id FROM scenes WHERE id = ?
-    `).bind(sceneId).first();
+      SELECT s.id, s.project_id, p.output_preset
+      FROM scenes s
+      JOIN projects p ON s.project_id = p.id
+      WHERE s.id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number; output_preset: string | null }>();
     
     if (!scene) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404);
     }
     
-    // デフォルト値でINSERT
+    // output_preset からデフォルト display_policy を取得
+    const preset = getOutputPreset(scene.output_preset);
+    const displayPolicy = body.display_policy ?? preset.balloon_policy_default ?? 'voice_window';
+    
+    // display_policy バリデーション
+    const policyValidation = validateDisplayPolicy(displayPolicy, body.start_ms, body.end_ms);
+    if (!policyValidation.valid) {
+      return c.json({ error: { code: 'VALIDATION_ERROR', message: policyValidation.error } }, 400);
+    }
+    
+    // デフォルト値でINSERT（display_policy はプリセットを反映）
     const result = await c.env.DB.prepare(`
       INSERT INTO scene_balloons (
         scene_id, utterance_id,
         x, y, w, h,
-        shape, display_mode
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        shape, display_mode, display_policy,
+        start_ms, end_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       sceneId,
       utteranceId,
@@ -360,7 +413,10 @@ sceneBalloons.post('/', async (c) => {
       body.w ?? 0.3,
       body.h ?? 0.2,
       body.shape ?? 'round',
-      body.display_mode ?? 'voice_window'
+      body.display_mode ?? 'voice_window', // 後方互換用
+      displayPolicy, // ★ SSOT
+      displayPolicy === 'manual_window' ? (body.start_ms ?? null) : null,
+      displayPolicy === 'manual_window' ? (body.end_ms ?? null) : null
     ).run();
     
     const balloonId = result.meta.last_row_id;

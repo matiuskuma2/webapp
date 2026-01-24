@@ -1330,6 +1330,7 @@ interface RilarcIntent {
 type IntentAction =
   | BalloonAdjustWindowAction
   | BalloonAdjustPositionAction
+  | BalloonSetPolicyAction  // ★ 追加
   | SfxAddFromLibraryAction
   | SfxSetVolumeAction
   | SfxSetTimingAction
@@ -1355,6 +1356,17 @@ interface BalloonAdjustPositionAction {
   delta_y?: number;
   absolute_x?: number;
   absolute_y?: number;
+}
+
+// ★ display_policy 変更アクション
+interface BalloonSetPolicyAction {
+  action: 'balloon.set_policy';
+  scene_idx: number;
+  balloon_no: number;  // 1-indexed
+  policy: 'always_on' | 'voice_window' | 'manual_window';
+  // manual_window の場合のみ（任意）
+  start_ms?: number;
+  end_ms?: number;
 }
 
 interface SfxAddFromLibraryAction {
@@ -1402,6 +1414,7 @@ interface BgmSetLoopAction {
 const ALLOWED_CHAT_ACTIONS = new Set([
   'balloon.adjust_window',
   'balloon.adjust_position',
+  'balloon.set_policy',  // ★ display_policy の変更
   'sfx.add_from_library',
   'sfx.set_volume',
   'sfx.set_timing',
@@ -1526,6 +1539,79 @@ async function resolveIntentToOps(
         } else {
           warnings.push(`${prefix}: No changes specified for ${action.action}`);
         }
+
+      } else if (action.action === 'balloon.set_policy') {
+        // ★ display_policy 変更アクション
+        const policyAction = action as BalloonSetPolicyAction;
+        
+        // scene_idx → scene_id 解決
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, policyAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${policyAction.scene_idx}`);
+          continue;
+        }
+
+        // balloon_no → balloon_id 解決
+        const balloonsResult = await db.prepare(`
+          SELECT id FROM scene_balloons 
+          WHERE scene_id = ?
+          ORDER BY z_index ASC, id ASC
+        `).bind(scene.id).all();
+
+        const balloonIndex = policyAction.balloon_no - 1;
+        if (balloonIndex < 0 || balloonIndex >= balloonsResult.results.length) {
+          errors.push(`${prefix}: Balloon not found: scene_idx=${policyAction.scene_idx}, balloon_no=${policyAction.balloon_no}`);
+          continue;
+        }
+
+        const balloonId = balloonsResult.results[balloonIndex].id as number;
+        
+        // policy バリデーション
+        const validPolicies = ['always_on', 'voice_window', 'manual_window'];
+        if (!validPolicies.includes(policyAction.policy)) {
+          errors.push(`${prefix}: Invalid policy: ${policyAction.policy}. Must be one of: ${validPolicies.join(', ')}`);
+          continue;
+        }
+        
+        // manual_window の場合は start_ms/end_ms が必要（あれば設定、なければ警告）
+        const setFields: Record<string, unknown> = {
+          display_policy: policyAction.policy,
+        };
+        
+        if (policyAction.policy === 'manual_window') {
+          if (policyAction.start_ms !== undefined && policyAction.end_ms !== undefined) {
+            if (policyAction.end_ms <= policyAction.start_ms) {
+              errors.push(`${prefix}: end_ms must be greater than start_ms`);
+              continue;
+            }
+            setFields.start_ms = policyAction.start_ms;
+            setFields.end_ms = policyAction.end_ms;
+          } else {
+            warnings.push(`${prefix}: manual_window without start_ms/end_ms. Current DB values will be used.`);
+          }
+        }
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: policyAction.scene_idx,
+            scene_id: scene.id,
+            balloon_no: policyAction.balloon_no,
+            balloon_id: balloonId,
+            policy: policyAction.policy,
+          },
+        });
+
+        ops.push({
+          op: 'update',
+          entity: 'scene_balloons',
+          where: { id: balloonId },
+          set: setFields,
+          reason: `Chat: balloon.set_policy (scene_idx=${policyAction.scene_idx}, balloon_no=${policyAction.balloon_no}, policy=${policyAction.policy})`,
+        });
 
       } else if (action.action === 'sfx.set_volume' || action.action === 'sfx.set_timing' || action.action === 'sfx.remove') {
         const sfxAction = action as SfxSetVolumeAction | SfxSetTimingAction | SfxRemoveAction;

@@ -8231,6 +8231,44 @@ function parseMessageToIntent(message) {
     });
   }
   
+  // ★ Pattern: Balloon display policy (e.g., "シーン2のバブル1を出しっぱなしにして")
+  const balloonPolicyMatch = message.match(/(?:scene|シーン)\s*(\d+).*?(?:balloon|バブル)\s*(\d+).*?(出しっぱなし|常時表示|always.?on|喋って(?:る|い)?時(?:だけ)?|voice.?window|手動|manual)/i);
+  if (balloonPolicyMatch) {
+    const sceneIdx = parseInt(balloonPolicyMatch[1], 10);
+    const balloonNo = parseInt(balloonPolicyMatch[2], 10);
+    const modeWord = balloonPolicyMatch[3].toLowerCase();
+    
+    let policy = 'voice_window';
+    if (modeWord.includes('出しっぱなし') || modeWord.includes('常時') || modeWord.includes('always')) {
+      policy = 'always_on';
+    } else if (modeWord.includes('手動') || modeWord.includes('manual')) {
+      policy = 'manual_window';
+    }
+    
+    const policyAction = {
+      action: 'balloon.set_policy',
+      scene_idx: sceneIdx,
+      balloon_no: balloonNo,
+      policy: policy,
+    };
+    
+    // manual_window の場合、開始/終了を拾う（存在すれば）
+    if (policy === 'manual_window') {
+      const startMatch = message.match(/開始\s*(\d+)\s*ms/i);
+      const endMatch = message.match(/終了\s*(\d+)\s*ms/i);
+      if (startMatch && endMatch) {
+        policyAction.start_ms = parseInt(startMatch[1], 10);
+        policyAction.end_ms = parseInt(endMatch[1], 10);
+      }
+    }
+    
+    actions.push(policyAction);
+  }
+  
+  // Pattern: Change all balloons to a policy (e.g., "全部出しっぱなし", "すべて喋ってる時だけ")
+  // Note: This will require frontend to fetch all balloon_nos and create multiple actions
+  // For now, we just warn that this is not supported in single-action mode
+  
   if (actions.length === 0 && errors.length === 0) {
     return {
       ok: false,
@@ -8619,6 +8657,10 @@ async function refreshBuilderWizard() {
     const hasSfx = v.has_sfx === true;
     const hasVoice = v.summary?.has_voice === true;
     const canGenerate = res.data.can_generate === true;
+    
+    // Output preset and balloon policy summary
+    const outputPreset = res.data.output_preset || {};
+    const balloonSummary = res.data.balloon_policy_summary || {};
 
     // Build step cards
     const stepCards = [];
@@ -8641,10 +8683,14 @@ async function refreshBuilderWizard() {
     ));
 
     // Step 3: 表現（バブル/モーション）
+    const balloonTotal = balloonSummary.total || 0;
+    const balloonDesc = balloonTotal > 0
+      ? `💬 バブル: 出しっぱなし ${balloonSummary.always_on || 0} / 喋る時 ${balloonSummary.voice_window || 0} / 手動 ${balloonSummary.manual_window || 0}`
+      : 'バブル未設定（チャットで追加可能）';
     stepCards.push(renderWizardCard(
       '3) 表現',
-      '🔧 調整可',
-      'バブル/モーションは生成後も修正OK',
+      balloonTotal > 0 ? `💬 ${balloonTotal}件` : '🔧 調整可',
+      balloonDesc,
       'indigo'
     ));
 
@@ -8658,16 +8704,29 @@ async function refreshBuilderWizard() {
 
     stepsEl.innerHTML = stepCards.join('');
 
-    // Tips
+    // Tips with output_preset info
+    let tipsHtml = '';
     if (errors.length > 0) {
-      tipsEl.innerHTML = '<span class="text-red-600"><i class="fas fa-exclamation-circle mr-1"></i><b>必須:</b> 素材が不足しています。赤い警告のシーンを修正してください。</span>';
+      tipsHtml = '<span class="text-red-600"><i class="fas fa-exclamation-circle mr-1"></i><b>必須:</b> 素材が不足しています。赤い警告のシーンを修正してください。</span>';
     } else if (!audioLayers.length) {
-      tipsEl.innerHTML = '<span class="text-amber-600"><i class="fas fa-lightbulb mr-1"></i><b>推奨:</b> BGMを設定すると、セリフなしシーンでも「音あり動画」になります。</span>';
+      tipsHtml = '<span class="text-amber-600"><i class="fas fa-lightbulb mr-1"></i><b>推奨:</b> BGMを設定すると、セリフなしシーンでも「音あり動画」になります。</span>';
     } else if (warnings.length > 0) {
-      tipsEl.innerHTML = `<span class="text-amber-600"><i class="fas fa-info-circle mr-1"></i>${warnings[0]}</span>`;
+      tipsHtml = `<span class="text-amber-600"><i class="fas fa-info-circle mr-1"></i>${warnings[0]}</span>`;
     } else {
-      tipsEl.innerHTML = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>生成準備OK。生成後は「チャットで修正」でタイミング調整できます。</span>';
+      tipsHtml = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>生成準備OK。生成後は「チャットで修正」でタイミング調整できます。</span>';
     }
+    
+    // Output preset info line
+    if (outputPreset.id) {
+      const presetLabel = outputPreset.label || outputPreset.id;
+      const aspectRatio = outputPreset.aspect_ratio || '';
+      const policyDefault = outputPreset.balloon_policy_default === 'always_on' ? '出しっぱなし' : '喋る時だけ';
+      tipsHtml += `<div class="mt-1 text-xs text-indigo-600">
+        <i class="fas fa-tv mr-1"></i>配信先: <b>${escapeHtml(presetLabel)}</b> (${aspectRatio}) / バブル既定: ${policyDefault}
+      </div>`;
+    }
+    
+    tipsEl.innerHTML = tipsHtml;
 
   } catch (e) {
     console.warn('[Wizard] Preflight fetch failed:', e);
