@@ -8356,11 +8356,15 @@ async function sendChatEditMessage() {
   
   try {
     // Call dry-run API
-    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/dry-run`, {
+    // Note: video_build_id is optional for pre-build editing
+    const payload = {
       user_message: message,
       intent: parsed.intent,
-      video_build_id: window.chatEditState.buildId,
-    });
+    };
+    if (window.chatEditState.buildId) {
+      payload.video_build_id = window.chatEditState.buildId;
+    }
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/dry-run`, payload);
     
     // Remove thinking message
     const thinkingEl = document.getElementById(thinkingId);
@@ -8622,6 +8626,39 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// ============================================
+// Chat Edit Helper Functions
+// ============================================
+
+/**
+ * Insert template text into chat input (Quick Actions)
+ * @param {string} text 
+ */
+function insertChatTemplate(text) {
+  const input = document.getElementById('chatEditInput');
+  if (!input) return;
+  input.value = text;
+  input.focus();
+}
+
+/**
+ * Open pre-build chat (before video generation)
+ * - No buildId/videoUrl since we're editing before generation
+ */
+function openPreBuildChat() {
+  openChatEditModal(null, null);
+  const buildLabel = document.getElementById('chatEditBuildLabel');
+  const projectLabel = document.getElementById('chatEditProjectLabel');
+  if (buildLabel) buildLabel.textContent = 'Pre-build';
+  if (projectLabel) projectLabel.textContent = `Project #${PROJECT_ID}`;
+  
+  // Update modal title to indicate pre-build mode
+  const titleEl = document.querySelector('#chatEditModal h2');
+  if (titleEl) {
+    titleEl.innerHTML = '<i class="fas fa-comments mr-2"></i>生成前に整える';
+  }
+}
+
 // Make chat edit functions globally available (v1 Modal)
 window.openChatEditModal = openChatEditModal;
 window.closeChatEditModal = closeChatEditModal;
@@ -8630,6 +8667,8 @@ window.closeChatEditPanel = closeChatEditPanel; // Backward compatibility
 window.sendChatEditMessage = sendChatEditMessage;
 window.cancelChatEditDryRun = cancelChatEditDryRun;
 window.applyChatEdit = applyChatEdit;
+window.insertChatTemplate = insertChatTemplate;
+window.openPreBuildChat = openPreBuildChat;
 
 // ===============================
 // Safe Chat v1: Builder Wizard (preflight-based)

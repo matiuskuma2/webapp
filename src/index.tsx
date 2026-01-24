@@ -936,9 +936,14 @@ app.get('/projects/:id', (c) => {
                                 <div class="text-xs text-gray-500">preflightに基づいて自動表示</div>
                             </div>
                         </div>
-                        <button onclick="refreshBuilderWizard()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs hover:bg-indigo-700 transition-colors">
-                            <i class="fas fa-sync-alt mr-1"></i>更新
-                        </button>
+                        <div class="flex items-center gap-2">
+                            <button onclick="openPreBuildChat()" class="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs hover:bg-indigo-100 border border-indigo-200 transition-colors">
+                                <i class="fas fa-comments mr-1"></i>生成前に整える（チャット）
+                            </button>
+                            <button onclick="refreshBuilderWizard()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs hover:bg-indigo-700 transition-colors">
+                                <i class="fas fa-sync-alt mr-1"></i>更新
+                            </button>
+                        </div>
                     </div>
 
                     <div id="builderWizardSteps" class="mt-3 grid grid-cols-1 md:grid-cols-4 gap-2">
