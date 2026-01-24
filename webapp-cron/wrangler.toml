@@ -2,9 +2,11 @@ name = "webapp-cron"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
-# Cron Triggers - UTC 19:00 = JST 04:00 毎日実行
+# Cron Triggers
+# - */5 * * * *   = 5分ごと（Stuck builds cleanup）
+# - 0 19 * * *    = 毎日 UTC 19:00 = JST 04:00（Video cleanup）
 [triggers]
-crons = ["0 19 * * *"]
+crons = ["*/5 * * * *", "0 19 * * *"]
 
 # D1 Database - webapp と同じ DB を共有
 [[d1_databases]]
