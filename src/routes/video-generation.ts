@@ -3578,17 +3578,35 @@ videoGeneration.post('/webhooks/video-build', async (c) => {
   const { DB } = c.env;
   
   try {
-    // 1. 署名検証
-    const signature = c.req.header('X-Webhook-Signature');
+    // 1. 署名検証（HMAC-SHA256 with timestamp for replay protection）
+    // Header format: X-Rilarc-Signature: sha256=<hex>
+    // Signed message: "<timestamp>.<body>"
+    const signature = c.req.header('X-Rilarc-Signature') || c.req.header('X-Webhook-Signature');
+    const timestamp = c.req.header('X-Rilarc-Timestamp');
+    const eventId = c.req.header('X-Rilarc-Event-Id');
     const webhookSecret = c.env.WEBHOOK_SECRET || c.env.CRON_SECRET;
+    
+    // Log event for debugging
+    if (eventId) {
+      console.log(`[Webhook] Received event: ${eventId}`);
+    }
+    
+    const body = await c.req.text();
     
     if (!webhookSecret) {
       console.warn('[Webhook] WEBHOOK_SECRET not configured, accepting without verification');
     } else if (!signature) {
-      return c.json({ error: 'UNAUTHORIZED', message: 'Missing signature' }, 401);
+      return c.json({ error: 'UNAUTHORIZED', message: 'Missing signature header' }, 401);
     } else {
+      // Extract signature value (remove "sha256=" prefix if present)
+      const signatureValue = signature.startsWith('sha256=') 
+        ? signature.slice(7) 
+        : signature;
+      
+      // Build signed message: timestamp + "." + body (if timestamp present)
+      const signedMessage = timestamp ? `${timestamp}.${body}` : body;
+      
       // HMAC-SHA256 検証
-      const body = await c.req.text();
       const encoder = new TextEncoder();
       const key = await crypto.subtle.importKey(
         'raw',
@@ -3597,24 +3615,30 @@ videoGeneration.post('/webhooks/video-build', async (c) => {
         false,
         ['sign']
       );
-      const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+      const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(signedMessage));
       const expectedSignature = Array.from(new Uint8Array(signatureBuffer))
         .map(b => b.toString(16).padStart(2, '0'))
         .join('');
       
-      if (signature !== expectedSignature) {
-        console.warn('[Webhook] Signature mismatch');
+      if (signatureValue !== expectedSignature) {
+        console.warn('[Webhook] Signature mismatch', { eventId, timestamp });
         return c.json({ error: 'UNAUTHORIZED', message: 'Invalid signature' }, 401);
       }
       
-      // Re-parse body as JSON
-      const payload = JSON.parse(body);
-      return await processWebhook(c, DB, payload);
+      // Replay protection: reject if timestamp is older than 5 minutes
+      if (timestamp) {
+        const timestampSec = parseInt(timestamp, 10);
+        const nowSec = Math.floor(Date.now() / 1000);
+        if (Math.abs(nowSec - timestampSec) > 300) {
+          console.warn('[Webhook] Timestamp too old', { eventId, timestamp, nowSec });
+          return c.json({ error: 'UNAUTHORIZED', message: 'Timestamp expired' }, 401);
+        }
+      }
     }
     
-    // No secret configured - accept payload directly
-    const payload = await c.req.json();
-    return await processWebhook(c, DB, payload);
+    // Parse body as JSON
+    const payload = JSON.parse(body);
+    return await processWebhook(c, DB, payload, eventId);
     
   } catch (error) {
     console.error('[Webhook] Error:', error);
@@ -3628,7 +3652,7 @@ videoGeneration.post('/webhooks/video-build', async (c) => {
 /**
  * Process webhook payload
  */
-async function processWebhook(c: any, DB: D1Database, payload: any) {
+async function processWebhook(c: any, DB: D1Database, payload: any, eventId?: string | null) {
   const {
     video_build_id,
     status,
@@ -3731,7 +3755,7 @@ async function processWebhook(c: any, DB: D1Database, payload: any) {
     UPDATE video_builds SET ${updateFields.join(', ')} WHERE id = ?
   `).bind(...updateValues).run();
   
-  console.log(`[Webhook] Build ${video_build_id} updated: ${build.status} → ${status}`);
+  console.log(`[Webhook] Build ${video_build_id} updated: ${build.status} → ${status}${eventId ? ` (event: ${eventId})` : ''}`);
   
   // 5. 完了時のログ記録（二重計上防止）
   if (status === 'completed' && build.render_usage_logged === 0) {
@@ -3831,11 +3855,31 @@ async function processWebhook(c: any, DB: D1Database, payload: any) {
     }
   }
   
+  // 7. Webhook受信の監査ログ（api_usage_logs）
+  try {
+    await DB.prepare(`
+      INSERT INTO api_usage_logs (user_id, provider, model, operation, input_tokens, output_tokens, estimated_cost_usd, metadata_json, created_at)
+      VALUES (?, 'internal', 'webhook', 'video_build_callback', 0, 0, 0, ?, CURRENT_TIMESTAMP)
+    `).bind(
+      build.owner_user_id || null,
+      JSON.stringify({
+        video_build_id,
+        event_id: eventId || null,
+        previous_status: build.status,
+        new_status: status,
+        has_download_url: !!download_url,
+      })
+    ).run();
+  } catch (logErr) {
+    console.warn('[Webhook] Failed to log to api_usage_logs:', logErr);
+  }
+  
   return c.json({ 
     success: true, 
     video_build_id,
     previous_status: build.status,
     new_status: status,
+    event_id: eventId || null,
   });
 }
 
