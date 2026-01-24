@@ -820,12 +820,66 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Format Button -->
+                <!-- Format Section with Mode Selection -->
                 <div id="formatSection" class="mb-6 p-4 bg-purple-50 rounded-lg border-l-4 border-purple-600 hidden">
-                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                        <div>
-                            <h3 class="font-semibold text-gray-800 mb-1">RILARCシナリオ生成</h3>
-                            <p class="text-sm text-gray-600">OpenAI Chat APIで入力テキストをシーン分割します（30秒-1分）</p>
+                    <h3 class="font-semibold text-gray-800 mb-3"><i class="fas fa-cut mr-2"></i>シーン分割設定</h3>
+                    
+                    <!-- Split Mode Selection -->
+                    <div class="mb-4">
+                        <label class="text-sm font-medium text-gray-700 mb-2 block">分割モード</label>
+                        <div class="space-y-2">
+                            <label class="flex items-start gap-3 p-3 bg-white rounded-lg border border-gray-200 cursor-pointer hover:border-purple-400 transition-colors">
+                                <input type="radio" name="splitMode" value="preserve" class="mt-1" checked>
+                                <div>
+                                    <div class="font-medium text-gray-800">原文維持（台本モード）</div>
+                                    <div class="text-xs text-gray-500">
+                                        原文を一切改変しません。空行（段落）で分割し、各段落をそのまま1シーンにします。<br>
+                                        <span class="text-purple-600">画像プロンプトのみAI生成</span>
+                                    </div>
+                                </div>
+                            </label>
+                            <label class="flex items-start gap-3 p-3 bg-white rounded-lg border border-gray-200 cursor-pointer hover:border-purple-400 transition-colors">
+                                <input type="radio" name="splitMode" value="ai" class="mt-1">
+                                <div>
+                                    <div class="font-medium text-gray-800">AI整理モード</div>
+                                    <div class="text-xs text-gray-500">
+                                        AIが意図を読み取り、適切に分割・整理します。<br>
+                                        <span class="text-amber-600">⚠️ 文章が要約・再構成される場合があります</span>
+                                    </div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Target Scene Count (conditionally shown) -->
+                    <div id="targetSceneCountSection" class="mb-4">
+                        <label class="text-sm font-medium text-gray-700 mb-2 block">
+                            目標シーン数
+                            <span class="text-xs text-gray-500 ml-2">（空欄=段落数に従う）</span>
+                        </label>
+                        <div class="flex items-center gap-3">
+                            <input 
+                                type="number" 
+                                id="targetSceneCount" 
+                                min="1" 
+                                max="100" 
+                                placeholder="自動"
+                                class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
+                            >
+                            <span class="text-sm text-gray-600">シーン</span>
+                            <span id="paragraphCountInfo" class="text-sm text-gray-500 ml-2"></span>
+                        </div>
+                        <p class="text-xs text-gray-500 mt-1">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            <span id="splitModeHint">原文維持モード: 段落数より多い場合は文境界で分割、少ない場合は結合（省略なし）</span>
+                        </p>
+                    </div>
+                    
+                    <!-- Execute Button -->
+                    <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pt-3 border-t border-purple-200">
+                        <div class="text-sm text-red-600 bg-red-50 px-3 py-2 rounded">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            <strong>注意:</strong> 実行すると既存のシーン・音声・画像・バブル・SFX/BGMが削除されます
                         </div>
                         <button 
                             id="formatBtn"

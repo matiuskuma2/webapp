@@ -271,9 +271,28 @@ formatting.post('/:id/merge', async (c) => {
 })
 
 // POST /api/projects/:id/format - 整形・シーン分割実行（chunk単位処理）
+// 新: split_mode=preserve|ai, target_scene_count, reset=true をサポート
 formatting.post('/:id/format', async (c) => {
   try {
     const projectId = c.req.param('id')
+    
+    // リクエストボディからオプション取得
+    let body: {
+      split_mode?: 'preserve' | 'ai'
+      target_scene_count?: number
+      reset?: boolean
+    } = {}
+    try {
+      body = await c.req.json()
+    } catch {
+      // body がない場合は空オブジェクト（後方互換）
+    }
+    
+    const splitMode = body.split_mode || 'ai' // デフォルトは ai
+    const targetSceneCount = body.target_scene_count || 5 // デフォルトは 5
+    const shouldReset = body.reset === true
+    
+    console.log(`[Format] project=${projectId}, mode=${splitMode}, target=${targetSceneCount}, reset=${shouldReset}`)
 
     // 1. プロジェクトの存在確認とステータスチェック
     const project = await c.env.DB.prepare(`
@@ -290,19 +309,32 @@ formatting.post('/:id/format', async (c) => {
         }
       }, 404)
     }
+    
+    // 2. reset=true の場合：既存データを全削除して再実行
+    if (shouldReset) {
+      console.log(`[Format] Resetting project ${projectId} - deleting existing scenes and related data`)
+      await hardResetProject(c.env.DB, projectId)
+      // status を 'uploaded' に戻す
+      await c.env.DB.prepare(`
+        UPDATE projects SET status = 'uploaded', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(projectId).run()
+      // project オブジェクトを更新
+      project.status = 'uploaded'
+    }
 
-    // 2. source_type に応じた処理分岐
+    // 3. source_type に応じた処理分岐
     // Note: Parse API実行済み（status='parsed'）の場合は chunk単位処理を使用
     if (project.status === 'parsed' || project.status === 'formatting') {
       // Parse API実行済み → chunk単位処理（テキスト・音声共通）
-      return await processTextChunks(c, projectId, project)
+      return await processTextChunks(c, projectId, project, splitMode, targetSceneCount)
     } else if (project.source_type === 'audio' && project.status === 'transcribed') {
       // 音声入力 + Parse未実行の場合：従来のフロー（全文を1回で処理）
       // ※このケースは Parse をスキップした場合のみ
       return await processAudioTranscription(c, projectId, project)
     } else if (project.source_type === 'text') {
       // テキスト入力の場合：chunk単位処理
-      return await processTextChunks(c, projectId, project)
+      // まず parse を実行する必要がある
+      return await processTextChunks(c, projectId, project, splitMode, targetSceneCount)
     } else {
       // 想定外のステータス
       return c.json({
@@ -348,11 +380,66 @@ formatting.post('/:id/format', async (c) => {
 })
 
 /**
- * テキスト入力の chunk 単位処理
+ * ハードリセット: プロジェクトの全データを削除（scenes, image_generations, audio_generations, scene_utterances, video_builds など）
+ * ビルド履歴は残す（監査・確認用）
  */
-async function processTextChunks(c: any, projectId: string, project: any) {
-  // ステータスチェック（parsed または formatting を許可）
-  const validStatuses = ['parsed', 'formatting']
+async function hardResetProject(db: any, projectId: string) {
+  // 1. scenes取得
+  const { results: scenes } = await db.prepare(`SELECT id FROM scenes WHERE project_id = ?`).bind(projectId).all()
+  const sceneIds = scenes.map((s: any) => s.id)
+  
+  if (sceneIds.length > 0) {
+    // 2. 関連データ削除（順序に注意）
+    for (const sceneId of sceneIds) {
+      // scene_utterances
+      await db.prepare(`DELETE FROM scene_utterances WHERE scene_id = ?`).bind(sceneId).run()
+      // scene_character_map
+      await db.prepare(`DELETE FROM scene_character_map WHERE scene_id = ?`).bind(sceneId).run()
+      // scene_character_traits
+      await db.prepare(`DELETE FROM scene_character_traits WHERE scene_id = ?`).bind(sceneId).run()
+      // image_generations
+      await db.prepare(`DELETE FROM image_generations WHERE scene_id = ?`).bind(sceneId).run()
+      // audio_generations
+      await db.prepare(`DELETE FROM audio_generations WHERE scene_id = ?`).bind(sceneId).run()
+    }
+    
+    // 3. scenes削除
+    await db.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
+  }
+  
+  // 4. text_chunks をリセット（statusをpendingに戻す）
+  await db.prepare(`
+    UPDATE text_chunks 
+    SET status = 'pending', scene_count = 0, error_message = NULL, processed_at = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE project_id = ?
+  `).bind(projectId).run()
+  
+  // 5. プロジェクトのエラー状態をクリア
+  await db.prepare(`
+    UPDATE projects 
+    SET error_message = NULL, last_error = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(projectId).run()
+  
+  console.log(`[HardReset] Project ${projectId}: deleted ${sceneIds.length} scenes and related data`)
+}
+
+/**
+ * テキスト入力の chunk 単位処理
+ * @param splitMode 'preserve' = 原文維持（空行分割）, 'ai' = AI整理（省略なし）
+ * @param targetSceneCount 目標シーン数（preserve: 段落数調整、ai: シーン数目標）
+ */
+async function processTextChunks(
+  c: any, 
+  projectId: string, 
+  project: any,
+  splitMode: 'preserve' | 'ai' = 'ai',
+  targetSceneCount: number = 5
+) {
+  console.log(`[processTextChunks] mode=${splitMode}, target=${targetSceneCount}`)
+  
+  // ステータスチェック（parsed, formatting, uploaded を許可）
+  const validStatuses = ['parsed', 'formatting', 'uploaded']
   if (!validStatuses.includes(project.status)) {
     return c.json({
       error: {
@@ -364,6 +451,11 @@ async function processTextChunks(c: any, projectId: string, project: any) {
         }
       }
     }, 400)
+  }
+  
+  // preserve モード: 原文をそのまま分割（AI呼び出し不要）
+  if (splitMode === 'preserve') {
+    return await processPreserveMode(c, projectId, project, targetSceneCount)
   }
 
   // ステータスを 'formatting' に更新（初回のみ）
@@ -437,12 +529,13 @@ async function processTextChunks(c: any, projectId: string, project: any) {
         WHERE id = ?
       `).bind(chunk.id).run()
 
-      // OpenAI API で MiniScene 生成（1-3シーン）
-      const miniScenesResult = await generateMiniScenes(
+      // OpenAI API で MiniScene 生成（AI整理モード）
+      const miniScenesResult = await generateMiniScenesAI(
         chunk.text as string,
         project.title as string,
         chunk.idx as number,
-        c.env.OPENAI_API_KEY
+        c.env.OPENAI_API_KEY,
+        targetSceneCount
       )
 
       if (!miniScenesResult.success) {
@@ -755,6 +848,230 @@ async function getChunkStats(db: any, projectId: string) {
 }
 
 /**
+ * preserve モード: 原文維持で分割（AIによる改変なし）
+ * - 空行（\n\n）で段落分割
+ * - 段落数 > targetSceneCount: 段落を結合（省略なし）
+ * - 段落数 < targetSceneCount: 段落を文境界で分割（省略・言い換え禁止）
+ */
+async function processPreserveMode(
+  c: any,
+  projectId: string,
+  project: any,
+  targetSceneCount: number
+) {
+  console.log(`[PreserveMode] Starting for project ${projectId}, target=${targetSceneCount}`)
+  
+  // source_text を取得
+  const sourceText = project.source_text as string || ''
+  if (!sourceText.trim()) {
+    return c.json({
+      error: {
+        code: 'NO_TEXT',
+        message: 'No source text available for preserve mode'
+      }
+    }, 400)
+  }
+  
+  // 1. 既存データをクリア
+  const { results: existingScenes } = await c.env.DB.prepare(`
+    SELECT id FROM scenes WHERE project_id = ?
+  `).bind(projectId).all()
+  
+  if (existingScenes.length > 0) {
+    for (const scene of existingScenes) {
+      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id = ?`).bind(scene.id).run()
+      await c.env.DB.prepare(`DELETE FROM scene_utterances WHERE scene_id = ?`).bind(scene.id).run()
+      await c.env.DB.prepare(`DELETE FROM scene_character_map WHERE scene_id = ?`).bind(scene.id).run()
+      await c.env.DB.prepare(`DELETE FROM scene_character_traits WHERE scene_id = ?`).bind(scene.id).run()
+    }
+    await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
+  }
+  
+  // 2. テキストを段落に分割（空行区切り）
+  let paragraphs = sourceText
+    .split(/\n\s*\n/)
+    .map(p => p.trim())
+    .filter(p => p.length > 0)
+  
+  console.log(`[PreserveMode] Found ${paragraphs.length} paragraphs, target=${targetSceneCount}`)
+  
+  // 3. 段落数を targetSceneCount に調整
+  if (paragraphs.length > targetSceneCount) {
+    // 段落を結合（省略なし）
+    paragraphs = mergeParagraphs(paragraphs, targetSceneCount)
+  } else if (paragraphs.length < targetSceneCount) {
+    // 段落を文境界で分割
+    paragraphs = splitParagraphs(paragraphs, targetSceneCount)
+  }
+  
+  console.log(`[PreserveMode] Adjusted to ${paragraphs.length} scenes`)
+  
+  // 4. シーンを作成（dialogue = 原文そのまま、image_prompt はAI生成）
+  const insertStatements = []
+  for (let i = 0; i < paragraphs.length; i++) {
+    const paragraph = paragraphs[i]
+    const role = i === 0 ? 'hook' : (i === paragraphs.length - 1 ? 'summary' : 'context')
+    const title = `シーン ${i + 1}`
+    
+    // image_prompt を生成（簡易版: 後でAI生成に切り替え可能）
+    const imagePrompt = await generateImagePromptFromText(
+      paragraph.substring(0, 200),
+      project.title as string,
+      c.env.OPENAI_API_KEY
+    )
+    
+    insertStatements.push(
+      c.env.DB.prepare(`
+        INSERT INTO scenes (
+          project_id, idx, role, title, dialogue, speech_type, bullets, image_prompt, chunk_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
+      `).bind(
+        projectId,
+        i + 1,
+        role,
+        title,
+        paragraph, // 原文そのまま！
+        'narration', // デフォルトは narration
+        JSON.stringify([]), // bullets は空
+        imagePrompt
+      )
+    )
+  }
+  
+  // Batch実行
+  await c.env.DB.batch(insertStatements)
+  
+  // 5. status更新
+  await c.env.DB.prepare(`
+    UPDATE projects SET status = 'formatted', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+  `).bind(projectId).run()
+  
+  // 6. Auto-assign characters (non-blocking)
+  try {
+    const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign')
+    const { extractAndUpdateCharacterTraits } = await import('../utils/character-trait-extractor')
+    
+    c.executionCtx.waitUntil(
+      (async () => {
+        const assignResult = await autoAssignCharactersToScenes(c.env.DB, parseInt(projectId))
+        console.log(`[PreserveMode] Auto-assigned ${assignResult.assigned} characters`)
+        
+        const traitResult = await extractAndUpdateCharacterTraits(c.env.DB, parseInt(projectId))
+        console.log(`[PreserveMode] Extracted traits for ${traitResult.updated} characters`)
+      })().catch(err => {
+        console.error(`[PreserveMode] Character processing failed:`, err.message)
+      })
+    )
+  } catch (err) {
+    console.warn(`[PreserveMode] Auto-assign skipped:`, err)
+  }
+  
+  return c.json({
+    project_id: parseInt(projectId),
+    status: 'formatted',
+    split_mode: 'preserve',
+    total_scenes: paragraphs.length,
+    message: `原文維持モードで ${paragraphs.length} シーンを生成しました`
+  }, 200)
+}
+
+/**
+ * 段落を結合（省略なし）
+ */
+function mergeParagraphs(paragraphs: string[], targetCount: number): string[] {
+  if (paragraphs.length <= targetCount) return paragraphs
+  
+  const result: string[] = []
+  const groupSize = Math.ceil(paragraphs.length / targetCount)
+  
+  for (let i = 0; i < paragraphs.length; i += groupSize) {
+    const group = paragraphs.slice(i, i + groupSize)
+    result.push(group.join('\n\n')) // 空行で結合して段落感を維持
+  }
+  
+  return result.slice(0, targetCount)
+}
+
+/**
+ * 段落を文境界で分割（省略・言い換え禁止）
+ */
+function splitParagraphs(paragraphs: string[], targetCount: number): string[] {
+  if (paragraphs.length >= targetCount) return paragraphs
+  
+  const result: string[] = []
+  const neededSplits = targetCount - paragraphs.length
+  
+  // 長い段落から順に分割
+  const sortedByLength = [...paragraphs].sort((a, b) => b.length - a.length)
+  const toSplit = new Set(sortedByLength.slice(0, neededSplits).map(p => paragraphs.indexOf(p)))
+  
+  for (let i = 0; i < paragraphs.length; i++) {
+    const p = paragraphs[i]
+    
+    if (toSplit.has(i) && p.length > 100) {
+      // 文境界（。！？）で分割
+      const sentences = p.split(/(?<=[。！？])/g).filter(s => s.trim())
+      if (sentences.length >= 2) {
+        const mid = Math.ceil(sentences.length / 2)
+        result.push(sentences.slice(0, mid).join('').trim())
+        result.push(sentences.slice(mid).join('').trim())
+      } else {
+        result.push(p)
+      }
+    } else {
+      result.push(p)
+    }
+  }
+  
+  return result.slice(0, targetCount)
+}
+
+/**
+ * テキストから image_prompt を生成（簡易版）
+ */
+async function generateImagePromptFromText(
+  text: string,
+  projectTitle: string,
+  apiKey: string
+): Promise<string> {
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          {
+            role: 'system',
+            content: 'Generate a concise English image prompt (30-200 chars) for an infographic video scene. Focus on visual elements that represent the text content. Output only the prompt, no explanation.'
+          },
+          {
+            role: 'user',
+            content: `Project: ${projectTitle}\nText: ${text}`
+          }
+        ],
+        max_tokens: 100,
+        temperature: 0.7
+      })
+    })
+    
+    if (!response.ok) {
+      console.error('Image prompt generation failed:', response.status)
+      return 'Abstract digital illustration representing the concept'
+    }
+    
+    const result = await response.json() as any
+    return result.choices?.[0]?.message?.content?.trim() || 'Abstract digital illustration'
+  } catch (error) {
+    console.error('Image prompt generation error:', error)
+    return 'Abstract digital illustration representing the concept'
+  }
+}
+
+/**
  * 自動merge実行（全chunk完了時）
  */
 async function autoMergeScenes(c: any, projectId: string, stats: any) {
@@ -883,20 +1200,22 @@ async function autoMergeScenes(c: any, projectId: string, stats: any) {
 }
 
 /**
- * OpenAI Chat API を使って MiniScene（1-3シーン）を生成（chunk単位、2段階リトライ対応）
+ * OpenAI Chat API を使って MiniScene を生成（AI整理モード、省略なし）
+ * @param targetSceneCount 目標シーン数（プロジェクト全体での目標、chunkごとに按分）
  */
-async function generateMiniScenes(
+async function generateMiniScenesAI(
   chunkText: string,
   projectTitle: string,
   chunkIdx: number,
-  apiKey: string
+  apiKey: string,
+  targetSceneCount: number = 5
 ): Promise<{
   success: boolean
   scenes?: any[]
   error?: string
 }> {
   // 第1回目の生成試行
-  const firstAttempt = await generateMiniScenesWithSchema(chunkText, projectTitle, chunkIdx, apiKey, 0.7)
+  const firstAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.7, targetSceneCount)
   if (firstAttempt.success) {
     return firstAttempt
   }
@@ -904,7 +1223,7 @@ async function generateMiniScenes(
   console.warn('First attempt failed, retrying with lower temperature...', firstAttempt.error)
 
   // 第2回目の生成試行（temperature 下げ）
-  const secondAttempt = await generateMiniScenesWithSchema(chunkText, projectTitle, chunkIdx, apiKey, 0.3)
+  const secondAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.3, targetSceneCount)
   if (secondAttempt.success) {
     return secondAttempt
   }
@@ -966,14 +1285,16 @@ async function generateRILARCScenario(
 }
 
 /**
- * MiniScene生成（JSON Schema strict:true）
+ * MiniScene生成（AI整理モード、省略なし、文字数緩和）
+ * @param targetSceneCount 目標シーン数参考用
  */
-async function generateMiniScenesWithSchema(
+async function generateMiniScenesWithSchemaAI(
   chunkText: string,
   projectTitle: string,
   chunkIdx: number,
   apiKey: string,
-  temperature: number
+  temperature: number,
+  targetSceneCount: number = 5
 ): Promise<{
   success: boolean
   scenes?: any[]
@@ -981,14 +1302,21 @@ async function generateMiniScenesWithSchema(
   rawContent?: string
 }> {
   try {
+    // AI整理モード: 省略を極力避ける指示を追加
     const systemPrompt = `あなたは動画シナリオ作成の専門家です。
-提供された文章断片から、1-3個のシーンを生成してください。
+提供された文章断片から、1-5個のシーンを生成してください。
 
-【厳守ルール】
-1. シーン数は **1〜3 個**（文章の長さに応じて調整）
-2. 各シーンの dialogue は **60〜140 文字**（簡潔かつ明瞭に）
-3. 各シーンの bullets は **2〜3 個**、各 8〜24 文字
-4. 各シーンの title は **10〜40 文字**
+【最重要: 省略禁止】
+- **元の文章の内容を省略しないでください**
+- 元の表現・言い回しをできるだけ残してください
+- 要約ではなく、元の文章を構造化してください
+- 情報を削除せず、適切なシーンに分配してください
+
+【ルール】
+1. シーン数は **1〜5 個**（文章の長さに応じて調整、長い場合は多く）
+2. 各シーンの dialogue は **30〜500 文字**（元の文章を維持するため緩和）
+3. 各シーンの bullets は **2〜3 個**、各 5〜40 文字
+4. 各シーンの title は **5〜50 文字**
 5. 各シーンの image_prompt は **30〜400 文字**（英語推奨、具体的に描写）
 6. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
 7. speech_type は **必ず判定**:
@@ -1014,7 +1342,8 @@ async function generateMiniScenesWithSchema(
 
 注意：idx、metadata は不要。シーン配列のみを返してください。`
 
-    const userPrompt = `以下の文章断片から1-3個のシーンを生成してください。
+    const userPrompt = `以下の文章断片からシーンを生成してください。
+**元の文章の内容を省略せず、できるだけ原文を活かしてください。**
 
 【プロジェクトタイトル】
 ${projectTitle}
@@ -1022,16 +1351,17 @@ ${projectTitle}
 【文章断片 (Part ${chunkIdx})】
 ${chunkText}
 
-上記の文章を元に、視聴者にとって魅力的で分かりやすいニュース風インフォグラフィック動画のシーンを作成してください。`
+上記の文章を元に、視聴者にとって魅力的で分かりやすいニュース風インフォグラフィック動画のシーンを作成してください。
+情報を省略せず、適切に複数シーンに分割してください。`
 
-    // JSON Schema for MiniScenes (1-3 scenes, no idx/metadata)
+    // JSON Schema for MiniScenes (1-5 scenes, 文字数緩和)
     const jsonSchema = {
       type: 'object',
       properties: {
         scenes: {
           type: 'array',
           minItems: 1,
-          maxItems: 3,
+          maxItems: 5,
           items: {
             type: 'object',
             properties: {
@@ -1039,8 +1369,8 @@ ${chunkText}
                 type: 'string',
                 enum: ['hook', 'context', 'main_point', 'evidence', 'timeline', 'analysis', 'summary', 'cta']
               },
-              title: { type: 'string', minLength: 10, maxLength: 40 },
-              dialogue: { type: 'string', minLength: 60, maxLength: 140 },
+              title: { type: 'string', minLength: 5, maxLength: 50 },
+              dialogue: { type: 'string', minLength: 30, maxLength: 500 }, // 緩和: 30-500文字
               speech_type: {
                 type: 'string',
                 enum: ['dialogue', 'narration'],
@@ -1050,7 +1380,7 @@ ${chunkText}
                 type: 'array',
                 minItems: 2,
                 maxItems: 3,
-                items: { type: 'string', minLength: 8, maxLength: 24 }
+                items: { type: 'string', minLength: 5, maxLength: 40 } // 緩和: 5-40文字
               },
               image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
             },

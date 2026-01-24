@@ -36,14 +36,23 @@ window.builderPagination = {
 document.addEventListener('DOMContentLoaded', () => {
   loadProject();
   
-  // Text character counter
+  // Text character counter and paragraph counter
   const sourceText = document.getElementById('sourceText');
   if (sourceText) {
     sourceText.addEventListener('input', () => {
       const charCount = sourceText.value.length;
       document.getElementById('textCharCount').textContent = charCount;
+      // Update paragraph count for format section
+      updateParagraphCount(sourceText.value);
     });
   }
+  
+  // Split mode radio change handler
+  document.addEventListener('change', (e) => {
+    if (e.target.name === 'splitMode') {
+      updateSplitModeHint(e.target.value);
+    }
+  });
   
   // Restore last active tab from localStorage
   const lastTab = localStorage.getItem('lastActiveTab');
@@ -97,6 +106,8 @@ async function loadProject() {
     if (currentProject.source_type === 'text' && currentProject.source_text) {
       document.getElementById('sourceText').value = currentProject.source_text;
       document.getElementById('textCharCount').textContent = currentProject.source_text.length;
+      // Update paragraph count for format section
+      updateParagraphCount(currentProject.source_text);
     }
     
     // Enable/disable tabs based on status
@@ -863,6 +874,161 @@ async function saveSourceText() {
 
 // ========== Scene Split Functions ==========
 
+// Global split settings
+let currentSplitMode = 'ai'; // 'preserve' or 'ai'
+let currentTargetSceneCount = 5; // Default target scene count
+
+/**
+ * Render format section UI with mode selection
+ */
+function renderFormatSectionUI() {
+  return `
+    <div class="p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg">
+      <h3 class="font-bold text-gray-800 mb-4">シーン分割設定</h3>
+      
+      <!-- Mode Selection -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">分割モード</label>
+        <div class="flex gap-4">
+          <label class="flex items-center cursor-pointer">
+            <input type="radio" name="splitMode" value="ai" checked 
+                   onchange="updateSplitMode('ai')"
+                   class="mr-2 text-purple-600 focus:ring-purple-500">
+            <span class="text-sm">
+              <strong>AI整理</strong>
+              <span class="text-gray-500 block text-xs">意図を読み取り、省略せず整理</span>
+            </span>
+          </label>
+          <label class="flex items-center cursor-pointer">
+            <input type="radio" name="splitMode" value="preserve"
+                   onchange="updateSplitMode('preserve')"
+                   class="mr-2 text-purple-600 focus:ring-purple-500">
+            <span class="text-sm">
+              <strong>原文維持</strong>
+              <span class="text-gray-500 block text-xs">台本をそのまま使用（空行で分割）</span>
+            </span>
+          </label>
+        </div>
+      </div>
+      
+      <!-- Target Scene Count -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数</label>
+        <div class="flex items-center gap-2">
+          <input type="number" id="targetSceneCount" value="5" min="1" max="30"
+                 onchange="currentTargetSceneCount = parseInt(this.value) || 5"
+                 class="w-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
+          <span class="text-sm text-gray-500">シーン（1〜30）</span>
+        </div>
+      </div>
+      
+      <!-- Mode Description -->
+      <div id="splitModeDescription" class="mb-4 p-3 bg-white rounded border border-gray-200">
+        <p class="text-sm text-gray-600">
+          <i class="fas fa-robot text-purple-600 mr-2"></i>
+          <strong>AI整理モード:</strong> 元の文章を省略せず、AIが意図を読み取って適切にシーン分割します。
+        </p>
+      </div>
+      
+      <!-- Execute Button -->
+      <button 
+        id="formatBtn"
+        onclick="confirmAndFormatSplit()"
+        class="w-full px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold touch-manipulation"
+      >
+        <i class="fas fa-magic mr-2"></i>シーン分割を実行
+      </button>
+      
+      <p class="text-xs text-gray-500 mt-2 text-center">
+        ※ 既存のシーン・画像・音声は全てリセットされます
+      </p>
+    </div>
+  `;
+}
+
+/**
+ * Update split mode and description
+ */
+function updateSplitMode(mode) {
+  currentSplitMode = mode;
+  const descEl = document.getElementById('splitModeDescription');
+  if (!descEl) return;
+  
+  if (mode === 'preserve') {
+    descEl.innerHTML = `
+      <p class="text-sm text-gray-600">
+        <i class="fas fa-file-alt text-green-600 mr-2"></i>
+        <strong>原文維持モード:</strong> 原文は一切変更しません。空行（段落）で分割し、必要に応じて結合・分割します。
+      </p>
+    `;
+  } else {
+    descEl.innerHTML = `
+      <p class="text-sm text-gray-600">
+        <i class="fas fa-robot text-purple-600 mr-2"></i>
+        <strong>AI整理モード:</strong> 元の文章を省略せず、AIが意図を読み取って適切にシーン分割します。
+      </p>
+    `;
+  }
+}
+
+/**
+ * Confirm and execute format split (with reset warning)
+ */
+async function confirmAndFormatSplit() {
+  // Get target scene count from input
+  const targetInput = document.getElementById('targetSceneCount');
+  if (targetInput) {
+    currentTargetSceneCount = parseInt(targetInput.value) || 5;
+  }
+  
+  // Confirm dialog
+  const modeText = currentSplitMode === 'preserve' ? '原文維持' : 'AI整理';
+  const confirmed = confirm(
+    \`シーン分割を実行しますか？\n\n\` +
+    \`分割モード: \${modeText}\n\` +
+    \`目標シーン数: \${currentTargetSceneCount}\n\n\` +
+    \`⚠️ 注意: 既存のシーン・画像・音声・バブル・SFX・BGM は全て削除されます。\n\` +
+    \`（ビルド履歴は保持されます）\`
+  );
+  
+  if (!confirmed) return;
+  
+  // Execute format split
+  await formatAndSplit();
+}
+
+/**
+ * Update paragraph count display
+ * Counts paragraphs separated by empty lines (\n\n)
+ */
+function updateParagraphCount(text) {
+  const paragraphCountInfo = document.getElementById('paragraphCountInfo');
+  if (!paragraphCountInfo) return;
+  
+  if (!text || text.trim() === '') {
+    paragraphCountInfo.textContent = '';
+    return;
+  }
+  
+  // Count paragraphs (split by double newline)
+  const paragraphs = text.split(/\n\s*\n/).filter(p => p.trim() !== '');
+  paragraphCountInfo.textContent = `（現在の段落数: ${paragraphs.length}）`;
+}
+
+/**
+ * Update split mode hint text
+ */
+function updateSplitModeHint(mode) {
+  const hintEl = document.getElementById('splitModeHint');
+  if (!hintEl) return;
+  
+  if (mode === 'preserve') {
+    hintEl.textContent = '原文維持モード: 段落数より多い場合は文境界で分割、少ない場合は結合（省略なし）';
+  } else {
+    hintEl.textContent = 'AI整理モード: AIが最適なシーン数に調整します（元の表現をできるだけ維持）';
+  }
+}
+
 // Global polling state
 let formatPollingInterval = null;
 let formatPollingStartTime = null;
@@ -871,11 +1037,18 @@ let currentFormatRunId = null; // SSOT: 監視中のrun_id（mismatch検出用�
 const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 
 // Format and split scenes with progress monitoring
+// Note: Called from confirmAndFormatSplit() which handles the confirmation dialog
 async function formatAndSplit() {
   if (isProcessing) {
     showToast('処理中です。しばらくお待ちください', 'warning');
     return;
   }
+  
+  // Get split mode and target scene count from global state (set by confirmAndFormatSplit)
+  const splitMode = currentSplitMode || 'ai';
+  const targetSceneCount = currentTargetSceneCount || 5;
+  
+  console.log('[Format] Split mode:', splitMode, 'Target scene count:', targetSceneCount);
   
   isProcessing = true;
   setButtonLoading('formatBtn', true);
@@ -973,8 +1146,14 @@ async function formatAndSplit() {
       }
     }
     
-    // Initial format call
-    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
+    // Initial format call with split mode parameters
+    const formatPayload = {
+      split_mode: splitMode,
+      target_scene_count: targetSceneCount,
+      reset: true  // Always full reset (Phase S-1)
+    };
+    console.log('[Format] Sending format request with payload:', formatPayload);
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`, formatPayload);
     
     if (response.data.error) {
       // INVALID_STATUS (failed) の場合、復帰導線を表示
@@ -990,12 +1169,29 @@ async function formatAndSplit() {
       return;
     }
     
+    // Check if preserve mode completed immediately
+    if (response.data.status === 'formatted' && response.data.split_mode === 'preserve') {
+      // Preserve mode completed immediately - no polling needed
+      console.log('[Format] Preserve mode completed:', response.data);
+      showToast(`原文維持モードで ${response.data.total_scenes} シーンを生成しました`, 'success');
+      
+      // Hide progress UI
+      document.getElementById('formatProgressUI')?.classList.add('hidden');
+      
+      // Reload project to show scenes
+      await loadProject();
+      
+      isProcessing = false;
+      setButtonLoading('formatBtn', false);
+      return;
+    }
+    
     // SSOT: 監視するrun_id/run_noを保存（mismatch検出用）
     currentFormatRunId = response.data.run_id || null;
     currentFormatRunNo = response.data.run_no || null;
     console.log('[Format] Started monitoring run_id:', currentFormatRunId, 'run_no:', currentFormatRunNo);
     
-    // Start polling for progress
+    // Start polling for progress (AI mode)
     startFormatPolling();
     
   } catch (error) {
@@ -1631,23 +1827,9 @@ async function resetProject() {
       showToast(`プロジェクトをリセットしました（${response.data.reset_to}）`, 'success');
       await loadProject(); // Reload project
       
-      // Format section を元に戻す
+      // Format section を元に戻す（2モード対応）
       const formatSection = document.getElementById('formatSection');
-      formatSection.innerHTML = `
-        <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-          <div>
-            <h3 class="font-semibold text-gray-800 mb-1">RILARCシナリオ生成</h3>
-            <p class="text-sm text-gray-600">OpenAI Chat APIで入力テキストをシーン分割します（30秒-1分）</p>
-          </div>
-          <button 
-            id="formatBtn"
-            onclick="formatAndSplit()"
-            class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation"
-          >
-            <i class="fas fa-magic mr-2"></i>シーン分割を実行
-          </button>
-        </div>
-      `;
+      formatSection.innerHTML = renderFormatSectionUI();
       formatSection.classList.remove('hidden');
     } else {
       showToast(response.data.error?.message || 'リセットに失敗しました', 'error');
