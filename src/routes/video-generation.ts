@@ -2361,8 +2361,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     // Calculate estimated cost based on total duration and scene count
     const totalDurationSec = projectJson.summary?.total_duration_ms 
       ? projectJson.summary.total_duration_ms / 1000 
-      : scenes.length * 5; // Fallback: 5 sec per scene
-    const remotionEstimatedCost = estimateRemotionBuildCost(totalDurationSec, scenes.length);
+      : scenesWithAssets.length * 5; // Fallback: 5 sec per scene
+    const remotionEstimatedCost = estimateRemotionBuildCost(totalDurationSec, scenesWithAssets.length);
     
     await c.env.DB.prepare(`
       INSERT INTO api_usage_logs (
@@ -2381,7 +2381,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         executor_user_id: userId,
         is_delegation: ownerUserId !== userId,
         status: 'submitted',
-        scene_count: scenes.length,
+        scene_count: scenesWithAssets.length,
         total_duration_sec: totalDurationSec,
         estimated_cost_usd: remotionEstimatedCost
       })
