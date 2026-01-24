@@ -8705,10 +8705,14 @@ async function refreshBuilderWizard() {
     const stepCards = [];
 
     // Step 1: 素材
+    // Handle errors that could be objects or strings
+    const firstError = errors[0];
+    const errorMsg = typeof firstError === 'string' ? firstError 
+                   : (firstError?.message || firstError?.reason || '素材が足りません');
     stepCards.push(renderWizardCard(
       '1) 素材',
       errors.length === 0 ? '✅ OK' : '🔴 NG',
-      errors.length === 0 ? '画像/漫画/動画が揃っています' : errors[0] || '素材が足りません',
+      errors.length === 0 ? '画像/漫画/動画が揃っています' : errorMsg,
       errors.length === 0 ? 'green' : 'red'
     ));
 
@@ -8750,7 +8754,10 @@ async function refreshBuilderWizard() {
     } else if (!audioLayers.length) {
       tipsHtml = '<span class="text-amber-600"><i class="fas fa-lightbulb mr-1"></i><b>推奨:</b> BGMを設定すると、セリフなしシーンでも「音あり動画」になります。</span>';
     } else if (warnings.length > 0) {
-      tipsHtml = `<span class="text-amber-600"><i class="fas fa-info-circle mr-1"></i>${warnings[0]}</span>`;
+      const firstWarn = warnings[0];
+      const warnMsg = typeof firstWarn === 'string' ? firstWarn 
+                    : (firstWarn?.message || firstWarn?.reason || '注意事項があります');
+      tipsHtml = `<span class="text-amber-600"><i class="fas fa-info-circle mr-1"></i>${warnMsg}</span>`;
     } else {
       tipsHtml = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>生成準備OK。生成後は「チャットで修正」でタイミング調整できます。</span>';
     }

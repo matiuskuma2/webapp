@@ -447,6 +447,24 @@ app.get('/:sceneId/edit-context', async (c) => {
       WHERE scene_id = ?
     `).bind(sceneId).all();
     
+    // 5. Get utterance status for this scene (join with audio_generations)
+    const uttStats = await c.env.DB.prepare(`
+      SELECT 
+        COUNT(*) as total,
+        SUM(CASE WHEN ag.id IS NOT NULL AND ag.status = 'completed' THEN 1 ELSE 0 END) as with_audio,
+        COALESCE(SUM(CASE WHEN ag.id IS NOT NULL AND ag.status = 'completed' THEN su.duration_ms ELSE 0 END), 0) as total_duration_ms
+      FROM scene_utterances su
+      LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
+      WHERE su.scene_id = ?
+    `).bind(sceneId).first();
+    
+    // 6. Get duration_override_ms from scenes table
+    const sceneExtraFields = await c.env.DB.prepare(`
+      SELECT duration_override_ms, text_render_mode, motion_preset
+      FROM scenes
+      WHERE id = ?
+    `).bind(sceneId).first();
+    
     return c.json({
       scene: {
         id: scene.id,
@@ -456,7 +474,15 @@ app.get('/:sceneId/edit-context', async (c) => {
         image_prompt: scene.image_prompt || '',
         is_prompt_customized: scene.is_prompt_customized || 0,
         display_asset_type: scene.display_asset_type || 'image',
-        comic_data: scene.comic_data ? JSON.parse(String(scene.comic_data)) : null
+        comic_data: scene.comic_data ? JSON.parse(String(scene.comic_data)) : null,
+        duration_override_ms: sceneExtraFields?.duration_override_ms || null,
+        text_render_mode: sceneExtraFields?.text_render_mode || null,
+        motion_preset_id: sceneExtraFields?.motion_preset || null,
+        utterance_status: {
+          total: Number(uttStats?.total) || 0,
+          with_audio: Number(uttStats?.with_audio) || 0,
+          total_duration_ms: Number(uttStats?.total_duration_ms) || 0
+        }
       },
       project_characters: (charactersResult.results || []).map((char: any) => ({
         character_key: char.character_key,

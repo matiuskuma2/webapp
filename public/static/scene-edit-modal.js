@@ -242,6 +242,13 @@
       } catch (error) {
         console.error('[SceneEditModal] Failed to load motion data:', error);
         // Fallback to defaults
+        if (this.motionPresets.length === 0) {
+          // Default presets if API fails
+          this.motionPresets = [
+            { id: 'none', name: '動きなし', description: '静止画のまま表示', motion_type: 'none' },
+            { id: 'kenburns_soft', name: 'ゆっくりズーム', description: 'ゆっくりとズームイン', motion_type: 'kenburns' }
+          ];
+        }
         this.motionState = {
           original: { preset_id: 'kenburns_soft', is_default: true },
           current: 'kenburns_soft',
