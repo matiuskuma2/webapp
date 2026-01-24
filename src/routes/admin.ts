@@ -1313,4 +1313,199 @@ admin.get('/orphan-builds', async (c) => {
   }
 });
 
+// ====================================================================
+// POST /api/admin/cron/cleanup-stuck-builds - Stuck ビルド検知・自動キャンセル
+// ====================================================================
+// submitted/rendering/uploading が一定時間以上続いているビルドを failed に更新
+// 認証: Cron-Secret ヘッダーまたは SuperAdmin セッション
+
+admin.post('/cron/cleanup-stuck-builds', async (c) => {
+  const { DB } = c.env;
+  
+  // 認証: Cron-Secret または SuperAdmin セッション
+  const cronSecret = c.req.header('X-Cron-Secret');
+  const expectedSecret = c.env.CRON_SECRET || 'default-cron-secret-change-me';
+  
+  if (cronSecret !== expectedSecret) {
+    const sessionCookie = getCookie(c, 'session');
+    if (!sessionCookie) {
+      return c.json({ error: 'UNAUTHORIZED', message: 'Cron secret or session required' }, 401);
+    }
+    
+    const sessionResult = await DB.prepare(`
+      SELECT u.id, u.role FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.id = ? AND s.expires_at > datetime('now')
+    `).bind(sessionCookie).first<{ id: number; role: string }>();
+    
+    if (!sessionResult || sessionResult.role !== 'superadmin') {
+      return c.json({ error: 'FORBIDDEN', message: 'SuperAdmin required' }, 403);
+    }
+  }
+  
+  try {
+    // 設定: タイムアウト閾値（分）
+    const STUCK_THRESHOLD_MINUTES = 30;  // submitted/rendering が30分以上続いたらstuck
+    
+    // stuck candidates を取得
+    // submitted: created_at から30分以上経過
+    // rendering: render_started_at から30分以上経過
+    const stuckBuilds = await DB.prepare(`
+      SELECT 
+        id, project_id, status, aws_job_id, remotion_render_id,
+        created_at, render_started_at, updated_at
+      FROM video_builds
+      WHERE status IN ('submitted', 'rendering', 'uploading', 'validating', 'queued')
+        AND (
+          (status = 'submitted' AND datetime(created_at, '+${STUCK_THRESHOLD_MINUTES} minutes') < datetime('now'))
+          OR (status = 'rendering' AND datetime(COALESCE(render_started_at, created_at), '+${STUCK_THRESHOLD_MINUTES} minutes') < datetime('now'))
+          OR (status IN ('uploading', 'validating', 'queued') AND datetime(created_at, '+${STUCK_THRESHOLD_MINUTES} minutes') < datetime('now'))
+        )
+      ORDER BY created_at ASC
+      LIMIT 50
+    `).all<{
+      id: number;
+      project_id: number;
+      status: string;
+      aws_job_id: string | null;
+      remotion_render_id: string | null;
+      created_at: string;
+      render_started_at: string | null;
+      updated_at: string;
+    }>();
+    
+    const builds = stuckBuilds.results || [];
+    let cancelledCount = 0;
+    const cancelled: number[] = [];
+    const errors: string[] = [];
+    
+    for (const build of builds) {
+      try {
+        // ビルドを failed に更新
+        const result = await DB.prepare(`
+          UPDATE video_builds 
+          SET status = 'failed',
+              error_code = 'TIMEOUT_STUCK',
+              error_message = ?,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ? AND status = ?
+        `).bind(
+          `Build stuck in ${build.status} state for over ${STUCK_THRESHOLD_MINUTES} minutes. Automatically cancelled.`,
+          build.id,
+          build.status
+        ).run();
+        
+        if (result.meta.changes === 1) {
+          cancelled.push(build.id);
+          cancelledCount++;
+          console.log(`[cron] Cancelled stuck build ${build.id} (was: ${build.status}, created: ${build.created_at})`);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        errors.push(`Build ${build.id}: ${errMsg}`);
+        console.error(`[cron] Error cancelling build ${build.id}:`, err);
+      }
+    }
+    
+    const result = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      threshold_minutes: STUCK_THRESHOLD_MINUTES,
+      found: builds.length,
+      cancelled: cancelledCount,
+      cancelled_ids: cancelled,
+      errors: errors.length,
+      error_details: errors.slice(0, 10),
+    };
+    
+    console.log('[cron] Cleanup stuck builds completed:', result);
+    return c.json(result);
+    
+  } catch (error) {
+    console.error('Cron cleanup stuck builds error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to cleanup' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/admin/stuck-builds - Stuck ビルドの一覧取得
+// ====================================================================
+// SuperAdmin でのモニタリング用
+
+admin.get('/stuck-builds', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    const STUCK_THRESHOLD_MINUTES = 30;
+    
+    const stuckBuilds = await DB.prepare(`
+      SELECT 
+        vb.id, vb.project_id, vb.owner_user_id, vb.status,
+        vb.aws_job_id, vb.remotion_render_id,
+        vb.created_at, vb.render_started_at, vb.updated_at,
+        p.title AS project_title,
+        u.email AS owner_email,
+        CASE 
+          WHEN vb.status = 'submitted' THEN 
+            ROUND((julianday('now') - julianday(vb.created_at)) * 1440, 1)
+          WHEN vb.status = 'rendering' THEN 
+            ROUND((julianday('now') - julianday(COALESCE(vb.render_started_at, vb.created_at))) * 1440, 1)
+          ELSE 
+            ROUND((julianday('now') - julianday(vb.created_at)) * 1440, 1)
+        END AS minutes_stuck
+      FROM video_builds vb
+      LEFT JOIN projects p ON vb.project_id = p.id
+      LEFT JOIN users u ON vb.owner_user_id = u.id
+      WHERE vb.status IN ('submitted', 'rendering', 'uploading', 'validating', 'queued')
+        AND datetime(vb.created_at, '+${STUCK_THRESHOLD_MINUTES} minutes') < datetime('now')
+      ORDER BY vb.created_at ASC
+      LIMIT 100
+    `).all<{
+      id: number;
+      project_id: number;
+      owner_user_id: number | null;
+      status: string;
+      aws_job_id: string | null;
+      remotion_render_id: string | null;
+      created_at: string;
+      render_started_at: string | null;
+      updated_at: string;
+      project_title: string | null;
+      owner_email: string | null;
+      minutes_stuck: number;
+    }>();
+    
+    const builds = stuckBuilds.results || [];
+    
+    return c.json({
+      success: true,
+      threshold_minutes: STUCK_THRESHOLD_MINUTES,
+      count: builds.length,
+      builds: builds.map(b => ({
+        id: b.id,
+        project_id: b.project_id,
+        project_title: b.project_title,
+        status: b.status,
+        owner_email: b.owner_email,
+        aws_job_id: b.aws_job_id,
+        remotion_render_id: b.remotion_render_id,
+        minutes_stuck: b.minutes_stuck,
+        created_at: b.created_at,
+        render_started_at: b.render_started_at,
+        updated_at: b.updated_at,
+      })),
+    });
+    
+  } catch (error) {
+    console.error('Get stuck builds error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get stuck builds' 
+    }, 500);
+  }
+});
+
 export default admin;
