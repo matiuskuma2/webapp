@@ -1256,9 +1256,22 @@ videoGeneration.get('/video-builds/usage', async (c) => {
  */
 videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => {
   const { validateProjectAssets, validateUtterancesPreflight } = await import('../utils/video-build-helpers');
+  const { createVideoBuildClientConfig } = await import('../utils/aws-video-build-client');
   
   try {
     const projectId = parseInt(c.req.param('projectId'), 10);
+    
+    // 環境変数チェック（警告用）
+    const envWarnings: string[] = [];
+    const awsConfigured = createVideoBuildClientConfig(c.env) !== null;
+    const siteUrlConfigured = !!c.env.SITE_URL;
+    
+    if (!awsConfigured) {
+      envWarnings.push('AWS Orchestrator が設定されていません（動画生成不可）');
+    }
+    if (!siteUrlConfigured) {
+      envWarnings.push('SITE_URL が未設定です。デフォルト値が使用されます');
+    }
     
     // シーンデータ取得
     // R2: display_asset_type, text_render_mode を取得
@@ -1439,10 +1452,10 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     }
     const totalBalloons = balloonPolicySummary.always_on + balloonPolicySummary.voice_window + balloonPolicySummary.manual_window;
     
-    // 全体の判定: 素材OKなら生成可能（utterances は警告のみ）
-    // 必須条件: 素材がある
+    // 全体の判定: 素材OKかつAWS設定ありなら生成可能（utterances は警告のみ）
+    // 必須条件: 素材がある + AWS が設定されている
     // 推奨条件: 音声パーツがある、BGMがある
-    const canGenerate = assetValidation.is_ready;
+    const canGenerate = assetValidation.is_ready && awsConfigured;
     
     // 警告を「必須」と「推奨」に分類
     // 必須エラー（赤・生成停止）: 素材不足
@@ -1518,6 +1531,12 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
       balloon_policy_summary: {
         ...balloonPolicySummary,
         total: totalBalloons,
+      },
+      // 環境設定状況（トラブルシュート用）
+      config: {
+        aws_configured: awsConfigured,
+        site_url_configured: siteUrlConfigured,
+        env_warnings: envWarnings,
       },
     });
     

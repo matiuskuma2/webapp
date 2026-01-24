@@ -1418,6 +1418,21 @@ admin.post('/cron/cleanup-stuck-builds', async (c) => {
       error_details: errors.slice(0, 10),
     };
     
+    // api_usage_logs に Cron 実行を記録（監査証跡）
+    try {
+      await DB.prepare(`
+        INSERT INTO api_usage_logs (user_id, provider, model, operation, input_tokens, output_tokens, estimated_cost_usd, metadata_json, created_at)
+        VALUES (NULL, 'internal', 'cron', 'cleanup_stuck_builds', 0, 0, 0, ?, CURRENT_TIMESTAMP)
+      `).bind(JSON.stringify({
+        found: builds.length,
+        cancelled: cancelledCount,
+        cancelled_ids: cancelled,
+        threshold_minutes: STUCK_THRESHOLD_MINUTES,
+      })).run();
+    } catch (logErr) {
+      console.warn('[cron] Failed to log to api_usage_logs:', logErr);
+    }
+    
     console.log('[cron] Cleanup stuck builds completed:', result);
     return c.json(result);
     
