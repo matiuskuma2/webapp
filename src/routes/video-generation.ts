@@ -3542,4 +3542,301 @@ videoGeneration.get('/:sceneId/balloons', async (c) => {
   return c.json({ balloons: balloons || [] });
 });
 
+// ====================================================================
+// AWS Webhook Endpoint - Callback from Orchestrator
+// ====================================================================
+/**
+ * POST /api/webhooks/video-build
+ * 
+ * AWS Orchestrator からのステータス更新コールバック
+ * ポーリング依存を脱却し、リアルタイムでステータスを更新
+ * 
+ * 認証: HMAC-SHA256 署名検証
+ * Header: X-Webhook-Signature = HMAC-SHA256(body, WEBHOOK_SECRET)
+ * 
+ * Payload:
+ * {
+ *   video_build_id: number,
+ *   status: 'rendering' | 'uploading' | 'completed' | 'failed',
+ *   progress_percent?: number,
+ *   progress_stage?: string,
+ *   progress_message?: string,
+ *   download_url?: string,
+ *   download_expires_at?: string,
+ *   error_code?: string,
+ *   error_message?: string,
+ *   render_metadata?: {
+ *     render_id: string,
+ *     started_at?: string,
+ *     completed_at?: string,
+ *     duration_sec?: number,
+ *     estimated_cost_usd?: number,
+ *   }
+ * }
+ */
+videoGeneration.post('/webhooks/video-build', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    // 1. 署名検証
+    const signature = c.req.header('X-Webhook-Signature');
+    const webhookSecret = c.env.WEBHOOK_SECRET || c.env.CRON_SECRET;
+    
+    if (!webhookSecret) {
+      console.warn('[Webhook] WEBHOOK_SECRET not configured, accepting without verification');
+    } else if (!signature) {
+      return c.json({ error: 'UNAUTHORIZED', message: 'Missing signature' }, 401);
+    } else {
+      // HMAC-SHA256 検証
+      const body = await c.req.text();
+      const encoder = new TextEncoder();
+      const key = await crypto.subtle.importKey(
+        'raw',
+        encoder.encode(webhookSecret),
+        { name: 'HMAC', hash: 'SHA-256' },
+        false,
+        ['sign']
+      );
+      const signatureBuffer = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+      const expectedSignature = Array.from(new Uint8Array(signatureBuffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
+      
+      if (signature !== expectedSignature) {
+        console.warn('[Webhook] Signature mismatch');
+        return c.json({ error: 'UNAUTHORIZED', message: 'Invalid signature' }, 401);
+      }
+      
+      // Re-parse body as JSON
+      const payload = JSON.parse(body);
+      return await processWebhook(c, DB, payload);
+    }
+    
+    // No secret configured - accept payload directly
+    const payload = await c.req.json();
+    return await processWebhook(c, DB, payload);
+    
+  } catch (error) {
+    console.error('[Webhook] Error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Webhook processing failed' 
+    }, 500);
+  }
+});
+
+/**
+ * Process webhook payload
+ */
+async function processWebhook(c: any, DB: D1Database, payload: any) {
+  const {
+    video_build_id,
+    status,
+    progress_percent,
+    progress_stage,
+    progress_message,
+    download_url,
+    download_expires_at,
+    error_code,
+    error_message,
+    render_metadata,
+  } = payload;
+  
+  if (!video_build_id || !status) {
+    return c.json({ error: 'INVALID_PAYLOAD', message: 'video_build_id and status required' }, 400);
+  }
+  
+  // 2. ビルドの存在確認
+  const build = await DB.prepare(`
+    SELECT id, status, render_usage_logged, project_id, owner_user_id
+    FROM video_builds WHERE id = ?
+  `).bind(video_build_id).first<{
+    id: number;
+    status: string;
+    render_usage_logged: number;
+    project_id: number;
+    owner_user_id: number | null;
+  }>();
+  
+  if (!build) {
+    return c.json({ error: 'NOT_FOUND', message: 'Video build not found' }, 404);
+  }
+  
+  // 3. すでに完了/失敗していたらスキップ（冪等性）
+  if (['completed', 'failed'].includes(build.status) && build.status === status) {
+    console.log(`[Webhook] Build ${video_build_id} already ${status}, skipping`);
+    return c.json({ success: true, message: 'Already processed', status: build.status });
+  }
+  
+  // 4. ステータス更新
+  const updateFields: string[] = ['status = ?', 'updated_at = CURRENT_TIMESTAMP'];
+  const updateValues: any[] = [status];
+  
+  if (progress_percent !== undefined) {
+    updateFields.push('progress_percent = ?');
+    updateValues.push(progress_percent);
+  }
+  if (progress_stage) {
+    updateFields.push('progress_stage = ?');
+    updateValues.push(progress_stage);
+  }
+  if (progress_message) {
+    updateFields.push('progress_message = ?');
+    updateValues.push(progress_message);
+  }
+  if (download_url) {
+    updateFields.push('download_url = ?');
+    updateValues.push(download_url);
+  }
+  if (download_expires_at) {
+    updateFields.push('download_expires_at = ?');
+    updateValues.push(download_expires_at);
+  }
+  if (error_code) {
+    updateFields.push('error_code = ?');
+    updateValues.push(error_code);
+  }
+  if (error_message) {
+    updateFields.push('error_message = ?');
+    updateValues.push(error_message);
+  }
+  
+  // Render metadata
+  if (render_metadata) {
+    if (render_metadata.render_id) {
+      updateFields.push('remotion_render_id = ?');
+      updateValues.push(render_metadata.render_id);
+    }
+    if (render_metadata.started_at) {
+      updateFields.push('render_started_at = ?');
+      updateValues.push(render_metadata.started_at);
+    }
+    if (render_metadata.completed_at) {
+      updateFields.push('render_completed_at = ?');
+      updateValues.push(render_metadata.completed_at);
+    }
+    if (render_metadata.duration_sec !== undefined) {
+      updateFields.push('render_duration_sec = ?');
+      updateValues.push(render_metadata.duration_sec);
+    }
+    if (render_metadata.estimated_cost_usd !== undefined) {
+      updateFields.push('estimated_cost_usd = ?');
+      updateValues.push(render_metadata.estimated_cost_usd);
+    }
+  }
+  
+  updateValues.push(video_build_id);
+  
+  await DB.prepare(`
+    UPDATE video_builds SET ${updateFields.join(', ')} WHERE id = ?
+  `).bind(...updateValues).run();
+  
+  console.log(`[Webhook] Build ${video_build_id} updated: ${build.status} → ${status}`);
+  
+  // 5. 完了時のログ記録（二重計上防止）
+  if (status === 'completed' && build.render_usage_logged === 0) {
+    try {
+      // Lock first: render_usage_logged を 1 に更新
+      const lockResult = await DB.prepare(`
+        UPDATE video_builds SET render_usage_logged = 1 WHERE id = ? AND render_usage_logged = 0
+      `).bind(video_build_id).run();
+      
+      if (lockResult.meta.changes === 1) {
+        // Get full build data for logging
+        const fullBuild = await DB.prepare(`
+          SELECT vb.*, p.user_id as project_owner_user_id
+          FROM video_builds vb
+          LEFT JOIN projects p ON vb.project_id = p.id
+          WHERE vb.id = ?
+        `).bind(video_build_id).first<any>();
+        
+        if (fullBuild) {
+          const userId = fullBuild.owner_user_id || fullBuild.project_owner_user_id;
+          if (userId) {
+            let fps = 30, aspectRatio = '9:16', resolution = '1080p';
+            try {
+              const settings = JSON.parse(fullBuild.settings_json || '{}');
+              fps = settings.fps || 30;
+              aspectRatio = settings.aspect_ratio || '9:16';
+              resolution = settings.resolution || '1080p';
+            } catch {}
+            
+            await logVideoBuildRender(DB, {
+              userId,
+              projectId: fullBuild.project_id,
+              videoBuildId: video_build_id,
+              totalScenes: fullBuild.total_scenes || 0,
+              totalDurationMs: fullBuild.total_duration_ms || 0,
+              fps,
+              status: 'completed',
+              errorCode: null,
+              errorMessage: null,
+              remotionRenderId: render_metadata?.render_id || fullBuild.remotion_render_id,
+              aspectRatio,
+              resolution,
+            });
+            console.log(`[Webhook] Logged render usage for build ${video_build_id}`);
+          }
+        }
+      }
+    } catch (logErr) {
+      console.warn('[Webhook] Failed to log render usage:', logErr);
+    }
+  }
+  
+  // 6. 失敗時もログ記録
+  if (status === 'failed' && build.render_usage_logged === 0) {
+    try {
+      await DB.prepare(`
+        UPDATE video_builds SET render_usage_logged = 1 WHERE id = ? AND render_usage_logged = 0
+      `).bind(video_build_id).run();
+      
+      const fullBuild = await DB.prepare(`
+        SELECT vb.*, p.user_id as project_owner_user_id
+        FROM video_builds vb
+        LEFT JOIN projects p ON vb.project_id = p.id
+        WHERE vb.id = ?
+      `).bind(video_build_id).first<any>();
+      
+      if (fullBuild) {
+        const userId = fullBuild.owner_user_id || fullBuild.project_owner_user_id;
+        if (userId) {
+          let fps = 30, aspectRatio = '9:16', resolution = '1080p';
+          try {
+            const settings = JSON.parse(fullBuild.settings_json || '{}');
+            fps = settings.fps || 30;
+            aspectRatio = settings.aspect_ratio || '9:16';
+            resolution = settings.resolution || '1080p';
+          } catch {}
+          
+          await logVideoBuildRender(DB, {
+            userId,
+            projectId: fullBuild.project_id,
+            videoBuildId: video_build_id,
+            totalScenes: fullBuild.total_scenes || 0,
+            totalDurationMs: fullBuild.total_duration_ms || 0,
+            fps,
+            status: 'failed',
+            errorCode: error_code || 'UNKNOWN',
+            errorMessage: error_message || 'Unknown error',
+            remotionRenderId: render_metadata?.render_id || fullBuild.remotion_render_id,
+            aspectRatio,
+            resolution,
+          });
+          console.log(`[Webhook] Logged failed render for build ${video_build_id}`);
+        }
+      }
+    } catch (logErr) {
+      console.warn('[Webhook] Failed to log render failure:', logErr);
+    }
+  }
+  
+  return c.json({ 
+    success: true, 
+    video_build_id,
+    previous_status: build.status,
+    new_status: status,
+  });
+}
+
 export default videoGeneration;

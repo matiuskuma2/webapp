@@ -934,12 +934,57 @@ jobs:
 
 **必要なGitHub Secret**: `CRON_SECRET`
 
+#### Stuck Build Cleanup（5分間隔で実行推奨）
+
+`.github/workflows/cron-cleanup-stuck-builds.yml`:
+```yaml
+name: Cleanup Stuck Builds
+on:
+  schedule:
+    - cron: '*/5 * * * *'  # 5分ごと
+  workflow_dispatch:
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cleanup stuck builds
+        run: |
+          curl -X POST \
+            -H "X-Cron-Secret: ${{ secrets.CRON_SECRET }}" \
+            "https://webapp-c7n.pages.dev/api/admin/cron/cleanup-stuck-builds"
+```
+
+#### 外部 Cron サービス（UptimeRobot / cron-job.org）
+
+1. **UptimeRobot** (無料プランで5分間隔可能)
+   - URL: `https://webapp-c7n.pages.dev/api/admin/cron/cleanup-stuck-builds`
+   - Method: `POST`
+   - Custom HTTP Header: `X-Cron-Secret: your-secret`
+
+2. **cron-job.org** (無料・1分間隔も可能)
+   - URL: `https://webapp-c7n.pages.dev/api/admin/cron/cleanup-stuck-builds`
+   - Request method: `POST`
+   - Header: `X-Cron-Secret: your-secret`
+
 #### 手動実行
 ```bash
+# Stuck Build Cleanup
+curl -X POST \
+  -H "X-Cron-Secret: your-secret" \
+  "https://webapp-c7n.pages.dev/api/admin/cron/cleanup-stuck-builds"
+
+# Render Log Collection
 curl -X POST \
   -H "X-Cron-Secret: your-secret" \
   "https://webapp-c7n.pages.dev/api/admin/cron/collect-render-logs"
 ```
+
+### Cron エンドポイント一覧
+
+| エンドポイント | 用途 | 推奨間隔 |
+|---------------|------|---------|
+| `POST /api/admin/cron/cleanup-stuck-builds` | 30分以上 stuck のビルドを自動キャンセル | 5分 |
+| `POST /api/admin/cron/collect-render-logs` | 未記録のレンダーログを回収 | 1日1回 |
 
 ### SuperAdmin UI
 管理画面 → コスト管理 → オペレーション使用量:
@@ -949,6 +994,101 @@ curl -X POST \
 
 ### マイグレーション
 - `0034_add_video_builds_render_usage_logged.sql` - 二重計上防止フラグ
+
+---
+
+## AWS Webhook (Callback) 仕様
+
+### エンドポイント
+`POST /api/webhooks/video-build`
+
+### 認証
+- **Header**: `X-Webhook-Signature: HMAC-SHA256(body, WEBHOOK_SECRET)`
+- 環境変数 `WEBHOOK_SECRET` または `CRON_SECRET` を使用
+
+### Payload
+```json
+{
+  "video_build_id": 123,
+  "status": "rendering|uploading|completed|failed",
+  "progress_percent": 50,
+  "progress_stage": "Rendering frames",
+  "progress_message": "Processing scene 3 of 10",
+  "download_url": "https://...",
+  "download_expires_at": "2026-01-25T12:00:00Z",
+  "error_code": "RENDER_ERROR",
+  "error_message": "Failed to render scene 5",
+  "render_metadata": {
+    "render_id": "remotion-render-id",
+    "started_at": "2026-01-24T10:00:00Z",
+    "completed_at": "2026-01-24T10:05:00Z",
+    "duration_sec": 300,
+    "estimated_cost_usd": 0.05
+  }
+}
+```
+
+### レスポンス
+```json
+{
+  "success": true,
+  "message": "Build updated",
+  "status": "completed"
+}
+```
+
+### 特徴
+- **冪等性**: 同じステータスの再送は無視
+- **二重計上防止**: `render_usage_logged` フラグで lock-first パターン
+- **自動ログ記録**: completed/failed 時に `api_usage_logs` へ記録
+
+---
+
+## AWS Webhook Integration
+
+AWS Orchestrator からのコールバックでステータスをリアルタイム更新（ポーリング依存脱却）。
+
+### Webhook エンドポイント
+
+`POST /api/webhooks/video-build`
+
+**認証**: HMAC-SHA256 署名検証
+```
+X-Webhook-Signature: HMAC-SHA256(body, WEBHOOK_SECRET)
+```
+
+**Payload**:
+```json
+{
+  "video_build_id": 123,
+  "status": "completed",
+  "progress_percent": 100,
+  "progress_stage": "Completed",
+  "download_url": "https://...",
+  "download_expires_at": "2026-01-25T12:00:00Z",
+  "render_metadata": {
+    "render_id": "...",
+    "started_at": "2026-01-24T10:00:00Z",
+    "completed_at": "2026-01-24T10:05:00Z",
+    "duration_sec": 300,
+    "estimated_cost_usd": 0.50
+  }
+}
+```
+
+**Status 値**: `rendering`, `uploading`, `completed`, `failed`
+
+### 環境変数
+
+```bash
+# Webhook 署名検証用（CRON_SECRET と共用可能）
+WEBHOOK_SECRET=your-webhook-secret
+```
+
+### 二重計上防止
+
+- `render_usage_logged` フラグで冪等性を保証
+- Webhook と Cron のどちらが先に処理しても同じ結果
 
 ---
 
