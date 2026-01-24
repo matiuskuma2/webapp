@@ -1090,5 +1090,150 @@ WEBHOOK_SECRET=your-webhook-secret
 - `render_usage_logged` フラグで冪等性を保証
 - Webhook と Cron のどちらが先に処理しても同じ結果
 
+### Orchestrator側 Webhook送信コード（コピペ用）
+
+AWS Lambda / Node.js 18+ 向けの署名付きWebhook送信実装:
+
+```typescript
+// Orchestrator側に追加する Webhook 送信コード
+import crypto from 'crypto';
+
+const WEBHOOK_URL = process.env.WEBHOOK_URL || 'https://webapp-c7n.pages.dev/api/webhooks/video-build';
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET; // Cloudflare側と同じ値
+
+interface WebhookPayload {
+  video_build_id: number;
+  status: 'rendering' | 'uploading' | 'completed' | 'failed';
+  progress_percent?: number;
+  progress_stage?: string;
+  progress_message?: string;
+  download_url?: string;
+  download_expires_at?: string; // ISO8601
+  error_code?: string;
+  error_message?: string;
+  render_metadata?: {
+    render_id?: string;
+    started_at?: string;
+    completed_at?: string;
+    duration_sec?: number;
+    duration_ms?: number;
+    estimated_cost_usd?: number;
+  };
+}
+
+async function postWebhook(payload: WebhookPayload): Promise<void> {
+  if (!WEBHOOK_SECRET) {
+    console.warn('[Webhook] WEBHOOK_SECRET not configured, skipping');
+    return;
+  }
+
+  const body = JSON.stringify(payload);
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const message = `${timestamp}.${body}`;
+  
+  const signature = crypto
+    .createHmac('sha256', WEBHOOK_SECRET)
+    .update(message)
+    .digest('hex');
+
+  const eventId = crypto.randomUUID();
+
+  const response = await fetch(WEBHOOK_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Rilarc-Timestamp': timestamp,
+      'X-Rilarc-Signature': `sha256=${signature}`,
+      'X-Rilarc-Event-Id': eventId,
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Webhook failed: ${response.status} ${text}`);
+  }
+
+  console.log(`[Webhook] Sent ${payload.status} for build ${payload.video_build_id}`);
+}
+
+// 使用例 - completed
+await postWebhook({
+  video_build_id: 123,
+  status: 'completed',
+  progress_percent: 100,
+  progress_stage: 'Completed',
+  download_url: 'https://your-bucket.s3.amazonaws.com/video.mp4?presigned...',
+  download_expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  render_metadata: {
+    render_id: 'remotion-render-abc123',
+    started_at: startTime.toISOString(),
+    completed_at: new Date().toISOString(),
+    duration_ms: totalDurationMs,
+    estimated_cost_usd: estimatedCost,
+  },
+});
+
+// 使用例 - failed
+await postWebhook({
+  video_build_id: 123,
+  status: 'failed',
+  error_code: 'RENDER_ERROR',
+  error_message: 'Failed to render scene 5: Out of memory',
+  render_metadata: {
+    render_id: 'remotion-render-abc123',
+    started_at: startTime.toISOString(),
+  },
+});
+```
+
+**重要ポイント**:
+- `X-Rilarc-Timestamp` は秒単位のUNIXタイムスタンプ
+- 署名は `timestamp.body` を HMAC-SHA256 で計算
+- タイムスタンプが ±5分 を超えると拒否される（リプレイ対策）
+- `X-Rilarc-Event-Id` は監査ログ追跡用
+
+---
+
+## 復旧手順（サンドボックス再開用）
+
+```bash
+# GitHub からクローン
+git clone https://github.com/matiuskuma2/webapp.git
+cd webapp
+
+# 依存関係インストール
+npm install
+
+# ローカルDB初期化
+npm run db:migrate:local
+
+# ビルド
+npm run build
+
+# ローカル開発サーバー起動
+pm2 start ecosystem.config.cjs
+
+# 動作確認
+curl http://localhost:3000/api/settings/motion-presets
+```
+
+**バックアップからの復元**:
+```bash
+# バックアップダウンロード
+curl -o backup.tar.gz "https://www.genspark.ai/api/files/s/XjkHCe8T"
+
+# 展開
+tar -xzf backup.tar.gz -C /home/user/
+
+# 依存関係インストール
+cd /home/user/webapp
+npm install
+
+# ビルド＆起動
+npm run build
+pm2 start ecosystem.config.cjs
+```
+
 ---
 
