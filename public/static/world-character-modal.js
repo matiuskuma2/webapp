@@ -1026,6 +1026,14 @@
       return;
     }
     
+    // Check if it's a Google voice (not ElevenLabs or Fish)
+    const isElevenLabs = voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-');
+    const isFish = voiceId.startsWith('fish:') || voiceId.startsWith('fish-');
+    if (!isElevenLabs && !isFish) {
+      toast('Google音声のプレビューは準備中です。ElevenLabs音声（el-で始まる）を選択してください。', 'warning');
+      return;
+    }
+    
     const btn = document.getElementById('wc-voice-preview-btn');
     if (btn) {
       btn.disabled = true;
@@ -1048,7 +1056,15 @@
       
       if (!response.ok) {
         // Extract error message from API response
-        const errorMsg = data?.error || data?.message || '音声生成に失敗しました';
+        // Note: API returns { error: { code, message } } structure
+        let errorMsg = '音声生成に失敗しました';
+        if (data?.error?.message) {
+          errorMsg = data.error.message;
+        } else if (typeof data?.error === 'string') {
+          errorMsg = data.error;
+        } else if (data?.message) {
+          errorMsg = data.message;
+        }
         throw new Error(errorMsg);
       }
       
