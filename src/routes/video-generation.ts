@@ -1725,7 +1725,8 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
             release_ms: activeBgm.ducking_release_ms,
           } : undefined,
         } : undefined,
-      }
+      },
+      { siteUrl }  // Pass siteUrl for absolute URL conversion
     );
     
     return c.json(projectJson);
@@ -2229,6 +2230,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     
     // 6. project.json生成
     // Output preset から aspect_ratio / resolution / fps を取得（body で上書き可能）
+    // CRITICAL: Pass siteUrl for absolute URL conversion (Remotion Lambda requires absolute URLs)
+    const siteUrlForBuild = c.env.SITE_URL || 'https://webapp-c7n.pages.dev';
     const projectJson = buildProjectJson(
       { id: project.id, title: project.title, user_id: ownerUserId },
       scenesWithAssets,
@@ -2237,6 +2240,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         aspectRatio: body.aspect_ratio || outputPresetConfig.aspect_ratio,
         resolution: body.resolution || outputPresetConfig.resolution,
         fps: body.fps || outputPresetConfig.fps,
+        siteUrl: siteUrlForBuild,
       }
     );
     

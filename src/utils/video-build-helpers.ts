@@ -1028,6 +1028,22 @@ export interface RemotionProjectJson_R1 {
  * @param options オプション
  * @returns Remotionスキーマ準拠のProjectJson
  */
+const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+
+/**
+ * Convert relative R2 URL to absolute URL
+ * CRITICAL: Remotion Lambda cannot resolve relative URLs
+ */
+function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string | undefined): string | null {
+  if (!relativeUrl) return null;
+  if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
+    return relativeUrl;
+  }
+  const baseUrl = (siteUrl || DEFAULT_SITE_URL).replace(/\/$/, '');
+  const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+  return `${baseUrl}${path}`;
+}
+
 export function buildProjectJson(
   project: ProjectData,
   scenes: SceneData[],
@@ -1037,6 +1053,7 @@ export function buildProjectJson(
     resolution?: '720p' | '1080p';
     fps?: number;
     schemaVersion?: '1.1' | '1.5';
+    siteUrl?: string;  // For absolute URL conversion
   }
 ): RemotionProjectJson_R1 {
   const now = new Date().toISOString();
@@ -1044,6 +1061,7 @@ export function buildProjectJson(
   const resolution = options?.resolution || '1080p';
   const fps = options?.fps || 30;
   const schemaVersion = options?.schemaVersion || '1.5';
+  const siteUrl = options?.siteUrl || DEFAULT_SITE_URL;
   
   const resolutionSize = RESOLUTION_MAP[resolution][aspectRatio];
   
@@ -1074,7 +1092,7 @@ export function buildProjectJson(
             role: utt.role,
             character_key: utt.character_key || null,
             character_name: utt.character_name || null,
-            audio_url: utt.audio_url,
+            audio_url: toAbsoluteUrl(utt.audio_url, siteUrl) || utt.audio_url,  // Absolute URL
             duration_ms: utt.duration_ms,
             text: utt.text || '',
             start_ms: voiceStartMs,
@@ -1145,21 +1163,21 @@ export function buildProjectJson(
     const startMs = currentMs;
     currentMs += durationMs;
     
-    // 4. visual URL 取得
+    // 4. visual URL 取得 (Convert to absolute URL for Remotion Lambda)
     let imageUrl: string | undefined;
     const displayType = scene.display_asset_type || 'image';
     
     if (displayType === 'comic' && scene.active_comic?.r2_url) {
-      imageUrl = scene.active_comic.r2_url;
+      imageUrl = toAbsoluteUrl(scene.active_comic.r2_url, siteUrl) || undefined;
     } else if (scene.active_image?.r2_url) {
-      imageUrl = scene.active_image.r2_url;
+      imageUrl = toAbsoluteUrl(scene.active_image.r2_url, siteUrl) || undefined;
     }
     
-    // 5. legacy audio 構築（後方互換）
+    // 5. legacy audio 構築（後方互換）- Convert URL to absolute
     let audioAsset: RemotionScene_R1['assets']['audio'] | undefined;
     if (scene.active_audio?.audio_url) {
       audioAsset = {
-        url: scene.active_audio.audio_url,
+        url: toAbsoluteUrl(scene.active_audio.audio_url, siteUrl) || scene.active_audio.audio_url,
         duration_ms: scene.active_audio.duration_ms,
         format: 'mp3',
       };
@@ -1280,8 +1298,8 @@ export function buildProjectJson(
             border_width: b.style.border_width,
           },
           z_index: b.z_index,
-          // A案 baked: バブル画像URL（baked モード時に使用）
-          bubble_image_url: b.bubble_r2_url || undefined,
+          // A案 baked: バブル画像URL（baked モード時に使用）- Absolute URL
+          bubble_image_url: b.bubble_r2_url ? (toAbsoluteUrl(b.bubble_r2_url, siteUrl) || undefined) : undefined,
           bubble_image_size: (b.bubble_width_px && b.bubble_height_px) ? {
             width: b.bubble_width_px,
             height: b.bubble_height_px,
@@ -1317,11 +1335,11 @@ export function buildProjectJson(
       },
       // R2-A: balloons
       balloons: balloons.length > 0 ? balloons : undefined,
-      // R3-B: sfx
+      // R3-B: sfx - Convert URL to absolute
       sfx: scene.sfx && scene.sfx.length > 0 ? scene.sfx.map((cue: any) => ({
         id: `sfx-${cue.id}`,
         name: cue.name || 'SFX',
-        url: cue.r2_url,
+        url: toAbsoluteUrl(cue.r2_url, siteUrl) || cue.r2_url,
         start_ms: cue.start_ms || 0,
         end_ms: cue.end_ms ?? undefined,
         duration_ms: cue.duration_ms ?? undefined,
