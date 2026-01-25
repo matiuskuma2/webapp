@@ -3,6 +3,97 @@ import type { Bindings } from '../types/bindings'
 
 const projects = new Hono<{ Bindings: Bindings }>()
 
+// =============================================================================
+// Scene Motion Column Compatibility Layer
+// =============================================================================
+// 本番DBと開発DBでscene_motionテーブルのカラム名が異なる可能性があるため、
+// 実行時にカラム名を検出して互換性を確保する
+//
+// 可能なカラム名:
+// - 'preset' (migration 0026)
+// - 'motion_preset_id' (旧スキーマ/別環境)
+// - null (テーブルが存在しない)
+// =============================================================================
+
+type MotionPresetColumnName = 'preset' | 'motion_preset_id' | null;
+
+// リクエスト内キャッシュ用のWeakMap (Cloudflare Workersではリクエストごとにリセット)
+const motionColumnCache = new Map<string, MotionPresetColumnName>();
+
+/**
+ * scene_motion テーブルのプリセットカラム名を検出
+ * @param db D1Database instance
+ * @returns カラム名 ('preset' | 'motion_preset_id') または null (テーブル/カラムなし)
+ */
+async function detectMotionPresetColumn(db: D1Database): Promise<MotionPresetColumnName> {
+  // キャッシュチェック (同一リクエスト内での重複検出を防止)
+  const cacheKey = 'motion_preset_column';
+  if (motionColumnCache.has(cacheKey)) {
+    return motionColumnCache.get(cacheKey)!;
+  }
+
+  try {
+    const { results } = await db.prepare(`PRAGMA table_info(scene_motion)`).all<{
+      cid: number;
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+      pk: number;
+    }>();
+
+    const columnNames = new Set(results.map(r => r.name));
+    
+    let detectedColumn: MotionPresetColumnName = null;
+    if (columnNames.has('preset')) {
+      detectedColumn = 'preset';
+    } else if (columnNames.has('motion_preset_id')) {
+      detectedColumn = 'motion_preset_id';
+    }
+
+    // 検出結果をログ (1回のみ)
+    console.log(`[MotionPresetColumn] Detected: ${detectedColumn ?? 'none'} (available: ${Array.from(columnNames).join(', ')})`);
+    
+    motionColumnCache.set(cacheKey, detectedColumn);
+    return detectedColumn;
+  } catch (error) {
+    // テーブルが存在しない場合など
+    console.warn(`[MotionPresetColumn] Failed to detect:`, error);
+    motionColumnCache.set(cacheKey, null);
+    return null;
+  }
+}
+
+/**
+ * シーンのモーションプリセットを取得
+ * @param db D1Database instance
+ * @param sceneId シーンID
+ * @param defaultPreset デフォルト値
+ * @returns プリセット名
+ */
+async function fetchMotionPreset(
+  db: D1Database, 
+  sceneId: number, 
+  defaultPreset: string
+): Promise<string> {
+  const column = await detectMotionPresetColumn(db);
+  
+  if (!column) {
+    // カラムが存在しない場合はデフォルト値を返す
+    return defaultPreset;
+  }
+
+  try {
+    // カラム名を動的に使用 (SQLインジェクション対策: 検証済みの値のみ使用)
+    const query = `SELECT ${column} as preset_value FROM scene_motion WHERE scene_id = ?`;
+    const row = await db.prepare(query).bind(sceneId).first<{ preset_value: string }>();
+    return row?.preset_value ?? defaultPreset;
+  } catch (error) {
+    console.warn(`[fetchMotionPreset] Failed for scene ${sceneId}:`, error);
+    return defaultPreset;
+  }
+}
+
 // POST /api/projects - プロジェクト作成
 projects.post('/', async (c) => {
   try {
@@ -667,23 +758,13 @@ projects.get('/:id/scenes', async (c) => {
             text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
             // R3-B: SFX（効果音）数
             sfx_count: sfxCount,
-            // R2-C: motion preset (will be fetched separately for efficiency, return placeholder)
-            // Note: scene_motion テーブルのカラム名は環境によって異なる可能性あり
-            // Local: `preset`, Production: may vary - use try-catch for safety
-            motion_preset_id: await (async () => {
-              try {
-                // Try with 'preset' column first (migration 0026)
-                const motionRecord = await c.env.DB.prepare(`
-                  SELECT preset FROM scene_motion WHERE scene_id = ?
-                `).bind(scene.id).first<{ preset: string }>();
-                if (motionRecord) return motionRecord.preset;
-              } catch (e) {
-                // Fallback: column might not exist or have different name
-                console.warn(`[motion_preset] Failed to fetch for scene ${scene.id}:`, e);
-              }
-              // Default based on display_asset_type
-              return (scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft';
-            })()
+            // R2-C: motion preset
+            // 互換レイヤー使用: detectMotionPresetColumn() でカラム名を検出
+            motion_preset_id: await fetchMotionPreset(
+              c.env.DB,
+              scene.id,
+              (scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft'
+            )
           }
         })
       )
