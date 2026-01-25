@@ -19,9 +19,59 @@
 
 ### 2. 自動処理パイプライン
 1. **Parse**: 長文を意味単位（500-1500文字）のチャンクに分割
-2. **Format**: 各チャンクをOpenAI GPT-4oでシナリオ化
+2. **Format**: 各チャンクをOpenAI GPT-4oでシナリオ化（2モード対応）
 3. **Image Generation**: Gemini APIで各シーンの画像生成
 4. **Export**: 画像ZIP、セリフCSV、全ファイルZIPをダウンロード
+
+### 2.5 シーン分割モード（Format）
+
+#### 2パターンの分割方式
+
+| モード | 名称 | 動作 |
+|-------|------|------|
+| `preserve` | 原文維持（台本モード） | dialogue=原文そのまま（改変禁止）、改行で分割、image_promptのみAI生成 |
+| `ai` | AI整理モード | AIが意図を読み取って整形、30-500文字程度、省略は極力避ける |
+
+#### reset=true の仕様（確定版）
+
+**削除対象（制作物）**:
+- scene_balloons（吹き出し）
+- scene_audio_cues（SFX）
+- scene_telops（テロップ）
+- scene_motion（モーション）
+- scene_style_settings（シーンスタイル）
+- scene_utterances（発話）
+- scene_character_map（キャラ割当）
+- scene_character_traits（キャラ特徴）
+- audio_generations（音声）
+- image_generations（画像）
+- scenes（シーン本体）
+
+**保持対象（設定）**:
+- video_builds（ビルド履歴 - 監査用）
+- project_audio_tracks（BGM設定 - project単位）
+- project_character_models（キャラ定義 - project単位）
+- project_style_settings（スタイル設定 - project単位）
+
+#### API
+```
+POST /api/projects/:id/format
+Body: {
+  "split_mode": "preserve" | "ai",
+  "target_scene_count": 5,
+  "reset": true
+}
+```
+
+#### preserve モードの詳細
+- **改行正規化**: CRLF→LF、NBSP→半角空白、全角空白→半角空白
+- **整合性チェック**: 分割後に文字数が変わっていないか検証（空白除く）
+- **段落調整**: 段落数 > target → 結合（\n\nで繋ぐ）、段落数 < target → 文境界で分割
+
+#### AI モードの詳細
+- **target配分**: `chunkTarget = ceil(remainingTarget / pendingChunks.length)`
+- **上限**: MAX_SCENES_PER_CHUNK = 5（1 chunkあたり最大5シーン）
+- **文字数制限**: 30-500文字（省略回避のため緩和済み）
 
 ### 3. スタイルプリセット機能
 - プロジェクト全体のデフォルトスタイルを設定

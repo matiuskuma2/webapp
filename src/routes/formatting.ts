@@ -551,19 +551,26 @@ async function processTextChunks(
   let successCount = 0
   let failedCount = 0
   
-  // ★ target配分ロジック: chunk数に応じてシーン数を按分
-  const totalChunks = await c.env.DB.prepare(`
-    SELECT COUNT(*) as count FROM text_chunks WHERE project_id = ?
-  `).bind(projectId).first() as { count: number }
+  // ★ target配分ロジック（確定版）
+  // - remainingTarget = target - 既存シーン数
+  // - remainingChunks = pendingChunks.length（未処理chunk数をそのまま使用）
+  // - chunkTarget = ceil(remainingTarget / remainingChunks)
+  // ※ この方式なら何度やり直しても壊れない
   
-  const currentSceneCount = await c.env.DB.prepare(`
+  const existingScenesResult = await c.env.DB.prepare(`
     SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
   `).bind(projectId).first() as { count: number }
+  const existingScenesCount = existingScenesResult?.count || 0
   
-  const remainingTarget = Math.max(1, targetSceneCount - (currentSceneCount?.count || 0))
-  const remainingChunks = Math.max(1, (totalChunks?.count || 1) - (currentSceneCount?.count || 0) / 2)
+  const remainingTarget = Math.max(1, targetSceneCount - existingScenesCount)
+  const remainingChunks = Math.max(1, pendingChunks.length)  // ★ 修正: pendingChunks.lengthを使用
   
-  console.log(`[AIMode] target=${targetSceneCount}, currentScenes=${currentSceneCount?.count}, remainingTarget=${remainingTarget}, remainingChunks=${remainingChunks}`)
+  // chunk単位の目標シーン数（上限5シーンに制限）
+  const MAX_SCENES_PER_CHUNK = 5
+  const baseChunkTarget = Math.ceil(remainingTarget / remainingChunks)
+  const chunkTargetScenes = Math.min(baseChunkTarget, MAX_SCENES_PER_CHUNK)
+  
+  console.log(`[AIMode] target=${targetSceneCount}, existingScenes=${existingScenesCount}, remainingTarget=${remainingTarget}, pendingChunks=${remainingChunks}, chunkTarget=${chunkTargetScenes}`)
 
   for (const chunk of pendingChunks) {
     try {
@@ -574,9 +581,7 @@ async function processTextChunks(
         WHERE id = ?
       `).bind(chunk.id).run()
       
-      // このchunkに割り当てるシーン数を計算
-      const chunkTargetScenes = Math.max(1, Math.ceil(remainingTarget / remainingChunks))
-      console.log(`[AIMode] Chunk ${chunk.idx}: target ${chunkTargetScenes} scenes`)
+      console.log(`[AIMode] Processing chunk ${chunk.idx}: target ${chunkTargetScenes} scenes`)
 
       // OpenAI API で MiniScene 生成（AI整理モード）
       const miniScenesResult = await generateMiniScenesAI(
@@ -908,6 +913,11 @@ async function getChunkStats(db: any, projectId: string) {
  * - 空行（\n\n）で段落分割
  * - 段落数 > targetSceneCount: 段落を結合（省略なし）
  * - 段落数 < targetSceneCount: 段落を文境界で分割（省略・言い換え禁止）
+ * 
+ * 【改行正規化】
+ * - NBSP（\u00A0）、全角空白（\u3000）を半角空白に変換
+ * - CRLFをLFに統一
+ * - ただし内容比較時は全ての空白を除去して比較
  */
 async function processPreserveMode(
   c: any,
@@ -918,7 +928,7 @@ async function processPreserveMode(
   console.log(`[PreserveMode] Starting for project ${projectId}, target=${targetSceneCount}`)
   
   // source_text を取得
-  const sourceText = project.source_text as string || ''
+  let sourceText = project.source_text as string || ''
   if (!sourceText.trim()) {
     return c.json({
       error: {
@@ -928,8 +938,12 @@ async function processPreserveMode(
     }, 400)
   }
   
-  // ★ 原文不変ガード: 元テキストの文字数を記録
-  const originalCharCount = sourceText.length
+  // ★ 改行正規化（CRLFをLF、特殊空白を通常空白に）
+  // Note: 内容は変えない、空白の種類を統一するのみ
+  sourceText = normalizeWhitespace(sourceText)
+  
+  // ★ 原文不変ガード: 元テキストの「意味のある文字」を記録（空白除外）
+  const originalContentLength = sourceText.replace(/[\s\u00A0\u3000]+/g, '').length
   
   // 1. 既存データをクリア（hardResetProjectを使用）
   await hardResetProject(c.env.DB, projectId)
@@ -937,7 +951,7 @@ async function processPreserveMode(
   // 2. テキストを段落に分割（空行区切り）
   // Note: trim() のみ許可、内容の改変は禁止
   let paragraphs = sourceText
-    .split(/\n\s*\n/)
+    .split(/\n\s*\n/)  // 空行で分割
     .map(p => p.trim())  // 前後の空白のみ除去
     .filter(p => p.length > 0)
   
@@ -952,11 +966,8 @@ async function processPreserveMode(
     paragraphs = splitParagraphsPreserve(paragraphs, targetSceneCount)
   }
   
-  // ★ 原文不変ガード: 分割後の文字数チェック
-  const totalCharAfterSplit = paragraphs.reduce((sum, p) => sum + p.length, 0)
-  // 結合・分割で \n\n が追加/削除されるため、元の空白を除いた比較
-  const originalContentLength = sourceText.replace(/\s+/g, '').length
-  const afterContentLength = paragraphs.join('').replace(/\s+/g, '').length
+  // ★ 原文不変ガード: 分割後の「意味のある文字」をチェック
+  const afterContentLength = paragraphs.join('').replace(/[\s\u00A0\u3000]+/g, '').length
   
   if (afterContentLength !== originalContentLength) {
     console.error(`[PreserveMode] INTEGRITY CHECK FAILED: original=${originalContentLength}, after=${afterContentLength}`)
@@ -1098,6 +1109,21 @@ function splitParagraphsPreserve(paragraphs: string[], targetCount: number): str
   }
   
   return result.slice(0, targetCount)
+}
+
+/**
+ * 空白文字の正規化（preserve モード用）
+ * - CRLF → LF
+ * - NBSP (U+00A0) → 半角空白
+ * - 全角空白 (U+3000) → 半角空白
+ * - 連続空白の圧縮はしない（原文維持）
+ */
+function normalizeWhitespace(text: string): string {
+  return text
+    .replace(/\r\n/g, '\n')         // CRLF → LF
+    .replace(/\r/g, '\n')           // CR → LF
+    .replace(/\u00A0/g, ' ')        // NBSP → 半角空白
+    .replace(/\u3000/g, ' ')        // 全角空白 → 半角空白
 }
 
 /**

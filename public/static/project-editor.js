@@ -951,7 +951,7 @@ function renderFormatSectionUI() {
       </button>
       
       <p class="text-xs text-red-500 mt-2 text-center font-medium">
-        ⚠️ やり直し＝全リセット（既存のシーン・画像・音声は全削除）
+        ⚠️ やり直し＝全リセット（シーン・画像・音声・バブル・SFX等は全削除、BGM設定・キャラ定義は保持）
       </p>
     </div>
   `;
@@ -1046,11 +1046,16 @@ async function confirmAndFormatSplit() {
   // Confirm dialog
   const modeText = currentSplitMode === 'preserve' ? '原文維持' : 'AI整理';
   const confirmed = confirm(
-    \`シーン分割を実行しますか？\n\n\` +
-    \`分割モード: \${modeText}\n\` +
-    \`目標シーン数: \${currentTargetSceneCount}\n\n\` +
-    \`⚠️ 注意: 既存のシーン・画像・音声・バブル・SFX・BGM は全て削除されます。\n\` +
-    \`（ビルド履歴は保持されます）\`
+    `シーン分割を実行しますか？\n\n` +
+    `分割モード: ${modeText}\n` +
+    `目標シーン数: ${currentTargetSceneCount}\n\n` +
+    `⚠️ 全リセット対象（制作物）:\n` +
+    `  ・シーン・画像・音声・吹き出し\n` +
+    `  ・SFX・テロップ・モーション\n` +
+    `  ・キャラ割当・キャラ特徴変化\n\n` +
+    `✅ 保持される設定:\n` +
+    `  ・BGM設定・キャラクター定義\n` +
+    `  ・ビルド履歴（監査用）`
   );
   
   if (!confirmed) return;
