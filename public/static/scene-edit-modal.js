@@ -953,25 +953,22 @@
           </p>
         </div>
         
-        <!-- Voice Character -->
-        <div>
-          <label class="block text-sm font-semibold text-gray-700 mb-3">
-            <i class="fas fa-microphone mr-1 text-green-600"></i>音声キャラクター（1人）
-          </label>
-          <select 
-            id="edit-voice-char-select"
-            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-          >
-            <option value="">-- 音声キャラクターを選択 --</option>
-            ${this.currentState.imageCharacterKeys.map(key => {
-              const char = this.characters.find(c => c.character_key === key);
-              return char ? `<option value="${this.escapeHtml(key)}" ${key === this.currentState.voiceCharacterKey ? 'selected' : ''}>${this.escapeHtml(char.character_name)}</option>` : '';
-            }).join('')}
-          </select>
-          <p class="text-xs text-gray-500 mt-2">
-            <i class="fas fa-info-circle mr-1"></i>
-            セリフを喋るキャラクターを選択（画像キャラから選択）
+        <!-- Voice Guide - R1.5: utterances タブに移行 -->
+        <div class="p-4 bg-purple-50 border border-purple-200 rounded-lg">
+          <div class="flex items-center gap-2 mb-2">
+            <i class="fas fa-microphone-alt text-purple-600"></i>
+            <span class="font-semibold text-purple-800">音声設定について</span>
+          </div>
+          <p class="text-sm text-purple-700 mb-3">
+            複数キャラクターの会話シーンでは、<strong>「音声」タブ</strong>で各発話（セリフ・ナレーション）ごとに話者を設定できます。
           </p>
+          <button 
+            type="button"
+            class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold"
+            onclick="SceneEditModal.switchTab('utterances')"
+          >
+            <i class="fas fa-arrow-right mr-2"></i>音声タブで設定する
+          </button>
         </div>
       `;
       
