@@ -1998,55 +1998,128 @@ app.get('/projects/:id', (c) => {
                             </video>
                         </div>
 
-                        <div class="mt-3 text-xs text-gray-400 leading-relaxed">
-                            <div class="font-semibold text-gray-300 mb-1">対応する修正:</div>
-                            <ul class="list-disc ml-4 space-y-0.5">
-                                <li>バブル: タイミング・位置調整</li>
-                                <li>SFX: 音量・タイミング変更</li>
-                                <li>BGM: 音量・ループ設定</li>
-                            </ul>
-                            <div class="mt-2 text-amber-400/80">
-                                <i class="fas fa-exclamation-triangle mr-1"></i>
-                                画像差し替え・テキスト変更は未対応
+                        <!-- PR-5-2: できること/できないこと カード -->
+                        <div class="mt-3 space-y-2">
+                            <!-- できること -->
+                            <div class="bg-green-900/30 border border-green-700/50 rounded-lg p-2.5">
+                                <div class="text-xs font-semibold text-green-400 mb-1.5 flex items-center gap-1.5">
+                                    <i class="fas fa-check-circle"></i>できること（今すぐ）
+                                </div>
+                                <div class="text-xs text-gray-300 space-y-1">
+                                    <div class="flex items-start gap-1.5">
+                                        <span class="text-green-400">💬</span>
+                                        <div><span class="font-medium">バブル:</span> 出し分け（常時/喋る時/手動）、位置・サイズ調整</div>
+                                    </div>
+                                    <div class="flex items-start gap-1.5">
+                                        <span class="text-green-400">🎵</span>
+                                        <div><span class="font-medium">BGM:</span> ON/OFF、音量（%）、ダッキング</div>
+                                    </div>
+                                    <div class="flex items-start gap-1.5">
+                                        <span class="text-green-400">🔔</span>
+                                        <div><span class="font-medium">効果音:</span> 追加/削除、音量、タイミング（ms）</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- できないこと -->
+                            <div class="bg-gray-800/50 border border-gray-600/50 rounded-lg p-2.5">
+                                <div class="text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1.5">
+                                    <i class="fas fa-times-circle"></i>できないこと（まだ）
+                                </div>
+                                <div class="text-xs text-gray-500 space-y-0.5">
+                                    <div>📝 字幕の本文を書き換える</div>
+                                    <div>🧩 シーンの並び替え・分割統合</div>
+                                    <div>🎞️ 大規模なカット編集</div>
+                                </div>
+                            </div>
+                            <!-- 反映ルール -->
+                            <div class="text-xs text-gray-500 flex items-center gap-1.5 pt-1">
+                                <i class="fas fa-info-circle text-blue-400"></i>
+                                <span>指示 → 差分確認 → 適用 → <span class="text-blue-400 font-medium">新ビルド生成</span></span>
                             </div>
                         </div>
                     </div>
 
                     <!-- Right: Chat -->
                     <div class="p-4 flex flex-col max-h-[70vh]">
-                        <!-- Guidance -->
-                        <div class="bg-gray-50 border border-gray-200 rounded-xl p-3 text-xs text-gray-700">
-                            <div class="font-semibold text-gray-800 mb-1">
-                                <i class="fas fa-lightbulb text-amber-500 mr-1"></i>例:
+                        <!-- PR-5-2: 改善されたガイダンス -->
+                        <div class="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-3 text-xs">
+                            <div class="font-semibold text-indigo-800 mb-1.5 flex items-center gap-1.5">
+                                <i class="fas fa-magic text-indigo-500"></i>
+                                自然な言葉で修正指示を出せます
                             </div>
-                            <ul class="list-disc ml-5 space-y-1">
-                                <li>「シーン2のバブル1を+300ms遅らせて」</li>
-                                <li>「シーン3のSFX1の音量を50%に」</li>
-                                <li>「BGM音量を20%に」「BGMをループON」</li>
-                            </ul>
+                            <p class="text-gray-600 leading-relaxed">
+                                下のテンプレをクリックするか、自由に入力してください。<br/>
+                                変更内容を確認してから適用 → <span class="font-medium text-indigo-700">新ビルド生成</span>
+                            </p>
                         </div>
 
-                        <!-- Quick Actions (Balloon policy) -->
+                        <!-- PR-5-2: 拡張クイック指示（テンプレボタン） -->
                         <div class="mt-2 bg-white border border-gray-200 rounded-xl p-3">
                             <div class="text-xs font-semibold text-gray-700 mb-2">
-                                <i class="fas fa-bolt text-amber-500 mr-1"></i>クイック指示（クリックで入力）
+                                <i class="fas fa-bolt text-amber-500 mr-1"></i>例文テンプレ（クリックで追記）
                             </div>
-                            <div class="flex flex-wrap gap-2">
-                                <button type="button"
-                                    class="px-3 py-1.5 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                                    onclick="insertChatTemplate('シーン2のバブル1を「喋ってる時だけ表示」にして')">
-                                    💬 喋ってる時だけ
-                                </button>
-                                <button type="button"
-                                    class="px-3 py-1.5 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                                    onclick="insertChatTemplate('シーン2のバブル1を「出しっぱなし」にして')">
-                                    💬 出しっぱなし
-                                </button>
-                                <button type="button"
-                                    class="px-3 py-1.5 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-                                    onclick="insertChatTemplate('BGM音量を20%に')">
-                                    🎵 BGM音量
-                                </button>
+                            <!-- バブル系 -->
+                            <div class="mb-2">
+                                <div class="text-xs text-gray-500 mb-1">💬 バブル</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                        onclick="insertChatTemplate('バブルを喋る時だけ表示にして')">
+                                        喋る時だけ
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                        onclick="insertChatTemplate('バブルを常時表示にして')">
+                                        常時表示
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                        onclick="insertChatTemplate('シーン3のバブルを右上に移動（x:+80, y:-40）')">
+                                        位置調整
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                        onclick="insertChatTemplate('バブルを手動表示にして、シーン2は 0ms〜1800ms')">
+                                        手動タイミング
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- BGM系 -->
+                            <div class="mb-2">
+                                <div class="text-xs text-gray-500 mb-1">🎵 BGM</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('BGMをON、音量を15%に')">
+                                        ON + 音量
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('BGM音量を20%に')">
+                                        音量変更
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('BGMをOFFにして')">
+                                        OFF
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- SFX系 -->
+                            <div>
+                                <div class="text-xs text-gray-500 mb-1">🔔 効果音</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                                        onclick="insertChatTemplate('効果音をシーン5の開始500msに追加、音量30%')">
+                                        追加
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                                        onclick="insertChatTemplate('シーン3のSFX1の音量を50%に')">
+                                        音量変更
+                                    </button>
+                                </div>
                             </div>
                         </div>
 

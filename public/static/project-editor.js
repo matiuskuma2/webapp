@@ -9222,13 +9222,30 @@ function escapeHtml(str) {
 
 /**
  * Insert template text into chat input (Quick Actions)
+ * PR-5-2: 追記モード対応（既存テキストがあれば改行して追加）
  * @param {string} text 
  */
 function insertChatTemplate(text) {
   const input = document.getElementById('chatEditInput');
   if (!input) return;
-  input.value = text;
+  
+  // 既存テキストがあれば追記、なければ上書き
+  const existing = input.value.trim();
+  if (existing) {
+    input.value = existing + '\n' + text;
+  } else {
+    input.value = text;
+  }
+  
+  // カーソルを末尾に移動
   input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+  
+  // テキストエリアの高さを自動調整（もしautoリサイズが必要な場合）
+  if (input.scrollHeight > input.clientHeight) {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 150) + 'px';
+  }
 }
 
 /**
