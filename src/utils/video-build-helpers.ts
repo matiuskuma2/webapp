@@ -639,7 +639,8 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
 }
 
 // ====================================================================
-// validateProjectJson - project.json 生成後の最終検証（src完全性）
+// validateRenderInputs - レンダー入力の検証（SSOT純関数）
+// PR-A2: preflightでもPOSTでも同一の検証関数を使う
 // ====================================================================
 
 /**
@@ -660,131 +661,158 @@ export interface ProjectJsonValidationResult {
 }
 
 /**
- * validateProjectJson - buildProjectJson後の最終検証
+ * RenderInputScene - preflightでも組み立て可能な最小のレンダー入力
+ * POSTでもpreflightでも同じ検証関数（validateRenderInputs）を使うための型
+ */
+export interface RenderInputScene {
+  idx: number;
+  // 画像 or 動画のどちらか（どちらも絶対URL）
+  image_url?: string | null;
+  video_url?: string | null;
+  // voices（絶対URL、空文字禁止）
+  voice_urls: string[];
+  // baked時のバブル画像欠落は warning にするための情報（任意）
+  text_render_mode?: 'none' | 'baked' | 'native' | 'remotion' | string;
+  balloon_missing_baked_image_count?: number;
+}
+
+/**
+ * validateRenderInputs - レンダラーに渡す最小入力の検証（SSOT）
  * 
- * SSOT原則: この関数が「レンダーに飛ばして良いか」の最終ゲート
+ * PR-A2: POST（buildProjectJson後）でも、preflight（最小入力）でも同じ検証関数を使う
+ * これにより「preflightで通ったがPOSTで落ちる」事故を防ぐ
  * 
- * ================================
- * 必須エラー（critical_errors）→ レンダー不可
- * ================================
- * - 画像src が空（image/comic モードで assets.image.url が undefined/空文字）
- * - 動画src が空（video モードで assets.video.url が undefined/空文字）
- * - voices[].audio_url が空文字（存在するなら非空必須）
- * 
- * ================================
- * 警告（warnings）→ レンダー可だが注意
- * ================================
- * - voices が空（音声なし、無音になる）
- * - balloons が設定されているが baked画像がない
- * 
- * @param projectJson buildProjectJson() の返り値
+ * @param scenes 最小入力形式のシーン配列
  * @returns 検証結果
  */
-export function validateProjectJson(projectJson: RemotionProjectJson_R1): ProjectJsonValidationResult {
+export function validateRenderInputs(scenes: RenderInputScene[]): ProjectJsonValidationResult {
   const critical_errors: ProjectJsonValidationResult['critical_errors'] = [];
   const warnings: ProjectJsonValidationResult['warnings'] = [];
-  
-  for (const scene of projectJson.scenes) {
-    // ========================================
-    // 必須チェック 1: ビジュアルソース（画像 OR 動画のどちらか必須）
-    // PR-A2: video-only シーン対応（I2V/動画素材）
-    // ========================================
-    const imageUrl = scene.assets?.image?.url;
-    const videoUrl = (scene.assets as any)?.video_clip?.url;
-    
-    const hasValidImage = imageUrl && imageUrl.trim() !== '' && 
-      (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'));
-    const hasValidVideo = videoUrl && videoUrl.trim() !== '' &&
-      (videoUrl.startsWith('http://') || videoUrl.startsWith('https://'));
-    
+
+  for (const s of scenes) {
+    const imageUrl = (s.image_url ?? '').trim();
+    const videoUrl = (s.video_url ?? '').trim();
+
+    const hasValidImage = imageUrl !== '' && (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'));
+    const hasValidVideo = videoUrl !== '' && (videoUrl.startsWith('http://') || videoUrl.startsWith('https://'));
+
+    // 必須：画像 or 動画 のどちらかが絶対URLで存在
     if (!hasValidImage && !hasValidVideo) {
-      // どちらもない → 必須エラー
       if (!imageUrl && !videoUrl) {
         critical_errors.push({
-          scene_idx: scene.idx,
-          field: 'assets.image.url / assets.video_clip.url',
-          reason: `シーン${scene.idx}に画像も動画も設定されていません。どちらかを生成してください。`,
+          scene_idx: s.idx,
+          field: 'image_url / video_url',
+          reason: `シーン${s.idx}に画像も動画も設定されていません。どちらかを生成してください。`,
         });
-      } else if (imageUrl && imageUrl.trim() === '') {
+      } else if (imageUrl && !(imageUrl.startsWith('http://') || imageUrl.startsWith('https://'))) {
         critical_errors.push({
-          scene_idx: scene.idx,
-          field: 'assets.image.url',
-          reason: `画像URLが空です。シーン${scene.idx}の画像を生成してください。`,
-        });
-      } else if (imageUrl && !imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
-        critical_errors.push({
-          scene_idx: scene.idx,
-          field: 'assets.image.url',
+          scene_idx: s.idx,
+          field: 'image_url',
           reason: `画像URLが相対パスです（${imageUrl.substring(0, 50)}...）。絶対URLが必要です。`,
         });
-      } else if (videoUrl && videoUrl.trim() === '') {
+      } else if (videoUrl && !(videoUrl.startsWith('http://') || videoUrl.startsWith('https://'))) {
         critical_errors.push({
-          scene_idx: scene.idx,
-          field: 'assets.video_clip.url',
-          reason: `動画URLが空です。シーン${scene.idx}の動画を生成してください。`,
+          scene_idx: s.idx,
+          field: 'video_url',
+          reason: `動画URLが相対パスです（${videoUrl.substring(0, 50)}...）。絶対URLが必要です。`,
         });
-      } else if (videoUrl && !videoUrl.startsWith('http://') && !videoUrl.startsWith('https://')) {
+      } else if (imageUrl === '') {
         critical_errors.push({
-          scene_idx: scene.idx,
-          field: 'assets.video_clip.url',
-          reason: `動画URLが相対パスです。絶対URLが必要です。`,
+          scene_idx: s.idx,
+          field: 'image_url',
+          reason: `画像URLが空です。シーン${s.idx}の画像を生成してください。`,
         });
-      }
-    }
-    
-    // ========================================
-    // 必須チェック 2: 音声ソース（voicesがあるなら全て非空必須）
-    // ========================================
-    const voices = scene.assets?.voices || [];
-    for (let i = 0; i < voices.length; i++) {
-      const voice = voices[i];
-      if (voice.audio_url === '' || voice.audio_url === null || voice.audio_url === undefined) {
-        // 空文字の audio_url は Remotion で "No src passed" を引き起こす
+      } else if (videoUrl === '') {
         critical_errors.push({
-          scene_idx: scene.idx,
-          field: `assets.voices[${i}].audio_url`,
-          reason: `音声URL が空です（voice_id: ${voice.id}）。音声を生成するか、このvoiceを削除してください。`,
-        });
-      } else if (!voice.audio_url.startsWith('http://') && !voice.audio_url.startsWith('https://')) {
-        critical_errors.push({
-          scene_idx: scene.idx,
-          field: `assets.voices[${i}].audio_url`,
-          reason: `音声URLが相対パスです。絶対URLが必要です。`,
+          scene_idx: s.idx,
+          field: 'video_url',
+          reason: `動画URLが空です。シーン${s.idx}の動画を生成してください。`,
         });
       }
     }
-    
-    // ========================================
-    // 警告チェック 1: 音声なし（無音シーン）
-    // ========================================
-    if (voices.length === 0 && !scene.assets?.audio?.url) {
+
+    // 必須：voices が存在するなら audio_url は空文字/相対/未定義禁止
+    const voiceUrls = Array.isArray(s.voice_urls) ? s.voice_urls : [];
+    for (let i = 0; i < voiceUrls.length; i++) {
+      const u = (voiceUrls[i] ?? '').trim();
+      if (u === '') {
+        critical_errors.push({
+          scene_idx: s.idx,
+          field: `voice_urls[${i}]`,
+          reason: `音声URLが空です。音声を生成するか、該当の音声参照を除外してください。`,
+        });
+        continue;
+      }
+      if (!u.startsWith('http://') && !u.startsWith('https://')) {
+        critical_errors.push({
+          scene_idx: s.idx,
+          field: `voice_urls[${i}]`,
+          reason: `音声URLが相対パスです（${u.substring(0, 50)}...）。絶対URLが必要です。`,
+        });
+      }
+    }
+
+    // 警告：音声無し（無音シーン）
+    if (voiceUrls.length === 0) {
       warnings.push({
-        scene_idx: scene.idx,
-        field: 'assets.voices',
+        scene_idx: s.idx,
+        field: 'voice_urls',
         message: '音声がありません。このシーンは無音で再生されます。',
       });
     }
-    
-    // ========================================
-    // 警告チェック 2: balloons の baked 画像
-    // ========================================
-    if (scene.text_render_mode === 'baked' && scene.balloons && scene.balloons.length > 0) {
-      const balloonsWithoutImage = scene.balloons.filter((b: any) => !b.bubble_image_url);
-      if (balloonsWithoutImage.length > 0) {
-        warnings.push({
-          scene_idx: scene.idx,
-          field: 'balloons[].bubble_image_url',
-          message: `bakedモードで ${balloonsWithoutImage.length}件のバルーン画像が未設定です。これらは表示されません。`,
-        });
-      }
+
+    // 警告：bakedバブル画像欠落（表示崩れだが生成は可能）
+    if (s.text_render_mode === 'baked' && (s.balloon_missing_baked_image_count ?? 0) > 0) {
+      warnings.push({
+        scene_idx: s.idx,
+        field: 'balloons[].bubble_image_url',
+        message: `bakedモードで ${s.balloon_missing_baked_image_count}件のバルーン画像が未設定です。これらは表示されません。`,
+      });
     }
   }
-  
+
   return {
     is_valid: critical_errors.length === 0,
     critical_errors,
     warnings,
   };
+}
+
+/**
+ * validateProjectJson - buildProjectJson後の最終検証
+ * 
+ * PR-A2: 内部で validateRenderInputs（SSOT純関数）を呼ぶ
+ * これにより preflight と POST で同一の検証ロジックを使う
+ * 
+ * @param projectJson buildProjectJson() の返り値
+ * @returns 検証結果
+ */
+export function validateProjectJson(projectJson: RemotionProjectJson_R1): ProjectJsonValidationResult {
+  // projectJson を RenderInputScene[] に変換して validateRenderInputs を呼ぶ
+  const scenes: RenderInputScene[] = projectJson.scenes.map((scene) => {
+    const imageUrl = scene.assets?.image?.url ?? null;
+    const videoUrl = (scene.assets as any)?.video_clip?.url ?? null;
+    
+    // voices の audio_url を抽出（空文字も含めて渡す - 検証で弾く）
+    const voices = scene.assets?.voices ?? [];
+    const voiceUrls = voices.map(v => v.audio_url ?? '');
+
+    // bakedバブル欠落カウント（warning用）
+    const missingBaked = (scene.text_render_mode === 'baked' && Array.isArray(scene.balloons))
+      ? scene.balloons.filter((b: any) => !b?.bubble_image_url).length
+      : 0;
+
+    return {
+      idx: scene.idx,
+      image_url: imageUrl,
+      video_url: videoUrl,
+      voice_urls: voiceUrls,
+      text_render_mode: scene.text_render_mode,
+      balloon_missing_baked_image_count: missingBaked,
+    };
+  });
+
+  return validateRenderInputs(scenes);
 }
 
 // ====================================================================

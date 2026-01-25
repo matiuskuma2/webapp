@@ -28,6 +28,8 @@ import {
   buildProjectJson, 
   hashProjectJson,
   validateProjectJson,
+  validateRenderInputs,
+  type RenderInputScene,
 } from '../utils/video-build-helpers';
 
 /**
@@ -1355,7 +1357,8 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           // ignore
         }
         
-        // R1.6: scene_utterances を取得（audio_generations の status を含む）
+        // R1.6: scene_utterances を取得（audio_generations の status と r2_url を含む）
+        // PR-A2: audio_url を取得してvalidateRenderInputsで検証
         const { results: utteranceRows } = await c.env.DB.prepare(`
           SELECT 
             u.id,
@@ -1363,7 +1366,8 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
             u.role,
             u.text,
             u.audio_generation_id,
-            ag.status as audio_status
+            ag.status as audio_status,
+            ag.r2_url as audio_r2_url
           FROM scene_utterances u
           LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
           WHERE u.scene_id = ?
@@ -1375,7 +1379,16 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           text: string;
           audio_generation_id: number | null;
           audio_status: string | null;
+          audio_r2_url: string | null;
         }>();
+        
+        // PR-A2: bakedモードのバルーン画像欠落数を取得（warning用）
+        const { results: balloonMissingRows } = await c.env.DB.prepare(`
+          SELECT COUNT(*) as cnt
+          FROM scene_balloons
+          WHERE scene_id = ? AND (bubble_r2_url IS NULL OR bubble_r2_url = '')
+        `).bind(scene.id).all<{ cnt: number }>();
+        const balloonMissingCount = balloonMissingRows?.[0]?.cnt || 0;
         
         return {
           id: scene.id,
@@ -1384,6 +1397,8 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           title: scene.title || '',
           dialogue: scene.dialogue || '',
           display_asset_type: scene.display_asset_type || 'image',
+          // PR-A2: text_render_mode を追加（bakedバルーン警告用）
+          text_render_mode: scene.text_render_mode || (scene.display_asset_type === 'comic' ? 'baked' : 'remotion'),
           // Convert all R2 URLs to absolute URLs for consistency
           active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: toAbsoluteUrl(activeImage.r2_url, siteUrl) } : null,
           active_comic: activeComic ? { id: activeComic.id, r2_key: activeComic.r2_key, r2_url: toAbsoluteUrl(activeComic.r2_url, siteUrl) } : null,
@@ -1396,12 +1411,16 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
           } : null,
           active_audio: activeAudio,
           comic_data: comicData,
-          // R1.6: utterances with audio_status
+          // PR-A2: bakedモードのバルーン画像欠落数（warning用）
+          balloon_missing_baked_image_count: balloonMissingCount,
+          // R1.6/PR-A2: utterances with audio_status and audio_url
           utterances: utteranceRows.map(u => ({
             id: u.id,
             text: u.text,
             audio_generation_id: u.audio_generation_id,
             audio_status: u.audio_status || null,
+            // PR-A2: audio_url を絶対URL化して追加（validateRenderInputsで検証）
+            audio_url: u.audio_r2_url ? toAbsoluteUrl(u.audio_r2_url, siteUrl) : null,
           })),
         };
       })
@@ -1460,30 +1479,91 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     }
     const totalBalloons = balloonPolicySummary.always_on + balloonPolicySummary.voice_window + balloonPolicySummary.manual_window;
     
-    // 全体の判定: 素材OKかつAWS設定ありなら生成可能（utterances は警告のみ）
-    // 必須条件: 素材がある + AWS が設定されている
-    // 推奨条件: 音声パーツがある、BGMがある
-    const canGenerate = assetValidation.is_ready && awsConfigured;
+    // PR-A2: project.json最終ゲート相当（src完全性）を preflight でも実行
+    // buildProjectJsonは重いので、preflightで組める最小入力から同一の検証関数（validateRenderInputs）を使う
+    const siteUrlForBuild = c.env.SITE_URL || 'https://webapp-c7n.pages.dev';
+    
+    const renderInputs: RenderInputScene[] = scenesWithAssets.map((s: any) => {
+      // 画像候補：comic → image（display_asset_typeに応じて選択）
+      const displayType = s.display_asset_type || 'image';
+      let imageRel: string | null = null;
+      if (displayType === 'comic') {
+        imageRel = s.active_comic?.r2_url || null;
+      } else if (displayType === 'image') {
+        imageRel = s.active_image?.r2_url || null;
+      }
+      // 既にtoAbsoluteUrl済みの場合はそのまま使う
+      const imageAbs = imageRel;
+
+      // 動画候補：active_video があるなら
+      const videoRel = s.active_video?.r2_url || null;
+      const videoAbs = videoRel;
+
+      // voices：utterancesの audio_url（すでにabsolute化している想定）
+      // 空文字や null は除外せず、validateRenderInputs で検証する
+      const voiceUrls = Array.isArray(s.utterances)
+        ? s.utterances
+            .filter((u: any) => u.audio_url && u.audio_status === 'completed')
+            .map((u: any) => u.audio_url)
+        : [];
+
+      return {
+        idx: s.idx,
+        image_url: imageAbs,
+        video_url: videoAbs,
+        voice_urls: voiceUrls,
+        text_render_mode: s.text_render_mode,
+        balloon_missing_baked_image_count: s.balloon_missing_baked_image_count || 0,
+      };
+    });
+
+    const projectJsonValidation = validateRenderInputs(renderInputs);
+    
+    // 全体の判定: 素材OK かつ AWS設定あり かつ project.json検証OK なら生成可能
+    // PR-A2: projectJsonValidation.is_valid を追加（これで「押せない」が実現）
+    const canGenerate = assetValidation.is_ready && awsConfigured && projectJsonValidation.is_valid;
     
     // 警告を「必須」と「推奨」に分類
-    // 必須エラー（赤・生成停止）: 素材不足
-    const requiredErrors = assetValidation.missing.map(m => ({
-      type: 'ASSET_MISSING' as const,
-      level: 'error' as const,
-      scene_id: m.scene_id,
-      scene_idx: m.scene_idx,
-      message: `シーン${m.scene_idx}：${m.required_asset === 'active_comic.r2_url' ? '漫画画像' : '画像'}がありません`,
-    }));
+    // 必須エラー（赤・生成停止）: 素材不足 + project.json検証エラー
+    const requiredErrors = [
+      // 素材不足エラー
+      ...assetValidation.missing.map(m => ({
+        type: 'ASSET_MISSING' as const,
+        level: 'error' as const,
+        scene_id: m.scene_id,
+        scene_idx: m.scene_idx,
+        message: `シーン${m.scene_idx}：${m.required_asset === 'active_comic.r2_url' ? '漫画画像' : '画像'}がありません`,
+      })),
+      // PR-A2: project.json検証エラー
+      ...projectJsonValidation.critical_errors.map(e => ({
+        type: 'PROJECT_JSON_ERROR' as const,
+        level: 'error' as const,
+        scene_id: null as number | null,
+        scene_idx: e.scene_idx,
+        message: e.reason,
+      })),
+    ];
     
-    // 推奨警告（黄・生成は止めない）: 音声パーツ関連
-    const recommendedWarnings = utteranceValidation.errors.map(e => ({
-      ...e,
-      level: 'warning' as const,
-      // BGMがある場合はメッセージを調整
-      message: hasBgm && e.type === 'NO_UTTERANCES'
-        ? e.message.replace('（ボイスなしでも生成可）', '（BGMで再生されます）')
-        : e.message,
-    }));
+    // 推奨警告（黄・生成は止めない）: 音声パーツ関連 + project.json警告
+    const recommendedWarnings = [
+      // utterance 関連の警告
+      ...utteranceValidation.errors.map(e => ({
+        ...e,
+        level: 'warning' as const,
+        // BGMがある場合はメッセージを調整
+        message: hasBgm && e.type === 'NO_UTTERANCES'
+          ? e.message.replace('（ボイスなしでも生成可）', '（BGMで再生されます）')
+          : e.message,
+      })),
+      // PR-A2: project.json警告（無音シーン、bakedバブル欠落等）
+      ...projectJsonValidation.warnings.map(w => ({
+        type: 'PROJECT_JSON_WARNING' as const,
+        level: 'warning' as const,
+        scene_id: null as number | null,
+        scene_idx: w.scene_idx,
+        message: w.message,
+      })),
+    ];
     
     // 素材の警告も推奨として追加
     const assetWarnings = assetValidation.warnings.map(w => ({
@@ -1545,6 +1625,12 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
         aws_configured: awsConfigured,
         site_url_configured: siteUrlConfigured,
         env_warnings: envWarnings,
+      },
+      // PR-A2: project.json最終ゲート検証結果（デバッグ/詳細表示用）
+      project_json_validation: {
+        is_valid: projectJsonValidation.is_valid,
+        critical_errors: projectJsonValidation.critical_errors,
+        warnings: projectJsonValidation.warnings,
       },
     });
     
