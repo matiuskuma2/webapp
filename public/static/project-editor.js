@@ -7139,6 +7139,7 @@ function buildStatusMeta(status) {
 
 /**
  * Summarize build settings for display
+ * PR-5-1: expression_summary を追加（表現サマリー）
  */
 function summarizeBuildSettings(build) {
   const settings = safeJsonParse(build.settings_json) || build.settings || build.build_settings || {};
@@ -7149,7 +7150,27 @@ function summarizeBuildSettings(build) {
   const bgmVol = (settings.bgm?.volume ?? 0.25);
   const bgmVolPct = Math.round(Math.min(1, Math.max(0, bgmVol)) * 100);
   const motionPreset = settings.motion?.preset ?? (settings.motion?.ken_burns ? 'kenburns_soft' : 'none') ?? 'none';
-  return { preset, captionsEnabled, captionsPos, bgmEnabled, bgmVolPct, motionPreset };
+  
+  // PR-5-1: 表現サマリー（expression_summary）
+  const expr = settings.expression_summary || null;
+  
+  return { 
+    preset, 
+    captionsEnabled, 
+    captionsPos, 
+    bgmEnabled, 
+    bgmVolPct, 
+    motionPreset,
+    // PR-5-1: 表現サマリー（なければnull = 過去ビルド）
+    expression: expr ? {
+      hasVoice: expr.has_voice ?? false,
+      hasBgm: expr.has_bgm ?? false,
+      hasSfx: expr.has_sfx ?? false,
+      isSilent: expr.is_silent ?? false,
+      balloonCount: expr.balloon_count ?? 0,
+      balloonPolicy: expr.balloon_policy_summary || null,
+    } : null
+  };
 }
 
 /**
@@ -7211,6 +7232,51 @@ function renderVideoBuildItem(build) {
       <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">🏃 ${motionLabel(s.motionPreset)}</span>
     </div>
   `;
+  
+  // PR-5-1: 表現サマリータグ行（expression_summary があれば表示）
+  let expressionLine = '';
+  if (s.expression) {
+    const expr = s.expression;
+    const tags = [];
+    
+    // 無音判定（最優先で警告表示）
+    if (expr.isSilent) {
+      tags.push('<span class="px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 text-xs">🔇 無音</span>');
+    } else {
+      // 音声あり
+      if (expr.hasVoice) {
+        tags.push('<span class="px-1.5 py-0.5 rounded bg-green-100 text-green-700 text-xs">🔊 音声</span>');
+      }
+      // BGMあり
+      if (expr.hasBgm) {
+        tags.push('<span class="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-xs">🎵 BGM</span>');
+      }
+      // SFXあり
+      if (expr.hasSfx) {
+        tags.push('<span class="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 text-xs">🔔 効果音</span>');
+      }
+    }
+    
+    // バルーンあり
+    if (expr.balloonCount > 0) {
+      let balloonLabel = `💬 バブル ${expr.balloonCount}`;
+      // ポリシー内訳（括弧で小さく表示）
+      if (expr.balloonPolicy && (expr.balloonPolicy.always > 0 || expr.balloonPolicy.voice_window > 0 || expr.balloonPolicy.manual_window > 0)) {
+        const parts = [];
+        if (expr.balloonPolicy.always > 0) parts.push(`常時${expr.balloonPolicy.always}`);
+        if (expr.balloonPolicy.voice_window > 0) parts.push(`喋${expr.balloonPolicy.voice_window}`);
+        if (expr.balloonPolicy.manual_window > 0) parts.push(`手${expr.balloonPolicy.manual_window}`);
+        if (parts.length > 0) {
+          balloonLabel += ` <span class="text-gray-400">(${parts.join('/')})</span>`;
+        }
+      }
+      tags.push(`<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-xs">${balloonLabel}</span>`);
+    }
+    
+    if (tags.length > 0) {
+      expressionLine = `<div class="flex flex-wrap gap-1 mt-1">${tags.join('')}</div>`;
+    }
+  }
   
   // Lane class (active builds get highlighted border)
   const isActive = status.isActive;
@@ -7347,6 +7413,7 @@ function renderVideoBuildItem(build) {
             ${build.is_delegation ? '<span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">🔁 代行</span>' : ''}
           </div>
           ${settingsLine}
+          ${expressionLine}
           ${expiryHtml}
           ${retryHtml}
           ${progressHtml}

@@ -2178,6 +2178,39 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       }, 400);
     }
     
+    // PR-5-1: 表現サマリーを集計（スナップショット保存用）
+    let totalUtterancesWithAudio = 0;
+    let totalBalloons = 0;
+    let totalSfx = 0;
+    const balloonPolicyCounts: Record<string, number> = {
+      always: 0,      // 常時表示
+      voice_window: 0, // 喋る時
+      manual_window: 0 // 手動
+    };
+    
+    for (const scene of scenesWithAssets) {
+      // 音声付き utterance をカウント
+      if (scene.utterances && Array.isArray(scene.utterances)) {
+        totalUtterancesWithAudio += scene.utterances.filter((u: any) => u.audio_url).length;
+      }
+      // バルーンをカウント＋display_mode別集計
+      if (scene.balloons && Array.isArray(scene.balloons)) {
+        totalBalloons += scene.balloons.length;
+        for (const b of scene.balloons as any[]) {
+          const mode = b.display_mode || 'voice_window';
+          if (balloonPolicyCounts[mode] !== undefined) {
+            balloonPolicyCounts[mode]++;
+          } else {
+            balloonPolicyCounts['voice_window']++;
+          }
+        }
+      }
+      // SFXをカウント
+      if (scene.sfx && Array.isArray(scene.sfx)) {
+        totalSfx += scene.sfx.length;
+      }
+    }
+    
     // 5. R3-A: プロジェクトオーディオトラック（通しBGM）を取得
     const activeBgm = await c.env.DB.prepare(`
       SELECT id, r2_key, r2_url, duration_ms, volume, loop, 
@@ -2244,6 +2277,21 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       motion: {
         preset: body.motion?.preset ?? outputPresetConfig.motion_default ?? 'none',
         transition: body.motion?.transition || 'crossfade',
+      },
+      // PR-5-1: 表現サマリー（スナップショット）
+      expression_summary: {
+        has_voice: totalUtterancesWithAudio > 0,
+        has_bgm: activeBgm ? true : (body.bgm?.enabled ?? false),
+        has_sfx: totalSfx > 0,
+        balloon_count: totalBalloons,
+        balloon_policy_summary: {
+          always: balloonPolicyCounts.always,
+          voice_window: balloonPolicyCounts.voice_window,
+          manual_window: balloonPolicyCounts.manual_window,
+          total: totalBalloons,
+        },
+        // 無音判定（音声・BGM・SFXすべてなし）
+        is_silent: totalUtterancesWithAudio === 0 && !activeBgm && !(body.bgm?.enabled) && totalSfx === 0,
       },
     };
     
