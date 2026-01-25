@@ -3466,10 +3466,10 @@ ${escapeHtml(scene.dialogue)}
       </div>
       
       <!-- ★ Phase F-7: Audio section moved directly under dialogue -->
-      <!-- Phase1.7: 漫画モード時は音声セクションを発話ごとの形式に変更 -->
+      <!-- PR-UX-1: 画像モードは音声ガイド、漫画モードは発話ごと -->
       ${isComicMode && hasComicUtterances
         ? renderComicAudioSection(scene)
-        : renderSceneAudioSection(scene)
+        : renderSceneAudioGuide(scene)
       }
       
       ${scene.bullets && scene.bullets.length > 0 ? `
@@ -4078,6 +4078,99 @@ function renderSceneAudioPlaceholder(scene) {
           <i class="fas fa-spinner fa-spin text-purple-600 mr-2"></i>
           <span class="text-gray-600 text-sm">音声UIを読み込み中...</span>
         </div>
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * PR-UX-1: 画像モード用の音声ガイドUI
+ * 「このセリフの音声（1人）」を削除し、音声タブへの誘導に置換
+ * 
+ * 目的:
+ * - 複数キャラの会話があっても、1人しか設定できない旧UIを削除
+ * - 代わりにscene_utterances（音声タブ）への導線を提供
+ * - 発話数と生成状況のサマリーを表示
+ * 
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderSceneAudioGuide(scene) {
+  // utterance_status から情報を取得
+  const utteranceStatus = scene.utterance_status || { total: 0, with_audio: 0, total_duration_ms: 0 };
+  const total = utteranceStatus.total || 0;
+  const withAudio = utteranceStatus.with_audio || 0;
+  const allGenerated = total > 0 && withAudio === total;
+  const noneGenerated = withAudio === 0;
+  
+  // 状態に応じたアイコンと色
+  let statusIcon, statusColor, statusText, statusBg;
+  if (total === 0) {
+    statusIcon = 'fa-microphone-slash';
+    statusColor = 'text-gray-500';
+    statusText = '発話なし';
+    statusBg = 'bg-gray-50 border-gray-200';
+  } else if (allGenerated) {
+    statusIcon = 'fa-check-circle';
+    statusColor = 'text-green-600';
+    statusText = `${total}件すべて生成済み`;
+    statusBg = 'bg-green-50 border-green-200';
+  } else if (noneGenerated) {
+    statusIcon = 'fa-exclamation-circle';
+    statusColor = 'text-orange-600';
+    statusText = `${total}件 未生成`;
+    statusBg = 'bg-orange-50 border-orange-200';
+  } else {
+    statusIcon = 'fa-clock';
+    statusColor = 'text-blue-600';
+    statusText = `${withAudio}/${total}件 生成済み`;
+    statusBg = 'bg-blue-50 border-blue-200';
+  }
+  
+  return `
+    <div class="bg-gradient-to-br from-purple-50 to-blue-50 rounded-lg border-2 border-purple-200 overflow-hidden">
+      <div class="bg-gradient-to-r from-purple-600 to-blue-600 px-4 py-2">
+        <h4 class="text-white font-semibold text-sm flex items-center">
+          <i class="fas fa-microphone-alt mr-2"></i>
+          音声設定
+        </h4>
+      </div>
+      <div class="p-4 space-y-3">
+        <!-- 発話サマリー -->
+        <div class="flex items-center justify-between p-3 ${statusBg} rounded-lg border">
+          <div class="flex items-center gap-2">
+            <i class="fas ${statusIcon} ${statusColor}"></i>
+            <span class="text-sm font-semibold ${statusColor}">${statusText}</span>
+          </div>
+          ${total > 0 && utteranceStatus.total_duration_ms > 0 ? `
+            <span class="text-xs text-gray-500">
+              <i class="fas fa-clock mr-1"></i>${(utteranceStatus.total_duration_ms / 1000).toFixed(1)}秒
+            </span>
+          ` : ''}
+        </div>
+        
+        <!-- ガイドテキスト -->
+        <div class="text-sm text-gray-600">
+          <p class="mb-2">
+            <i class="fas fa-info-circle mr-1 text-purple-500"></i>
+            複数キャラクターの会話は<strong>「音声タブ」</strong>で発話ごとに設定できます。
+          </p>
+          <ul class="text-xs text-gray-500 space-y-1 ml-5 list-disc">
+            <li>各セリフに話者（キャラ/ナレーション）を設定</li>
+            <li>発話ごとに音声を生成</li>
+            <li>順番の入れ替えも可能</li>
+          </ul>
+        </div>
+        
+        <!-- 音声タブを開くボタン -->
+        <button 
+          onclick="openSceneEditModal(${scene.id}, 'audio')"
+          class="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold text-sm flex items-center justify-center gap-2"
+        >
+          <i class="fas fa-microphone-alt"></i>
+          音声タブで編集
+          ${total > 0 && !allGenerated ? '<span class="ml-2 px-2 py-0.5 bg-orange-400 rounded-full text-xs">要設定</span>' : ''}
+        </button>
       </div>
     </div>
   `;
