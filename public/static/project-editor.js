@@ -9020,6 +9020,12 @@ async function sendChatEditMessage() {
       // Show dry-run result panel (v1: dry-run box appears, input stays visible)
       showDryRunResult(response.data);
       
+      // ★ BUG FIX: 成功時もinput/sendBtnを再有効化する
+      input.value = '';
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+      
     } else {
       // Dry-run failed
       const errorMsg = response.data.errors?.join(', ') || '変更を適用できません';
