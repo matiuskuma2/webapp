@@ -1102,27 +1102,16 @@ export function buildProjectJson(
           
           voiceStartMs += utt.duration_ms;
         } else {
-          // R2-A: 音声なしでも voices に追加（balloon 同期用・字幕用）
-          // 優先順位: 1) utt.duration_ms (SSOT)  2) テキスト長ベースの推定値
+          // R2-A: 音声なしの utterance は duration 計算に使うが、voices には追加しない
+          // (Remotion Lambda は空の audio_url で "No src passed" エラーになるため)
+          // balloon 同期は別途 utterances データから行う
           const durationMsValue = utt.duration_ms || Math.max(
             MIN_DURATION_MS,
             (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
           );
           
-          voices.push({
-            id: `voice-utt-${utt.id}`,
-            utterance_id: utt.id,  // R2: balloon 連動用
-            role: utt.role,
-            character_key: utt.character_key || null,
-            character_name: utt.character_name || null,
-            audio_url: '', // 空の場合は再生しない
-            duration_ms: durationMsValue,
-            text: utt.text || '',
-            start_ms: voiceStartMs,
-            end_ms: voiceStartMs + durationMsValue,  // R2
-            format: 'mp3',
-          });
-          
+          // 注意: voiceStartMs は進めるが voices には追加しない
+          // これにより後続の音声付き utterance のタイミングが正しく計算される
           voiceStartMs += durationMsValue;
         }
       }
