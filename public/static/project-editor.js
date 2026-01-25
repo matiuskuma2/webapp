@@ -3435,123 +3435,38 @@ function renderComicAudioSection(scene) {
 }
 
 /**
- * Render scene text content (dialogue, bullets, prompt, style)
+ * Phase1: Render scene text content (結果確認専用)
+ * トップカードは「結果確認」のみ。編集はモーダルに集約。
+ * 
+ * 表示順序（確定）:
+ * ① セリフ概要（短縮・参照専用）
+ * ② 発話サマリー（話者・件数・生成状態）
+ * ③ 映像タイプ（画像/漫画）
+ * ④ 登場キャラ（映像用）
+ * ⑤ 詳細（折りたたみ：スタイル・プロンプト・要点）
+ * 
  * @param {object} scene 
  * @returns {string} HTML
  */
 function renderSceneTextContent(scene) {
-  // Phase1.7: display_asset_type に応じてセリフ表示を切替
-  const displayAssetType = scene.display_asset_type || 'image';
-  const isComicMode = displayAssetType === 'comic';
-  const hasComicUtterances = scene.comic_data?.published?.utterances?.length > 0 || scene.comic_data?.draft?.utterances?.length > 0;
-  
   return `
     <div class="space-y-4">
-      <!-- セリフ -->
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-2">
-          ${isComicMode && hasComicUtterances 
-            ? '<i class="fas fa-comment-alt mr-1 text-orange-500"></i>発話（漫画用・最大3件）'
-            : 'セリフ'
-          }
-        </label>
-        ${isComicMode && hasComicUtterances
-          ? `<div class="p-3 bg-orange-50 rounded-lg border border-orange-200">
-               ${renderComicUtterances(scene)}
-             </div>`
-          : `<div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-gray-800 whitespace-pre-wrap text-sm">
-${escapeHtml(scene.dialogue)}
-             </div>`
-        }
-      </div>
       
-      <!-- ★ Phase F-7: Audio section moved directly under dialogue -->
-      <!-- PR-UX-1: 画像モードは音声ガイド、漫画モードは発話ごと -->
-      ${isComicMode && hasComicUtterances
-        ? renderComicAudioSection(scene)
-        : renderSceneAudioGuide(scene)
-      }
+      <!-- ① セリフ概要（短縮・参照専用） -->
+      ${renderDialogueSummary(scene)}
       
-      ${scene.bullets && scene.bullets.length > 0 ? `
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-2">要点</label>
-        <ul class="list-disc list-inside space-y-1 text-sm text-gray-700">
-          ${scene.bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
-        </ul>
-      </div>
-      ` : ''}
+      <!-- ② 発話サマリー（話者・件数・生成状態）- 編集ボタンなし -->
+      ${renderSpeakerSummarySection(scene, { showEditButton: false })}
       
-      <!-- Character Traits Section (Phase X-5) -->
-      <div id="builderCharTraits-${scene.id}" class="bg-gradient-to-r from-indigo-50 to-purple-50 p-3 rounded-lg border border-indigo-200">
-        <div class="flex items-center justify-between mb-2">
-          <label class="text-sm font-semibold text-indigo-800">
-            <i class="fas fa-user-tag mr-1"></i>キャラクター特徴
-          </label>
-          <button 
-            onclick="loadBuilderSceneCharTraits(${scene.id})"
-            class="text-xs text-indigo-600 hover:text-indigo-800"
-            title="特徴を再読み込み"
-          >
-            <i class="fas fa-sync-alt"></i>
-          </button>
-        </div>
-        <div id="builderCharTraitsList-${scene.id}" class="text-xs text-gray-600">
-          <i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...
-        </div>
-      </div>
+      <!-- ③ 映像タイプ表示（画像/漫画） -->
+      ${renderAssetTypeIndicator(scene)}
       
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-2">画像プロンプト</label>
-        <p class="text-xs text-amber-600 mb-2">
-          <i class="fas fa-exclamation-triangle mr-1"></i>
-          ※画像内のテキストを日本語にしたい場合は「文字は日本語で」と追記
-        </p>
-        <textarea 
-          id="builderPrompt-${scene.id}"
-          rows="3"
-          placeholder="例: A beautiful forest scene. 文字は日本語で。"
-          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-        >${escapeHtml(scene.image_prompt)}</textarea>
-      </div>
-      
-      <!-- Image Characters (Phase F-6: Moved here, under prompt) -->
+      <!-- ④ 登場キャラ（映像用） -->
       ${renderImageCharacterSection(scene)}
       
-      <!-- PR-UX-2: Speaker Summary (audio characters) -->
-      ${renderSpeakerSummarySection(scene)}
+      <!-- ⑤ 詳細（折りたたみ：参照専用） -->
+      ${renderSceneDetailsFold(scene)}
       
-      <!-- Style Selector -->
-      <div>
-        <label class="block text-sm font-semibold text-gray-700 mb-2">
-          <i class="fas fa-palette mr-1 text-purple-600"></i>スタイル
-        </label>
-        <div class="flex gap-2">
-          <select 
-            id="sceneStyle-${scene.id}"
-            class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
-            onchange="setSceneStyle(${scene.id})"
-          >
-            ${renderStyleOptions(scene.style_preset_id)}
-          </select>
-          ${scene.style_preset_id 
-            ? `<button 
-                 onclick="clearSceneStyle(${scene.id})"
-                 class="px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors text-sm whitespace-nowrap"
-                 title="デフォルトに戻す"
-               >
-                 <i class="fas fa-times"></i>
-               </button>`
-            : ''
-          }
-        </div>
-        <p class="text-xs text-gray-500 mt-1">
-          ${scene.style_preset_id 
-            ? 'シーン専用スタイル設定中' 
-            : window.builderProjectDefaultStyle 
-              ? 'プロジェクトデフォルトを使用' 
-              : '未設定（オリジナルプロンプト）'}
-        </p>
-      </div>
     </div>
   `;
 }
@@ -4070,7 +3985,13 @@ function renderImageCharacterSection(scene) {
  * @param {object} scene 
  * @returns {string} HTML
  */
-function renderSpeakerSummarySection(scene) {
+/**
+ * PR-UX-2 + Phase1: 話者サマリーセクション
+ * @param {object} scene 
+ * @param {object} opts - { showEditButton: boolean } デフォルト true
+ * @returns {string} HTML
+ */
+function renderSpeakerSummarySection(scene, opts = { showEditButton: true }) {
   const speakerSummary = scene.speaker_summary || null;
   const utteranceStatus = scene.utterance_status || { total: 0, with_audio: 0 };
   
@@ -4101,8 +4022,18 @@ function renderSpeakerSummarySection(scene) {
     statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs"><i class="fas fa-clock mr-1"></i>${withAudio}/${total}件生成済み</span>`;
   }
   
+  // Phase1: 編集ボタンはオプションで制御
+  const editButton = opts.showEditButton ? `
+    <button 
+      onclick="openSceneEditModal(${scene.id}, 'audio')"
+      class="text-xs px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
+    >
+      <i class="fas fa-edit mr-1"></i>編集
+    </button>
+  ` : '';
+  
   return `
-    <div class="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+    <div class="p-3 bg-purple-50 rounded-lg border border-purple-200">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
           <span class="text-sm font-semibold text-purple-800">
@@ -4112,18 +4043,15 @@ function renderSpeakerSummarySection(scene) {
         </div>
         ${statusBadge}
       </div>
-      <div class="mt-2 flex items-center justify-between">
-        <p class="text-xs text-gray-500">
-          <i class="fas fa-info-circle mr-1"></i>
-          音声タブで発話ごとに話者を設定できます
-        </p>
-        <button 
-          onclick="openSceneEditModal(${scene.id}, 'audio')"
-          class="text-xs px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
-        >
-          <i class="fas fa-edit mr-1"></i>編集
-        </button>
-      </div>
+      ${opts.showEditButton ? `
+        <div class="mt-2 flex items-center justify-between">
+          <p class="text-xs text-gray-500">
+            <i class="fas fa-info-circle mr-1"></i>
+            音声タブで発話ごとに話者を設定できます
+          </p>
+          ${editButton}
+        </div>
+      ` : ''}
     </div>
   `;
 }
@@ -9798,6 +9726,123 @@ function updateOutputPresetPreview(presetId) {
   
   previewText.textContent = details.join(' / ');
   previewContainer.classList.remove('hidden');
+}
+
+// ============================================================
+// Phase1: Builder Scene Card UI Restructure
+// トップは「結果確認」のみ。編集はモーダルに集約。
+// ============================================================
+
+/**
+ * Phase1: セリフ概要（参照専用・短縮表示）
+ * 画像モード: scene.dialogue
+ * 漫画モード: comic_data.utterances を結合
+ */
+function renderDialogueSummary(scene) {
+  const displayAssetType = scene.display_asset_type || 'image';
+  const isComicMode = displayAssetType === 'comic';
+
+  let text = '';
+  if (isComicMode) {
+    const utterances =
+      scene.comic_data?.published?.utterances ||
+      scene.comic_data?.draft?.utterances ||
+      [];
+    text = utterances.map(u => u.text || '').filter(Boolean).join(' ');
+  } else {
+    text = scene.dialogue || '';
+  }
+
+  const truncated =
+    text.length > 120 ? text.slice(0, 120) + '…' : text;
+
+  return `
+    <div>
+      <label class="block text-sm font-semibold text-gray-700 mb-2">
+        <i class="fas fa-comment-alt mr-1 text-blue-500"></i>セリフ概要
+      </label>
+      <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm whitespace-pre-wrap">
+        ${truncated ? escapeHtml(truncated) : '<span class="text-gray-400">未設定</span>'}
+      </div>
+    </div>
+  `;
+}
+
+/**
+ * Phase1: 映像タイプ表示（画像 / 漫画）
+ */
+function renderAssetTypeIndicator(scene) {
+  const t = scene.display_asset_type || 'image';
+  const isComic = t === 'comic';
+
+  return `
+    <div class="flex items-center gap-2 text-sm">
+      <span class="font-semibold text-gray-700">
+        <i class="fas fa-${isComic ? 'book-open' : 'image'} mr-1 ${isComic ? 'text-orange-500' : 'text-green-600'}"></i>
+        映像：
+      </span>
+      <span class="px-2 py-1 rounded-full text-xs font-medium ${
+        isComic ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
+      }">
+        ${isComic ? '漫画' : '画像'}
+      </span>
+    </div>
+  `;
+}
+
+/**
+ * Phase1: 詳細（折りたたみ・参照専用）
+ * スタイル、画像プロンプト、要点を読み取り専用で表示
+ */
+function renderSceneDetailsFold(scene) {
+  const bullets = scene.bullets || [];
+  const styleLabel = scene.style_preset_id || 'デフォルト';
+  const prompt = scene.image_prompt || scene.prompt || '';
+  const promptText =
+    prompt.length > 240 ? prompt.slice(0, 240) + '…' : prompt;
+
+  return `
+    <details class="bg-gray-50 rounded-lg border border-gray-200">
+      <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-100">
+        <i class="fas fa-chevron-right mr-2"></i>詳細を表示
+      </summary>
+      <div class="px-4 pb-4 space-y-4 border-t border-gray-200 pt-3">
+
+        <div>
+          <div class="text-xs font-semibold text-gray-600 mb-1">
+            <i class="fas fa-palette mr-1 text-purple-500"></i>スタイル
+          </div>
+          <div class="text-sm">${escapeHtml(styleLabel)}</div>
+        </div>
+
+        ${prompt ? `
+          <div>
+            <div class="text-xs font-semibold text-gray-600 mb-1">
+              <i class="fas fa-image mr-1 text-green-600"></i>画像プロンプト
+            </div>
+            <div class="text-sm bg-white p-2 rounded border border-gray-100 whitespace-pre-wrap">
+              ${escapeHtml(promptText)}
+            </div>
+          </div>
+        ` : ''}
+
+        ${bullets.length ? `
+          <div>
+            <div class="text-xs font-semibold text-gray-600 mb-1">
+              <i class="fas fa-list mr-1 text-blue-600"></i>要点
+            </div>
+            <ul class="list-disc list-inside text-sm space-y-1">
+              ${bullets.map(b => `<li>${escapeHtml(b)}</li>`).join('')}
+            </ul>
+          </div>
+        ` : ''}
+
+        <div class="text-xs text-gray-500">
+          編集は「シーンを編集」から行えます。
+        </div>
+      </div>
+    </details>
+  `;
 }
 
 // Export output preset functions
