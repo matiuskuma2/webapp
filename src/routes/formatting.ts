@@ -1066,20 +1066,34 @@ async function processPreserveMode(
 /**
  * 段落を結合（原文維持版: 省略なし、改変なし）
  * 結合時は \n\n で繋ぐ（段落感を維持）
+ * 
+ * 【修正版】段落を均等に分配してtargetCountに合わせる
+ * 例: 8段落 → 5シーン = [2,2,2,1,1] の配分
  */
 function mergeParagraphsPreserve(paragraphs: string[], targetCount: number): string[] {
   if (paragraphs.length <= targetCount) return paragraphs
   
   const result: string[] = []
-  const groupSize = Math.ceil(paragraphs.length / targetCount)
+  const n = paragraphs.length
+  const t = targetCount
   
-  for (let i = 0; i < paragraphs.length; i += groupSize) {
-    const group = paragraphs.slice(i, i + groupSize)
+  // 各グループに割り当てる段落数を計算
+  // base = 最小の段落数（各グループに必ず割り当て）
+  // extra = 余りの段落数（先頭のグループに1つずつ追加）
+  const base = Math.floor(n / t)
+  const extra = n % t
+  
+  let idx = 0
+  for (let g = 0; g < t; g++) {
+    // 先頭の extra グループには base+1 個、残りには base 個を割り当て
+    const groupSize = base + (g < extra ? 1 : 0)
+    const group = paragraphs.slice(idx, idx + groupSize)
     // \n\n で結合（原文の改行を維持）
     result.push(group.join('\n\n'))
+    idx += groupSize
   }
   
-  return result.slice(0, targetCount)
+  return result
 }
 
 /**
