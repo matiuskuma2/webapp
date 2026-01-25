@@ -1187,14 +1187,16 @@
             <div id="wc-image-chars-container" class="space-y-2"></div>
           </div>
 
-          <div class="border border-green-200 rounded-lg p-4 bg-green-50/30">
-            <h4 class="text-sm font-bold text-green-800 mb-2 flex items-center">
-              <i class="fas fa-microphone mr-2"></i>音声キャラクター（1人）
+          <!-- Phase2: 音声キャラクター（1人）は削除 -->
+          <!-- 音声設定は発話ごとに音声タブで行うため、ここでは不要 -->
+          <div class="border border-purple-200 rounded-lg p-4 bg-purple-50/30">
+            <h4 class="text-sm font-bold text-purple-800 mb-2 flex items-center">
+              <i class="fas fa-microphone-alt mr-2"></i>音声設定について
             </h4>
-            <p class="text-xs text-green-600 mb-3">このシーンのセリフを喋るキャラクター</p>
-            <select id="wc-voice-char" class="w-full border border-green-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-green-500 bg-white">
-              <option value="">-- ナレーター（キャラなし） --</option>
-            </select>
+            <p class="text-xs text-purple-600">
+              <i class="fas fa-info-circle mr-1"></i>
+              音声の話者設定は「シーンを編集」→「音声」タブで発話ごとに行えます。
+            </p>
           </div>
 
           <div class="flex gap-3 justify-end pt-2">
@@ -1231,7 +1233,7 @@
    */
   function populateAssignSlots(characters, assignments) {
     const currentImageChars = assignments.map(a => a.character_key);
-    const currentVoiceChar = assignments.find(a => a.is_primary === 1)?.character_key || '';
+    // Phase2: currentVoiceChar は不要（音声は音声タブで発話ごとに管理）
 
     const imageContainer = document.getElementById('wc-image-chars-container');
     if (imageContainer) {
@@ -1264,22 +1266,13 @@
       }
     }
 
-    const voiceSelect = document.getElementById('wc-voice-char');
-    if (voiceSelect) {
-      const opts = ['<option value="">-- ナレーター（キャラなし） --</option>'];
-      for (const ch of characters) {
-        const key = escapeHtml(ch.character_key);
-        const name = escapeHtml(ch.character_name);
-        const hasVoice = ch.voice_preset_id ? '🎤' : '';
-        const selected = ch.character_key === currentVoiceChar ? 'selected' : '';
-        opts.push(`<option value="${key}" ${selected}>${hasVoice} ${name} (${key})</option>`);
-      }
-      voiceSelect.innerHTML = opts.join('');
-    }
+    // Phase2: 音声キャラクター選択は削除
+    // 音声設定は音声タブで発話ごとに行うため、ここでは不要
   }
 
   /**
    * Collect assignments
+   * Phase2: 音声キャラクターは削除（音声タブで発話ごとに設定）
    */
   function collectAssignments() {
     const imageCheckboxes = document.querySelectorAll('.wc-image-char-cb:checked');
@@ -1290,12 +1283,10 @@
       return null;
     }
 
-    const voiceSelect = document.getElementById('wc-voice-char');
-    const voiceCharacter = voiceSelect?.value?.trim() || null;
-
+    // Phase2: voice_character は null に固定（音声は音声タブで管理）
     return {
       image_characters: imageCharacters,
-      voice_character: voiceCharacter
+      voice_character: null
     };
   }
 

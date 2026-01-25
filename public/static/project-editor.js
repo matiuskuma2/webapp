@@ -9742,19 +9742,63 @@ function renderDialogueSummary(scene) {
   const displayAssetType = scene.display_asset_type || 'image';
   const isComicMode = displayAssetType === 'comic';
 
-  let text = '';
+  // 漫画モード: 発話を分割表示（合算しない）
   if (isComicMode) {
     const utterances =
       scene.comic_data?.published?.utterances ||
       scene.comic_data?.draft?.utterances ||
       [];
-    text = utterances.map(u => u.text || '').filter(Boolean).join(' ');
-  } else {
-    text = scene.dialogue || '';
+    
+    if (utterances.length === 0) {
+      return `
+        <div>
+          <label class="block text-sm font-semibold text-gray-700 mb-2">
+            <i class="fas fa-comment-alt mr-1 text-orange-500"></i>発話（漫画）
+          </label>
+          <div class="p-3 bg-gray-50 rounded-lg border border-gray-200 text-sm">
+            <span class="text-gray-400">発話なし</span>
+          </div>
+        </div>
+      `;
+    }
+    
+    // 最大3件を表示、それ以上は「…他n件」
+    const maxDisplay = 3;
+    const displayUtterances = utterances.slice(0, maxDisplay);
+    const remaining = utterances.length - maxDisplay;
+    
+    const utteranceRows = displayUtterances.map((u, idx) => {
+      const text = u.text || '';
+      const truncated = text.length > 60 ? text.slice(0, 60) + '…' : text;
+      return `
+        <div class="flex items-start gap-2 py-1 ${idx > 0 ? 'border-t border-gray-100' : ''}">
+          <span class="text-xs font-bold text-orange-600 whitespace-nowrap">発話${idx + 1}:</span>
+          <span class="text-gray-800">${escapeHtml(truncated)}</span>
+        </div>
+      `;
+    }).join('');
+    
+    const remainingText = remaining > 0 
+      ? `<div class="text-xs text-gray-500 mt-1">…他 ${remaining}件</div>` 
+      : '';
+    
+    return `
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">
+          <i class="fas fa-comment-alt mr-1 text-orange-500"></i>発話（漫画）
+          <span class="text-xs font-normal text-gray-500 ml-2">${utterances.length}件</span>
+        </label>
+        <div class="p-3 bg-orange-50 rounded-lg border border-orange-200 text-sm">
+          ${utteranceRows}
+          ${remainingText}
+        </div>
+      </div>
+    `;
   }
-
-  const truncated =
-    text.length > 120 ? text.slice(0, 120) + '…' : text;
+  
+  // 画像モード: 通常のdialogue表示
+  const text = scene.dialogue || '';
+  const truncated = text.length > 120 ? text.slice(0, 120) + '…' : text;
 
   return `
     <div>
