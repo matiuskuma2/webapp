@@ -185,11 +185,12 @@ async function generateImageWithFallback(
   }
   
   // Step 2: 最初の試行
+  // リトライ回数を5回に増加（Gemini無料枠のレート制限対策）
   console.log(`[Image Gen] Attempting with ${keyResult.source} API key`);
   const result = await generateImageWithRetry(
     prompt,
     keyResult.apiKey,
-    3,
+    5,  // 3→5 に増加（429エラー対策）
     referenceImages,
     skipDefaultInstructions
   );
@@ -214,7 +215,7 @@ async function generateImageWithFallback(
     const systemResult = await generateImageWithRetry(
       prompt,
       c.env.GEMINI_API_KEY,
-      3,
+      5,  // 3→5 に増加（429エラー対策）
       referenceImages,
       skipDefaultInstructions
     );
@@ -1249,7 +1250,7 @@ async function generateImageWithRetry(
         const retryAfter = response.headers.get('Retry-After')
         const waitTime = retryAfter 
           ? parseInt(retryAfter) * 1000 
-          : Math.pow(2, attempt) * 1000 // 指数バックオフ: 1s, 2s, 4s
+          : Math.min(Math.pow(2, attempt + 1) * 1000, 30000) // 指数バックオフ: 2s, 4s, 8s, 16s, 30s (max 30s)
 
         console.warn(`Rate limited (429). Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
         
@@ -1257,7 +1258,7 @@ async function generateImageWithRetry(
           await sleep(waitTime)
           continue
         } else {
-          lastError = 'Rate limit exceeded after max retries'
+          lastError = 'Rate limit exceeded after max retries. Please wait 1-2 minutes before trying again.'
           break
         }
       }
