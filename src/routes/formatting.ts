@@ -688,6 +688,13 @@ async function processTextChunks(
   // 統計を取得
   const stats = await getChunkStats(c.env.DB, projectId)
 
+  // ★ BUG FIX: バッチ処理完了後に全chunk完了かチェックし、完了していれば自動merge
+  // これにより、最後のchunkを処理したリクエストで即座に 'formatted' へ遷移する
+  if (stats.pending === 0 && stats.processing === 0) {
+    console.log(`[Format] All chunks processed in this batch, triggering autoMergeScenes for project ${projectId}`)
+    return await autoMergeScenes(c, projectId, stats)
+  }
+
   // 最新のrun_id/run_noを取得（SSOT: UI側でmismatch検出に使用）
   const latestRun = await c.env.DB.prepare(`
     SELECT id, run_no FROM runs
