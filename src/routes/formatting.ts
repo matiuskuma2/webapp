@@ -1034,24 +1034,34 @@ async function processPreserveMode(
     UPDATE projects SET status = 'formatted', updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).bind(projectId).run()
   
-  // 6. Auto-assign characters (non-blocking)
+  // 6. Auto-assign characters AND generate utterances (non-blocking)
   try {
     const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign')
     const { extractAndUpdateCharacterTraits } = await import('../utils/character-trait-extractor')
+    const { generateUtterancesForProject } = await import('../utils/dialogue-parser')
     
     c.executionCtx.waitUntil(
       (async () => {
+        // Step 1: Auto-assign characters to scenes
         const assignResult = await autoAssignCharactersToScenes(c.env.DB, parseInt(projectId))
         console.log(`[PreserveMode] Auto-assigned ${assignResult.assigned} characters`)
         
+        // Step 2: Extract character traits
         const traitResult = await extractAndUpdateCharacterTraits(c.env.DB, parseInt(projectId))
         console.log(`[PreserveMode] Extracted traits for ${traitResult.updated} characters`)
+        
+        // Step 3: Generate utterances from dialogue (NEW!)
+        // This parses "キャラ名：「セリフ」" format and creates individual utterances
+        const utteranceResult = await generateUtterancesForProject(c.env.DB, parseInt(projectId))
+        console.log(`[PreserveMode] Generated ${utteranceResult.total_utterances} utterances for ${utteranceResult.total_scenes} scenes`)
+        console.log(`[PreserveMode] - Scenes with dialogues: ${utteranceResult.scenes_with_dialogues}`)
+        console.log(`[PreserveMode] - Scenes with narration only: ${utteranceResult.scenes_with_narration_only}`)
       })().catch(err => {
-        console.error(`[PreserveMode] Character processing failed:`, err.message)
+        console.error(`[PreserveMode] Character/Utterance processing failed:`, err.message)
       })
     )
   } catch (err) {
-    console.warn(`[PreserveMode] Auto-assign skipped:`, err)
+    console.warn(`[PreserveMode] Auto-assign/Utterances skipped:`, err)
   }
   
   return c.json({
@@ -1262,12 +1272,13 @@ async function autoMergeScenes(c: any, projectId: string, stats: any) {
       WHERE id = ?
     `).bind(projectId).run()
 
-    // Phase X-2: Auto-assign characters (non-blocking, best-effort)
+    // Phase X-2: Auto-assign characters AND generate utterances (non-blocking, best-effort)
     // ✅ Runs asynchronously to avoid blocking response
     // ✅ Failures do not affect 'formatted' status
     try {
       const { autoAssignCharactersToScenes } = await import('../utils/character-auto-assign');
       const { extractAndUpdateCharacterTraits } = await import('../utils/character-trait-extractor');
+      const { generateUtterancesForProject } = await import('../utils/dialogue-parser');
       
       c.executionCtx.waitUntil(
         (async () => {
@@ -1279,13 +1290,21 @@ async function autoMergeScenes(c: any, projectId: string, stats: any) {
           // Phase X-3: This ensures visual consistency across all scenes
           const traitResult = await extractAndUpdateCharacterTraits(c.env.DB, parseInt(projectId));
           console.log(`[Phase X-3] Extracted traits for ${traitResult.updated} characters: ${traitResult.characters.join(', ')}`);
+          
+          // Step 3: Generate utterances from dialogue (NEW!)
+          // This parses "キャラ名：「セリフ」" format and creates individual utterances
+          // Ensures proper voice assignment per speaker, not reading character names
+          const utteranceResult = await generateUtterancesForProject(c.env.DB, parseInt(projectId));
+          console.log(`[AIMode] Generated ${utteranceResult.total_utterances} utterances for ${utteranceResult.total_scenes} scenes`);
+          console.log(`[AIMode] - Scenes with dialogues: ${utteranceResult.scenes_with_dialogues}`);
+          console.log(`[AIMode] - Scenes with narration only: ${utteranceResult.scenes_with_narration_only}`);
         })()
           .catch(err => {
-            console.error(`[Phase X-2/X-3] Character processing failed for project ${projectId}:`, err.message);
+            console.error(`[Phase X-2/X-3/Utterances] Character/Utterance processing failed for project ${projectId}:`, err.message);
           })
       );
     } catch (err) {
-      console.warn(`[Phase X-2] Auto-assign skipped for project ${projectId}:`, err);
+      console.warn(`[Phase X-2] Auto-assign/Utterances skipped for project ${projectId}:`, err);
     }
 
     // 4. 結果返却
