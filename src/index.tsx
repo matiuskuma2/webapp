@@ -1899,6 +1899,63 @@ app.get('/projects/:id', (c) => {
         </div>
     </div>
 
+    <!-- PR-4-3: Video Build Preview Modal -->
+    <div id="videoBuildPreviewModal" class="hidden fixed inset-0 z-50">
+        <div class="absolute inset-0 bg-black/60" onclick="closeVideoBuildPreviewModal()"></div>
+
+        <div class="relative min-h-screen flex items-center justify-center p-4">
+            <div class="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+                <div class="bg-gray-900 px-5 py-4 flex items-center justify-between">
+                    <div class="text-white font-bold flex items-center gap-2">
+                        <i class="fas fa-film"></i>
+                        <span id="vbPreviewTitle">プレビュー</span>
+                        <span id="vbPreviewBuildId" class="text-xs text-white/70 ml-2"></span>
+                    </div>
+                    <button class="text-white/90 hover:bg-white/15 p-2 rounded-lg" onclick="closeVideoBuildPreviewModal()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="bg-gray-950 p-4">
+                    <div class="rounded-lg overflow-hidden border border-white/10">
+                        <video id="vbPreviewVideo" controls class="w-full" preload="metadata">
+                            <source id="vbPreviewVideoSrc" src="" type="video/mp4" />
+                        </video>
+                    </div>
+
+                    <div class="mt-4 flex flex-wrap gap-2">
+                        <button
+                            id="vbPreviewChatEditBtn"
+                            class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-2"
+                        >
+                            <i class="fas fa-comments"></i>修正（チャット）
+                        </button>
+
+                        <a
+                            id="vbPreviewDownloadLink"
+                            href="#"
+                            target="_blank"
+                            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold flex items-center gap-2"
+                        >
+                            <i class="fas fa-download"></i>ダウンロード
+                        </a>
+
+                        <button
+                            class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-sm"
+                            onclick="closeVideoBuildPreviewModal()"
+                        >
+                            閉じる
+                        </button>
+                    </div>
+
+                    <div class="mt-3 text-xs text-gray-300">
+                        ※ 修正すると「新ビルド」が作成されます（元のビルドは残ります）
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Safe Chat v1: Chat Edit Modal (CENTER POPUP) -->
     <div id="chatEditModal" class="hidden fixed inset-0 z-50">
         <!-- Backdrop -->

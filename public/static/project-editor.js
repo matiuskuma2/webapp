@@ -7041,6 +7041,14 @@ async function loadVideoBuilds() {
     
     listEl.innerHTML = builds.map(renderVideoBuildItem).join('');
     
+    // PR-4-2: 待ち受けスクロール（startVideoBuild成功時に設定される）
+    if (window.pendingScrollToBuildId) {
+      const ok = scrollToAndHighlightBuild(window.pendingScrollToBuildId);
+      if (ok) {
+        window.pendingScrollToBuildId = null;
+      }
+    }
+    
     // Check for active build
     const activeBuild = builds.find(b => 
       ['queued', 'validating', 'submitted', 'rendering', 'uploading', 'retry_wait'].includes(b.status)
@@ -7092,100 +7100,206 @@ function toggleVideoBuildError(buildId) {
   }
 }
 
+// ===== PR-4: Video Build レーン化ヘルパー =====
+
 /**
- * Render a single video build item
+ * Extract error message safely (PR-4: [object Object] 根絶)
+ */
+function extractErrorMessage(err, fallback = '失敗しました') {
+  if (!err) return fallback;
+  const data = err.response?.data;
+  if (typeof data === 'string') return data;
+  if (data?.error?.message) return data.error.message;
+  if (data?.message) return data.message;
+  if (typeof err.message === 'string') return err.message;
+  try { return JSON.stringify(data); } catch { return fallback; }
+}
+
+/**
+ * Safely parse JSON string
+ */
+function safeJsonParse(str, fallback = null) {
+  if (!str || typeof str !== 'string') return fallback;
+  try { return JSON.parse(str); } catch { return fallback; }
+}
+
+/**
+ * Get build status metadata for UI
+ */
+function buildStatusMeta(status) {
+  const s = String(status || '').toLowerCase();
+  if (s === 'completed') return { label: '完了', cls: 'bg-green-100 text-green-800', icon: 'fa-check-circle', isActive: false };
+  if (s === 'failed') return { label: '失敗', cls: 'bg-red-100 text-red-800', icon: 'fa-times-circle', isActive: false };
+  if (s === 'cancelled') return { label: '中止', cls: 'bg-gray-100 text-gray-700', icon: 'fa-ban', isActive: false };
+  if (['rendering','uploading','submitted','queued','validating','retry_wait'].includes(s)) {
+    return { label: '生成中', cls: 'bg-amber-100 text-amber-800', icon: 'fa-spinner', isActive: true };
+  }
+  return { label: '準備', cls: 'bg-gray-100 text-gray-700', icon: 'fa-circle', isActive: false };
+}
+
+/**
+ * Summarize build settings for display
+ */
+function summarizeBuildSettings(build) {
+  const settings = safeJsonParse(build.settings_json) || build.settings || build.build_settings || {};
+  const preset = settings.output_preset || settings.outputPreset || 'yt_long';
+  const captionsEnabled = settings.captions?.enabled ?? settings.include_captions ?? true;
+  const captionsPos = settings.captions?.position || 'bottom';
+  const bgmEnabled = settings.bgm?.enabled ?? settings.background_music?.enabled ?? settings.include_bgm ?? false;
+  const bgmVol = (settings.bgm?.volume ?? 0.25);
+  const bgmVolPct = Math.round(Math.min(1, Math.max(0, bgmVol)) * 100);
+  const motionPreset = settings.motion?.preset ?? (settings.motion?.ken_burns ? 'kenburns_soft' : 'none') ?? 'none';
+  return { preset, captionsEnabled, captionsPos, bgmEnabled, bgmVolPct, motionPreset };
+}
+
+/**
+ * Get preset display label
+ */
+function presetLabel(preset) {
+  const p = String(preset || '');
+  if (p === 'yt_long') return 'YouTube長尺';
+  if (p === 'short_vertical') return '縦型ショート';
+  if (p === 'yt_shorts') return 'YT Shorts';
+  if (p === 'reels') return 'Reels';
+  if (p === 'tiktok') return 'TikTok';
+  return p;
+}
+
+/**
+ * Motion preset label
+ */
+function motionLabel(preset) {
+  if (preset === 'none') return 'なし';
+  if (preset === 'kenburns_soft') return 'ゆっくり';
+  if (preset === 'kenburns_medium') return '標準';
+  return preset;
+}
+
+/**
+ * Scroll to and highlight a build lane (PR-4-2)
+ */
+function scrollToAndHighlightBuild(buildId) {
+  const el = document.getElementById(`video-build-lane-${buildId}`);
+  if (!el) return false;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  el.classList.add('ring-2', 'ring-indigo-400', 'bg-indigo-50');
+  setTimeout(() => {
+    el.classList.remove('ring-2', 'ring-indigo-400', 'bg-indigo-50');
+  }, 3000);
+  return true;
+}
+window.scrollToAndHighlightBuild = scrollToAndHighlightBuild;
+
+/**
+ * Render a single video build item (PR-4 レーン化)
  */
 function renderVideoBuildItem(build) {
+  const status = buildStatusMeta(build.status);
   const statusInfo = getVideoBuildStatusInfo(build.status);
+  
   // Parse UTC datetime and convert to Japan timezone
   const createdAtUtc = build.created_at.replace(' ', 'T') + 'Z';
   const createdAt = new Date(createdAtUtc).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
+  
+  // Build settings summary (PR-4)
+  const s = summarizeBuildSettings(build);
+  const settingsLine = `
+    <div class="flex flex-wrap gap-1 mt-2">
+      <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">📺 ${presetLabel(s.preset)}</span>
+      <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">CC ${s.captionsEnabled ? 'ON' : 'OFF'}</span>
+      <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">🎵 ${s.bgmEnabled ? 'ON' : 'OFF'}</span>
+      <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">🏃 ${motionLabel(s.motionPreset)}</span>
+    </div>
+  `;
+  
+  // Lane class (active builds get highlighted border)
+  const isActive = status.isActive;
+  const laneClass = isActive 
+    ? 'p-4 hover:bg-gray-50 transition-colors border-l-4 border-indigo-500 bg-indigo-50/40'
+    : 'p-4 hover:bg-gray-50 transition-colors';
   
   let actionHtml = '';
   let expiryHtml = '';
   
   if (build.status === 'completed' && build.download_url) {
-    // Calculate expiry
     const expiry = formatDownloadExpiry(build);
     
     if (expiry === 'expired') {
-      // URL expired - show refresh button
       actionHtml = `
         <div class="flex flex-col items-end gap-2">
-          <button 
-            onclick="refreshVideoBuildDownload(${build.id})"
-            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold flex items-center gap-2"
-          >
+          <button onclick="refreshVideoBuildDownload(${build.id})"
+            class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold flex items-center gap-2">
             <i class="fas fa-sync-alt"></i>URL再取得
           </button>
-          <span class="text-xs text-amber-600">
-            <i class="fas fa-exclamation-triangle mr-1"></i>URLの期限が切れています
-          </span>
+          <span class="text-xs text-amber-600"><i class="fas fa-exclamation-triangle mr-1"></i>期限切れ</span>
         </div>
       `;
     } else {
-      // Valid URL - show download and chat edit buttons
+      // PR-4-3: プレビュー → 修正 → DL の順
       actionHtml = `
         <div class="flex items-center gap-2">
-          <button 
-            onclick="openChatEditModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
-            class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors text-sm font-semibold flex items-center gap-2"
-            title="チャットで修正"
-          >
+          <button onclick="openVideoBuildPreviewModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+            class="px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 text-sm font-semibold flex items-center gap-2"
+            title="プレビュー再生">
+            <i class="fas fa-play"></i>
+          </button>
+          <button onclick="openChatEditModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+            class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-2"
+            title="チャットで修正">
             <i class="fas fa-comments"></i>修正
           </button>
-          <a 
-            href="${build.download_url}" 
-            target="_blank"
-            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold flex items-center gap-2"
-          >
+          <a href="${build.download_url}" target="_blank"
+            class="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold flex items-center gap-2">
             <i class="fas fa-download"></i>DL
           </a>
         </div>
       `;
-      
       if (expiry) {
-        expiryHtml = `
-          <p class="text-xs text-gray-500 mt-1">
-            <i class="fas fa-clock mr-1"></i>期限: ${expiry}
-          </p>
-        `;
+        expiryHtml = `<p class="text-xs text-gray-500 mt-1"><i class="fas fa-clock mr-1"></i>期限: ${expiry}</p>`;
       }
     }
   } else if (build.status === 'completed' && !build.download_url) {
-    // Completed but no URL yet - need to refresh
     actionHtml = `
-      <button 
-        onclick="refreshVideoBuildDownload(${build.id})"
-        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold flex items-center gap-2"
-      >
+      <button onclick="refreshVideoBuildDownload(${build.id})"
+        class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold flex items-center gap-2">
         <i class="fas fa-sync-alt"></i>URL取得
       </button>
     `;
   } else if (build.status === 'failed') {
     actionHtml = `
       <div class="flex items-center gap-2">
-        <button 
-          onclick="toggleVideoBuildError(${build.id})"
-          class="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors text-sm flex items-center gap-1"
-        >
+        <button onclick="toggleVideoBuildError(${build.id})"
+          class="px-3 py-2 text-red-600 hover:bg-red-50 rounded-lg text-sm flex items-center gap-1">
           <i class="fas fa-info-circle"></i>詳細
         </button>
-        <button 
-          onclick="retryVideoBuild(${build.id})"
-          class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-semibold flex items-center gap-2"
-        >
+        <button onclick="retryVideoBuild(${build.id})"
+          class="px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 text-sm font-semibold flex items-center gap-2">
           <i class="fas fa-redo"></i>再試行
         </button>
       </div>
     `;
+  } else if (isActive) {
+    // 生成中の場合は更新ボタン
+    actionHtml = `
+      <button onclick="loadVideoBuilds()"
+        class="px-3 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 text-sm font-semibold flex items-center gap-2">
+        <i class="fas fa-sync-alt"></i>更新
+      </button>
+    `;
   }
   
+  // Progress bar for active builds
   let progressHtml = '';
-  if (['rendering', 'uploading'].includes(build.status) && build.progress_percent !== null) {
+  if (isActive && build.progress_percent !== null && build.progress_percent !== undefined) {
     progressHtml = `
-      <div class="mt-2 w-full bg-gray-200 rounded-full h-2">
-        <div class="h-full bg-blue-500 rounded-full transition-all" style="width: ${build.progress_percent}%"></div>
+      <div class="mt-3">
+        <div class="flex items-center justify-between text-xs text-gray-500 mb-1">
+          <span>${build.progress_stage || '処理中...'}</span>
+          <span>${build.progress_percent}%</span>
+        </div>
+        <div class="w-full h-2 bg-gray-200 rounded-full overflow-hidden">
+          <div class="h-full bg-indigo-600 transition-all" style="width:${build.progress_percent}%"></div>
+        </div>
       </div>
     `;
   }
@@ -7195,7 +7309,6 @@ function renderVideoBuildItem(build) {
   if (build.status === 'failed') {
     const errorCode = build.error_code || 'UNKNOWN_ERROR';
     const errorMessage = build.error_message || '不明なエラーが発生しました';
-    
     errorHtml = `
       <div id="videoBuildError-${build.id}" class="hidden mt-3 p-3 bg-red-50 rounded-lg border border-red-200">
         <div class="flex items-start gap-2">
@@ -7203,10 +7316,8 @@ function renderVideoBuildItem(build) {
           <div class="flex-1 min-w-0">
             <p class="text-xs font-semibold text-red-700">エラーコード: ${errorCode}</p>
             <p class="text-xs text-red-600 mt-1 whitespace-pre-wrap break-words">${errorMessage}</p>
-            <button 
-              onclick="navigator.clipboard.writeText('${errorCode}: ${errorMessage.replace(/'/g, "\\'")}'); showToast('エラー情報をコピーしました', 'success');"
-              class="mt-2 text-xs text-red-500 hover:text-red-700 underline"
-            >
+            <button onclick="navigator.clipboard.writeText('${errorCode}: ${errorMessage.replace(/'/g, "\\'")}'); showToast('エラー情報をコピーしました', 'success');"
+              class="mt-2 text-xs text-red-500 hover:text-red-700 underline">
               <i class="fas fa-copy mr-1"></i>コピー
             </button>
           </div>
@@ -7219,33 +7330,28 @@ function renderVideoBuildItem(build) {
   let retryHtml = '';
   if (build.status === 'retry_wait' || (build.retry_count && build.retry_count > 0 && build.status !== 'completed' && build.status !== 'failed')) {
     const remaining = 5 - (build.retry_count || 0);
-    retryHtml = `
-      <p class="text-xs text-amber-600 mt-1">
-        <i class="fas fa-hourglass-half mr-1"></i>自動再試行中（あと最大${remaining}回）
-      </p>
-    `;
+    retryHtml = `<p class="text-xs text-amber-600 mt-1"><i class="fas fa-hourglass-half mr-1"></i>自動再試行中（あと最大${remaining}回）</p>`;
   }
   
   return `
-    <div class="p-4 hover:bg-gray-50 transition-colors" data-build-id="${build.id}">
-      <div class="flex items-center justify-between gap-4">
+    <div id="video-build-lane-${build.id}" class="${laneClass}" data-build-id="${build.id}">
+      <div class="flex items-start justify-between gap-4">
         <div class="flex-1 min-w-0">
-          <div class="flex items-center gap-3">
-            <span class="text-2xl">${statusInfo.icon}</span>
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 flex-wrap">
-                <span class="font-mono text-gray-500 text-sm">#${build.id}</span>
-                <span class="text-sm font-semibold ${statusInfo.textColor}">${statusInfo.label}</span>
-                ${build.is_delegation ? '<span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded" title="管理者代行で実行">🔁 代行</span>' : ''}
-              </div>
-              <p class="text-xs text-gray-500">${createdAt}</p>
-              ${expiryHtml}
-              ${retryHtml}
-            </div>
+          <div class="flex items-center gap-2 flex-wrap">
+            <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded ${status.cls} text-xs font-semibold">
+              <i class="fas ${status.icon} ${status.icon === 'fa-spinner' ? 'fa-spin' : ''}"></i>
+              ${status.label}
+            </span>
+            <span class="text-sm font-semibold text-gray-900">Build #${build.id}</span>
+            <span class="text-xs text-gray-500">${createdAt}</span>
+            ${build.is_delegation ? '<span class="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded">🔁 代行</span>' : ''}
           </div>
+          ${settingsLine}
+          ${expiryHtml}
+          ${retryHtml}
           ${progressHtml}
         </div>
-        <div class="flex-shrink-0">
+        <div class="shrink-0">
           ${actionHtml}
         </div>
       </div>
@@ -7432,8 +7538,25 @@ async function startVideoBuild() {
     if (response.data.success) {
       showToast('動画生成を開始しました', 'success');
       
-      // Reload builds
+      // PR-4-2: 新ビルドIDを待ち受けスクロール用に設定
+      const newId = response.data.video_build_id || response.data.build_id || response.data.id || response.data.new_video_build_id;
+      if (newId) {
+        window.pendingScrollToBuildId = Number(newId);
+      }
+      
+      // Reload builds (will trigger scroll if newId is set)
       await loadVideoBuilds();
+      
+      // PR-4-2: IDが取れなかった場合のフォールバック - 生成中ビルドを探す
+      if (!newId) {
+        const builds = window.videoBuildListCache || [];
+        const activeBuild = builds.find(b => 
+          ['queued', 'validating', 'submitted', 'rendering', 'uploading'].includes(String(b.status || '').toLowerCase())
+        );
+        if (activeBuild?.id) {
+          scrollToAndHighlightBuild(activeBuild.id);
+        }
+      }
       
       // Refresh usage
       await refreshVideoBuildUsage();
@@ -8343,6 +8466,65 @@ window.chatEditState = {
   dryRunResult: null,
   messages: [],
 };
+
+// ===== PR-4-3: Video Build Preview Modal =====
+
+/**
+ * Open the video build preview modal
+ * @param {number} buildId 
+ * @param {string} videoUrl 
+ */
+function openVideoBuildPreviewModal(buildId, videoUrl) {
+  const modal = document.getElementById('videoBuildPreviewModal');
+  if (!modal) return;
+
+  const title = document.getElementById('vbPreviewTitle');
+  const idEl = document.getElementById('vbPreviewBuildId');
+  const src = document.getElementById('vbPreviewVideoSrc');
+  const video = document.getElementById('vbPreviewVideo');
+
+  if (title) title.textContent = 'プレビュー（完成動画）';
+  if (idEl) idEl.textContent = `Build #${buildId}`;
+
+  if (src && videoUrl) {
+    src.src = videoUrl;
+    video.load();
+  }
+
+  // DLリンク
+  const dl = document.getElementById('vbPreviewDownloadLink');
+  if (dl && videoUrl) dl.href = videoUrl;
+
+  // 修正（チャット）ボタン → chatEditModal を開く
+  const chatBtn = document.getElementById('vbPreviewChatEditBtn');
+  if (chatBtn) {
+    chatBtn.onclick = () => {
+      closeVideoBuildPreviewModal();
+      openChatEditModal(buildId, videoUrl);
+    };
+  }
+
+  modal.classList.remove('hidden');
+  document.body.classList.add('overflow-hidden');
+}
+
+/**
+ * Close the video build preview modal
+ */
+function closeVideoBuildPreviewModal() {
+  const modal = document.getElementById('videoBuildPreviewModal');
+  if (!modal) return;
+
+  // stop video
+  const video = document.getElementById('vbPreviewVideo');
+  try { video.pause(); } catch {}
+  modal.classList.add('hidden');
+  document.body.classList.remove('overflow-hidden');
+}
+
+// Export for global access
+window.openVideoBuildPreviewModal = openVideoBuildPreviewModal;
+window.closeVideoBuildPreviewModal = closeVideoBuildPreviewModal;
 
 /**
  * Open the chat edit modal for a specific build (v1 Center Popup)
