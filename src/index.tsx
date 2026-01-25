@@ -2037,6 +2037,10 @@ app.get('/projects/:id', (c) => {
                                         <span class="text-green-400">🔔</span>
                                         <div><span class="font-medium">効果音:</span> 追加/削除、音量、タイミング（ms）</div>
                                     </div>
+                                    <div class="flex items-start gap-1.5">
+                                        <span class="text-green-400">📝</span>
+                                        <div><span class="font-medium">テロップ:</span> 表示ON/OFF、位置（上/中央/下）、サイズ（小/中/大）</div>
+                                    </div>
                                 </div>
                             </div>
                             <!-- できないこと -->
@@ -2045,7 +2049,7 @@ app.get('/projects/:id', (c) => {
                                     <i class="fas fa-times-circle"></i>できないこと（まだ）
                                 </div>
                                 <div class="text-xs text-gray-500 space-y-0.5">
-                                    <div>📝 字幕の本文を書き換える</div>
+                                    <div>📝 テロップ・字幕の本文を書き換える</div>
                                     <div>🧩 シーンの並び替え・分割統合</div>
                                     <div>🎞️ 大規模なカット編集</div>
                                 </div>
@@ -2125,7 +2129,7 @@ app.get('/projects/:id', (c) => {
                                 </div>
                             </div>
                             <!-- SFX系 -->
-                            <div>
+                            <div class="mb-2">
                                 <div class="text-xs text-gray-500 mb-1">🔔 効果音</div>
                                 <div class="flex flex-wrap gap-1.5">
                                     <button type="button"
@@ -2137,6 +2141,37 @@ app.get('/projects/:id', (c) => {
                                         class="px-2.5 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
                                         onclick="insertChatTemplate('シーン3のSFX1の音量を50%に')">
                                         音量変更
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- PR-5-3b: テロップ系 -->
+                            <div>
+                                <div class="text-xs text-gray-500 mb-1">📝 テロップ</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('テロップを全部OFF')">
+                                        全OFF
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('テロップを全部ON')">
+                                        全ON
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('テロップ位置を上に')">
+                                        位置：上
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('テロップ位置を中央に')">
+                                        位置：中央
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('テロップサイズを大に')">
+                                        サイズ：大
                                     </button>
                                 </div>
                             </div>

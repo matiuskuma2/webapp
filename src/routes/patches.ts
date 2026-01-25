@@ -1336,7 +1336,11 @@ type IntentAction =
   | SfxSetTimingAction
   | SfxRemoveAction
   | BgmSetVolumeAction
-  | BgmSetLoopAction;
+  | BgmSetLoopAction
+  // PR-5-3b: テロップ設定（Build単位の上書き）
+  | TelopSetEnabledAction
+  | TelopSetPositionAction
+  | TelopSetSizeAction;
 
 interface BalloonAdjustWindowAction {
   action: 'balloon.adjust_window';
@@ -1410,6 +1414,23 @@ interface BgmSetLoopAction {
   loop: boolean;
 }
 
+// PR-5-3b: テロップ設定アクション（Build単位の上書き）
+// 注意: これらはDBエンティティを更新せず、次回ビルドの settings_json.telops を変更する
+interface TelopSetEnabledAction {
+  action: 'telop.set_enabled';
+  enabled: boolean;  // true=全テロップON, false=全テロップOFF
+}
+
+interface TelopSetPositionAction {
+  action: 'telop.set_position';
+  position_preset: 'bottom' | 'center' | 'top';  // 下 / 中央 / 上
+}
+
+interface TelopSetSizeAction {
+  action: 'telop.set_size';
+  size_preset: 'sm' | 'md' | 'lg';  // 小 / 中 / 大
+}
+
 // 許可されるアクションのホワイトリスト
 const ALLOWED_CHAT_ACTIONS = new Set([
   'balloon.adjust_window',
@@ -1421,6 +1442,10 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'sfx.remove',
   'bgm.set_volume',
   'bgm.set_loop',
+  // PR-5-3b: テロップ設定（Build単位の上書き、scene_telopはいじらない）
+  'telop.set_enabled',
+  'telop.set_position',
+  'telop.set_size',
 ]);
 
 /**
@@ -1429,6 +1454,13 @@ const ALLOWED_CHAT_ACTIONS = new Set([
  * 人間参照（scene_idx, balloon_no, cue_no）をDB IDに解決し、
  * ssot_patch_v1 形式の ops に変換する
  */
+// PR-5-3b: テロップ設定はBuild単位の上書き（DBエンティティを更新しない）
+interface TelopSettingsOverride {
+  enabled?: boolean;
+  position_preset?: 'bottom' | 'center' | 'top';
+  size_preset?: 'sm' | 'md' | 'lg';
+}
+
 async function resolveIntentToOps(
   db: D1Database,
   projectId: number,
@@ -1439,11 +1471,15 @@ async function resolveIntentToOps(
   errors: string[];
   warnings: string[];
   resolution_log: Array<{ action: string; resolved: Record<string, unknown> }>;
+  // PR-5-3b: テロップ設定の上書き（次回ビルドのsettings_json.telopsに反映）
+  telop_settings_override?: TelopSettingsOverride;
 }> {
   const ops: PatchOp[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
   const resolutionLog: Array<{ action: string; resolved: Record<string, unknown> }> = [];
+  // PR-5-3b: テロップ設定の収集（DBは更新せず、次回ビルドに反映）
+  const telopSettingsOverride: TelopSettingsOverride = {};
 
   for (let i = 0; i < intent.actions.length; i++) {
     const action = intent.actions[i];
@@ -1776,6 +1812,41 @@ async function resolveIntentToOps(
             reason: `Chat: bgm.set_loop`,
           });
         }
+
+      // PR-5-3b: テロップ設定アクション（Build単位の上書き、DBは更新しない）
+      } else if (action.action === 'telop.set_enabled') {
+        const telopAction = action as TelopSetEnabledAction;
+        telopSettingsOverride.enabled = telopAction.enabled;
+        resolutionLog.push({
+          action: action.action,
+          resolved: { enabled: telopAction.enabled },
+        });
+
+      } else if (action.action === 'telop.set_position') {
+        const telopAction = action as TelopSetPositionAction;
+        const validPositions = ['bottom', 'center', 'top'];
+        if (!validPositions.includes(telopAction.position_preset)) {
+          errors.push(`${prefix}: Invalid position_preset: ${telopAction.position_preset}. Must be one of: ${validPositions.join(', ')}`);
+          continue;
+        }
+        telopSettingsOverride.position_preset = telopAction.position_preset;
+        resolutionLog.push({
+          action: action.action,
+          resolved: { position_preset: telopAction.position_preset },
+        });
+
+      } else if (action.action === 'telop.set_size') {
+        const telopAction = action as TelopSetSizeAction;
+        const validSizes = ['sm', 'md', 'lg'];
+        if (!validSizes.includes(telopAction.size_preset)) {
+          errors.push(`${prefix}: Invalid size_preset: ${telopAction.size_preset}. Must be one of: ${validSizes.join(', ')}`);
+          continue;
+        }
+        telopSettingsOverride.size_preset = telopAction.size_preset;
+        resolutionLog.push({
+          action: action.action,
+          resolved: { size_preset: telopAction.size_preset },
+        });
       }
 
     } catch (error) {
@@ -1783,12 +1854,16 @@ async function resolveIntentToOps(
     }
   }
 
+  // PR-5-3b: テロップ設定が空でない場合のみ含める
+  const hasTelopOverride = Object.keys(telopSettingsOverride).length > 0;
+
   return {
     ok: errors.length === 0,
     ops,
     errors,
     warnings,
     resolution_log: resolutionLog,
+    ...(hasTelopOverride && { telop_settings_override: telopSettingsOverride }),
   };
 }
 
@@ -1882,7 +1957,12 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
   const dryRunResult = await executeDryRun(c.env.DB, projectId, patchRequest);
 
   // patch_requestsに記録
+  // PR-5-3b: テロップ設定のオーバーライドも保存
   const status = dryRunResult.ok ? 'dry_run_ok' : 'dry_run_failed';
+  const dryRunResultWithTelop = {
+    ...dryRunResult,
+    telop_settings_override: resolution.telop_settings_override,
+  };
   
   const insertResult = await c.env.DB.prepare(`
     INSERT INTO patch_requests (
@@ -1895,14 +1975,14 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     body.user_message,
     JSON.stringify(body.intent),
     JSON.stringify(resolution.ops),
-    JSON.stringify(dryRunResult),
+    JSON.stringify(dryRunResultWithTelop),
     status
   ).run();
 
   const patchRequestId = insertResult.meta.last_row_id;
 
-  // UI用のサマリー生成
-  const summary = generateDiffSummary(dryRunResult, body.intent);
+  // UI用のサマリー生成（テロップ設定のサマリーも含む）
+  const summary = generateDiffSummary(dryRunResult, body.intent, resolution.telop_settings_override);
 
   return c.json({
     ok: dryRunResult.ok,
@@ -1915,6 +1995,8 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     summary,
     errors: [...resolution.errors, ...dryRunResult.errors],
     warnings: [...resolution.warnings, ...dryRunResult.warnings],
+    // PR-5-3b: テロップ設定のオーバーライド
+    telop_settings_override: resolution.telop_settings_override,
   });
 });
 
@@ -1975,6 +2057,13 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
     },
     ops: JSON.parse(existing.ops_json as string),
   };
+
+  // PR-5-3b: dry_run_result_jsonからテロップ設定のオーバーライドを取得
+  let telopSettingsOverride: TelopSettingsOverride | undefined;
+  try {
+    const dryRunResult = JSON.parse(existing.dry_run_result_json as string);
+    telopSettingsOverride = dryRunResult.telop_settings_override;
+  } catch { /* ignore */ }
 
   // Apply実行
   const result = await executeApply(c.env.DB, body.patch_request_id, patchRequest);
@@ -2072,6 +2161,18 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
           buildSettings = JSON.parse(sourceBuild.settings_json);
         } catch { /* ignore */ }
       }
+    }
+
+    // PR-5-3b: テロップ設定のオーバーライドを適用
+    if (telopSettingsOverride) {
+      const existingTelops = (buildSettings.telops as Record<string, unknown>) || { enabled: true };
+      buildSettings.telops = {
+        ...existingTelops,
+        ...(telopSettingsOverride.enabled !== undefined && { enabled: telopSettingsOverride.enabled }),
+        ...(telopSettingsOverride.position_preset && { position_preset: telopSettingsOverride.position_preset }),
+        ...(telopSettingsOverride.size_preset && { size_preset: telopSettingsOverride.size_preset }),
+      };
+      console.log(`[Chat Edit Apply] Telop settings override applied:`, buildSettings.telops);
     }
 
     const activeBgm = await c.env.DB.prepare(`
@@ -2201,7 +2302,8 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
  */
 function generateDiffSummary(
   dryRunResult: DryRunResult, 
-  intent: RilarcIntent
+  intent: RilarcIntent,
+  telopSettingsOverride?: TelopSettingsOverride
 ): {
   description: string;
   changes: Array<{
@@ -2288,8 +2390,39 @@ function generateDiffSummary(
           detail: `ループ: ${la.loop ? 'ON' : 'OFF'}`,
         });
       }
+
+    // PR-5-3b: テロップ設定アクション
+    } else if (action.action.startsWith('telop.')) {
+      if (action.action === 'telop.set_enabled') {
+        const ta = action as TelopSetEnabledAction;
+        changes.push({
+          type: 'telop',
+          target: 'テロップ',
+          detail: ta.enabled ? '表示: ON' : '表示: OFF',
+        });
+      } else if (action.action === 'telop.set_position') {
+        const ta = action as TelopSetPositionAction;
+        const posLabel = { bottom: '下', center: '中央', top: '上' }[ta.position_preset] || ta.position_preset;
+        changes.push({
+          type: 'telop',
+          target: 'テロップ',
+          detail: `位置: ${posLabel}`,
+        });
+      } else if (action.action === 'telop.set_size') {
+        const ta = action as TelopSetSizeAction;
+        const sizeLabel = { sm: '小', md: '中', lg: '大' }[ta.size_preset] || ta.size_preset;
+        changes.push({
+          type: 'telop',
+          target: 'テロップ',
+          detail: `サイズ: ${sizeLabel}`,
+        });
+      }
     }
   }
+
+  // PR-5-3b: テロップ設定オーバーライドから追加のサマリー
+  // （intentのactionsにない場合でも、オーバーライドとして設定されている場合を考慮）
+  // 実際にはintentのactionsから生成されるため、ここでは重複チェックのみ
 
   const description = changes.length > 0
     ? `${changes.length}件の変更を適用します`

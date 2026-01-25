@@ -7634,9 +7634,12 @@ async function startVideoBuild() {
     motion: {
       preset: motionPreset,
     },
-    // PR-5-3a: テロップ表示設定
+    // PR-5-3a/b: テロップ表示設定
     telops: {
       enabled: telopsEnabled,
+      // PR-5-3b: 位置・サイズはデフォルト値（Safe Chatで変更可能）
+      position_preset: 'bottom',  // bottom | center | top
+      size_preset: 'md',  // sm | md | lg
     },
   };
   
@@ -8860,6 +8863,35 @@ function parseMessageToIntent(message) {
   // Pattern: Change all balloons to a policy (e.g., "全部出しっぱなし", "すべて喋ってる時だけ")
   // Note: This will require frontend to fetch all balloon_nos and create multiple actions
   // For now, we just warn that this is not supported in single-action mode
+  
+  // ========================================
+  // PR-5-3b: テロップコマンドのパース
+  // ========================================
+  
+  // Pattern: テロップON/OFF (e.g., "テロップを全部ON", "テロップを全部OFF", "テロップをOFFに")
+  if (/テロップ.*?(?:全部)?(?:off|オフ|非表示|消す|消して)/i.test(message)) {
+    actions.push({ action: 'telop.set_enabled', enabled: false });
+  } else if (/テロップ.*?(?:全部)?(?:on|オン|表示|出す|出して)/i.test(message)) {
+    actions.push({ action: 'telop.set_enabled', enabled: true });
+  }
+  
+  // Pattern: テロップ位置 (e.g., "テロップ位置を上に", "テロップを下に", "テロップ中央")
+  if (/テロップ.*?(?:位置)?.*?(?:上|top|トップ)/i.test(message)) {
+    actions.push({ action: 'telop.set_position', position_preset: 'top' });
+  } else if (/テロップ.*?(?:位置)?.*?(?:中央|center|センター|真ん中)/i.test(message)) {
+    actions.push({ action: 'telop.set_position', position_preset: 'center' });
+  } else if (/テロップ.*?(?:位置)?.*?(?:下|bottom|ボトム)/i.test(message)) {
+    actions.push({ action: 'telop.set_position', position_preset: 'bottom' });
+  }
+  
+  // Pattern: テロップサイズ (e.g., "テロップサイズを大に", "テロップを小さく")
+  if (/テロップ.*?(?:サイズ)?.*?(?:大|large|lg|大きく)/i.test(message)) {
+    actions.push({ action: 'telop.set_size', size_preset: 'lg' });
+  } else if (/テロップ.*?(?:サイズ)?.*?(?:中|medium|md)/i.test(message)) {
+    actions.push({ action: 'telop.set_size', size_preset: 'md' });
+  } else if (/テロップ.*?(?:サイズ)?.*?(?:小|small|sm|小さく)/i.test(message)) {
+    actions.push({ action: 'telop.set_size', size_preset: 'sm' });
+  }
   
   if (actions.length === 0 && errors.length === 0) {
     return {
