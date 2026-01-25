@@ -7704,6 +7704,17 @@ async function startVideoBuild() {
       errorMsg = '今月の動画生成上限（30本）に達しました。\n翌月になると自動的にリセットされます。';
     } else if (errorCode === 'NO_SCENES' || errorCode === 'NO_IMAGES') {
       errorMsg = '動画生成に必要な素材が不足しています。\nすべてのシーンに画像を設定してください。';
+    } else if (errorCode === 'PROJECT_JSON_INVALID') {
+      // PR-A2: project.json 検証エラーの詳細表示
+      const details = error.response?.data?.error?.details;
+      const criticalErrors = details?.critical_errors || [];
+      if (criticalErrors.length > 0) {
+        // 各エラーの理由を1行にまとめて表示
+        const errorDetails = criticalErrors.map(e => `• ${e.reason}`).join('\n');
+        errorMsg = `動画生成に必要な素材が不足しています：\n\n${errorDetails}`;
+      } else {
+        errorMsg = '動画データに問題があります。\n素材を確認してください。';
+      }
     } else if (errorCode === 'AWS_ORCHESTRATOR_ERROR') {
       const awsError = error.response?.data?.error?.details?.aws_error || '';
       if (awsError.includes('Rate') || awsError.includes('Concurrency')) {

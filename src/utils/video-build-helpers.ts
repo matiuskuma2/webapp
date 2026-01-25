@@ -686,22 +686,50 @@ export function validateProjectJson(projectJson: RemotionProjectJson_R1): Projec
   
   for (const scene of projectJson.scenes) {
     // ========================================
-    // 必須チェック 1: 画像ソース
+    // 必須チェック 1: ビジュアルソース（画像 OR 動画のどちらか必須）
+    // PR-A2: video-only シーン対応（I2V/動画素材）
     // ========================================
     const imageUrl = scene.assets?.image?.url;
-    if (!imageUrl || imageUrl.trim() === '') {
-      critical_errors.push({
-        scene_idx: scene.idx,
-        field: 'assets.image.url',
-        reason: `画像URLが未設定です。シーン${scene.idx}の画像を生成してください。`,
-      });
-    } else if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
-      // 相対URLは Remotion Lambda で解決できない
-      critical_errors.push({
-        scene_idx: scene.idx,
-        field: 'assets.image.url',
-        reason: `画像URLが相対パスです（${imageUrl.substring(0, 50)}...）。絶対URLが必要です。`,
-      });
+    const videoUrl = (scene.assets as any)?.video_clip?.url;
+    
+    const hasValidImage = imageUrl && imageUrl.trim() !== '' && 
+      (imageUrl.startsWith('http://') || imageUrl.startsWith('https://'));
+    const hasValidVideo = videoUrl && videoUrl.trim() !== '' &&
+      (videoUrl.startsWith('http://') || videoUrl.startsWith('https://'));
+    
+    if (!hasValidImage && !hasValidVideo) {
+      // どちらもない → 必須エラー
+      if (!imageUrl && !videoUrl) {
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: 'assets.image.url / assets.video_clip.url',
+          reason: `シーン${scene.idx}に画像も動画も設定されていません。どちらかを生成してください。`,
+        });
+      } else if (imageUrl && imageUrl.trim() === '') {
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: 'assets.image.url',
+          reason: `画像URLが空です。シーン${scene.idx}の画像を生成してください。`,
+        });
+      } else if (imageUrl && !imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: 'assets.image.url',
+          reason: `画像URLが相対パスです（${imageUrl.substring(0, 50)}...）。絶対URLが必要です。`,
+        });
+      } else if (videoUrl && videoUrl.trim() === '') {
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: 'assets.video_clip.url',
+          reason: `動画URLが空です。シーン${scene.idx}の動画を生成してください。`,
+        });
+      } else if (videoUrl && !videoUrl.startsWith('http://') && !videoUrl.startsWith('https://')) {
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: 'assets.video_clip.url',
+          reason: `動画URLが相対パスです。絶対URLが必要です。`,
+        });
+      }
     }
     
     // ========================================

@@ -21,6 +21,14 @@ import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
 import { logVideoBuildRender } from '../utils/usage-logger';
+// PR-A1/A2: video-build-helpers を静的importに統一（動的importはコスト・追跡性の問題）
+import { 
+  validateProjectAssets, 
+  validateUtterancesPreflight, 
+  buildProjectJson, 
+  hashProjectJson,
+  validateProjectJson,
+} from '../utils/video-build-helpers';
 
 /**
  * Default SITE_URL for webapp
@@ -1255,7 +1263,7 @@ videoGeneration.get('/video-builds/usage', async (c) => {
  * - 各 utterance に音声が生成済みか
  */
 videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => {
-  const { validateProjectAssets, validateUtterancesPreflight } = await import('../utils/video-build-helpers');
+  // PR-A2: video-build-helpers は静的importに移行済み
   const { createVideoBuildClientConfig } = await import('../utils/aws-video-build-client');
   
   try {
@@ -1564,8 +1572,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
  *   - scene_id: Filter to specific scene (optional)
  */
 videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) => {
-  const { buildProjectJson } = await import('../utils/video-build-helpers');
-  
+  // PR-A2: buildProjectJson は静的importに移行済み
   try {
     const projectId = parseInt(c.req.param('projectId'), 10);
     const sceneIdFilter = c.req.query('scene_id') ? parseInt(c.req.query('scene_id')!, 10) : null;
@@ -1818,8 +1825,7 @@ videoGeneration.get('/projects/:projectId/video-builds', async (c) => {
 videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
   const { getCookie } = await import('hono/cookie');
   
-  // Helper imports
-  const { validateProjectAssets, buildProjectJson, hashProjectJson } = await import('../utils/video-build-helpers');
+  // PR-A2: video-build-helpers は静的importに移行済み
   const { startVideoBuild, createVideoBuildClientConfig, DEFAULT_OUTPUT_BUCKET, getDefaultOutputKey } = await import('../utils/aws-video-build-client');
   
   try {
@@ -2323,7 +2329,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     
     // 6.5. PR-A1: project.json の最終検証（src完全性チェック）
     // SSOT: この検証がレンダーに飛ばして良いかの最終ゲート
-    const { validateProjectJson } = await import('../utils/video-build-helpers');
+    // PR-A2: validateProjectJson は静的importに移行済み
     const projectJsonValidation = validateProjectJson(projectJson);
     
     if (!projectJsonValidation.is_valid) {
