@@ -1,6 +1,9 @@
 // API Base URL
 const API_BASE = '/api';
 
+// Debug flags (set window.DEBUG_VIDEO_BUILD = true in console to enable verbose logging)
+window.DEBUG_VIDEO_BUILD = window.DEBUG_VIDEO_BUILD || false;
+
 // Global state (SSOT: currentProjectはwindow.currentProjectに一本化)
 // これにより reset-to-input 等で片方だけ更新される事故を防止
 window.currentProject = window.currentProject || null;
@@ -7786,7 +7789,7 @@ async function pollActiveVideoBuilds() {
     VIDEO_BUILD_ACTIVE_STATUSES.includes(b.status)
   );
   
-  console.log(`[VB Poll] tick: ${activeBuilds.length} active builds (cache has ${builds.length} total)`);
+  if (window.DEBUG_VIDEO_BUILD) console.log(`[VB Poll] tick: ${activeBuilds.length} active builds (cache has ${builds.length} total)`);
   
   if (activeBuilds.length === 0) {
     stopVideoBuildPolling();
@@ -7802,11 +7805,11 @@ async function pollActiveVideoBuilds() {
         continue;
       }
       
-      console.log(`[VB Poll] refreshing buildId=${build.id}, current status=${build.status}`);
+      if (window.DEBUG_VIDEO_BUILD) console.log(`[VB Poll] refreshing buildId=${build.id}, current status=${build.status}`);
       const response = await axios.post(`${API_BASE}/video-builds/${build.id}/refresh`);
       // BUG FIX: Backend returns "build", not "video_build"
       const updatedBuild = response.data.build || response.data.video_build;
-      console.log(`[VB Poll] refreshed buildId=${build.id}, new status=${updatedBuild?.status}, progress=${updatedBuild?.progress_percent}%`);
+      if (window.DEBUG_VIDEO_BUILD) console.log(`[VB Poll] refreshed buildId=${build.id}, new status=${updatedBuild?.status}, progress=${updatedBuild?.progress_percent}%`);
       
       if (updatedBuild) {
         // Update cache

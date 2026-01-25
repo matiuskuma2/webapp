@@ -639,6 +639,127 @@ export function validateProjectAssets(scenes: SceneData[]): AssetValidationResul
 }
 
 // ====================================================================
+// validateProjectJson - project.json 生成後の最終検証（src完全性）
+// ====================================================================
+
+/**
+ * ProjectJsonValidationResult - project.json検証結果
+ */
+export interface ProjectJsonValidationResult {
+  is_valid: boolean;
+  critical_errors: Array<{
+    scene_idx: number;
+    field: string;
+    reason: string;
+  }>;
+  warnings: Array<{
+    scene_idx: number;
+    field: string;
+    message: string;
+  }>;
+}
+
+/**
+ * validateProjectJson - buildProjectJson後の最終検証
+ * 
+ * SSOT原則: この関数が「レンダーに飛ばして良いか」の最終ゲート
+ * 
+ * ================================
+ * 必須エラー（critical_errors）→ レンダー不可
+ * ================================
+ * - 画像src が空（image/comic モードで assets.image.url が undefined/空文字）
+ * - 動画src が空（video モードで assets.video.url が undefined/空文字）
+ * - voices[].audio_url が空文字（存在するなら非空必須）
+ * 
+ * ================================
+ * 警告（warnings）→ レンダー可だが注意
+ * ================================
+ * - voices が空（音声なし、無音になる）
+ * - balloons が設定されているが baked画像がない
+ * 
+ * @param projectJson buildProjectJson() の返り値
+ * @returns 検証結果
+ */
+export function validateProjectJson(projectJson: RemotionProjectJson_R1): ProjectJsonValidationResult {
+  const critical_errors: ProjectJsonValidationResult['critical_errors'] = [];
+  const warnings: ProjectJsonValidationResult['warnings'] = [];
+  
+  for (const scene of projectJson.scenes) {
+    // ========================================
+    // 必須チェック 1: 画像ソース
+    // ========================================
+    const imageUrl = scene.assets?.image?.url;
+    if (!imageUrl || imageUrl.trim() === '') {
+      critical_errors.push({
+        scene_idx: scene.idx,
+        field: 'assets.image.url',
+        reason: `画像URLが未設定です。シーン${scene.idx}の画像を生成してください。`,
+      });
+    } else if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
+      // 相対URLは Remotion Lambda で解決できない
+      critical_errors.push({
+        scene_idx: scene.idx,
+        field: 'assets.image.url',
+        reason: `画像URLが相対パスです（${imageUrl.substring(0, 50)}...）。絶対URLが必要です。`,
+      });
+    }
+    
+    // ========================================
+    // 必須チェック 2: 音声ソース（voicesがあるなら全て非空必須）
+    // ========================================
+    const voices = scene.assets?.voices || [];
+    for (let i = 0; i < voices.length; i++) {
+      const voice = voices[i];
+      if (voice.audio_url === '' || voice.audio_url === null || voice.audio_url === undefined) {
+        // 空文字の audio_url は Remotion で "No src passed" を引き起こす
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: `assets.voices[${i}].audio_url`,
+          reason: `音声URL が空です（voice_id: ${voice.id}）。音声を生成するか、このvoiceを削除してください。`,
+        });
+      } else if (!voice.audio_url.startsWith('http://') && !voice.audio_url.startsWith('https://')) {
+        critical_errors.push({
+          scene_idx: scene.idx,
+          field: `assets.voices[${i}].audio_url`,
+          reason: `音声URLが相対パスです。絶対URLが必要です。`,
+        });
+      }
+    }
+    
+    // ========================================
+    // 警告チェック 1: 音声なし（無音シーン）
+    // ========================================
+    if (voices.length === 0 && !scene.assets?.audio?.url) {
+      warnings.push({
+        scene_idx: scene.idx,
+        field: 'assets.voices',
+        message: '音声がありません。このシーンは無音で再生されます。',
+      });
+    }
+    
+    // ========================================
+    // 警告チェック 2: balloons の baked 画像
+    // ========================================
+    if (scene.text_render_mode === 'baked' && scene.balloons && scene.balloons.length > 0) {
+      const balloonsWithoutImage = scene.balloons.filter((b: any) => !b.bubble_image_url);
+      if (balloonsWithoutImage.length > 0) {
+        warnings.push({
+          scene_idx: scene.idx,
+          field: 'balloons[].bubble_image_url',
+          message: `bakedモードで ${balloonsWithoutImage.length}件のバルーン画像が未設定です。これらは表示されません。`,
+        });
+      }
+    }
+  }
+  
+  return {
+    is_valid: critical_errors.length === 0,
+    critical_errors,
+    warnings,
+  };
+}
+
+// ====================================================================
 // Phase R1.6: Utterances Preflight 検証
 // ====================================================================
 

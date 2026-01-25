@@ -2321,6 +2321,30 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       }
     );
     
+    // 6.5. PR-A1: project.json の最終検証（src完全性チェック）
+    // SSOT: この検証がレンダーに飛ばして良いかの最終ゲート
+    const { validateProjectJson } = await import('../utils/video-build-helpers');
+    const projectJsonValidation = validateProjectJson(projectJson);
+    
+    if (!projectJsonValidation.is_valid) {
+      // 必須エラーがあればレンダーに飛ばさない
+      return c.json({
+        error: {
+          code: 'PROJECT_JSON_INVALID',
+          message: `project.json に必須項目の不備があります（${projectJsonValidation.critical_errors.length}件のエラー）`,
+          details: {
+            critical_errors: projectJsonValidation.critical_errors,
+            warnings: projectJsonValidation.warnings,
+          }
+        }
+      }, 400);
+    }
+    
+    // 警告があればログに出力（レンダーは続行）
+    if (projectJsonValidation.warnings.length > 0) {
+      console.log(`[VideoBuild] project.json warnings (project_id=${projectId}):`, projectJsonValidation.warnings);
+    }
+    
     const projectJsonHash = await hashProjectJson(projectJson);
     const projectJsonString = JSON.stringify(projectJson);
     
