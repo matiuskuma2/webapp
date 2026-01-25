@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-25（PR-5-3b Safe Chat テロップコマンド）
+- **最終更新**: 2026-01-25（Phase2 UI統合完了 - 二重モーダル根絶）
 
 ---
 
@@ -693,6 +693,42 @@ scene_utterances
 
 ---
 
+## 2026-01-25 Phase2 UI統合
+
+### 概要
+Builder UI を「トップは結果表示のみ、編集はモーダルで完結」の原則に沿ってリファクタリング。二重モーダル問題を根絶。
+
+### Phase1: Builder Scene Card 再構成
+- **セリフ概要**: 全文表示 → 120文字省略（参照専用）
+- **発話サマリー**: 下部 → 上部に移動、編集ボタン削除
+- **映像タイプ**: 画像/漫画を明示表示
+- **カード内編集UI**: 全削除（モーダルに集約）
+- **詳細情報**: スタイル/プロンプト/要点を折りたたみ表示
+
+### Phase2-PR2a: 漫画発話分割表示
+- **Before**: 発話を結合して1行表示
+- **After**: `発話1: 〇〇 / 発話2: △△` と行別表示（最大3行 + 「他n件」）
+
+### Phase2-PR2b: 音声キャラクター(1人) 削除
+- キャラ割当モーダルから「音声キャラクター（1人）」セクションを削除
+- 音声設定はSceneEditModal の「音声タブ」に統一
+
+### Phase2-PR2c: 二重モーダル根絶
+- **Before**: 発話編集で別モーダルが `document.body` に追加される問題
+  - キャンセルボタンが効かない
+  - 連打で複数モーダル生成
+- **After**: インライン編集に変更
+  - 発話カード内でフォームに変化
+  - 同じDOM内で完結
+  - 状態ガードで連打防止
+
+### 変更ファイル
+- `public/static/project-editor.js`: renderSceneTextContent, renderDialogueSummary等
+- `public/static/world-character-modal.js`: openAssign から音声キャラ削除
+- `public/static/utterances-tab.js`: インライン編集実装
+
+---
+
 ## 2026-01-23 R3-A 追加機能
 
 ### 通しBGM（project_audio_tracks）
@@ -1283,15 +1319,18 @@ await postWebhook({
 
 ## 復旧手順（サンドボックス再開用）
 
+### 方法1: GitHubからクローン（推奨）
+
 ```bash
 # GitHub からクローン
+cd /home/user
 git clone https://github.com/matiuskuma2/webapp.git
 cd webapp
 
-# 依存関係インストール
+# 依存関係インストール（5分程度かかる場合あり）
 npm install
 
-# ローカルDB初期化
+# ローカルDB初期化（38個のマイグレーション適用）
 npm run db:migrate:local
 
 # ビルド
@@ -1304,21 +1343,57 @@ pm2 start ecosystem.config.cjs
 curl http://localhost:3000/api/settings/motion-presets
 ```
 
-**バックアップからの復元**:
-```bash
-# バックアップダウンロード
-curl -o backup.tar.gz "https://www.genspark.ai/api/files/s/XjkHCe8T"
+### 方法2: バックアップから復元
 
-# 展開
+```bash
+# バックアップダウンロード（最新のtar.gzを使用）
+curl -o backup.tar.gz "https://www.genspark.ai/api/files/s/LATEST_BACKUP_ID"
+
+# 展開（/home/userに展開）
 tar -xzf backup.tar.gz -C /home/user/
 
 # 依存関係インストール
 cd /home/user/webapp
 npm install
 
+# ローカルDB初期化
+npm run db:migrate:local
+
 # ビルド＆起動
 npm run build
 pm2 start ecosystem.config.cjs
+```
+
+### 本番デプロイ手順
+
+```bash
+# 1. Cloudflare API設定確認
+npx wrangler whoami
+
+# 2. 本番DBマイグレーション（初回のみ）
+npm run db:migrate:prod
+
+# 3. デプロイ
+npm run build
+npx wrangler pages deploy dist --project-name webapp
+```
+
+### 環境変数（.dev.vars）
+
+```bash
+# 必須
+OPENAI_API_KEY=sk-...
+GEMINI_API_KEY=...
+
+# オプション（動画生成用）
+AWS_REGION=ap-northeast-1
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+VIDEO_BUILD_ORCHESTRATOR_URL=...
+
+# 管理用
+CRON_SECRET=...
+WEBHOOK_SECRET=...
 ```
 
 ---
