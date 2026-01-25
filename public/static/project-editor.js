@@ -7786,6 +7786,8 @@ async function pollActiveVideoBuilds() {
     VIDEO_BUILD_ACTIVE_STATUSES.includes(b.status)
   );
   
+  console.log(`[VB Poll] tick: ${activeBuilds.length} active builds (cache has ${builds.length} total)`);
+  
   if (activeBuilds.length === 0) {
     stopVideoBuildPolling();
     hideVideoBuildProgress();
@@ -7800,8 +7802,11 @@ async function pollActiveVideoBuilds() {
         continue;
       }
       
+      console.log(`[VB Poll] refreshing buildId=${build.id}, current status=${build.status}`);
       const response = await axios.post(`${API_BASE}/video-builds/${build.id}/refresh`);
-      const updatedBuild = response.data.video_build;
+      // BUG FIX: Backend returns "build", not "video_build"
+      const updatedBuild = response.data.build || response.data.video_build;
+      console.log(`[VB Poll] refreshed buildId=${build.id}, new status=${updatedBuild?.status}, progress=${updatedBuild?.progress_percent}%`);
       
       if (updatedBuild) {
         // Update cache
