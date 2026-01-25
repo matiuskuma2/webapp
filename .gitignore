@@ -30,3 +30,12 @@ core
 # IDE
 .idea/
 .vscode/
+
+# Temporary/debug files (R2 downloads, local debug data)
+temp_*.json
+video-builds/
+*.backup.json
+
+# Local database files
+*.sqlite
+*.db
