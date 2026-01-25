@@ -3,9 +3,34 @@ import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
 import type { Bindings } from './types/bindings'
 
-// Asset version for cache busting - updated on each build/deploy
-// Format: YYYYMMDD-HHMM or git commit hash
-const ASSET_VERSION = '20260125-1' // PR-A2: Auto-update on deploy
+// Asset version for cache busting
+// Priority: 1) env.ASSET_VERSION (set by CI/CD), 2) __BUILD_VERSION__ (set at build time), 3) fallback
+// This ensures fresh assets are loaded after each deployment
+
+// __BUILD_VERSION__ is replaced by Vite's define at build time with git hash or timestamp
+declare const __BUILD_VERSION__: string;
+
+/**
+ * Get asset version for cache busting
+ * @param env - Cloudflare environment bindings
+ * @returns version string for ?v= query parameter
+ */
+function getAssetVersion(env?: Bindings): string {
+  // 1. Environment variable (highest priority - set by CI/CD)
+  if (env?.ASSET_VERSION) {
+    return env.ASSET_VERSION;
+  }
+  // 2. Build version (replaced during build with git hash)
+  try {
+    if (typeof __BUILD_VERSION__ !== 'undefined' && __BUILD_VERSION__) {
+      return __BUILD_VERSION__;
+    }
+  } catch {
+    // __BUILD_VERSION__ not defined (development mode)
+  }
+  // 3. Fallback (development)
+  return 'dev';
+}
 import projects from './routes/projects'
 import transcriptions from './routes/transcriptions'
 import parsing from './routes/parsing'
@@ -436,6 +461,7 @@ app.get('/', (c) => {
 
 app.get('/projects/:id', (c) => {
   const projectId = c.req.param('id')
+  const ASSET_VERSION = getAssetVersion(c.env)
   
   return c.html(`
 
