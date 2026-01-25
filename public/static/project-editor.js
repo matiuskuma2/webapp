@@ -8962,18 +8962,18 @@ async function refreshBuilderWizard() {
     const errorMsg = typeof firstError === 'string' ? firstError 
                    : (firstError?.message || firstError?.reason || '素材が足りません');
     stepCards.push(renderWizardCard(
-      '1) 素材',
-      errors.length === 0 ? '✅ OK' : '🔴 NG',
-      errors.length === 0 ? '画像/漫画/動画が揃っています' : errorMsg,
+      '1) 素材（必須）',
+      errors.length === 0 ? '✅ 準備OK' : '🔴 不足',
+      errors.length === 0 ? '画像/漫画/動画が揃っています（不足があると動画生成できません）' : errorMsg,
       errors.length === 0 ? 'green' : 'red'
     ));
 
     // Step 2: 音（BGM/SFX/Voice）
     const audioLayers = [hasBgm && 'BGM', hasSfx && 'SFX', hasVoice && 'Voice'].filter(Boolean);
     stepCards.push(renderWizardCard(
-      '2) 音',
-      audioLayers.length ? '✅ OK' : '🟡 任意',
-      audioLayers.length ? `音あり: ${audioLayers.join(' + ')}` : '音なしでも生成可（無音）',
+      '2) 音（任意）',
+      audioLayers.length ? '✅ 音あり' : '🟡 無音',
+      audioLayers.length ? `音あり: ${audioLayers.join(' + ')}` : '音なしでも生成できます（無音動画になります）',
       audioLayers.length ? 'green' : 'amber'
     ));
 
@@ -8981,19 +8981,19 @@ async function refreshBuilderWizard() {
     const balloonTotal = balloonSummary.total || 0;
     const balloonDesc = balloonTotal > 0
       ? `💬 バブル: 出しっぱなし ${balloonSummary.always_on || 0} / 喋る時 ${balloonSummary.voice_window || 0} / 手動 ${balloonSummary.manual_window || 0}`
-      : 'バブル未設定（チャットで追加可能）';
+      : 'バブル未設定（動画生成は可能）';
     stepCards.push(renderWizardCard(
-      '3) 表現',
-      balloonTotal > 0 ? `💬 ${balloonTotal}件` : '🔧 調整可',
-      balloonDesc,
+      '3) バブル/表現（任意）',
+      balloonTotal > 0 ? `💬 設定あり (${balloonTotal})` : '🟡 未設定',
+      `${balloonDesc}（生成後に「修正（チャット）」で調整できます）`,
       'indigo'
     ));
 
     // Step 4: 生成
     stepCards.push(renderWizardCard(
-      '4) 動画ビルド',
-      canGenerate ? '🚀 実行可' : '⏸ 待機',
-      canGenerate ? 'Video Build タブで生成' : 'まず素材エラーを解消',
+      '4) 動画生成',
+      canGenerate ? '🚀 可能' : '⛔ 不可',
+      canGenerate ? 'Video Buildタブで「動画を生成」を実行できます' : '素材（必須）が不足しています',
       canGenerate ? 'purple' : 'gray'
     ));
 
@@ -9002,25 +9002,24 @@ async function refreshBuilderWizard() {
     // Tips with output_preset info
     let tipsHtml = '';
     if (errors.length > 0) {
-      tipsHtml = '<span class="text-red-600"><i class="fas fa-exclamation-circle mr-1"></i><b>必須:</b> 素材が不足しています。赤い警告のシーンを修正してください。</span>';
+      tipsHtml = '<span class="text-red-600"><i class="fas fa-exclamation-circle mr-1"></i><b>必須:</b> 素材が不足しています。該当シーンの画像/漫画/動画を用意してください（ここが満たされないと動画生成できません）。</span>';
     } else if (!audioLayers.length) {
-      tipsHtml = '<span class="text-amber-600"><i class="fas fa-lightbulb mr-1"></i><b>推奨:</b> BGMを設定すると、セリフなしシーンでも「音あり動画」になります。</span>';
+      tipsHtml = '<span class="text-amber-600"><i class="fas fa-lightbulb mr-1"></i><b>任意:</b> 音（BGM/SFX/Voice）が未設定なので無音動画になります。必要ならBGM/SFX/音声を追加してください。</span>';
     } else if (warnings.length > 0) {
       const firstWarn = warnings[0];
       const warnMsg = typeof firstWarn === 'string' ? firstWarn 
                     : (firstWarn?.message || firstWarn?.reason || '注意事項があります');
       tipsHtml = `<span class="text-amber-600"><i class="fas fa-info-circle mr-1"></i>${warnMsg}</span>`;
     } else {
-      tipsHtml = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>生成準備OK。生成後は「チャットで修正」でタイミング調整できます。</span>';
+      tipsHtml = '<span class="text-green-600"><i class="fas fa-check-circle mr-1"></i>素材が揃っています。Video Buildタブで動画生成できます（生成後は「修正（チャット）」で調整）。</span>';
     }
     
     // Output preset info line
     if (outputPreset.id) {
       const presetLabel = outputPreset.label || outputPreset.id;
       const aspectRatio = outputPreset.aspect_ratio || '';
-      const policyDefault = outputPreset.balloon_policy_default === 'always_on' ? '出しっぱなし' : '喋る時だけ';
-      tipsHtml += `<div class="mt-1 text-xs text-indigo-600">
-        <i class="fas fa-tv mr-1"></i>配信先: <b>${escapeHtml(presetLabel)}</b> (${aspectRatio}) / バブル既定: ${policyDefault}
+      tipsHtml += `<div class="mt-1 text-xs text-gray-500">
+        <i class="fas fa-info-circle mr-1"></i>参考: 出力プリセット（${escapeHtml(presetLabel)} / ${aspectRatio}）は Video Build で最終決定します
       </div>`;
     }
     

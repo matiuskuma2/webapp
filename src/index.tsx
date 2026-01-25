@@ -994,14 +994,11 @@ app.get('/projects/:id', (c) => {
                         <div class="flex items-center gap-2">
                             <i class="fas fa-route text-indigo-600 text-lg"></i>
                             <div>
-                                <div class="font-bold text-gray-800">動画生成の流れ（次にやること）</div>
-                                <div class="text-xs text-gray-500">preflightに基づいて自動表示</div>
+                                <div class="font-bold text-gray-800">動画生成の準備状況</div>
+                                <div class="text-xs text-gray-500">素材・音声・バブルの状態を確認</div>
                             </div>
                         </div>
                         <div class="flex items-center gap-2">
-                            <button onclick="openPreBuildChat()" class="px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg text-xs hover:bg-indigo-100 border border-indigo-200 transition-colors">
-                                <i class="fas fa-comments mr-1"></i>生成前に整える（チャット）
-                            </button>
                             <button onclick="refreshBuilderWizard()" class="px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-xs hover:bg-indigo-700 transition-colors">
                                 <i class="fas fa-sync-alt mr-1"></i>更新
                             </button>
