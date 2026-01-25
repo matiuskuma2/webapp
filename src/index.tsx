@@ -2,6 +2,10 @@ import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { serveStatic } from 'hono/cloudflare-workers'
 import type { Bindings } from './types/bindings'
+
+// Asset version for cache busting - updated on each build/deploy
+// Format: YYYYMMDD-HHMM or git commit hash
+const ASSET_VERSION = '20260125-1' // PR-A2: Auto-update on deploy
 import projects from './routes/projects'
 import transcriptions from './routes/transcriptions'
 import parsing from './routes/parsing'
@@ -2611,20 +2615,20 @@ app.get('/projects/:id', (c) => {
         // Keep legacy access (PROJECT_ID) for existing scripts
         const PROJECT_ID = window.PROJECT_ID;
     </script>
-    <script src="/static/audio-client.js"></script>
-    <script src="/static/audio-state.js"></script>
-    <script src="/static/audio-ui.js"></script>
-    <script src="/static/world-character-client.js"></script>
-    <script src="/static/world-character-modal.js?v=20260120-2"></script>
-    <script src="/static/world-character-ui.js"></script>
-    <script src="/static/character-library.js"></script>
-    <script src="/static/scene-edit-modal.js?v=20260121-1"></script>
-    <script src="/static/utterances-tab.js?v=20260121-1"></script>
-    <script src="/static/character-trait-modal.js?v=20260120-2"></script>
+    <script src="/static/audio-client.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/audio-state.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/audio-ui.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/world-character-client.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/world-character-modal.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/world-character-ui.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/character-library.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/scene-edit-modal.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/utterances-tab.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/character-trait-modal.js?v=${ASSET_VERSION}"></script>
     <!-- comic-editor v1 は凍結（Phase1.6 SSOT再構築中） -->
     <!-- <script src="/static/comic-editor.js"></script> -->
-    <script src="/static/comic-editor-v2.js"></script>
-    <script src="/static/project-editor.js?v=20260120-5"></script>
+    <script src="/static/comic-editor-v2.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/project-editor.js?v=${ASSET_VERSION}"></script>
 </body>
 </html>
   `)
