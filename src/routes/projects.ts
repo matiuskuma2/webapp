@@ -668,12 +668,19 @@ projects.get('/:id/scenes', async (c) => {
             // R3-B: SFX（効果音）数
             sfx_count: sfxCount,
             // R2-C: motion preset (will be fetched separately for efficiency, return placeholder)
-            // Note: scene_motion テーブルのカラム名は `preset` (not `motion_preset_id`)
+            // Note: scene_motion テーブルのカラム名は環境によって異なる可能性あり
+            // Local: `preset`, Production: may vary - use try-catch for safety
             motion_preset_id: await (async () => {
-              const motionRecord = await c.env.DB.prepare(`
-                SELECT preset FROM scene_motion WHERE scene_id = ?
-              `).bind(scene.id).first<{ preset: string }>();
-              if (motionRecord) return motionRecord.preset;
+              try {
+                // Try with 'preset' column first (migration 0026)
+                const motionRecord = await c.env.DB.prepare(`
+                  SELECT preset FROM scene_motion WHERE scene_id = ?
+                `).bind(scene.id).first<{ preset: string }>();
+                if (motionRecord) return motionRecord.preset;
+              } catch (e) {
+                // Fallback: column might not exist or have different name
+                console.warn(`[motion_preset] Failed to fetch for scene ${scene.id}:`, e);
+              }
               // Default based on display_asset_type
               return (scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft';
             })()
