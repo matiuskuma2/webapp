@@ -7357,28 +7357,90 @@ function hideVideoBuildProgress() {
 }
 
 /**
+ * Update BGM volume label (PR-2)
+ */
+function updateBgmVolumeLabel() {
+  const slider = document.getElementById('vbBgmVolume');
+  const label = document.getElementById('vbBgmVolumeLabel');
+  if (slider && label) {
+    label.textContent = slider.value + '%';
+  }
+}
+
+/**
  * Start video build
+ * PR-2: 新UI (videoBuildConfigCard) 対応
  */
 async function startVideoBuild() {
   const btn = document.getElementById('btnStartVideoBuild');
   if (!btn || btn.disabled) return;
   
-  // Gather settings
+  // Helper functions for reading UI values
+  function getBool(id, fallback = false) {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    return !!el.checked;
+  }
+  function getVal(id, fallback = null) {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    return el.value;
+  }
+  function getRange01(id, fallback = 0.25) {
+    const el = document.getElementById(id);
+    if (!el) return fallback;
+    const n = Number(el.value);
+    if (Number.isNaN(n)) return fallback;
+    return Math.min(1, Math.max(0, n / 100));
+  }
+  
+  // Check if new UI exists (PR-2)
+  const hasNewConfigUI = !!document.getElementById('videoBuildConfigCard');
+  
+  // Output preset (Video Build側で決定)
+  const preset = hasNewConfigUI
+    ? (getVal('vbPresetSelector', 'yt_long') || 'yt_long')
+    : 'yt_long';
+  
+  // Captions
+  const captionsEnabled = hasNewConfigUI
+    ? getBool('vbCaptionsToggle', true)
+    : getBool('videoBuildCaptions', true);
+  const captionsPos = hasNewConfigUI
+    ? (getVal('vbCaptionsPosition', 'bottom') || 'bottom')
+    : 'bottom';
+  
+  // BGM
+  const bgmEnabled = hasNewConfigUI
+    ? getBool('vbBgmToggle', false)
+    : getBool('videoBuildBgm', false);
+  const bgmVolume = hasNewConfigUI
+    ? getRange01('vbBgmVolume', 0.25)
+    : 0.25;
+  
+  // Motion (Remotion語は内部のみ)
+  const motionPreset = hasNewConfigUI
+    ? (getVal('vbMotionPreset', 'kenburns_soft') || 'kenburns_soft')
+    : (getBool('videoBuildMotion', true) ? 'kenburns_soft' : 'none');
+  
+  // Build settings for API (SSOT aligned)
   const buildSettings = {
+    output_preset: preset,
     captions: {
-      enabled: document.getElementById('videoBuildCaptions')?.checked ?? true
+      enabled: captionsEnabled,
+      position: captionsPos,
     },
-    background_music: {
-      enabled: document.getElementById('videoBuildBgm')?.checked ?? false,
-      ducking: true
+    bgm: {
+      enabled: bgmEnabled,
+      volume: bgmVolume,
     },
     motion: {
-      ken_burns: document.getElementById('videoBuildMotion')?.checked ?? true
-    }
+      preset: motionPreset,
+    },
   };
   
   // Confirm
-  if (!confirm('動画生成を開始しますか？\n\n処理には数分かかる場合があります。')) {
+  if (!confirm('動画を生成しますか？\n\n生成後は「修正（チャット）」で調整できます。')) {
     return;
   }
   
@@ -7387,9 +7449,8 @@ async function startVideoBuild() {
   btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>送信中...';
   
   try {
-    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/video-builds`, {
-      build_settings: buildSettings
-    });
+    // API payload (PR-2: 新形式 - output_preset/captions/bgm/motion を直接送信)
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/video-builds`, buildSettings);
     
     if (response.data.success) {
       showToast('動画生成を開始しました', 'success');
@@ -7429,7 +7490,7 @@ async function startVideoBuild() {
     showToast(errorMsg, 'error');
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-film mr-2"></i>動画生成を開始';
+    btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成';
     updateVideoBuildButtonState();
   }
 }

@@ -1415,11 +1415,11 @@ app.get('/projects/:id', (c) => {
                     <div class="flex items-start justify-between gap-4">
                         <div class="flex-1">
                             <h3 class="text-lg font-bold text-gray-800 mb-2 flex items-center">
-                                <i class="fas fa-rocket mr-2 text-purple-600"></i>
-                                新しい動画を生成
+                                <i class="fas fa-film mr-2 text-purple-600"></i>
+                                動画を生成する
                             </h3>
                             <p class="text-sm text-gray-600 mb-2">
-                                このプロジェクトの全シーンから動画を自動生成します。
+                                作成したシーンを1本の動画として生成します。生成後は「修正（チャット）」で調整できます。
                             </p>
                             <div id="videoBuildRequirements" class="text-sm space-y-1">
                                 <!-- Requirements will be populated by JS -->
@@ -1432,29 +1432,103 @@ app.get('/projects/:id', (c) => {
                             disabled
                         >
                             <i class="fas fa-film"></i>
-                            動画生成を開始
+                            🎬 動画を生成
                         </button>
                     </div>
                     
-                    <!-- Build Settings -->
-                    <div class="mt-4 pt-4 border-t border-gray-200">
-                        <h4 class="text-sm font-semibold text-gray-700 mb-3">
-                            <i class="fas fa-cog mr-1"></i>
-                            生成オプション
-                        </h4>
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" id="videoBuildCaptions" checked class="w-4 h-4 text-purple-600 rounded">
-                                <span class="text-sm text-gray-700">字幕を表示</span>
+                </div>
+                
+                <!-- Video Build Config Card (NEW SSOT UI) -->
+                <div id="videoBuildConfigCard" class="mb-6 bg-white rounded-xl shadow border border-gray-200">
+                    <div class="p-4 border-b flex items-center justify-between">
+                        <h3 class="text-lg font-bold text-gray-800 flex items-center">
+                            <i class="fas fa-sliders-h mr-2 text-indigo-600"></i>出力設定
+                        </h3>
+                        <div class="text-xs text-gray-500">
+                            ※ 最終的な動画の出力ルールをここで決めます
+                        </div>
+                    </div>
+
+                    <div class="p-6 space-y-5">
+                        <!-- 配信先プリセット -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-tv mr-1 text-indigo-600"></i>配信先プリセット
                             </label>
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" id="videoBuildBgm" class="w-4 h-4 text-purple-600 rounded">
-                                <span class="text-sm text-gray-700">BGMを追加</span>
+                            <select id="vbPresetSelector"
+                                class="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm">
+                                <option value="yt_long">📺 YouTube 長尺（16:9）</option>
+                                <option value="short_vertical" disabled>📱 縦型ショート（9:16）※準備中</option>
+                                <option value="yt_shorts" disabled>🎬 YouTube Shorts（9:16）※準備中</option>
+                                <option value="reels" disabled>📸 Instagram Reels（9:16）※準備中</option>
+                                <option value="tiktok" disabled>🎵 TikTok（9:16）※準備中</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">
+                                現状は「YouTube 長尺（16:9）」前提で運用（縦型は制作ボード側の表示仕様が未対応のため）
+                            </p>
+                        </div>
+
+                        <!-- 字幕・BGM -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <!-- 字幕 -->
+                            <div class="p-4 bg-gray-50 rounded-lg border">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                        <i class="fas fa-closed-captioning text-indigo-600"></i>字幕
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                                        <input id="vbCaptionsToggle" type="checkbox" class="w-4 h-4 text-indigo-600 rounded" checked />
+                                        <span class="text-sm text-gray-700">表示する</span>
+                                    </label>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="text-xs text-gray-600">字幕位置</label>
+                                    <select id="vbCaptionsPosition"
+                                        class="mt-1 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                                        <option value="bottom">下</option>
+                                        <option value="center_bottom">中央下</option>
+                                        <option value="top_center">上</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <!-- BGM -->
+                            <div class="p-4 bg-gray-50 rounded-lg border">
+                                <div class="flex items-center justify-between">
+                                    <label class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                        <i class="fas fa-music text-indigo-600"></i>BGM
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 cursor-pointer">
+                                        <input id="vbBgmToggle" type="checkbox" class="w-4 h-4 text-indigo-600 rounded" />
+                                        <span class="text-sm text-gray-700">入れる</span>
+                                    </label>
+                                </div>
+                                <div class="mt-3">
+                                    <label class="text-xs text-gray-600">BGM音量</label>
+                                    <div class="flex items-center gap-3 mt-1">
+                                        <input id="vbBgmVolume" type="range" min="0" max="100" value="25"
+                                            class="flex-1 accent-indigo-600" oninput="updateBgmVolumeLabel()" />
+                                        <span id="vbBgmVolumeLabel" class="text-xs text-gray-700 w-10">25%</span>
+                                    </div>
+                                    <p class="text-xs text-gray-500 mt-1">※ BGMファイル自体の管理はBGM設定で行います</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- モーション -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-running mr-1 text-indigo-600"></i>モーション（カメラの動き）
                             </label>
-                            <label class="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" id="videoBuildMotion" checked class="w-4 h-4 text-purple-600 rounded">
-                                <span class="text-sm text-gray-700">Ken Burnsエフェクト</span>
-                            </label>
+                            <select id="vbMotionPreset"
+                                class="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm">
+                                <option value="none">動きなし</option>
+                                <option value="kenburns_soft" selected>ゆっくりズーム</option>
+                                <option value="kenburns_medium">ズーム（標準）</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">
+                                画像シーンにカメラワーク的な動きを付けます
+                            </p>
                         </div>
                     </div>
                 </div>
