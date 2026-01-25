@@ -3517,6 +3517,9 @@ ${escapeHtml(scene.dialogue)}
       <!-- Image Characters (Phase F-6: Moved here, under prompt) -->
       ${renderImageCharacterSection(scene)}
       
+      <!-- PR-UX-2: Speaker Summary (audio characters) -->
+      ${renderSpeakerSummarySection(scene)}
+      
       <!-- Style Selector -->
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-2">
@@ -4055,6 +4058,72 @@ function renderImageCharacterSection(scene) {
         <i class="fas fa-info-circle mr-1"></i>
         画像生成時にこのキャラクターが登場します（★は音声キャラ）
       </p>
+    </div>
+  `;
+}
+
+/**
+ * PR-UX-2: 話者（音声）サマリーセクション
+ * speaker_summary からキャラ名・ナレーションを表示
+ * 推測ゼロ: speaker_summary がなければ "未設定" を表示
+ * 
+ * @param {object} scene 
+ * @returns {string} HTML
+ */
+function renderSpeakerSummarySection(scene) {
+  const speakerSummary = scene.speaker_summary || null;
+  const utteranceStatus = scene.utterance_status || { total: 0, with_audio: 0 };
+  
+  // 話者リスト
+  let speakerDisplay = '';
+  if (speakerSummary && speakerSummary.speakers && speakerSummary.speakers.length > 0) {
+    speakerDisplay = speakerSummary.speakers.map(name => escapeHtml(name)).join(' / ');
+  } else if (utteranceStatus.total === 0) {
+    speakerDisplay = '<span class="text-gray-400">発話なし</span>';
+  } else {
+    speakerDisplay = '<span class="text-orange-500">未設定</span>';
+  }
+  
+  // 発話状況バッジ
+  const total = utteranceStatus.total || 0;
+  const withAudio = utteranceStatus.with_audio || 0;
+  const allGenerated = total > 0 && withAudio === total;
+  const noneGenerated = withAudio === 0;
+  
+  let statusBadge = '';
+  if (total === 0) {
+    statusBadge = '<span class="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs">発話なし</span>';
+  } else if (allGenerated) {
+    statusBadge = `<span class="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs"><i class="fas fa-check mr-1"></i>${total}件生成済み</span>`;
+  } else if (noneGenerated) {
+    statusBadge = `<span class="px-2 py-0.5 bg-orange-100 text-orange-700 rounded-full text-xs"><i class="fas fa-exclamation-circle mr-1"></i>${total}件未生成</span>`;
+  } else {
+    statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs"><i class="fas fa-clock mr-1"></i>${withAudio}/${total}件生成済み</span>`;
+  }
+  
+  return `
+    <div class="mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-sm font-semibold text-purple-800">
+            <i class="fas fa-microphone-alt mr-1"></i>話者（音声）
+          </span>
+          <span class="text-sm text-purple-700">${speakerDisplay}</span>
+        </div>
+        ${statusBadge}
+      </div>
+      <div class="mt-2 flex items-center justify-between">
+        <p class="text-xs text-gray-500">
+          <i class="fas fa-info-circle mr-1"></i>
+          音声タブで発話ごとに話者を設定できます
+        </p>
+        <button 
+          onclick="openSceneEditModal(${scene.id}, 'audio')"
+          class="text-xs px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
+        >
+          <i class="fas fa-edit mr-1"></i>編集
+        </button>
+      </div>
     </div>
   `;
 }
