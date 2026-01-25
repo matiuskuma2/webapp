@@ -6771,18 +6771,39 @@ async function refreshVideoBuildUsage() {
 
 /**
  * Check and update video build requirements
- * Phase R1.6: 新しい preflight API を使用（utterances チェック含む）
+ * PR-3: 事前チェック（preflight）を新UIに対応
+ * - 必須（赤）: 素材不足のみがブロック条件
+ * - 推奨（黄）: 音声なし等はブロックしない
  */
 async function updateVideoBuildRequirements() {
-  const reqEl = document.getElementById('videoBuildRequirements');
-  if (!reqEl) return;
+  // 新UIの要素を取得
+  const requiredEl = document.getElementById('preflightRequiredItems');
+  const recommendedEl = document.getElementById('preflightRecommendedItems');
+  const summaryEl = document.getElementById('preflightSummary');
+  const blockReasonEl = document.getElementById('preflightBlockReason');
+  
+  // 新UIがなければスキップ
+  if (!requiredEl || !recommendedEl || !summaryEl) {
+    console.log('[Preflight] New UI not found, skipping');
+    return;
+  }
   
   // Usage info
   const usage = window.videoBuildUsageCache || {};
   const isAtLimit = (usage.monthly_builds || 0) >= 60;
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
-  let html = '<div class="space-y-2">';
+  // 初期表示（ローディング）
+  requiredEl.innerHTML = '<div class="text-gray-400"><i class="fas fa-spinner fa-spin mr-2"></i>チェック中...</div>';
+  recommendedEl.innerHTML = '';
+  summaryEl.innerHTML = '';
+  if (blockReasonEl) blockReasonEl.classList.add('hidden');
+  
+  const SCENE_LIMIT_THRESHOLD = 100;
+  let blockReasons = [];
+  let requiredHtml = '';
+  let recommendedHtml = '';
+  let summaryStatus = 'ok'; // 'ok', 'warning', 'error'
   
   // Call preflight API for accurate check
   try {
@@ -6792,122 +6813,80 @@ async function updateVideoBuildRequirements() {
     // Store preflight result for button state
     window.videoBuildPreflightCache = preflight;
     
-    // 1. シーン数チェック
+    // === 必須チェック（素材） ===
     if (preflight.total_count === 0) {
-      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>シーンがありません</div>';
+      requiredHtml += '<div class="flex items-center text-red-600"><i class="fas fa-times-circle mr-2"></i>シーンがありません</div>';
+      blockReasons.push('シーンが作成されていません');
+      summaryStatus = 'error';
     } else if (!preflight.is_ready) {
-      // 2. 素材チェック（画像/漫画/動画）
-      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>素材が不足しています（' + preflight.ready_count + '/' + preflight.total_count + '）</div>';
+      // 素材が不足
+      requiredHtml += '<div class="flex items-center text-red-600">';
+      requiredHtml += '<i class="fas fa-times-circle mr-2"></i>';
+      requiredHtml += '素材が不足（' + preflight.ready_count + '/' + preflight.total_count + ' シーン準備済み）';
+      requiredHtml += '</div>';
       
-      // Show missing details
+      // 不足の詳細
       if (preflight.missing && preflight.missing.length > 0) {
-        html += '<div class="ml-4 mt-1 text-sm text-gray-500">';
+        requiredHtml += '<div class="ml-6 mt-1 text-xs text-gray-500 space-y-0.5">';
         preflight.missing.slice(0, 3).forEach(m => {
-          html += '<div>• シーン' + m.scene_idx + ': ' + m.reason + '</div>';
+          requiredHtml += '<div>• シーン' + m.scene_idx + ': ' + m.reason + '</div>';
         });
         if (preflight.missing.length > 3) {
-          html += '<div>• 他 ' + (preflight.missing.length - 3) + ' 件...</div>';
+          requiredHtml += '<div>• 他 ' + (preflight.missing.length - 3) + ' 件...</div>';
         }
-        html += '</div>';
+        requiredHtml += '</div>';
       }
-    } else if (!preflight.can_generate) {
-      // 3. レイヤー1 エラー（本当に生成不可能なケース）
-      html += '<div class="flex items-center text-red-600"><i class="fas fa-exclamation-circle mr-2"></i>⚠ 動画を生成できません</div>';
-      
-      // 本当のエラー（レイヤー1）のみ表示
-      const criticalErrors = (preflight.utterance_errors || []).filter(err => 
-        err.type !== 'NO_UTTERANCES' && err.type !== 'AUDIO_MISSING' && err.type !== 'TEXT_EMPTY'
-      );
-      
-      if (criticalErrors.length > 0) {
-        html += '<div class="ml-4 mt-1 text-sm space-y-1">';
-        criticalErrors.slice(0, 5).forEach(err => {
-          html += '<div class="flex items-start text-red-500">';
-          html += '<i class="fas fa-times-circle mr-2 mt-0.5 text-xs"></i>';
-          html += '<span>' + escapeHtml(err.message) + '</span>';
-          html += '</div>';
-        });
-        html += '</div>';
-      }
+      blockReasons.push('素材が不足しています（画像/漫画/動画を設定してください）');
+      summaryStatus = 'error';
+    } else if (preflight.total_count > SCENE_LIMIT_THRESHOLD) {
+      // シーン数上限超過
+      requiredHtml += '<div class="flex items-center text-red-600">';
+      requiredHtml += '<i class="fas fa-times-circle mr-2"></i>';
+      requiredHtml += preflight.total_count + 'シーンは上限（' + SCENE_LIMIT_THRESHOLD + '）を超えています';
+      requiredHtml += '</div>';
+      blockReasons.push(preflight.total_count + 'シーンは上限（' + SCENE_LIMIT_THRESHOLD + '）を超えています');
+      summaryStatus = 'error';
     } else {
-      // 4. 生成OK（can_generate: true）
-      html += '<div class="flex items-center text-green-600"><i class="fas fa-check-circle mr-2"></i>' + preflight.total_count + 'シーン準備完了</div>';
-      
-      // R3-B: 音声状態の表示（BGM/SFX/Voice）
-      const validation = preflight.validation || {};
-      const hasBgm = validation.has_bgm || false;
-      const hasSfx = validation.has_sfx || false;
-      const hasVoice = validation.summary?.has_voice || false;
-      const hasAnyAudio = hasBgm || hasSfx || hasVoice;
-      
-      // 音声レイヤー状態を構築
-      const audioLayers = [];
-      if (hasBgm) audioLayers.push('<span class="text-purple-600"><i class="fas fa-music mr-1"></i>BGM</span>');
-      if (hasSfx) audioLayers.push('<span class="text-blue-600"><i class="fas fa-volume-up mr-1"></i>SFX</span>');
-      if (hasVoice) audioLayers.push('<span class="text-green-600"><i class="fas fa-microphone mr-1"></i>Voice</span>');
-      
-      if (hasAnyAudio) {
-        html += '<div class="mt-1 flex items-center text-sm text-gray-600">';
-        html += '<span class="mr-2">🎵 音声:</span>' + audioLayers.join(' + ');
-        html += '</div>';
-      } else {
-        html += '<div class="mt-1 flex items-center text-sm text-amber-600">';
-        html += '<i class="fas fa-volume-mute mr-2"></i>音声なし（無音動画になります）';
-        html += '</div>';
-      }
-      
-      // レイヤー2: 警告（生成は可能だが注意事項あり）
-      // ※ 音声なしでも生成可能なので、クリックで誘導する機能は不要
-      const allWarnings = [
-        ...(preflight.warnings || []),
-        ...(preflight.utterance_errors || [])
-      ];
-      
-      if (allWarnings.length > 0) {
-        html += '<div class="mt-2 p-2 bg-amber-50 border border-amber-200 rounded">';
-        html += '<div class="flex items-center text-amber-700 text-sm font-medium mb-1">';
-        html += '<i class="fas fa-info-circle mr-2"></i>';
-        html += '注意: ' + allWarnings.length + '件（このまま生成できます）';
-        html += '</div>';
-        html += '<div class="ml-4 text-xs space-y-0.5 max-h-24 overflow-y-auto">';
-        
-        // 警告を最大5件表示（クリック不可、情報表示のみ）
-        allWarnings.slice(0, 5).forEach(warn => {
-          const msg = warn.message || '';
-          const icon = msg.includes('音声パーツ') || warn.type === 'NO_UTTERANCES' ? 'fa-comment-slash text-amber-500'
-                     : warn.type === 'AUDIO_MISSING' || msg.includes('音声が') ? 'fa-microphone-slash text-amber-500'
-                     : msg.includes('バブル') ? 'fa-comment-dots text-amber-500'
-                     : 'fa-info-circle text-gray-400';
-          
-          // 情報表示のみ（クリックでシーン編集を開く機能は削除）
-          html += '<div class="flex items-start text-gray-500">';
-          html += '<i class="fas ' + icon + ' mr-2 mt-0.5"></i>';
-          html += '<span>' + escapeHtml(msg) + '</span>';
-          html += '</div>';
-        });
-        
-        if (allWarnings.length > 5) {
-          html += '<div class="text-gray-400 mt-1">他 ' + (allWarnings.length - 5) + ' 件...</div>';
-        }
-        html += '</div>';
-        // BGM/SFXがある場合は無音ではなくBGM/SFXが流れることを説明
-        if (hasBgm || hasSfx) {
-          const audioFallback = hasBgm && hasSfx ? 'BGM + SFX' : hasBgm ? 'BGM' : 'SFX';
-          html += '<div class="mt-1 text-xs text-gray-500">※ 音声パーツなしのシーンでは ' + audioFallback + ' が再生されます</div>';
-        } else {
-          html += '<div class="mt-1 text-xs text-gray-500">※ 音声パーツなしのシーンは無音になります（問題なければそのまま生成できます）</div>';
-        }
-        html += '</div>';
-      }
+      // 素材OK
+      requiredHtml += '<div class="flex items-center text-green-600">';
+      requiredHtml += '<i class="fas fa-check-circle mr-2"></i>';
+      requiredHtml += '素材OK（' + preflight.total_count + 'シーン準備完了）';
+      requiredHtml += '</div>';
     }
     
-    // Scene count warning (Phase 1: warn for large videos)
-    const SCENE_WARN_THRESHOLD = 50;
-    const SCENE_LIMIT_THRESHOLD = 100;
-    if (preflight.total_count > SCENE_LIMIT_THRESHOLD) {
-      html += '<div class="flex items-center text-red-600 mt-2"><i class="fas fa-exclamation-circle mr-2"></i><span>' + preflight.total_count + 'シーンは現在の上限（' + SCENE_LIMIT_THRESHOLD + '）を超えています。</span></div>';
-    } else if (preflight.total_count > SCENE_WARN_THRESHOLD) {
-      html += '<div class="flex items-center text-amber-600 mt-2"><i class="fas fa-clock mr-2"></i><span>' + preflight.total_count + 'シーン: レンダリングに時間がかかる場合があります</span></div>';
+    // === 推奨チェック（音声・その他） ===
+    const validation = preflight.validation || {};
+    const hasBgm = validation.has_bgm || false;
+    const hasSfx = validation.has_sfx || false;
+    const hasVoice = validation.summary?.has_voice || false;
+    const hasAnyAudio = hasBgm || hasSfx || hasVoice;
+    
+    // 音声状態
+    if (hasAnyAudio) {
+      const audioLayers = [];
+      if (hasVoice) audioLayers.push('Voice');
+      if (hasBgm) audioLayers.push('BGM');
+      if (hasSfx) audioLayers.push('SFX');
+      recommendedHtml += '<div class="flex items-center text-green-600">';
+      recommendedHtml += '<i class="fas fa-check-circle mr-2"></i>';
+      recommendedHtml += '音声あり（' + audioLayers.join(' + ') + '）';
+      recommendedHtml += '</div>';
+    } else {
+      recommendedHtml += '<div class="flex items-center text-amber-600">';
+      recommendedHtml += '<i class="fas fa-info-circle mr-2"></i>';
+      recommendedHtml += '音声なし（無音動画になります）';
+      recommendedHtml += '</div>';
+      if (summaryStatus === 'ok') summaryStatus = 'warning';
+    }
+    
+    // 警告があれば表示
+    const warningCount = (preflight.warnings?.length || 0) + (preflight.utterance_errors?.length || 0);
+    if (warningCount > 0) {
+      recommendedHtml += '<div class="flex items-center text-amber-600">';
+      recommendedHtml += '<i class="fas fa-info-circle mr-2"></i>';
+      recommendedHtml += '注意事項 ' + warningCount + '件（生成には影響しません）';
+      recommendedHtml += '</div>';
+      if (summaryStatus === 'ok') summaryStatus = 'warning';
     }
     
   } catch (error) {
@@ -6916,7 +6895,6 @@ async function updateVideoBuildRequirements() {
     const scenes = window.lastLoadedScenes || [];
     const hasScenes = scenes.length > 0;
     
-    // SSOT: display_asset_type に応じたチェック
     const scenesReady = scenes.filter(s => {
       const displayType = s.display_asset_type || 'image';
       if (displayType === 'comic') return s.active_comic?.r2_url;
@@ -6926,7 +6904,7 @@ async function updateVideoBuildRequirements() {
     
     window.videoBuildPreflightCache = {
       is_ready: hasScenes && scenesReady === scenes.length,
-      can_generate: false,  // R1.6: fallback では false
+      can_generate: false,
       ready_count: scenesReady,
       total_count: scenes.length,
       missing: [],
@@ -6935,58 +6913,57 @@ async function updateVideoBuildRequirements() {
     };
     
     if (!hasScenes) {
-      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>シーンがありません</div>';
+      requiredHtml += '<div class="flex items-center text-red-600"><i class="fas fa-times-circle mr-2"></i>シーンがありません</div>';
+      blockReasons.push('シーンが作成されていません');
     } else if (scenesReady < scenes.length) {
-      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>素材が不足しています（' + scenesReady + '/' + scenes.length + '）</div>';
+      requiredHtml += '<div class="flex items-center text-red-600"><i class="fas fa-times-circle mr-2"></i>素材が不足（' + scenesReady + '/' + scenes.length + '）</div>';
+      blockReasons.push('素材が不足しています');
     } else {
-      html += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>プリフライトチェックに失敗しました</div>';
+      requiredHtml += '<div class="flex items-center text-amber-600"><i class="fas fa-exclamation-triangle mr-2"></i>チェックに失敗しました（再試行してください）</div>';
     }
+    summaryStatus = 'error';
+    recommendedHtml += '<div class="text-gray-400">-</div>';
   }
   
-  // Usage check
+  // Usage制限チェック
   if (isAtLimit) {
-    html += '<div class="flex items-center text-red-600"><i class="fas fa-ban mr-2"></i>今月の上限に達しています</div>';
+    blockReasons.push('今月の生成上限（60本）に達しています');
+    summaryStatus = 'error';
   }
-  
-  // Concurrent check - ID57: 処理中ビルドの詳細を表示
   if (hasConcurrent) {
-    const activeBuilds = usage.active_builds || [];
-    if (activeBuilds.length > 0) {
-      html += '<div class="mt-2 p-3 bg-amber-50 border border-amber-200 rounded-lg">';
-      html += '<div class="flex items-center text-amber-700 font-medium mb-2"><i class="fas fa-hourglass-half mr-2"></i>処理中のビルド (' + activeBuilds.length + '件)</div>';
-      html += '<div class="space-y-2 text-sm">';
-      activeBuilds.forEach(function(build) {
-        const statusIcon = build.status === 'rendering' ? 'fa-film' : 
-                          build.status === 'validating' ? 'fa-check-circle' :
-                          build.status === 'uploading' ? 'fa-cloud-upload-alt' : 'fa-clock';
-        const statusColor = build.status === 'rendering' ? 'text-blue-600' : 
-                           build.status === 'validating' ? 'text-yellow-600' :
-                           build.status === 'uploading' ? 'text-green-600' : 'text-gray-600';
-        html += '<div class="flex items-center justify-between bg-white p-2 rounded border">';
-        html += '<div class="flex items-center gap-2">';
-        html += '<i class="fas ' + statusIcon + ' ' + statusColor + '"></i>';
-        html += '<span class="font-medium">' + (build.project_title || 'プロジェクト #' + build.project_id) + '</span>';
-        html += '<span class="text-gray-500">#' + build.build_id + '</span>';
-        html += '</div>';
-        html += '<div class="flex items-center gap-2">';
-        html += '<span class="' + statusColor + ' font-medium">' + build.progress_percent + '%</span>';
-        html += '<span class="text-gray-400 text-xs">' + (build.progress_stage || build.status) + '</span>';
-        html += '</div>';
-        html += '</div>';
-      });
-      html += '</div>';
-      html += '</div>';
-    } else {
-      html += '<div class="flex items-center text-amber-600"><i class="fas fa-hourglass-half mr-2"></i>現在処理中のビルドがあります</div>';
-    }
+    blockReasons.push('別の動画が生成中です（完了後に再試行してください）');
+    summaryStatus = 'error';
   }
   
-  html += '</div>';
-  reqEl.innerHTML = html;
+  // UIを更新
+  requiredEl.innerHTML = requiredHtml;
+  recommendedEl.innerHTML = recommendedHtml;
   
-  // Update button state
+  // サマリー表示
+  if (blockReasons.length > 0) {
+    summaryEl.className = 'p-3 rounded-lg border mt-3 bg-red-50 border-red-200';
+    summaryEl.innerHTML = '<div class="flex items-center text-red-700"><i class="fas fa-ban mr-2"></i><span class="font-semibold">生成できません</span></div>';
+    
+    // ブロック理由を表示
+    if (blockReasonEl) {
+      blockReasonEl.innerHTML = '<i class="fas fa-exclamation-circle mr-2"></i>' + blockReasons.join('、');
+      blockReasonEl.classList.remove('hidden');
+    }
+  } else if (summaryStatus === 'warning') {
+    summaryEl.className = 'p-3 rounded-lg border mt-3 bg-amber-50 border-amber-200';
+    summaryEl.innerHTML = '<div class="flex items-center text-amber-700"><i class="fas fa-check-circle mr-2"></i><span class="font-semibold">生成可能</span><span class="text-sm ml-2">（注意事項あり）</span></div>';
+    if (blockReasonEl) blockReasonEl.classList.add('hidden');
+  } else {
+    summaryEl.className = 'p-3 rounded-lg border mt-3 bg-green-50 border-green-200';
+    summaryEl.innerHTML = '<div class="flex items-center text-green-700"><i class="fas fa-check-circle mr-2"></i><span class="font-semibold">準備完了</span></div>';
+    if (blockReasonEl) blockReasonEl.classList.add('hidden');
+  }
+  
+  // ボタン状態を更新
   updateVideoBuildButtonState();
 }
+
+
 
 /**
  * Update video build button state

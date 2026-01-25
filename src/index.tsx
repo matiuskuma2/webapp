@@ -1410,35 +1410,7 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
 
-                <!-- Create New Video Build -->
-                <div class="mb-6 p-6 bg-white rounded-lg border-2 border-purple-200 hover:border-purple-400 transition-colors">
-                    <div class="flex items-start justify-between gap-4">
-                        <div class="flex-1">
-                            <h3 class="text-lg font-bold text-gray-800 mb-2 flex items-center">
-                                <i class="fas fa-film mr-2 text-purple-600"></i>
-                                動画を生成する
-                            </h3>
-                            <p class="text-sm text-gray-600 mb-2">
-                                作成したシーンを1本の動画として生成します。生成後は「修正（チャット）」で調整できます。
-                            </p>
-                            <div id="videoBuildRequirements" class="text-sm space-y-1">
-                                <!-- Requirements will be populated by JS -->
-                            </div>
-                        </div>
-                        <button 
-                            id="btnStartVideoBuild"
-                            onclick="startVideoBuild()"
-                            class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                            disabled
-                        >
-                            <i class="fas fa-film"></i>
-                            🎬 動画を生成
-                        </button>
-                    </div>
-                    
-                </div>
-                
-                <!-- Video Build Config Card (NEW SSOT UI) -->
+                <!-- Video Build Config Card (出力設定) -->
                 <div id="videoBuildConfigCard" class="mb-6 bg-white rounded-xl shadow border border-gray-200">
                     <div class="p-4 border-b flex items-center justify-between">
                         <h3 class="text-lg font-bold text-gray-800 flex items-center">
@@ -1530,6 +1502,73 @@ app.get('/projects/:id', (c) => {
                                 画像シーンにカメラワーク的な動きを付けます
                             </p>
                         </div>
+                    </div>
+                </div>
+                
+                <!-- Preflight Check Card (事前チェック) -->
+                <div id="videoBuildPreflightCard" class="mb-6 bg-white rounded-xl shadow border border-gray-200">
+                    <div class="p-4 border-b flex items-center justify-between">
+                        <h3 class="text-lg font-bold text-gray-800 flex items-center">
+                            <i class="fas fa-clipboard-check mr-2 text-green-600"></i>事前チェック
+                        </h3>
+                        <button 
+                            onclick="updateVideoBuildRequirements()"
+                            class="text-gray-500 hover:text-gray-700 transition-colors text-sm flex items-center gap-1"
+                            title="再チェック"
+                        >
+                            <i class="fas fa-sync-alt"></i>
+                            <span class="hidden sm:inline">更新</span>
+                        </button>
+                    </div>
+                    <div class="p-4">
+                        <!-- 必須チェック（素材） -->
+                        <div id="preflightRequired" class="mb-4">
+                            <div class="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                                <span class="text-red-500">●</span> 必須（素材不足でブロック）
+                            </div>
+                            <div id="preflightRequiredItems" class="space-y-1 text-sm">
+                                <!-- JS で埋める -->
+                            </div>
+                        </div>
+                        
+                        <!-- 推奨チェック（音声・その他） -->
+                        <div id="preflightRecommended" class="mb-4">
+                            <div class="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
+                                <span class="text-amber-500">●</span> 推奨（なくても生成可能）
+                            </div>
+                            <div id="preflightRecommendedItems" class="space-y-1 text-sm">
+                                <!-- JS で埋める -->
+                            </div>
+                        </div>
+                        
+                        <!-- サマリー -->
+                        <div id="preflightSummary" class="p-3 rounded-lg border mt-3">
+                            <!-- JS で埋める -->
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Generate Button -->
+                <div class="mb-6 p-4 bg-gradient-to-r from-purple-50 to-indigo-50 rounded-xl border border-purple-200">
+                    <div class="flex items-center justify-between gap-4">
+                        <div class="flex-1">
+                            <p class="text-sm text-gray-600">
+                                準備ができたら動画を生成します。生成後は「修正（チャット）」で調整できます。
+                            </p>
+                        </div>
+                        <button 
+                            id="btnStartVideoBuild"
+                            onclick="startVideoBuild()"
+                            class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-md"
+                            disabled
+                        >
+                            <i class="fas fa-film"></i>
+                            🎬 動画を生成
+                        </button>
+                    </div>
+                    <!-- ブロック理由の表示 -->
+                    <div id="preflightBlockReason" class="hidden mt-3 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                        <!-- JS で埋める -->
                     </div>
                 </div>
                 
