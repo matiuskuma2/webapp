@@ -7362,9 +7362,18 @@ function renderVideoBuildItem(build) {
 
 /**
  * Refresh video build to get new presigned URL
+ * PR-4-4: 二重送信ガード + スクロール導線 + エラー表示統一
  * @param {number} buildId 
  */
 async function refreshVideoBuildDownload(buildId) {
+  // PR-4-4-3: 二重送信ガード（buildId単位）
+  if (!window.videoBuildRefreshUrlInFlight) window.videoBuildRefreshUrlInFlight = {};
+  if (window.videoBuildRefreshUrlInFlight[buildId]) {
+    console.log('[VideoBuild] Refresh already in flight for buildId:', buildId);
+    return;
+  }
+  window.videoBuildRefreshUrlInFlight[buildId] = true;
+  
   try {
     showToast('ダウンロードURLを取得中...', 'info');
     
@@ -7372,13 +7381,16 @@ async function refreshVideoBuildDownload(buildId) {
     
     if (response.data.status === 'completed' && response.data.output?.presigned_url) {
       // Update cache
-      const idx = window.videoBuildListCache.findIndex(b => b.id === buildId);
+      const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
       if (idx >= 0) {
         window.videoBuildListCache[idx].download_url = response.data.output.presigned_url;
         window.videoBuildListCache[idx].render_completed_at = window.videoBuildListCache[idx].render_completed_at || new Date().toISOString();
       }
       
-      // Reload list
+      // PR-4-4-2: スクロール導線（A確定 = 強調表示のみ、プレビュー自動オープンなし）
+      window.pendingScrollToBuildId = buildId;
+      
+      // Reload list → 自動でスクロール＆ハイライト
       await loadVideoBuilds();
       
       showToast('新しいダウンロードURLを取得しました', 'success');
@@ -7387,7 +7399,12 @@ async function refreshVideoBuildDownload(buildId) {
     }
   } catch (error) {
     console.error('[VideoBuild] Refresh download error:', error);
-    showToast('ダウンロードURLの取得に失敗しました', 'error');
+    // PR-4-4-4: エラー表示統一
+    const errMsg = extractErrorMessage(error, 'ダウンロードURLの取得に失敗しました');
+    showToast(errMsg, 'error');
+  } finally {
+    // PR-4-4-3: 必ずフラグを戻す
+    window.videoBuildRefreshUrlInFlight[buildId] = false;
   }
 }
 
@@ -7453,10 +7470,18 @@ function updateBgmVolumeLabel() {
 /**
  * Start video build
  * PR-2: 新UI (videoBuildConfigCard) 対応
+ * PR-4-4: 二重送信ガード追加
  */
 async function startVideoBuild() {
   const btn = document.getElementById('btnStartVideoBuild');
   if (!btn || btn.disabled) return;
+  
+  // PR-4-4-3: 二重送信ガード
+  if (window.videoBuildStartInFlight) {
+    console.log('[VideoBuild] Start already in flight');
+    return;
+  }
+  window.videoBuildStartInFlight = true;
   
   // Helper functions for reading UI values
   function getBool(id, fallback = false) {
@@ -7589,6 +7614,8 @@ async function startVideoBuild() {
     
     showToast(errorMsg, 'error');
   } finally {
+    // PR-4-4-3: 必ずフラグを戻す
+    window.videoBuildStartInFlight = false;
     btn.disabled = false;
     btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成';
     updateVideoBuildButtonState();
@@ -8766,6 +8793,7 @@ function parseMessageToIntent(message) {
 
 /**
  * Send a chat edit message (perform dry-run) - v1 Modal
+ * PR-4-4: 二重送信ガード追加
  */
 async function sendChatEditMessage() {
   const input = document.getElementById('chatEditInput');
@@ -8776,6 +8804,13 @@ async function sendChatEditMessage() {
   
   const message = input.value.trim();
   if (!message) return;
+  
+  // PR-4-4: 二重送信ガード
+  if (window.chatEditSendInFlight) {
+    console.log('[ChatEdit] Send already in flight');
+    return;
+  }
+  window.chatEditSendInFlight = true;
   
   // Disable input
   input.disabled = true;
@@ -8884,7 +8919,8 @@ async function sendChatEditMessage() {
     if (thinkingEl) thinkingEl.remove();
     
     console.error('[ChatEdit] Dry-run error:', error);
-    const errorMsg = error.response?.data?.error || error.message || '通信エラーが発生しました';
+    // PR-4-4: エラー表示統一
+    const errorMsg = extractErrorMessage(error, '変更の確認に失敗しました');
     history.innerHTML += `
       <div class="bg-red-50 rounded-lg p-3 border border-red-200">
         <p class="text-sm text-red-700">
@@ -8897,6 +8933,9 @@ async function sendChatEditMessage() {
     input.disabled = false;
     sendBtn.disabled = false;
     input.focus();
+  } finally {
+    // PR-4-4: 必ずフラグを戻す
+    window.chatEditSendInFlight = false;
   }
   
   history.scrollTop = history.scrollHeight;
@@ -8992,6 +9031,7 @@ function cancelChatEditDryRun() {
 
 /**
  * Apply the chat edit (after successful dry-run)
+ * PR-4-4: 二重送信ガード + extractErrorMessage統一
  */
 async function applyChatEdit() {
   const applyBtn = document.getElementById('btnChatEditApply');
@@ -9001,6 +9041,13 @@ async function applyChatEdit() {
     showToast('パッチIDが見つかりません', 'error');
     return;
   }
+  
+  // PR-4-4: 二重送信ガード
+  if (window.chatEditApplyInFlight) {
+    console.log('[ChatEdit] Apply already in flight');
+    return;
+  }
+  window.chatEditApplyInFlight = true;
   
   applyBtn.disabled = true;
   applyBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>適用中...';
@@ -9029,7 +9076,12 @@ async function applyChatEdit() {
       
       showToast(response.data.next_action || '修正を適用しました', 'success');
       
-      // Reload video builds list
+      // PR-4-2: 新ビルドIDを待ち受けスクロール用に設定
+      if (response.data.new_video_build_id) {
+        window.pendingScrollToBuildId = Number(response.data.new_video_build_id);
+      }
+      
+      // Reload video builds list (will trigger scroll if newId is set)
       await loadVideoBuilds();
       
       // Reload patch history
@@ -9038,11 +9090,6 @@ async function applyChatEdit() {
       // Close modal after a short delay
       setTimeout(() => {
         closeChatEditModal();
-        
-        // Scroll to new build if created
-        if (response.data.new_video_build_id) {
-          scrollToVideoBuild(response.data.new_video_build_id);
-        }
       }, 1500);
       
     } else {
@@ -9051,7 +9098,8 @@ async function applyChatEdit() {
     
   } catch (error) {
     console.error('[ChatEdit] Apply error:', error);
-    const errorMsg = error.response?.data?.error || error.message || '通信エラーが発生しました';
+    // PR-4-4: エラー表示統一
+    const errorMsg = extractErrorMessage(error, '修正の適用に失敗しました');
     
     history.innerHTML += `
       <div class="bg-red-50 rounded-lg p-3 border border-red-200">
@@ -9065,7 +9113,10 @@ async function applyChatEdit() {
     applyBtn.disabled = false;
     applyBtn.innerHTML = '<i class="fas fa-check mr-1"></i>適用して新ビルド生成';
     
-    showToast('修正の適用に失敗しました', 'error');
+    showToast(errorMsg, 'error');
+  } finally {
+    // PR-4-4: 必ずフラグを戻す
+    window.chatEditApplyInFlight = false;
   }
   
   history.scrollTop = history.scrollHeight;
