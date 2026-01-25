@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-24（AWS Orchestrator コードレビュー & Bug Fix）
+- **最終更新**: 2026-01-25（PR-5-3b Safe Chat テロップコマンド）
 
 ---
 
@@ -898,6 +898,42 @@ video_builds（拡張）
 #### マイグレーション
 - `0032_create_patch_requests.sql`
 - `0033_add_video_builds_patch_columns.sql`
+
+---
+
+### Safe Chat v1 - テロップコマンド (PR-5-3b)
+
+#### 概要
+Safe Chat でテロップ設定を「事故らない範囲だけ」変更可能に。Build単位の上書きで実現（DBエンティティは変更しない）。
+
+#### 許可操作（4つのみ）
+| コマンド | 説明 | パラメータ |
+|---------|------|-----------|
+| `telop.set_enabled` | 全テロップ ON/OFF | `enabled: boolean` |
+| `telop.set_position` | 位置プリセット変更 | `position_preset: 'bottom' \| 'center' \| 'top'` |
+| `telop.set_size` | サイズプリセット変更 | `size_preset: 'sm' \| 'md' \| 'lg'` |
+
+#### 禁止事項
+- 本文 text は一切触らない
+- シーン構成（並び替え/分割統合）は触らない
+- 字幕（captions）には影響しない
+
+#### SSOT 置き場所
+- **Build単位の上書き**: `settings_json.telops.enabled / position_preset / size_preset`
+- DBエンティティ（`scene_telops`テーブル）は更新しない
+
+#### UIテンプレート例
+```
+「テロップを全部OFF」
+「テロップを全部ON」
+「テロップ位置を上に」
+「テロップ位置を中央に」
+「テロップサイズを大に」
+```
+
+#### 実装ファイル
+- `src/routes/patches.ts`: `TelopSetEnabledAction`, `TelopSetPositionAction`, `TelopSetSizeAction` 型定義 + `resolveIntentToOps` でのtelop処理
+- `public/static/project-editor.js`: `parseMessageToIntent` にテロップパーサー追加
 
 ---
 
