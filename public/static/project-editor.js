@@ -7154,6 +7154,9 @@ function summarizeBuildSettings(build) {
   // PR-5-1: 表現サマリー（expression_summary）
   const expr = settings.expression_summary || null;
   
+  // PR-5-3a: テロップ設定
+  const telopsEnabled = settings.telops?.enabled ?? true;  // デフォルトON
+  
   return { 
     preset, 
     captionsEnabled, 
@@ -7161,6 +7164,8 @@ function summarizeBuildSettings(build) {
     bgmEnabled, 
     bgmVolPct, 
     motionPreset,
+    // PR-5-3a: テロップ表示設定
+    telopsEnabled,
     // PR-5-1: 表現サマリー（なければnull = 過去ビルド）
     expression: expr ? {
       hasVoice: expr.has_voice ?? false,
@@ -7169,6 +7174,8 @@ function summarizeBuildSettings(build) {
       isSilent: expr.is_silent ?? false,
       balloonCount: expr.balloon_count ?? 0,
       balloonPolicy: expr.balloon_policy_summary || null,
+      // PR-5-3a: テロップ有無
+      hasTelops: expr.has_telops ?? expr.telops_enabled ?? true,
     } : null
   };
 }
@@ -7222,12 +7229,13 @@ function renderVideoBuildItem(build) {
   const createdAtUtc = build.created_at.replace(' ', 'T') + 'Z';
   const createdAt = new Date(createdAtUtc).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
   
-  // Build settings summary (PR-4)
+  // Build settings summary (PR-4 + PR-5-3a)
   const s = summarizeBuildSettings(build);
   const settingsLine = `
     <div class="flex flex-wrap gap-1 mt-2">
       <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">📺 ${presetLabel(s.preset)}</span>
       <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">CC ${s.captionsEnabled ? 'ON' : 'OFF'}</span>
+      <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">📝 ${s.telopsEnabled ? 'ON' : 'OFF'}</span>
       <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">🎵 ${s.bgmEnabled ? 'ON' : 'OFF'}</span>
       <span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 text-xs">🏃 ${motionLabel(s.motionPreset)}</span>
     </div>
@@ -7271,6 +7279,15 @@ function renderVideoBuildItem(build) {
         }
       }
       tags.push(`<span class="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 text-xs">${balloonLabel}</span>`);
+    }
+    
+    // PR-5-3a: テロップ表示（ON/OFFを明示）
+    if (expr.hasTelops !== undefined) {
+      if (expr.hasTelops) {
+        tags.push('<span class="px-1.5 py-0.5 rounded bg-orange-100 text-orange-700 text-xs">📝 テロップON</span>');
+      } else {
+        tags.push('<span class="px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-xs">📝 テロップOFF</span>');
+      }
     }
     
     if (tags.length > 0) {
@@ -7598,6 +7615,11 @@ async function startVideoBuild() {
     ? (getVal('vbMotionPreset', 'kenburns_soft') || 'kenburns_soft')
     : (getBool('videoBuildMotion', true) ? 'kenburns_soft' : 'none');
   
+  // PR-5-3a: Telops（テロップ - 字幕とは別）
+  const telopsEnabled = hasNewConfigUI
+    ? getBool('vbTelopsToggle', true)  // デフォルトON
+    : true;
+  
   // Build settings for API (SSOT aligned)
   const buildSettings = {
     output_preset: preset,
@@ -7611,6 +7633,10 @@ async function startVideoBuild() {
     },
     motion: {
       preset: motionPreset,
+    },
+    // PR-5-3a: テロップ表示設定
+    telops: {
+      enabled: telopsEnabled,
     },
   };
   

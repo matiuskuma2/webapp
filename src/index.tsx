@@ -1487,6 +1487,25 @@ app.get('/projects/:id', (c) => {
                             </div>
                         </div>
 
+                        <!-- テロップ（PR-5-3a）※字幕とは別 -->
+                        <div class="p-4 bg-amber-50/50 rounded-lg border border-amber-200">
+                            <div class="flex items-center justify-between">
+                                <label class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                    <i class="fas fa-font text-amber-600"></i>テロップ
+                                    <span class="text-xs font-normal text-gray-500">（画面上テキスト）</span>
+                                </label>
+                                <label class="inline-flex items-center gap-2 cursor-pointer">
+                                    <input id="vbTelopsToggle" type="checkbox" class="w-4 h-4 text-amber-600 rounded" checked />
+                                    <span class="text-sm text-gray-700">表示する</span>
+                                </label>
+                            </div>
+                            <p class="text-xs text-gray-500 mt-2">
+                                <i class="fas fa-info-circle text-amber-500 mr-1"></i>
+                                テロップ＝シーンごとの任意テキスト表現。<br/>
+                                字幕（CC）＝音声由来の自動字幕。両方同時ONも可能です。
+                            </p>
+                        </div>
+
                         <!-- モーション -->
                         <div>
                             <label class="block text-sm font-semibold text-gray-700 mb-2">

@@ -2278,6 +2278,10 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         preset: body.motion?.preset ?? outputPresetConfig.motion_default ?? 'none',
         transition: body.motion?.transition || 'crossfade',
       },
+      // PR-5-3a: テロップ表示設定（字幕とは別）
+      telops: {
+        enabled: body.telops?.enabled ?? true,  // デフォルトON
+      },
       // PR-5-1: 表現サマリー（スナップショット）
       expression_summary: {
         has_voice: totalUtterancesWithAudio > 0,
@@ -2292,6 +2296,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         },
         // 無音判定（音声・BGM・SFXすべてなし）
         is_silent: totalUtterancesWithAudio === 0 && !activeBgm && !(body.bgm?.enabled) && totalSfx === 0,
+        // PR-5-3a: テロップ有無
+        has_telops: (body.telops?.enabled ?? true),
+        telops_enabled: (body.telops?.enabled ?? true),
       },
     };
     
