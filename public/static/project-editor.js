@@ -857,9 +857,12 @@ async function saveSourceText() {
     });
     
     if (response.data.id) {
-      showToast('テキストが保存されました', 'success');
+      showToast('テキストが保存されました。Scene Splitタブでシーン分割を実行してください。', 'success');
       await loadProject(); // Reload project to update status
       document.getElementById('nextStepGuide').classList.remove('hidden');
+      
+      // 自動でScene Splitタブに遷移
+      switchTab('sceneSplit');
     } else {
       showToast(response.data.error?.message || 'テキスト保存に失敗しました', 'error');
     }

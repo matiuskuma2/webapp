@@ -751,10 +751,18 @@ app.get('/projects/:id', (c) => {
                 
                 <!-- Next Step Guidance -->
                 <div id="nextStepGuide" class="mt-6 p-4 bg-blue-50 border-l-4 border-blue-600 rounded hidden">
-                    <p class="text-sm text-gray-700">
-                        <i class="fas fa-check-circle text-green-600 mr-2"></i>
-                        入力が完了しました。次は<strong>Scene Split</strong>タブでシーン分割を実行してください。
-                    </p>
+                    <div class="flex items-center justify-between flex-wrap gap-4">
+                        <p class="text-sm text-gray-700">
+                            <i class="fas fa-check-circle text-green-600 mr-2"></i>
+                            入力が完了しました。次は<strong>Scene Split</strong>タブでシーン分割を実行してください。
+                        </p>
+                        <button 
+                            onclick="switchTab('sceneSplit')"
+                            class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold touch-manipulation"
+                        >
+                            <i class="fas fa-cut mr-2"></i>シーン分割へ進む
+                        </button>
+                    </div>
                 </div>
             </div>
 
