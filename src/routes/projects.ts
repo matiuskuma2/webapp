@@ -464,10 +464,13 @@ projects.get('/:id/scenes', async (c) => {
 
           // R1.6: scene_utterances の状態取得（preflight用）
           // R3-A: duration_ms 追加（音声尺の合計計算用）
+          // PR-API-1: role, character_key 追加（話者サマリー用）
           const { results: utteranceRows } = await c.env.DB.prepare(`
             SELECT 
               u.id,
               u.text,
+              u.role,
+              u.character_key,
               u.audio_generation_id,
               ag.status as audio_status,
               ag.duration_ms
@@ -478,6 +481,8 @@ projects.get('/:id/scenes', async (c) => {
           `).bind(scene.id).all<{
             id: number;
             text: string;
+            role: string;
+            character_key: string | null;
             audio_generation_id: number | null;
             audio_status: string | null;
             duration_ms: number | null;
@@ -492,8 +497,9 @@ projects.get('/:id/scenes', async (c) => {
           const sfxCount = sfxCountResult?.count || 0
 
           // キャラクターの特徴情報をマージ（A/B/C層）
+          // PR-API-1: character_name 追加（話者サマリー用）
           const { results: charDetails } = await c.env.DB.prepare(`
-            SELECT character_key, appearance_description, story_traits
+            SELECT character_key, character_name, appearance_description, story_traits
             FROM project_character_models
             WHERE project_id = ?
           `).bind(projectId).all()
@@ -622,16 +628,52 @@ projects.get('/:id/scenes', async (c) => {
                 total_duration_ms: totalDurationMs
               };
             })(),
+            // PR-API-1: speaker_summary（話者サマリー）
+            // scene_utterances から話者情報を集約（SSOTはscene_utterancesのみ）
+            speaker_summary: (() => {
+              const hasNarration = utteranceRows.some((u: any) => u.role === 'narration');
+              const dialogueCharacterKeys = [...new Set(
+                utteranceRows
+                  .filter((u: any) => u.role === 'dialogue' && u.character_key)
+                  .map((u: any) => u.character_key)
+              )];
+              // character_key から character_name を解決（charDetailsMap を使用）
+              const speakers: string[] = [];
+              const speakerKeys: string[] = [];
+              
+              for (const charKey of dialogueCharacterKeys) {
+                const charDetail = charDetailsMap.get(charKey);
+                if (charDetail && (charDetail as any).character_name) {
+                  speakers.push((charDetail as any).character_name);
+                } else {
+                  // キャラ名が見つからない場合はキーをそのまま使用
+                  speakers.push(charKey as string);
+                }
+                speakerKeys.push(charKey as string);
+              }
+              
+              if (hasNarration) {
+                speakers.push('ナレーション');
+              }
+              
+              return {
+                speakers,           // 表示用: ["レイラ", "レン", "ナレーション"]
+                speaker_keys: speakerKeys,  // キー: ["char_leila", "char_ren"]
+                has_narration: hasNarration,
+                utterance_total: utteranceRows.length
+              };
+            })(),
             // R2-C: text_render_mode (computed from display_asset_type)
             text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
             // R3-B: SFX（効果音）数
             sfx_count: sfxCount,
             // R2-C: motion preset (will be fetched separately for efficiency, return placeholder)
+            // Note: scene_motion テーブルのカラム名は `preset` (not `motion_preset_id`)
             motion_preset_id: await (async () => {
               const motionRecord = await c.env.DB.prepare(`
-                SELECT motion_preset_id FROM scene_motion WHERE scene_id = ?
-              `).bind(scene.id).first<{ motion_preset_id: string }>();
-              if (motionRecord) return motionRecord.motion_preset_id;
+                SELECT preset FROM scene_motion WHERE scene_id = ?
+              `).bind(scene.id).first<{ preset: string }>();
+              if (motionRecord) return motionRecord.preset;
               // Default based on display_asset_type
               return (scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft';
             })()
