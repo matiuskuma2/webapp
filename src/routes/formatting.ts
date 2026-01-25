@@ -380,31 +380,62 @@ formatting.post('/:id/format', async (c) => {
 })
 
 /**
- * ハードリセット: プロジェクトの全データを削除（scenes, image_generations, audio_generations, scene_utterances, video_builds など）
- * ビルド履歴は残す（監査・確認用）
+ * ハードリセット: プロジェクトの全データを削除
+ * 
+ * 削除対象（子→親の順）:
+ * - scene_balloons (吹き出し)
+ * - scene_audio_cues (SFX/BGM)
+ * - scene_telops (テロップ)
+ * - scene_motion (モーション設定)
+ * - scene_style_settings (シーン別スタイル)
+ * - scene_utterances (発話)
+ * - scene_character_map (キャラクター割当)
+ * - scene_character_traits (キャラクター特性)
+ * - audio_generations (音声生成)
+ * - image_generations (画像生成)
+ * - scenes
+ * 
+ * 保持対象:
+ * - video_builds (ビルド履歴 - 監査用)
+ * - project_audio_tracks (BGM設定 - project単位)
+ * - project_character_models (キャラ定義 - project単位)
  */
 async function hardResetProject(db: any, projectId: string) {
+  console.log(`[HardReset] Starting reset for project ${projectId}`)
+  
   // 1. scenes取得
   const { results: scenes } = await db.prepare(`SELECT id FROM scenes WHERE project_id = ?`).bind(projectId).all()
   const sceneIds = scenes.map((s: any) => s.id)
   
   if (sceneIds.length > 0) {
-    // 2. 関連データ削除（順序に注意）
+    // 2. 関連データ削除（子→親の順、漏れ防止のため全テーブル列挙）
     for (const sceneId of sceneIds) {
-      // scene_utterances
+      // 吹き出し
+      await db.prepare(`DELETE FROM scene_balloons WHERE scene_id = ?`).bind(sceneId).run()
+      // SFX/BGMキュー
+      await db.prepare(`DELETE FROM scene_audio_cues WHERE scene_id = ?`).bind(sceneId).run()
+      // テロップ
+      await db.prepare(`DELETE FROM scene_telops WHERE scene_id = ?`).bind(sceneId).run()
+      // モーション設定
+      await db.prepare(`DELETE FROM scene_motion WHERE scene_id = ?`).bind(sceneId).run()
+      // シーン別スタイル
+      await db.prepare(`DELETE FROM scene_style_settings WHERE scene_id = ?`).bind(sceneId).run()
+      // 発話
       await db.prepare(`DELETE FROM scene_utterances WHERE scene_id = ?`).bind(sceneId).run()
-      // scene_character_map
+      // キャラクター割当
       await db.prepare(`DELETE FROM scene_character_map WHERE scene_id = ?`).bind(sceneId).run()
-      // scene_character_traits
+      // キャラクター特性
       await db.prepare(`DELETE FROM scene_character_traits WHERE scene_id = ?`).bind(sceneId).run()
-      // image_generations
-      await db.prepare(`DELETE FROM image_generations WHERE scene_id = ?`).bind(sceneId).run()
-      // audio_generations
+      // 音声生成
       await db.prepare(`DELETE FROM audio_generations WHERE scene_id = ?`).bind(sceneId).run()
+      // 画像生成
+      await db.prepare(`DELETE FROM image_generations WHERE scene_id = ?`).bind(sceneId).run()
     }
     
     // 3. scenes削除
     await db.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
+    
+    console.log(`[HardReset] Deleted ${sceneIds.length} scenes and all related data`)
   }
   
   // 4. text_chunks をリセット（statusをpendingに戻す）
@@ -421,7 +452,7 @@ async function hardResetProject(db: any, projectId: string) {
     WHERE id = ?
   `).bind(projectId).run()
   
-  console.log(`[HardReset] Project ${projectId}: deleted ${sceneIds.length} scenes and related data`)
+  console.log(`[HardReset] Project ${projectId}: reset complete`)
 }
 
 /**
@@ -519,6 +550,20 @@ async function processTextChunks(
   // 各 chunk を処理
   let successCount = 0
   let failedCount = 0
+  
+  // ★ target配分ロジック: chunk数に応じてシーン数を按分
+  const totalChunks = await c.env.DB.prepare(`
+    SELECT COUNT(*) as count FROM text_chunks WHERE project_id = ?
+  `).bind(projectId).first() as { count: number }
+  
+  const currentSceneCount = await c.env.DB.prepare(`
+    SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+  `).bind(projectId).first() as { count: number }
+  
+  const remainingTarget = Math.max(1, targetSceneCount - (currentSceneCount?.count || 0))
+  const remainingChunks = Math.max(1, (totalChunks?.count || 1) - (currentSceneCount?.count || 0) / 2)
+  
+  console.log(`[AIMode] target=${targetSceneCount}, currentScenes=${currentSceneCount?.count}, remainingTarget=${remainingTarget}, remainingChunks=${remainingChunks}`)
 
   for (const chunk of pendingChunks) {
     try {
@@ -528,6 +573,10 @@ async function processTextChunks(
         SET status = 'processing', updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).bind(chunk.id).run()
+      
+      // このchunkに割り当てるシーン数を計算
+      const chunkTargetScenes = Math.max(1, Math.ceil(remainingTarget / remainingChunks))
+      console.log(`[AIMode] Chunk ${chunk.idx}: target ${chunkTargetScenes} scenes`)
 
       // OpenAI API で MiniScene 生成（AI整理モード）
       const miniScenesResult = await generateMiniScenesAI(
@@ -535,7 +584,7 @@ async function processTextChunks(
         project.title as string,
         chunk.idx as number,
         c.env.OPENAI_API_KEY,
-        targetSceneCount
+        chunkTargetScenes  // chunk単位の目標シーン数
       )
 
       if (!miniScenesResult.success) {
@@ -849,6 +898,13 @@ async function getChunkStats(db: any, projectId: string) {
 
 /**
  * preserve モード: 原文維持で分割（AIによる改変なし）
+ * 
+ * 【重要: 原文不変ガード】
+ * - dialogue は絶対にAIに渡さない（image_prompt生成のみAI使用）
+ * - dialogue の文字列を再整形しない（trim以外禁止）
+ * - 句読点・改行を維持（結合時は \n\n）
+ * 
+ * 分割ルール:
  * - 空行（\n\n）で段落分割
  * - 段落数 > targetSceneCount: 段落を結合（省略なし）
  * - 段落数 < targetSceneCount: 段落を文境界で分割（省略・言い換え禁止）
@@ -872,50 +928,64 @@ async function processPreserveMode(
     }, 400)
   }
   
-  // 1. 既存データをクリア
-  const { results: existingScenes } = await c.env.DB.prepare(`
-    SELECT id FROM scenes WHERE project_id = ?
-  `).bind(projectId).all()
+  // ★ 原文不変ガード: 元テキストの文字数を記録
+  const originalCharCount = sourceText.length
   
-  if (existingScenes.length > 0) {
-    for (const scene of existingScenes) {
-      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id = ?`).bind(scene.id).run()
-      await c.env.DB.prepare(`DELETE FROM scene_utterances WHERE scene_id = ?`).bind(scene.id).run()
-      await c.env.DB.prepare(`DELETE FROM scene_character_map WHERE scene_id = ?`).bind(scene.id).run()
-      await c.env.DB.prepare(`DELETE FROM scene_character_traits WHERE scene_id = ?`).bind(scene.id).run()
-    }
-    await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
-  }
+  // 1. 既存データをクリア（hardResetProjectを使用）
+  await hardResetProject(c.env.DB, projectId)
   
   // 2. テキストを段落に分割（空行区切り）
+  // Note: trim() のみ許可、内容の改変は禁止
   let paragraphs = sourceText
     .split(/\n\s*\n/)
-    .map(p => p.trim())
+    .map(p => p.trim())  // 前後の空白のみ除去
     .filter(p => p.length > 0)
   
   console.log(`[PreserveMode] Found ${paragraphs.length} paragraphs, target=${targetSceneCount}`)
   
   // 3. 段落数を targetSceneCount に調整
   if (paragraphs.length > targetSceneCount) {
-    // 段落を結合（省略なし）
-    paragraphs = mergeParagraphs(paragraphs, targetSceneCount)
+    // 段落を結合（省略なし、\n\n で結合）
+    paragraphs = mergeParagraphsPreserve(paragraphs, targetSceneCount)
   } else if (paragraphs.length < targetSceneCount) {
-    // 段落を文境界で分割
-    paragraphs = splitParagraphs(paragraphs, targetSceneCount)
+    // 段落を文境界で分割（省略・言い換え禁止）
+    paragraphs = splitParagraphsPreserve(paragraphs, targetSceneCount)
   }
   
+  // ★ 原文不変ガード: 分割後の文字数チェック
+  const totalCharAfterSplit = paragraphs.reduce((sum, p) => sum + p.length, 0)
+  // 結合・分割で \n\n が追加/削除されるため、元の空白を除いた比較
+  const originalContentLength = sourceText.replace(/\s+/g, '').length
+  const afterContentLength = paragraphs.join('').replace(/\s+/g, '').length
+  
+  if (afterContentLength !== originalContentLength) {
+    console.error(`[PreserveMode] INTEGRITY CHECK FAILED: original=${originalContentLength}, after=${afterContentLength}`)
+    return c.json({
+      error: {
+        code: 'PRESERVE_INTEGRITY_ERROR',
+        message: '原文維持チェックに失敗しました。文字が欠落または追加されています。',
+        details: {
+          original_chars: originalContentLength,
+          after_chars: afterContentLength,
+          diff: afterContentLength - originalContentLength
+        }
+      }
+    }, 400)
+  }
+  
+  console.log(`[PreserveMode] Integrity check passed: ${afterContentLength} chars preserved`)
   console.log(`[PreserveMode] Adjusted to ${paragraphs.length} scenes`)
   
   // 4. シーンを作成（dialogue = 原文そのまま、image_prompt はAI生成）
   const insertStatements = []
   for (let i = 0; i < paragraphs.length; i++) {
-    const paragraph = paragraphs[i]
+    const dialogue = paragraphs[i]  // 原文そのまま！AIに渡さない
     const role = i === 0 ? 'hook' : (i === paragraphs.length - 1 ? 'summary' : 'context')
     const title = `シーン ${i + 1}`
     
-    // image_prompt を生成（簡易版: 後でAI生成に切り替え可能）
+    // image_prompt のみAI生成（dialogue は渡さない、要約テキストのみ）
     const imagePrompt = await generateImagePromptFromText(
-      paragraph.substring(0, 200),
+      dialogue.substring(0, 200),  // 先頭200文字を参考に
       project.title as string,
       c.env.OPENAI_API_KEY
     )
@@ -930,9 +1000,9 @@ async function processPreserveMode(
         i + 1,
         role,
         title,
-        paragraph, // 原文そのまま！
-        'narration', // デフォルトは narration
-        JSON.stringify([]), // bullets は空
+        dialogue,  // ★ 原文そのまま保存
+        'narration',
+        JSON.stringify([]),
         imagePrompt
       )
     )
@@ -976,9 +1046,10 @@ async function processPreserveMode(
 }
 
 /**
- * 段落を結合（省略なし）
+ * 段落を結合（原文維持版: 省略なし、改変なし）
+ * 結合時は \n\n で繋ぐ（段落感を維持）
  */
-function mergeParagraphs(paragraphs: string[], targetCount: number): string[] {
+function mergeParagraphsPreserve(paragraphs: string[], targetCount: number): string[] {
   if (paragraphs.length <= targetCount) return paragraphs
   
   const result: string[] = []
@@ -986,22 +1057,24 @@ function mergeParagraphs(paragraphs: string[], targetCount: number): string[] {
   
   for (let i = 0; i < paragraphs.length; i += groupSize) {
     const group = paragraphs.slice(i, i + groupSize)
-    result.push(group.join('\n\n')) // 空行で結合して段落感を維持
+    // \n\n で結合（原文の改行を維持）
+    result.push(group.join('\n\n'))
   }
   
   return result.slice(0, targetCount)
 }
 
 /**
- * 段落を文境界で分割（省略・言い換え禁止）
+ * 段落を文境界で分割（原文維持版: 省略・言い換え禁止）
+ * 分割は「。」「！」「？」の後でのみ行う
  */
-function splitParagraphs(paragraphs: string[], targetCount: number): string[] {
+function splitParagraphsPreserve(paragraphs: string[], targetCount: number): string[] {
   if (paragraphs.length >= targetCount) return paragraphs
   
   const result: string[] = []
   const neededSplits = targetCount - paragraphs.length
   
-  // 長い段落から順に分割
+  // 長い段落から順に分割対象を選ぶ
   const sortedByLength = [...paragraphs].sort((a, b) => b.length - a.length)
   const toSplit = new Set(sortedByLength.slice(0, neededSplits).map(p => paragraphs.indexOf(p)))
   
@@ -1009,12 +1082,13 @@ function splitParagraphs(paragraphs: string[], targetCount: number): string[] {
     const p = paragraphs[i]
     
     if (toSplit.has(i) && p.length > 100) {
-      // 文境界（。！？）で分割
-      const sentences = p.split(/(?<=[。！？])/g).filter(s => s.trim())
+      // 文境界（。！？）で分割（原文を変えない）
+      const sentences = p.split(/(?<=[。！？])/g).filter(s => s.length > 0)
       if (sentences.length >= 2) {
         const mid = Math.ceil(sentences.length / 2)
-        result.push(sentences.slice(0, mid).join('').trim())
-        result.push(sentences.slice(mid).join('').trim())
+        // join時に余計な文字を追加しない
+        result.push(sentences.slice(0, mid).join(''))
+        result.push(sentences.slice(mid).join(''))
       } else {
         result.push(p)
       }

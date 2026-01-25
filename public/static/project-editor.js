@@ -882,9 +882,20 @@ let currentTargetSceneCount = 5; // Default target scene count
  * Render format section UI with mode selection
  */
 function renderFormatSectionUI() {
+  // 段落数を計算
+  const paragraphCount = countParagraphs();
+  
   return `
     <div class="p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg">
       <h3 class="font-bold text-gray-800 mb-4">シーン分割設定</h3>
+      
+      <!-- Paragraph Count Info -->
+      <div id="paragraphInfo" class="mb-4 p-3 bg-blue-50 rounded border border-blue-200">
+        <p class="text-sm text-blue-800">
+          <i class="fas fa-align-left mr-2"></i>
+          <strong>現在の段落数:</strong> <span id="currentParagraphCount">${paragraphCount}</span> 段落
+        </p>
+      </div>
       
       <!-- Mode Selection -->
       <div class="mb-4">
@@ -904,8 +915,8 @@ function renderFormatSectionUI() {
                    onchange="updateSplitMode('preserve')"
                    class="mr-2 text-purple-600 focus:ring-purple-500">
             <span class="text-sm">
-              <strong>原文維持</strong>
-              <span class="text-gray-500 block text-xs">台本をそのまま使用（空行で分割）</span>
+              <strong>原文維持（台本モード）</strong>
+              <span class="text-gray-500 block text-xs">文章は一切変更しない</span>
             </span>
           </label>
         </div>
@@ -916,13 +927,13 @@ function renderFormatSectionUI() {
         <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数</label>
         <div class="flex items-center gap-2">
           <input type="number" id="targetSceneCount" value="5" min="1" max="30"
-                 onchange="currentTargetSceneCount = parseInt(this.value) || 5"
+                 onchange="updateTargetSceneCount(this.value)"
                  class="w-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
           <span class="text-sm text-gray-500">シーン（1〜30）</span>
         </div>
       </div>
       
-      <!-- Mode Description -->
+      <!-- Mode Description (動的更新) -->
       <div id="splitModeDescription" class="mb-4 p-3 bg-white rounded border border-gray-200">
         <p class="text-sm text-gray-600">
           <i class="fas fa-robot text-purple-600 mr-2"></i>
@@ -939,11 +950,33 @@ function renderFormatSectionUI() {
         <i class="fas fa-magic mr-2"></i>シーン分割を実行
       </button>
       
-      <p class="text-xs text-gray-500 mt-2 text-center">
-        ※ 既存のシーン・画像・音声は全てリセットされます
+      <p class="text-xs text-red-500 mt-2 text-center font-medium">
+        ⚠️ やり直し＝全リセット（既存のシーン・画像・音声は全削除）
       </p>
     </div>
   `;
+}
+
+/**
+ * Count paragraphs in current source text
+ */
+function countParagraphs() {
+  const textArea = document.getElementById('sourceText');
+  if (!textArea) return 0;
+  
+  const text = textArea.value || '';
+  if (!text.trim()) return 0;
+  
+  // 空行で分割して段落数をカウント
+  return text.split(/\n\s*\n/).filter(p => p.trim().length > 0).length;
+}
+
+/**
+ * Update target scene count and refresh description
+ */
+function updateTargetSceneCount(value) {
+  currentTargetSceneCount = parseInt(value) || 5;
+  updateSplitModeDescription();
 }
 
 /**
@@ -951,22 +984,51 @@ function renderFormatSectionUI() {
  */
 function updateSplitMode(mode) {
   currentSplitMode = mode;
+  updateSplitModeDescription();
+}
+
+/**
+ * Update split mode description with paragraph/target comparison
+ */
+function updateSplitModeDescription() {
   const descEl = document.getElementById('splitModeDescription');
   if (!descEl) return;
   
-  if (mode === 'preserve') {
+  const paragraphCount = countParagraphs();
+  const target = currentTargetSceneCount;
+  
+  if (currentSplitMode === 'preserve') {
+    // preserve モードの説明（段落数と目標の比較）
+    let adjustmentText = '';
+    if (paragraphCount > target) {
+      adjustmentText = `<span class="text-orange-600"><i class="fas fa-compress-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（段落を結合、改変なし）</span>`;
+    } else if (paragraphCount < target) {
+      adjustmentText = `<span class="text-blue-600"><i class="fas fa-expand-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（文境界で分割、改変なし）</span>`;
+    } else {
+      adjustmentText = `<span class="text-green-600"><i class="fas fa-check mr-1"></i>${paragraphCount}段落 = ${target}シーン（そのまま）</span>`;
+    }
+    
     descEl.innerHTML = `
-      <p class="text-sm text-gray-600">
-        <i class="fas fa-file-alt text-green-600 mr-2"></i>
-        <strong>原文維持モード:</strong> 原文は一切変更しません。空行（段落）で分割し、必要に応じて結合・分割します。
-      </p>
+      <div class="text-sm">
+        <p class="text-gray-600 mb-2">
+          <i class="fas fa-file-alt text-green-600 mr-2"></i>
+          <strong>原文維持モード:</strong> 文章は一切変更しません
+        </p>
+        <p class="mt-1">${adjustmentText}</p>
+      </div>
     `;
   } else {
+    // AI 整理モードの説明
     descEl.innerHTML = `
-      <p class="text-sm text-gray-600">
-        <i class="fas fa-robot text-purple-600 mr-2"></i>
-        <strong>AI整理モード:</strong> 元の文章を省略せず、AIが意図を読み取って適切にシーン分割します。
-      </p>
+      <div class="text-sm">
+        <p class="text-gray-600">
+          <i class="fas fa-robot text-purple-600 mr-2"></i>
+          <strong>AI整理モード:</strong> 元の文章を省略せず、AIが意図を読み取って適切にシーン分割します。
+        </p>
+        <p class="text-gray-500 mt-1 text-xs">
+          目標: 約${target}シーン（AIが内容に応じて調整）
+        </p>
+      </div>
     `;
   }
 }
