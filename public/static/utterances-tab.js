@@ -85,6 +85,9 @@
         return;
       }
       
+      // Phase2-PR2c: Show new utterance form if adding
+      const newFormHtml = this.isAddingNew ? this.renderNewUtteranceForm() : '';
+      
       container.innerHTML = `
         <!-- Guide -->
         <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
@@ -97,20 +100,23 @@
         
         <!-- Utterance List -->
         <div class="space-y-3" id="utterances-list">
-          ${this.utterances.length === 0 
+          ${this.utterances.length === 0 && !this.isAddingNew
             ? this.renderEmptyState() 
             : this.utterances.map((u, idx) => this.renderUtteranceCard(u, idx)).join('')}
+          ${newFormHtml}
         </div>
         
-        <!-- Add Button -->
-        <div class="mt-4">
-          <button 
-            id="btn-add-utterance"
-            class="w-full px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold"
-          >
-            <i class="fas fa-plus mr-2"></i>発話を追加
-          </button>
-        </div>
+        <!-- Add Button (hidden when adding new) -->
+        ${this.isAddingNew ? '' : `
+          <div class="mt-4">
+            <button 
+              id="btn-add-utterance"
+              class="w-full px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold"
+            >
+              <i class="fas fa-plus mr-2"></i>発話を追加
+            </button>
+          </div>
+        `}
         
         <!-- Audio Summary -->
         <div class="mt-4 pt-4 border-t border-gray-200">
@@ -136,11 +142,13 @@
     
     /**
      * Render a single utterance card
+     * Phase2-PR2c: Support inline editing mode
      */
     renderUtteranceCard(utterance, idx) {
       const isNarration = utterance.role === 'narration';
       const hasAudio = !!utterance.audio_url;
       const isGenerating = this.audioGeneratingIds.has(utterance.id);
+      const isEditing = this.editingUtteranceId === utterance.id;
       
       const characterName = isNarration 
         ? 'ナレーション' 
@@ -148,6 +156,11 @@
       
       const roleColor = isNarration ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800';
       const audioStatusColor = hasAudio ? 'text-green-600' : 'text-gray-400';
+      
+      // Phase2-PR2c: If editing, show inline edit form
+      if (isEditing) {
+        return this.renderInlineEditForm(utterance, idx);
+      }
       
       return `
         <div class="utterance-card p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow" data-utterance-id="${utterance.id}">
@@ -244,6 +257,151 @@
     },
     
     /**
+     * Phase2-PR2c: Render inline edit form for an utterance
+     */
+    renderInlineEditForm(utterance, idx) {
+      const isNarration = utterance.role === 'narration';
+      const characterOptions = this.assignedCharacters.map(c => 
+        `<option value="${this.escapeHtml(c.character_key)}" ${utterance.character_key === c.character_key ? 'selected' : ''}>${this.escapeHtml(c.name)}</option>`
+      ).join('');
+      
+      return `
+        <div class="utterance-card p-4 bg-blue-50 border-2 border-blue-400 rounded-lg shadow-md" data-utterance-id="${utterance.id}">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="w-8 h-8 flex items-center justify-center bg-blue-100 text-blue-700 rounded-full font-bold text-sm">
+              ${idx + 1}
+            </span>
+            <span class="text-sm font-bold text-blue-800">
+              <i class="fas fa-edit mr-1"></i>編集中
+            </span>
+          </div>
+          
+          <!-- Role Selection -->
+          <div class="mb-3">
+            <label class="block text-xs font-semibold text-gray-600 mb-1">種類</label>
+            <div class="flex gap-4">
+              <label class="flex items-center cursor-pointer">
+                <input type="radio" name="inline-edit-role-${utterance.id}" value="narration" class="mr-2" ${isNarration ? 'checked' : ''}>
+                <span class="text-sm">ナレーション</span>
+              </label>
+              <label class="flex items-center cursor-pointer ${this.assignedCharacters.length === 0 ? 'opacity-50' : ''}">
+                <input type="radio" name="inline-edit-role-${utterance.id}" value="dialogue" class="mr-2" ${!isNarration ? 'checked' : ''} ${this.assignedCharacters.length === 0 ? 'disabled' : ''}>
+                <span class="text-sm">キャラセリフ</span>
+              </label>
+            </div>
+          </div>
+          
+          <!-- Character Selection (shown for dialogue) -->
+          <div id="inline-edit-char-section-${utterance.id}" class="mb-3 ${isNarration ? 'hidden' : ''}">
+            <label class="block text-xs font-semibold text-gray-600 mb-1">キャラクター</label>
+            <select id="inline-edit-char-${utterance.id}" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+              <option value="">-- 選択 --</option>
+              ${characterOptions}
+            </select>
+          </div>
+          
+          <!-- Text -->
+          <div class="mb-3">
+            <label class="block text-xs font-semibold text-gray-600 mb-1">テキスト</label>
+            <textarea 
+              id="inline-edit-text-${utterance.id}"
+              rows="3"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            >${this.escapeHtml(utterance.text || '')}</textarea>
+          </div>
+          
+          <!-- Actions -->
+          <div class="flex gap-2">
+            <button 
+              class="btn-save-inline-edit flex-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold"
+              data-utterance-id="${utterance.id}"
+            >
+              <i class="fas fa-save mr-1"></i>保存
+            </button>
+            <button 
+              class="btn-cancel-inline-edit px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 text-sm font-semibold"
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      `;
+    },
+    
+    /**
+     * Phase2-PR2c: Render inline form for new utterance
+     */
+    renderNewUtteranceForm() {
+      const characterOptions = this.assignedCharacters.map(c => 
+        `<option value="${this.escapeHtml(c.character_key)}">${this.escapeHtml(c.name)}</option>`
+      ).join('');
+      
+      return `
+        <div class="utterance-card p-4 bg-green-50 border-2 border-green-400 rounded-lg shadow-md">
+          <div class="flex items-center gap-2 mb-3">
+            <span class="w-8 h-8 flex items-center justify-center bg-green-100 text-green-700 rounded-full font-bold text-sm">
+              <i class="fas fa-plus"></i>
+            </span>
+            <span class="text-sm font-bold text-green-800">
+              <i class="fas fa-plus-circle mr-1"></i>新しい発話を追加
+            </span>
+          </div>
+          
+          <!-- Role Selection -->
+          <div class="mb-3">
+            <label class="block text-xs font-semibold text-gray-600 mb-1">種類</label>
+            <div class="flex gap-4">
+              <label class="flex items-center cursor-pointer">
+                <input type="radio" name="inline-new-role" value="narration" class="mr-2" checked>
+                <span class="text-sm">ナレーション</span>
+              </label>
+              <label class="flex items-center cursor-pointer ${this.assignedCharacters.length === 0 ? 'opacity-50' : ''}">
+                <input type="radio" name="inline-new-role" value="dialogue" class="mr-2" ${this.assignedCharacters.length === 0 ? 'disabled' : ''}>
+                <span class="text-sm">キャラセリフ</span>
+              </label>
+            </div>
+          </div>
+          
+          <!-- Character Selection -->
+          <div id="inline-new-char-section" class="mb-3 hidden">
+            <label class="block text-xs font-semibold text-gray-600 mb-1">キャラクター</label>
+            <select id="inline-new-char" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+              <option value="">-- 選択 --</option>
+              ${characterOptions}
+            </select>
+          </div>
+          
+          <!-- Text -->
+          <div class="mb-3">
+            <label class="block text-xs font-semibold text-gray-600 mb-1">テキスト</label>
+            <textarea 
+              id="inline-utterance-text"
+              rows="3"
+              class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-green-500"
+              placeholder="発話テキストを入力..."
+            ></textarea>
+          </div>
+          
+          <!-- Actions -->
+          <div class="flex gap-2">
+            <button 
+              id="btn-save-new-utterance"
+              class="flex-1 px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold"
+            >
+              <i class="fas fa-plus mr-1"></i>追加
+            </button>
+            <button 
+              id="btn-cancel-new-utterance"
+              class="px-3 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 text-sm font-semibold"
+            >
+              キャンセル
+            </button>
+          </div>
+        </div>
+      `;
+    },
+    
+    /**
      * Render audio summary
      */
     renderAudioSummary() {
@@ -324,17 +482,82 @@
           this.playAudio(url);
         });
       });
+      
+      // Phase2-PR2c: Inline edit save
+      document.querySelectorAll('.btn-save-inline-edit').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          const id = parseInt(e.currentTarget.dataset.utteranceId);
+          this.saveInlineEdit(id);
+        });
+      });
+      
+      // Phase2-PR2c: Inline edit cancel
+      document.querySelectorAll('.btn-cancel-inline-edit').forEach(btn => {
+        btn.addEventListener('click', () => this.cancelInlineEdit());
+      });
+      
+      // Phase2-PR2c: New utterance save
+      const saveNewBtn = document.getElementById('btn-save-new-utterance');
+      if (saveNewBtn) {
+        saveNewBtn.addEventListener('click', () => this.saveNewUtterance());
+      }
+      
+      // Phase2-PR2c: New utterance cancel
+      const cancelNewBtn = document.getElementById('btn-cancel-new-utterance');
+      if (cancelNewBtn) {
+        cancelNewBtn.addEventListener('click', () => this.cancelInlineEdit());
+      }
+      
+      // Phase2-PR2c: Role change handler for inline forms
+      document.querySelectorAll('input[name^="inline-edit-role-"]').forEach(input => {
+        input.addEventListener('change', (e) => {
+          const utteranceId = e.target.name.replace('inline-edit-role-', '');
+          const charSection = document.getElementById(`inline-edit-char-section-${utteranceId}`);
+          if (charSection) {
+            charSection.classList.toggle('hidden', e.target.value === 'narration');
+          }
+        });
+      });
+      
+      // Phase2-PR2c: Role change handler for new form
+      document.querySelectorAll('input[name="inline-new-role"]').forEach(input => {
+        input.addEventListener('change', (e) => {
+          const charSection = document.getElementById('inline-new-char-section');
+          if (charSection) {
+            charSection.classList.toggle('hidden', e.target.value === 'narration');
+          }
+        });
+      });
     },
     
     /**
-     * Show modal to add a new utterance
+     * Phase2-PR2c: State for inline editing
+     */
+    editingUtteranceId: null,
+    isAddingNew: false,
+    
+    /**
+     * Show inline form to add a new utterance
+     * Phase2-PR2c: No modal - inline form at the end
      */
     showAddUtteranceModal() {
-      this.showUtteranceModal(null);
+      // Close any existing edit
+      this.cancelInlineEdit();
+      
+      // Show inline add form
+      this.isAddingNew = true;
+      this.render();
+      
+      // Focus the text input
+      setTimeout(() => {
+        const textInput = document.getElementById('inline-utterance-text');
+        if (textInput) textInput.focus();
+      }, 100);
     },
     
     /**
-     * Show modal to edit an utterance
+     * Show inline edit for an utterance
+     * Phase2-PR2c: No modal - edit in place
      */
     showEditUtteranceModal(utteranceId) {
       const utterance = this.utterances.find(u => u.id === utteranceId);
@@ -342,148 +565,102 @@
         console.error('[UtterancesTab] Utterance not found:', utteranceId);
         return;
       }
-      this.showUtteranceModal(utterance);
+      
+      // Close any existing edit
+      this.cancelInlineEdit();
+      
+      // Start editing this utterance
+      this.editingUtteranceId = utteranceId;
+      this.render();
+      
+      // Focus the text input
+      setTimeout(() => {
+        const textInput = document.getElementById(`inline-edit-text-${utteranceId}`);
+        if (textInput) textInput.focus();
+      }, 100);
     },
     
     /**
-     * Show utterance edit modal
-     * @param {Object|null} utterance - null for new, object for edit
+     * Cancel inline editing
      */
-    showUtteranceModal(utterance) {
-      const isEdit = !!utterance;
+    cancelInlineEdit() {
+      this.editingUtteranceId = null;
+      this.isAddingNew = false;
+      this.render();
+    },
+    
+    /**
+     * Save inline edit for existing utterance
+     */
+    async saveInlineEdit(utteranceId) {
+      const textInput = document.getElementById(`inline-edit-text-${utteranceId}`);
+      const roleInput = document.querySelector(`input[name="inline-edit-role-${utteranceId}"]:checked`);
+      const charSelect = document.getElementById(`inline-edit-char-${utteranceId}`);
       
-      // Build character options (only for dialogue)
-      const characterOptions = this.assignedCharacters.map(c => 
-        `<option value="${this.escapeHtml(c.character_key)}" ${utterance?.character_key === c.character_key ? 'selected' : ''}>${this.escapeHtml(c.name)}</option>`
-      ).join('');
+      if (!textInput || !roleInput) {
+        console.error('[UtterancesTab] Form elements not found');
+        return;
+      }
       
-      const modalHtml = `
-        <div id="utterance-modal" class="fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-4">
-          <div class="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[80vh] overflow-hidden">
-            <div class="bg-gradient-to-r from-purple-600 to-blue-600 px-6 py-4">
-              <h3 class="text-lg font-bold text-white">
-                <i class="fas fa-microphone-alt mr-2"></i>
-                ${isEdit ? '発話を編集' : '新しい発話を追加'}
-              </h3>
-            </div>
-            
-            <form id="utterance-form" class="p-6 space-y-4">
-              <!-- Role -->
-              <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">種類</label>
-                <div class="flex gap-4">
-                  <label class="flex items-center cursor-pointer">
-                    <input type="radio" name="utterance-role" value="narration" class="mr-2" ${!isEdit || utterance?.role === 'narration' ? 'checked' : ''}>
-                    <span class="text-sm">ナレーション</span>
-                  </label>
-                  <label class="flex items-center cursor-pointer ${this.assignedCharacters.length === 0 ? 'opacity-50' : ''}">
-                    <input type="radio" name="utterance-role" value="dialogue" class="mr-2" ${utterance?.role === 'dialogue' ? 'checked' : ''} ${this.assignedCharacters.length === 0 ? 'disabled' : ''}>
-                    <span class="text-sm">キャラセリフ</span>
-                  </label>
-                </div>
-                ${this.assignedCharacters.length === 0 ? '<p class="text-xs text-orange-500 mt-1">セリフを使うには先にキャラクターを割り当ててください</p>' : ''}
-              </div>
-              
-              <!-- Character (only for dialogue) -->
-              <div id="utterance-character-section" class="${!isEdit || utterance?.role !== 'dialogue' ? 'hidden' : ''}">
-                <label class="block text-sm font-semibold text-gray-700 mb-2">キャラクター</label>
-                <select id="utterance-character" class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500">
-                  <option value="">-- 選択 --</option>
-                  ${characterOptions}
-                </select>
-              </div>
-              
-              <!-- Text -->
-              <div>
-                <label class="block text-sm font-semibold text-gray-700 mb-2">テキスト（字幕にも使用）</label>
-                <textarea 
-                  id="utterance-text"
-                  rows="4"
-                  class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-                  placeholder="発話テキストを入力..."
-                >${this.escapeHtml(utterance?.text || '')}</textarea>
-              </div>
-              
-              <!-- Hidden ID -->
-              <input type="hidden" id="utterance-id" value="${utterance?.id || ''}">
-              
-              <!-- Actions -->
-              <div class="flex gap-3 pt-4">
-                <button type="submit" class="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold">
-                  <i class="fas fa-save mr-2"></i>${isEdit ? '更新' : '追加'}
-                </button>
-                <button type="button" id="btn-cancel-utterance" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 font-semibold">
-                  キャンセル
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      `;
+      const text = textInput.value.trim();
+      const role = roleInput.value;
+      const characterKey = role === 'dialogue' ? charSelect?.value || null : null;
       
-      // Insert modal
-      document.body.insertAdjacentHTML('beforeend', modalHtml);
+      if (!text) {
+        alert('テキストを入力してください');
+        return;
+      }
       
-      // Bind events
-      const modal = document.getElementById('utterance-modal');
-      const form = document.getElementById('utterance-form');
-      const roleInputs = document.querySelectorAll('input[name="utterance-role"]');
-      const characterSection = document.getElementById('utterance-character-section');
+      if (role === 'dialogue' && !characterKey) {
+        alert('キャラクターを選択してください');
+        return;
+      }
       
-      // Role change handler
-      roleInputs.forEach(input => {
-        input.addEventListener('change', (e) => {
-          characterSection.classList.toggle('hidden', e.target.value === 'narration');
-        });
-      });
+      try {
+        await axios.put(`/api/utterances/${utteranceId}`, { role, character_key: characterKey, text });
+        this.editingUtteranceId = null;
+        await this.load(this.currentSceneId);
+      } catch (error) {
+        console.error('[UtterancesTab] Save failed:', error);
+        alert('保存に失敗しました: ' + (error.response?.data?.error?.message || error.message));
+      }
+    },
+    
+    /**
+     * Save new utterance from inline form
+     */
+    async saveNewUtterance() {
+      const textInput = document.getElementById('inline-utterance-text');
+      const roleInput = document.querySelector('input[name="inline-new-role"]:checked');
+      const charSelect = document.getElementById('inline-new-char');
       
-      // Cancel
-      document.getElementById('btn-cancel-utterance').addEventListener('click', () => {
-        modal.remove();
-      });
+      if (!textInput || !roleInput) {
+        console.error('[UtterancesTab] Form elements not found');
+        return;
+      }
       
-      // Submit
-      form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
-        const id = document.getElementById('utterance-id').value;
-        const role = document.querySelector('input[name="utterance-role"]:checked').value;
-        const characterKey = role === 'dialogue' ? document.getElementById('utterance-character').value : null;
-        const text = document.getElementById('utterance-text').value.trim();
-        
-        if (!text) {
-          alert('テキストを入力してください');
-          return;
-        }
-        
-        if (role === 'dialogue' && !characterKey) {
-          alert('キャラクターを選択してください');
-          return;
-        }
-        
-        try {
-          if (id) {
-            // Update
-            await axios.put(`/api/utterances/${id}`, { role, character_key: characterKey, text });
-          } else {
-            // Create
-            await axios.post(`/api/scenes/${this.currentSceneId}/utterances`, { role, character_key: characterKey, text });
-          }
-          
-          modal.remove();
-          await this.load(this.currentSceneId); // Reload
-        } catch (error) {
-          console.error('[UtterancesTab] Save failed:', error);
-          alert('保存に失敗しました: ' + (error.response?.data?.error?.message || error.message));
-        }
-      });
+      const text = textInput.value.trim();
+      const role = roleInput.value;
+      const characterKey = role === 'dialogue' ? charSelect?.value || null : null;
       
-      // Close on background click
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-          modal.remove();
-        }
-      });
+      if (!text) {
+        alert('テキストを入力してください');
+        return;
+      }
+      
+      if (role === 'dialogue' && !characterKey) {
+        alert('キャラクターを選択してください');
+        return;
+      }
+      
+      try {
+        await axios.post(`/api/scenes/${this.currentSceneId}/utterances`, { role, character_key: characterKey, text });
+        this.isAddingNew = false;
+        await this.load(this.currentSceneId);
+      } catch (error) {
+        console.error('[UtterancesTab] Create failed:', error);
+        alert('追加に失敗しました: ' + (error.response?.data?.error?.message || error.message));
+      }
     },
     
     /**
