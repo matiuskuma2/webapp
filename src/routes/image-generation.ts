@@ -1248,9 +1248,10 @@ async function generateImageWithRetry(
       // 429エラー時はリトライ
       if (response.status === 429) {
         const retryAfter = response.headers.get('Retry-After')
+        // 指数バックオフ: 5s, 10s, 20s, 40s, 60s (max 60s) - Gemini無料枠(15 RPM)対応
         const waitTime = retryAfter 
           ? parseInt(retryAfter) * 1000 
-          : Math.min(Math.pow(2, attempt + 1) * 1000, 30000) // 指数バックオフ: 2s, 4s, 8s, 16s, 30s (max 30s)
+          : Math.min(Math.pow(2, attempt + 1) * 2500, 60000)
 
         console.warn(`Rate limited (429). Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
         
@@ -1258,7 +1259,7 @@ async function generateImageWithRetry(
           await sleep(waitTime)
           continue
         } else {
-          lastError = 'Rate limit exceeded after max retries. Please wait 1-2 minutes before trying again.'
+          lastError = '画像生成のレート制限に達しました。Gemini APIの無料枠（1分間に15リクエスト）を超えています。2〜3分待ってから再試行してください。'
           break
         }
       }
