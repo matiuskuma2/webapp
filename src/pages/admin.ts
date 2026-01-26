@@ -964,6 +964,9 @@ export const adminHtml = `
     
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // Dollar sign constant to avoid template literal issues
+        const DOLLAR = '$';
+        
         let currentFilter = 'all';
         let allUsers = [];
         let subscriptionsLoaded = false;
@@ -1502,7 +1505,7 @@ export const adminHtml = `
                         <div class="mb-4">
                             <div class="flex justify-between mb-1">
                                 <span class="font-medium text-gray-700">\${getApiTypeLabel(t.api_type)}</span>
-                                <span class="text-gray-600">\$\${costUsd.toFixed(4)} (¥\${costJpy.toFixed(0)}) / \${t.request_count || 0}回</span>
+                                <span class="text-gray-600">$$\${costUsd.toFixed(4)} (¥\${costJpy.toFixed(0)}) / \${t.request_count || 0}回</span>
                             </div>
                             <div class="w-full bg-gray-200 rounded-full h-3">
                                 <div class="bg-purple-600 h-3 rounded-full" style="width: \${(costUsd / maxCost * 100).toFixed(1)}%"></div>
@@ -1532,7 +1535,7 @@ export const adminHtml = `
                                 </div>
                             </div>
                             <div class="text-right">
-                                <div class="font-bold text-red-700">\$\${uCostUsd.toFixed(4)}</div>
+                                <div class="font-bold text-red-700">$$\${uCostUsd.toFixed(4)}</div>
                                 <div class="text-xs text-gray-500">¥\${uCostJpy.toFixed(0)}</div>
                                 <div class="text-sm text-gray-500">\${u.requestCount || 0}リクエスト</div>
                             </div>
@@ -1563,12 +1566,12 @@ export const adminHtml = `
                                 </div>
                             </div>
                             <div class="text-right">
-                                <div class="font-bold text-gray-700">\$\${uCostUsd.toFixed(4)}</div>
+                                <div class="font-bold text-gray-700">$$\${uCostUsd.toFixed(4)}</div>
                                 <div class="text-xs text-gray-500">¥\${uCostJpy.toFixed(0)}</div>
                                 <div class="text-xs mt-1">
-                                    <span class="text-red-600" title="運営負担">\$\${sponsoredCost.toFixed(4)}</span>
+                                    <span class="text-red-600" title="運営負担">$$\${sponsoredCost.toFixed(4)}</span>
                                     <span class="text-gray-400 mx-1">/</span>
-                                    <span class="text-blue-600" title="ユーザー負担">\$\${userCost.toFixed(4)}</span>
+                                    <span class="text-blue-600" title="ユーザー負担">$$\${userCost.toFixed(4)}</span>
                                 </div>
                                 <div class="text-xs text-gray-400">\${u.requestCount || 0}リクエスト</div>
                             </div>
@@ -1609,13 +1612,13 @@ export const adminHtml = `
         function formatCost(usd) {
             const usdVal = Number(usd) || 0;
             const jpyVal = usdVal * USD_JPY_RATE;
-            return \`\$\${usdVal.toFixed(4)} (¥\${jpyVal.toFixed(0)})\`;
+            return \`$$\${usdVal.toFixed(4)} (¥\${jpyVal.toFixed(0)})\`;
         }
         
         function formatCostShort(usd) {
             const usdVal = Number(usd) || 0;
             const jpyVal = usdVal * USD_JPY_RATE;
-            return \`\$\${usdVal.toFixed(4)}<br><span class="text-xs text-gray-500">¥\${jpyVal.toFixed(0)}</span>\`;
+            return \`$$\${usdVal.toFixed(4)}<br><span class="text-xs text-gray-500">¥\${jpyVal.toFixed(0)}</span>\`;
         }
         
         // Load sponsor usage data
@@ -1647,7 +1650,7 @@ export const adminHtml = `
                                 <i class="fas fa-star text-2xl"></i>
                             </div>
                             <div>
-                                <p class="text-lg font-bold text-yellow-800">スポンサー総コスト: \$\${grandUsd.toFixed(4)} (¥\${grandJpy.toFixed(0)})</p>
+                                <p class="text-lg font-bold text-yellow-800">スポンサー総コスト: $$\${grandUsd.toFixed(4)} (¥\${grandJpy.toFixed(0)})</p>
                                 <p class="text-sm text-yellow-700">総リクエスト数: \${data.grandTotalRequests || 0}件</p>
                             </div>
                         </div>
@@ -1670,7 +1673,7 @@ export const adminHtml = `
                                     </div>
                                 </div>
                                 <div class="text-right">
-                                    <div class="text-lg font-bold text-purple-800">\$\${spUsd.toFixed(4)}</div>
+                                    <div class="text-lg font-bold text-purple-800">$$\${spUsd.toFixed(4)}</div>
                                     <div class="text-xs text-purple-600">¥\${spJpy.toFixed(0)}</div>
                                     <div class="text-sm text-purple-600">\${sponsor.totalRequests || 0}リクエスト</div>
                                 </div>
@@ -1683,7 +1686,7 @@ export const adminHtml = `
                         const userJpy = userUsd * USD_JPY_RATE;
                         const types = Object.entries(user.byType || {}).map(([type, info]) => {
                             const tJpy = (info.cost || 0) * USD_JPY_RATE;
-                            return \`<span class="text-xs bg-gray-100 px-2 py-1 rounded mr-1">\${getApiTypeLabel(type)}: \$\${info.cost.toFixed(4)} (¥\${tJpy.toFixed(0)})</span>\`;
+                            return \`<span class="text-xs bg-gray-100 px-2 py-1 rounded mr-1">\${getApiTypeLabel(type)}: $$\${info.cost.toFixed(4)} (¥\${tJpy.toFixed(0)})</span>\`;
                         }).join('');
                         
                         html += \`
@@ -1699,7 +1702,7 @@ export const adminHtml = `
                                     </div>
                                 </div>
                                 <div class="text-right">
-                                    <div class="font-bold text-gray-800">\$\${userUsd.toFixed(4)}</div>
+                                    <div class="font-bold text-gray-800">$$\${userUsd.toFixed(4)}</div>
                                     <div class="text-xs text-gray-500">¥\${userJpy.toFixed(0)}</div>
                                     <div class="text-sm text-gray-500">\${user.totalRequests || 0}リクエスト</div>
                                 </div>
@@ -1777,7 +1780,7 @@ export const adminHtml = `
                                 </div>
                                 <div>
                                     <p class="text-lg font-bold text-indigo-800">総オペレーション: \${summary.totalOperations}件</p>
-                                    <p class="text-sm text-indigo-700">推定コスト: \$\${(summary.totalCost || 0).toFixed(4)} (過去\${summary.periodDays}日)</p>
+                                    <p class="text-sm text-indigo-700">推定コスト: $$\${(summary.totalCost || 0).toFixed(4)} (過去\${summary.periodDays}日)</p>
                                 </div>
                             </div>
                         </div>
@@ -2443,7 +2446,7 @@ export const adminHtml = `
                                 <i class="fas fa-edit mr-1"></i>編集
                             </button>
                             \${a.is_active 
-                                ? '<button onclick="deactivateAudio(' + a.id + ', \'' + escapeHtml(a.name) + '\')" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"><i class="fas fa-trash mr-1"></i>無効化</button>'
+                                ? '<button onclick="deactivateAudio(' + a.id + ', \\x27' + escapeHtml(a.name) + '\\x27)" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"><i class="fas fa-trash mr-1"></i>無効化</button>'
                                 : '<button onclick="restoreAudio(' + a.id + ')" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm"><i class="fas fa-undo mr-1"></i>復元</button>'
                             }
                         </div>
