@@ -7428,14 +7428,15 @@ function renderVideoBuildItem(build) {
     // FIX: 有効期限チェックを削除 - 常にプレビュー/修正/DLボタンを表示
     // 動画が再生できない場合はプレビューモーダル内でエラーハンドリング
     // PR-4-3: プレビュー → 修正 → DL の順
+    // FIX: Use refresh-enabled functions to handle expired presigned URLs
     actionHtml = `
       <div class="flex items-center gap-2">
-        <button onclick="openVideoBuildPreviewModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+        <button onclick="openPreviewWithRefresh(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
           class="px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 text-sm font-semibold flex items-center gap-2"
           title="プレビュー再生">
           <i class="fas fa-play"></i>
         </button>
-        <button onclick="openChatEditModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+        <button onclick="openChatEditWithRefresh(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
           class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-2"
           title="チャットで修正">
           <i class="fas fa-comments"></i>修正
@@ -7604,6 +7605,106 @@ async function refreshVideoBuildDownload(buildId) {
     window.videoBuildRefreshUrlInFlight[buildId] = false;
   }
 }
+
+/**
+ * Open chat edit modal with automatic URL refresh
+ * Handles expired signed URLs by refreshing before opening modal
+ * @param {number} buildId 
+ * @param {string} videoUrl - Current URL (may be expired)
+ */
+async function openChatEditWithRefresh(buildId, videoUrl) {
+  try {
+    // Check if URL looks like an S3 presigned URL that might be expired
+    const isPresignedUrl = videoUrl && (
+      videoUrl.includes('X-Amz-Signature') || 
+      videoUrl.includes('Signature=') ||
+      videoUrl.includes('x-amz-')
+    );
+    
+    // For presigned URLs, always try to get a fresh one
+    if (isPresignedUrl) {
+      showToast('動画URLを更新中...', 'info');
+      
+      try {
+        const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
+        const build = response.data.build;
+        
+        if (response.data.success && build?.download_url) {
+          // Update cache
+          const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
+          if (idx >= 0) {
+            window.videoBuildListCache[idx].download_url = build.download_url;
+          }
+          
+          // Open with fresh URL
+          openChatEditModal(buildId, build.download_url);
+          return;
+        }
+      } catch (refreshError) {
+        console.warn('[ChatEdit] Failed to refresh URL, trying with original:', refreshError);
+        // Fall through to use original URL
+      }
+    }
+    
+    // Use original URL if not presigned or refresh failed
+    openChatEditModal(buildId, videoUrl);
+  } catch (error) {
+    console.error('[ChatEdit] Error:', error);
+    showToast('チャット修正モーダルを開けませんでした', 'error');
+  }
+}
+
+/**
+ * Open preview modal with automatic URL refresh
+ * Handles expired signed URLs by refreshing before opening modal
+ * @param {number} buildId 
+ * @param {string} videoUrl - Current URL (may be expired)
+ */
+async function openPreviewWithRefresh(buildId, videoUrl) {
+  try {
+    // Check if URL looks like an S3 presigned URL that might be expired
+    const isPresignedUrl = videoUrl && (
+      videoUrl.includes('X-Amz-Signature') || 
+      videoUrl.includes('Signature=') ||
+      videoUrl.includes('x-amz-')
+    );
+    
+    // For presigned URLs, always try to get a fresh one
+    if (isPresignedUrl) {
+      showToast('動画URLを更新中...', 'info');
+      
+      try {
+        const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
+        const build = response.data.build;
+        
+        if (response.data.success && build?.download_url) {
+          // Update cache
+          const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
+          if (idx >= 0) {
+            window.videoBuildListCache[idx].download_url = build.download_url;
+          }
+          
+          // Open with fresh URL
+          openVideoBuildPreviewModal(buildId, build.download_url);
+          return;
+        }
+      } catch (refreshError) {
+        console.warn('[Preview] Failed to refresh URL, trying with original:', refreshError);
+        // Fall through to use original URL
+      }
+    }
+    
+    // Use original URL if not presigned or refresh failed
+    openVideoBuildPreviewModal(buildId, videoUrl);
+  } catch (error) {
+    console.error('[Preview] Error:', error);
+    showToast('プレビューモーダルを開けませんでした', 'error');
+  }
+}
+
+// Export for global access
+window.openChatEditWithRefresh = openChatEditWithRefresh;
+window.openPreviewWithRefresh = openPreviewWithRefresh;
 
 /**
  * Get status info (icon, label, color)
