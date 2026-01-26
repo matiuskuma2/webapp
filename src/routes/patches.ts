@@ -1975,19 +1975,37 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
   };
 
   // 基本バリデーション
-  const validation = validatePatchRequest(patchRequest, projectId);
-  if (!validation.valid) {
-    return c.json({
-      ok: false,
-      stage: 'validation',
-      errors: validation.errors,
-      warnings: [...resolution.warnings, ...validation.warnings],
-      resolution_log: resolution.resolution_log,
-    }, 400);
+  // PR-5-3b: telopアクションのみの場合はopsが空でもOK（telop_settings_overrideで処理）
+  const hasTelopOverrideOnly = resolution.ops.length === 0 && resolution.telop_settings_override;
+  
+  if (!hasTelopOverrideOnly) {
+    const validation = validatePatchRequest(patchRequest, projectId);
+    if (!validation.valid) {
+      return c.json({
+        ok: false,
+        stage: 'validation',
+        errors: validation.errors,
+        warnings: [...resolution.warnings, ...validation.warnings],
+        resolution_log: resolution.resolution_log,
+      }, 400);
+    }
   }
 
   // Dry-run実行
-  const dryRunResult = await executeDryRun(c.env.DB, projectId, patchRequest);
+  // PR-5-3b: telopアクションのみの場合はdry-runをスキップして成功扱い
+  let dryRunResult: { ok: boolean; plan: unknown[]; errors: string[]; warnings: string[] };
+  
+  if (hasTelopOverrideOnly) {
+    // telopアクションのみ: dry-runは不要、直接成功
+    dryRunResult = {
+      ok: true,
+      plan: [],
+      errors: [],
+      warnings: [],
+    };
+  } else {
+    dryRunResult = await executeDryRun(c.env.DB, projectId, patchRequest);
+  }
 
   // patch_requestsに記録
   // PR-5-3b: テロップ設定のオーバーライドも保存
@@ -2017,12 +2035,20 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
   // UI用のサマリー生成（テロップ設定のサマリーも含む）
   const summary = generateDiffSummary(dryRunResult, body.intent, resolution.telop_settings_override);
 
+  // PR-5-3b: telopアクションの数もresolved_opsに含める
+  const telopActionCount = resolution.telop_settings_override ? 
+    (resolution.telop_settings_override.enabled !== undefined ? 1 : 0) +
+    Object.keys(resolution.telop_settings_override.scene_overrides || {}).length +
+    (resolution.telop_settings_override.position_preset ? 1 : 0) +
+    (resolution.telop_settings_override.size_preset ? 1 : 0)
+    : 0;
+
   return c.json({
     ok: dryRunResult.ok,
     patch_request_id: patchRequestId,
     status,
     intent_actions: body.intent.actions.length,
-    resolved_ops: resolution.ops.length,
+    resolved_ops: resolution.ops.length + telopActionCount,
     resolution_log: resolution.resolution_log,
     plan: dryRunResult.plan,
     summary,
