@@ -9674,12 +9674,21 @@ async function processDryRunWithIntent(intent, userMessage, history, input, send
       input.focus();
       
     } else {
-      const errorMsg = response.data.errors?.join(', ') || '変更を適用できません';
+      let errorMsg = response.data.errors?.join(', ') || '変更を適用できません';
+      
+      // ユーザーフレンドリーなエラーメッセージに変換
+      if (errorMsg.includes('ops array is empty')) {
+        errorMsg = '指示を理解できませんでした。より具体的に教えてください。';
+      }
+      
       history.innerHTML += `
-        <div class="bg-red-50 rounded-lg p-3 border border-red-200 mb-2">
-          <p class="text-sm text-red-700">
-            <i class="fas fa-times-circle mr-1"></i>
+        <div class="bg-amber-50 rounded-lg p-3 border border-amber-200 mb-2">
+          <p class="text-sm text-amber-700">
+            <i class="fas fa-info-circle mr-1"></i>
             ${escapeHtml(errorMsg)}
+          </p>
+          <p class="text-xs text-gray-600 mt-2">
+            💡 ヒント: 「BGMを50%に下げて」「シーン1のテロップをOFF」のように具体的に指示してください
           </p>
           ${response.data.warnings?.length ? `<p class="text-xs text-amber-600 mt-1">${response.data.warnings.join(', ')}</p>` : ''}
         </div>
@@ -9695,8 +9704,13 @@ async function processDryRunWithIntent(intent, userMessage, history, input, send
     if (thinkingEl) thinkingEl.remove();
     
     console.error('[ChatEdit] Dry-run error:', error);
-    const errorMsg = extractErrorMessage(error, '変更の確認に失敗しました');
+    let errorMsg = extractErrorMessage(error, '変更の確認に失敗しました');
     const statusCode = error.response?.status;
+    
+    // ユーザーフレンドリーなエラーメッセージに変換
+    if (errorMsg.includes('ops array is empty')) {
+      errorMsg = '指示を理解できませんでした。より具体的に教えてください。\n例: 「BGMを50%に下げて」「シーン1のテロップをOFF」';
+    }
     const stageInfo = error.response?.data?.stage ? `(${error.response.data.stage})` : '';
     
     history.innerHTML += `

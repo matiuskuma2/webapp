@@ -613,10 +613,14 @@
 
         const data = await response.json();
 
-        // Update UI
-        document.getElementById('targetSceneCount').value = data.target_scene_count || 20;
-        document.getElementById('minChars').value = data.min_chars || 800;
-        document.getElementById('maxChars').value = data.max_chars || 1500;
+        // Update UI (with null checks - elements may not exist on all tabs)
+        const targetSceneEl = document.getElementById('targetSceneCount');
+        const minCharsEl = document.getElementById('minChars');
+        const maxCharsEl = document.getElementById('maxChars');
+        
+        if (targetSceneEl) targetSceneEl.value = data.target_scene_count || 20;
+        if (minCharsEl) minCharsEl.value = data.min_chars || 800;
+        if (maxCharsEl) maxCharsEl.value = data.max_chars || 1500;
 
         // Update preset button active state
         document.querySelectorAll('.split-preset').forEach(btn => {
