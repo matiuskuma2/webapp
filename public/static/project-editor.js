@@ -36,8 +36,9 @@ window.builderPagination = {
 };
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
-  loadProject();
+document.addEventListener('DOMContentLoaded', async () => {
+  // ⚠️ FIX: loadProjectを待ってからタブ復元する
+  await loadProject();
   
   // Text character counter and paragraph counter
   const sourceText = document.getElementById('sourceText');
@@ -57,7 +58,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
   
-  // Restore last active tab from localStorage
+  // Restore last active tab from localStorage (after project is loaded)
   const lastTab = localStorage.getItem('lastActiveTab');
   if (lastTab && ['input', 'sceneSplit', 'builder', 'export', 'videoBuild', 'styles'].includes(lastTab)) {
     switchTab(lastTab);
@@ -308,6 +309,12 @@ window.switchTab = switchTab;
 
 // Initialize Scene Split tab
 async function initSceneSplitTab() {
+  // ⚠️ FIX: currentProjectがまだロードされていない場合は何もしない
+  if (!currentProject) {
+    console.warn('[SceneSplit] currentProject is null, skipping init');
+    return;
+  }
+  
   // Check if project has valid source
   const hasTextSource = currentProject.source_type === 'text' && currentProject.source_text;
   const hasAudioSource = currentProject.source_type === 'audio' && 
