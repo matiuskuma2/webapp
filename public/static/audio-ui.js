@@ -51,7 +51,10 @@ window.AudioUI = {
             
             // Initialize if not already initialized
             if (!sceneCard.dataset.audioInitialized) {
-              console.log(`[AudioUI] Lazy loading scene ${sceneId}`);
+              // Only log in debug mode to reduce console noise
+              if (window.DEBUG_AUDIO_UI) {
+                console.log(`[AudioUI] Lazy loading scene ${sceneId}`);
+              }
               
               // Find scene data
               const scene = window.lastLoadedScenes?.find(s => s.id === sceneId);
@@ -207,7 +210,11 @@ window.AudioUI = {
     const container = document.querySelector(`#builder-scene-${sceneId} .audio-section-content`);
     
     if (!container) {
-      console.warn(`[AudioUI] Audio section container not found for scene ${sceneId}`);
+      // Note: This is expected in current UI design where audio controls moved to Scene Edit Modal
+      // Only log in debug mode to avoid console spam
+      if (window.DEBUG_AUDIO_UI) {
+        console.log(`[AudioUI] Audio section container not found for scene ${sceneId} (expected in current UI)`);
+      }
       return;
     }
     
