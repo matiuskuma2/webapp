@@ -207,10 +207,12 @@ async function generateImageWithFallback(
   // Step 4: ユーザーキーでクォータ超過 → システムキーでリトライ
   const isQuotaError = result.error?.toLowerCase().includes('quota') || 
                        result.error?.toLowerCase().includes('resource_exhausted') ||
-                       result.error?.includes('429');
+                       result.error?.includes('429') ||
+                       result.error?.includes('RATE_LIMIT_429');
   
   if (keyResult.source === 'user' && isQuotaError && c.env.GEMINI_API_KEY) {
-    console.log(`[Image Gen] User key quota exceeded, falling back to SYSTEM key`);
+    console.log(`[Image Gen] User key (${keyResult.source}) quota exceeded, falling back to SYSTEM key`);
+    console.log(`[Image Gen] Original error: ${result.error?.substring(0, 100)}`);
     
     const systemResult = await generateImageWithRetry(
       prompt,
@@ -220,6 +222,12 @@ async function generateImageWithFallback(
       skipDefaultInstructions
     );
     
+    if (systemResult.success) {
+      console.log(`[Image Gen] SUCCESS with SYSTEM key fallback`);
+    } else {
+      console.log(`[Image Gen] SYSTEM key also failed: ${systemResult.error?.substring(0, 100)}`);
+    }
+    
     return {
       ...systemResult,
       apiKeySource: 'system',
@@ -228,6 +236,7 @@ async function generateImageWithFallback(
   }
   
   // Step 5: リトライ不可 → 元のエラーを返却
+  console.log(`[Image Gen] No fallback available. source=${keyResult.source}, isQuotaError=${isQuotaError}, hasSystemKey=${!!c.env.GEMINI_API_KEY}`);
   return {
     ...result,
     apiKeySource: keyResult.source,
@@ -1259,7 +1268,8 @@ async function generateImageWithRetry(
           await sleep(waitTime)
           continue
         } else {
-          lastError = '画像生成のレート制限に達しました。Gemini APIの無料枠（1分間に15リクエスト）を超えています。2〜3分待ってから再試行してください。'
+          // フォールバック判定用に 'RATE_LIMIT_429' を含める
+          lastError = 'RATE_LIMIT_429: 画像生成のレート制限に達しました。Gemini APIの無料枠（1分間に15リクエスト）を超えています。'
           break
         }
       }
