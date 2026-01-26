@@ -2179,7 +2179,7 @@ app.get('/projects/:id', (c) => {
                         </details>
 
                         <!-- History -->
-                        <div id="chatEditHistory" class="flex-1 overflow-y-auto mt-3 space-y-3 pr-1 min-h-[150px]"></div>
+                        <div id="chatEditHistory" class="flex-1 overflow-y-auto mt-3 space-y-3 pr-1 min-h-[200px] max-h-[300px]"></div>
 
                         <!-- Dry-run Result (安心感のあるUI) -->
                         <div id="chatEditDryRunBox" class="hidden mt-3 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4 shadow-sm">

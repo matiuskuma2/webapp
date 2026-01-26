@@ -9502,6 +9502,14 @@ async function sendChatEditMessage() {
             intent: suggestion.intent,
             summary: suggestion.summary,
           };
+          
+          // 自動スクロールで提案カードを見えるようにする
+          setTimeout(() => {
+            const suggestionEl = document.getElementById(suggestionId);
+            if (suggestionEl) {
+              suggestionEl.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            }
+          }, 100);
         }
         
         input.value = '';
