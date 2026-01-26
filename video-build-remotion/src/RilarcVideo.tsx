@@ -21,6 +21,15 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   console.log('[RilarcVideo] projectJson type:', typeof projectJson);
   console.log('[RilarcVideo] projectJson scenes count:', projectJson?.scenes?.length);
   
+  // PR-5-3b: テロップ設定を取得
+  const telopsSettings = projectJson?.build_settings?.telops;
+  const globalTelopEnabled = telopsSettings?.enabled ?? true;
+  const sceneOverrides = telopsSettings?.scene_overrides || {};
+  
+  console.log('[RilarcVideo] telops settings:', JSON.stringify(telopsSettings));
+  console.log('[RilarcVideo] globalTelopEnabled:', globalTelopEnabled);
+  console.log('[RilarcVideo] sceneOverrides:', JSON.stringify(sceneOverrides));
+  
   // scenes が undefined の場合は空配列を使用
   const scenes = projectJson?.scenes || [];
   
@@ -52,6 +61,19 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
       
       {/* シーン群 */}
       {scenesWithFrames.map(({ scene, startFrame, durationFrames }, index) => {
+        // PR-5-3b: シーン単位のテロップ表示制御
+        // 1. グローバル設定がOFFなら全シーンOFF
+        // 2. シーンオーバーライドがあればそれを優先
+        // 3. なければshowSubtitle（props）を使用
+        const sceneIdx = scene.idx;
+        const sceneIdxKey = String(sceneIdx);
+        
+        let sceneShowSubtitle = showSubtitle && globalTelopEnabled;
+        if (sceneIdxKey in sceneOverrides) {
+          sceneShowSubtitle = sceneOverrides[sceneIdxKey];
+        }
+        
+        console.log(`[RilarcVideo] Scene ${sceneIdx}: showSubtitle=${sceneShowSubtitle} (override=${sceneIdxKey in sceneOverrides ? sceneOverrides[sceneIdxKey] : 'none'})`);
         console.log(`[RilarcVideo] Rendering Sequence for scene ${index + 1}: from=${startFrame}, duration=${durationFrames}`);
         return (
           <Sequence
@@ -61,7 +83,7 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
           >
             <Scene 
               scene={scene} 
-              showSubtitle={showSubtitle}
+              showSubtitle={sceneShowSubtitle}
               subtitleStyle={subtitleStyle}
             />
           </Sequence>

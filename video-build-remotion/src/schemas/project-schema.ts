@@ -184,6 +184,19 @@ export const ProjectJsonSchema = z.object({
       type: z.enum(['none', 'fade', 'slide', 'wipe']).default('fade'),
       duration_ms: z.number().default(300),
     }).optional(),
+    /**
+     * PR-5-3b: テロップ設定
+     * - enabled: 全体のテロップON/OFF
+     * - position_preset: 表示位置 (bottom/center/top)
+     * - size_preset: サイズ (sm/md/lg)
+     * - scene_overrides: シーン単位のON/OFF (scene_idx -> enabled)
+     */
+    telops: z.object({
+      enabled: z.boolean().default(true),
+      position_preset: z.enum(['bottom', 'center', 'top']).default('bottom'),
+      size_preset: z.enum(['sm', 'md', 'lg']).default('md'),
+      scene_overrides: z.record(z.string(), z.boolean()).optional(),
+    }).optional(),
   }),
   
   global: z.object({
