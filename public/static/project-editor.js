@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Restore last active tab from localStorage
   const lastTab = localStorage.getItem('lastActiveTab');
-  if (lastTab && ['input', 'sceneTab', 'builder', 'export'].includes(lastTab)) {
+  if (lastTab && ['input', 'sceneSplit', 'builder', 'export', 'videoBuild', 'styles'].includes(lastTab)) {
     switchTab(lastTab);
   }
   
@@ -302,6 +302,9 @@ function switchTab(tabName) {
   // ✅ Save last active tab to localStorage (for auto-restore on reload)
   localStorage.setItem('lastActiveTab', tabName);
 }
+
+// ✅ Export switchTab to global scope for onclick handlers
+window.switchTab = switchTab;
 
 // Initialize Scene Split tab
 async function initSceneSplitTab() {
