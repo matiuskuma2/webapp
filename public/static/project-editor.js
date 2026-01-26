@@ -5451,13 +5451,6 @@ function closeStyleEditor() {
   document.getElementById('styleEditorModal').classList.add('hidden');
 }
 
-// HTML escape utility
-function escapeHtml(text) {
-  const div = document.createElement('div');
-  div.textContent = text;
-  return div.innerHTML;
-}
-
 // ========== Builder Style Functions ==========
 
 // Render style options for scene
@@ -5875,17 +5868,6 @@ function updateTabStates(projectStatus) {
       }
     }
   });
-}
-
-// Get scene status badge HTML
-function getSceneStatusBadge(status) {
-  const statusMap = {
-    'pending': '<span class="px-2 py-1 bg-gray-100 text-gray-800 text-xs rounded">未生成</span>',
-    'generating': '<span class="px-2 py-1 bg-yellow-100 text-yellow-800 text-xs rounded">生成中</span>',
-    'completed': '<span class="px-2 py-1 bg-green-100 text-green-800 text-xs rounded">生成済み</span>',
-    'failed': '<span class="px-2 py-1 bg-red-100 text-red-800 text-xs rounded">失敗</span>'
-  };
-  return statusMap[status] || statusMap['pending'];
 }
 
 // Poll for single scene image generation completion
@@ -8771,7 +8753,7 @@ function openVideoBuildPreviewModal(buildId, videoUrl) {
       
       // 自動的にURL再取得を試みる
       try {
-        const response = await axios.post(\`\${API_BASE}/video-builds/\${buildId}/refresh\`);
+        const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
         const newUrl = response.data.build?.download_url;
         
         if (response.data.success && newUrl) {
@@ -8797,13 +8779,13 @@ function openVideoBuildPreviewModal(buildId, videoUrl) {
       } catch (refreshError) {
         console.error('[VideoBuild] URL refresh failed:', refreshError);
         if (errorEl) {
-          errorEl.innerHTML = \`
+          errorEl.innerHTML = `
             <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
               <i class="fas fa-times-circle mr-1"></i>
               動画の読み込みに失敗しました。<br/>
-              <span class="text-xs text-red-600">\${extractErrorMessage(refreshError, '動画が存在しない可能性があります')}</span>
+              <span class="text-xs text-red-600">${extractErrorMessage(refreshError, '動画が存在しない可能性があります')}</span>
             </div>
-          \`;
+          `;
         }
       }
     };
@@ -10113,18 +10095,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // NOTE: 送信ボタンのclickはHTML側のonclick="sendChatEditMessage()"に任せる
   // click委譲は二重発火リスクがあるため削除済み
 });
-
-/**
- * Escape HTML to prevent XSS
- * @param {string} str 
- * @returns {string}
- */
-function escapeHtml(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
 
 // ============================================
 // Chat Edit Helper Functions
