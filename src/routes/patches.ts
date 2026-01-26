@@ -2694,7 +2694,7 @@ patches.post('/projects/:projectId/chat-edits/parse-ai', async (c) => {
 async function geminiChatWithSuggestion(
   apiKey: string,
   userMessage: string,
-  ctx: { scene_idx?: number; balloon_no?: number; video_build_id?: number } | null,
+  ctx: { scene_idx?: number; balloon_no?: number; video_build_id?: number; has_bgm?: boolean; has_sfx?: boolean } | null,
   history: Array<{ role: 'user' | 'assistant'; content: string }> = []
 ): Promise<{
   ok: true;
@@ -2708,9 +2708,20 @@ async function geminiChatWithSuggestion(
 } | { ok: false; error: string }> {
   const allowedList = Array.from(ALLOWED_CHAT_ACTIONS);
   
-  const ctxText = ctx?.scene_idx 
+  // Build context text including asset status
+  let ctxText = ctx?.scene_idx 
     ? `現在の文脈: シーン${ctx.scene_idx}${ctx.balloon_no ? `, バブル${ctx.balloon_no}` : ''}${ctx.video_build_id ? `, ビルド#${ctx.video_build_id}` : ''}`
     : '文脈: なし';
+  
+  // Phase 1: 素材状態をコンテキストに追加
+  const assetStatus: string[] = [];
+  if (ctx?.has_bgm === false) assetStatus.push('BGMなし（未アップロード）');
+  if (ctx?.has_bgm === true) assetStatus.push('BGMあり');
+  if (ctx?.has_sfx === false) assetStatus.push('SFXなし');
+  if (ctx?.has_sfx === true) assetStatus.push('SFXあり');
+  if (assetStatus.length > 0) {
+    ctxText += `\n素材状態: ${assetStatus.join(', ')}`;
+  }
 
   const system = `
 あなたは動画編集アシスタント「Rilarc」です。フレンドリーで親しみやすい口調で、ユーザーと自然に会話しながら編集をサポートします。
@@ -2788,6 +2799,18 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 【文脈情報】
 ${ctxText}
 
+【素材がない場合の対応 - 重要】
+素材状態に「BGMなし」「SFXなし」がある場合、それらを追加・調整する提案は行わず、アップロード誘導をしてください。
+
+例1: 素材状態に「BGMなし」があり、ユーザーが「BGMを追加して」と言った場合
+→ {"assistant_message": "BGMを追加したいですね！まだBGMがアップロードされていないので、先にBGMをアップロードしましょう。\\n\\n📁 Video Build タブ → BGM設定 からアップロードできます。\\n\\n【おすすめフリーBGMサイト】\\n・DOVA-SYNDROME (dova-s.jp)\\n・甘茶の音楽工房\\n・魔王魂\\n\\nアップロードしたら教えてくださいね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+例2: 素材状態に「BGMなし」があり、ユーザーが「BGMを大きくして」と言った場合
+→ {"assistant_message": "BGMの音量を上げたいですね！ただ、まだBGMがアップロードされていないみたいです。先にBGMをアップロードしてから調整しましょう！\\n\\n📁 Video Build タブ → BGM設定 からアップロードできますよ。", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+例3: 素材状態に「SFXなし」があり、ユーザーが「効果音を追加して」と言った場合
+→ {"assistant_message": "効果音を追加したいですね！まだ効果音がないので、まずはSFXを設定しましょう。\\n\\nBuilder タブ → 各シーンの「🔊 SFX」から追加できます。\\n\\n【おすすめフリーSFXサイト】\\n・効果音ラボ\\n・OtoLogic\\n\\n設定したら教えてくださいね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
 【注意事項】
 - 必ずJSON形式のみで返す（マークダウンや説明文は不要）
 - 挨拶や雑談には会話のみ返す（actions は空配列）、ただし**次のアクションに自然に誘導**
@@ -2795,6 +2818,7 @@ ${ctxText}
 - suggestion_summaryは「Before → After」形式で書く
 - 音量は0-1の範囲（パーセントは変換）
 - 時間はミリ秒（秒は変換: 3秒 → 3000ms）
+- **素材がない場合は提案せずにアップロード誘導する**（上記例を参照）
 `;
 
   // Build conversation history for Gemini
@@ -2899,14 +2923,30 @@ patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
       return c.json({ ok: false, error: 'GEMINI_API_KEY is not configured' }, 500);
     }
 
-    // Parse context
+    // Phase 1: プロジェクトの素材状態を確認
+    const bgmTrack = await c.env.DB.prepare(`
+      SELECT id FROM project_audio_tracks 
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+    `).bind(projectId).first();
+    
+    const sfxCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM scene_audio_cues 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).first() as { count: number } | null;
+    
+    const hasBgm = !!bgmTrack;
+    const hasSfx = (sfxCount?.count || 0) > 0;
+
+    // Parse context with asset status
     const ctx = body?.context && typeof body.context === 'object'
       ? {
           scene_idx: typeof body.context.scene_idx === 'number' ? body.context.scene_idx : undefined,
           balloon_no: typeof body.context.balloon_no === 'number' ? body.context.balloon_no : undefined,
           video_build_id: typeof body.context.video_build_id === 'number' ? body.context.video_build_id : undefined,
+          has_bgm: hasBgm,
+          has_sfx: hasSfx,
         }
-      : null;
+      : { has_bgm: hasBgm, has_sfx: hasSfx };
 
     // Parse history
     const history = Array.isArray(body?.history) 
