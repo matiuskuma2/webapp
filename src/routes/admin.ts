@@ -1589,4 +1589,453 @@ admin.get('/stuck-builds', async (c) => {
   }
 });
 
+// ====================================================================
+// System Audio Library - BGM/SFX管理（Phase 2）
+// ====================================================================
+// 管理者がSunoAI等で作成したBGM/SFXをシステムライブラリとして登録
+// ユーザーはChat Edit機能でこれらを選択できる
+
+// ====================================================================
+// GET /api/admin/audio-library - システムオーディオ一覧
+// ====================================================================
+
+admin.get('/audio-library', async (c) => {
+  const { DB } = c.env;
+  const type = c.req.query('type'); // 'bgm' | 'sfx' | undefined (all)
+  const activeOnly = c.req.query('active') !== 'false'; // default: active only
+  
+  try {
+    let query = `
+      SELECT 
+        id, audio_type, name, description, category, mood, tags,
+        file_url, file_size, duration_ms, thumbnail_url,
+        source, source_metadata, created_by, is_active, sort_order,
+        created_at, updated_at
+      FROM system_audio_library
+    `;
+    
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+    
+    if (type && (type === 'bgm' || type === 'sfx')) {
+      conditions.push('audio_type = ?');
+      params.push(type);
+    }
+    
+    if (activeOnly) {
+      conditions.push('is_active = 1');
+    }
+    
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+    
+    query += ' ORDER BY sort_order ASC, created_at DESC';
+    
+    const result = await DB.prepare(query).bind(...params).all();
+    
+    return c.json({
+      success: true,
+      audio_library: result.results || [],
+    });
+  } catch (error) {
+    console.error('Get audio library error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get audio library' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/admin/audio-library/:id - システムオーディオ詳細
+// ====================================================================
+
+admin.get('/audio-library/:id', async (c) => {
+  const { DB } = c.env;
+  const id = parseInt(c.req.param('id'));
+  
+  if (isNaN(id)) {
+    return c.json({ success: false, error: 'Invalid ID' }, 400);
+  }
+  
+  try {
+    const audio = await DB.prepare(`
+      SELECT 
+        id, audio_type, name, description, category, mood, tags,
+        file_url, file_size, duration_ms, thumbnail_url,
+        source, source_metadata, created_by, is_active, sort_order,
+        created_at, updated_at
+      FROM system_audio_library
+      WHERE id = ?
+    `).bind(id).first();
+    
+    if (!audio) {
+      return c.json({ success: false, error: 'Audio not found' }, 404);
+    }
+    
+    return c.json({ success: true, audio });
+  } catch (error) {
+    console.error('Get audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/admin/audio-library - システムオーディオ登録
+// ====================================================================
+
+admin.post('/audio-library', async (c) => {
+  const { DB, R2 } = c.env;
+  const user = c.get('user' as never) as { id: number; email: string };
+  
+  try {
+    const body = await c.req.json<{
+      audio_type: 'bgm' | 'sfx';
+      name: string;
+      description?: string;
+      category?: string;
+      mood?: string;
+      tags?: string;
+      file_url: string;
+      file_size?: number;
+      duration_ms?: number;
+      thumbnail_url?: string;
+      source?: string;
+      source_metadata?: string;
+      sort_order?: number;
+    }>();
+    
+    // バリデーション
+    if (!body.audio_type || !['bgm', 'sfx'].includes(body.audio_type)) {
+      return c.json({ success: false, error: 'audio_type must be "bgm" or "sfx"' }, 400);
+    }
+    if (!body.name || body.name.trim().length === 0) {
+      return c.json({ success: false, error: 'name is required' }, 400);
+    }
+    if (!body.file_url || body.file_url.trim().length === 0) {
+      return c.json({ success: false, error: 'file_url is required' }, 400);
+    }
+    
+    const result = await DB.prepare(`
+      INSERT INTO system_audio_library (
+        audio_type, name, description, category, mood, tags,
+        file_url, file_size, duration_ms, thumbnail_url,
+        source, source_metadata, created_by, is_active, sort_order,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))
+    `).bind(
+      body.audio_type,
+      body.name.trim(),
+      body.description || null,
+      body.category || null,
+      body.mood || null,
+      body.tags || null,
+      body.file_url.trim(),
+      body.file_size || null,
+      body.duration_ms || null,
+      body.thumbnail_url || null,
+      body.source || 'manual',
+      body.source_metadata || null,
+      user.email,
+      body.sort_order ?? 0
+    ).run();
+    
+    return c.json({
+      success: true,
+      id: result.meta.last_row_id,
+      message: 'Audio added to library',
+    });
+  } catch (error) {
+    console.error('Add audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to add audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// PUT /api/admin/audio-library/:id - システムオーディオ更新
+// ====================================================================
+
+admin.put('/audio-library/:id', async (c) => {
+  const { DB } = c.env;
+  const id = parseInt(c.req.param('id'));
+  
+  if (isNaN(id)) {
+    return c.json({ success: false, error: 'Invalid ID' }, 400);
+  }
+  
+  try {
+    const body = await c.req.json<{
+      name?: string;
+      description?: string;
+      category?: string;
+      mood?: string;
+      tags?: string;
+      file_url?: string;
+      file_size?: number;
+      duration_ms?: number;
+      thumbnail_url?: string;
+      source?: string;
+      source_metadata?: string;
+      is_active?: boolean;
+      sort_order?: number;
+    }>();
+    
+    const updates: string[] = [];
+    const values: (string | number | null)[] = [];
+    
+    if (body.name !== undefined) {
+      updates.push('name = ?');
+      values.push(body.name.trim());
+    }
+    if (body.description !== undefined) {
+      updates.push('description = ?');
+      values.push(body.description || null);
+    }
+    if (body.category !== undefined) {
+      updates.push('category = ?');
+      values.push(body.category || null);
+    }
+    if (body.mood !== undefined) {
+      updates.push('mood = ?');
+      values.push(body.mood || null);
+    }
+    if (body.tags !== undefined) {
+      updates.push('tags = ?');
+      values.push(body.tags || null);
+    }
+    if (body.file_url !== undefined) {
+      updates.push('file_url = ?');
+      values.push(body.file_url.trim());
+    }
+    if (body.file_size !== undefined) {
+      updates.push('file_size = ?');
+      values.push(body.file_size);
+    }
+    if (body.duration_ms !== undefined) {
+      updates.push('duration_ms = ?');
+      values.push(body.duration_ms);
+    }
+    if (body.thumbnail_url !== undefined) {
+      updates.push('thumbnail_url = ?');
+      values.push(body.thumbnail_url || null);
+    }
+    if (body.source !== undefined) {
+      updates.push('source = ?');
+      values.push(body.source || null);
+    }
+    if (body.source_metadata !== undefined) {
+      updates.push('source_metadata = ?');
+      values.push(body.source_metadata || null);
+    }
+    if (body.is_active !== undefined) {
+      updates.push('is_active = ?');
+      values.push(body.is_active ? 1 : 0);
+    }
+    if (body.sort_order !== undefined) {
+      updates.push('sort_order = ?');
+      values.push(body.sort_order);
+    }
+    
+    if (updates.length === 0) {
+      return c.json({ success: false, error: 'No fields to update' }, 400);
+    }
+    
+    updates.push("updated_at = datetime('now')");
+    values.push(id);
+    
+    await DB.prepare(`
+      UPDATE system_audio_library 
+      SET ${updates.join(', ')} 
+      WHERE id = ?
+    `).bind(...values).run();
+    
+    return c.json({ success: true, message: 'Audio updated' });
+  } catch (error) {
+    console.error('Update audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to update audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// DELETE /api/admin/audio-library/:id - システムオーディオ削除
+// ====================================================================
+
+admin.delete('/audio-library/:id', async (c) => {
+  const { DB } = c.env;
+  const id = parseInt(c.req.param('id'));
+  
+  if (isNaN(id)) {
+    return c.json({ success: false, error: 'Invalid ID' }, 400);
+  }
+  
+  try {
+    // ソフトデリート（is_active = 0）
+    await DB.prepare(`
+      UPDATE system_audio_library 
+      SET is_active = 0, updated_at = datetime('now') 
+      WHERE id = ?
+    `).bind(id).run();
+    
+    return c.json({ success: true, message: 'Audio deactivated' });
+  } catch (error) {
+    console.error('Delete audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to delete audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/admin/audio-library/:id/restore - システムオーディオ復元
+// ====================================================================
+
+admin.post('/audio-library/:id/restore', async (c) => {
+  const { DB } = c.env;
+  const id = parseInt(c.req.param('id'));
+  
+  if (isNaN(id)) {
+    return c.json({ success: false, error: 'Invalid ID' }, 400);
+  }
+  
+  try {
+    await DB.prepare(`
+      UPDATE system_audio_library 
+      SET is_active = 1, updated_at = datetime('now') 
+      WHERE id = ?
+    `).bind(id).run();
+    
+    return c.json({ success: true, message: 'Audio restored' });
+  } catch (error) {
+    console.error('Restore audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to restore audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/admin/audio-library/upload - R2へ音声ファイルをアップロード
+// ====================================================================
+
+admin.post('/audio-library/upload', async (c) => {
+  const { R2 } = c.env;
+  const user = c.get('user' as never) as { id: number; email: string };
+  
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File | null;
+    const audioType = formData.get('audio_type') as string | null;
+    
+    if (!file) {
+      return c.json({ success: false, error: 'No file provided' }, 400);
+    }
+    
+    if (!audioType || !['bgm', 'sfx'].includes(audioType)) {
+      return c.json({ success: false, error: 'audio_type must be "bgm" or "sfx"' }, 400);
+    }
+    
+    // ファイル名をサニタイズ
+    const timestamp = Date.now();
+    const ext = file.name.split('.').pop()?.toLowerCase() || 'mp3';
+    const safeName = file.name.replace(/[^a-zA-Z0-9_.-]/g, '_').slice(0, 50);
+    const key = `system-audio/${audioType}/${timestamp}_${safeName}`;
+    
+    // R2にアップロード
+    const arrayBuffer = await file.arrayBuffer();
+    await R2.put(key, arrayBuffer, {
+      httpMetadata: {
+        contentType: file.type || 'audio/mpeg',
+      },
+      customMetadata: {
+        originalName: file.name,
+        uploadedBy: user.email,
+        audioType,
+      },
+    });
+    
+    // R2のパブリックURLを生成（カスタムドメインまたはR2 public URL）
+    // 注: 実際のURLはwrangler.jsonc / R2バケット設定に依存
+    const publicUrl = `https://pub-c057c39f47cd4519b35e1ffd2d1474a8.r2.dev/${key}`;
+    
+    return c.json({
+      success: true,
+      file_url: publicUrl,
+      file_size: file.size,
+      original_name: file.name,
+      r2_key: key,
+    });
+  } catch (error) {
+    console.error('Upload audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to upload audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/admin/audio-library/stats - 統計情報
+// ====================================================================
+
+admin.get('/audio-library/stats', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    const stats = await DB.prepare(`
+      SELECT 
+        audio_type,
+        COUNT(*) as total,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) as inactive
+      FROM system_audio_library
+      GROUP BY audio_type
+    `).all();
+    
+    const byMood = await DB.prepare(`
+      SELECT 
+        mood,
+        COUNT(*) as count
+      FROM system_audio_library
+      WHERE is_active = 1 AND mood IS NOT NULL
+      GROUP BY mood
+      ORDER BY count DESC
+    `).all();
+    
+    const byCategory = await DB.prepare(`
+      SELECT 
+        category,
+        COUNT(*) as count
+      FROM system_audio_library
+      WHERE is_active = 1 AND category IS NOT NULL
+      GROUP BY category
+      ORDER BY count DESC
+    `).all();
+    
+    return c.json({
+      success: true,
+      by_type: stats.results || [],
+      by_mood: byMood.results || [],
+      by_category: byCategory.results || [],
+    });
+  } catch (error) {
+    console.error('Get audio stats error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get stats' 
+    }, 500);
+  }
+});
+
 export default admin;

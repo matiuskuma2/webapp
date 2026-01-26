@@ -51,6 +51,9 @@ export const adminHtml = `
                 <button class="admin-tab px-4 py-3 font-semibold border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-tab="settings">
                     <i class="fas fa-cog mr-2"></i>システム設定
                 </button>
+                <button class="admin-tab px-4 py-3 font-semibold border-b-2 border-transparent text-gray-500 hover:text-gray-700" data-tab="audioLibrary">
+                    <i class="fas fa-music mr-2"></i>音声ライブラリ
+                </button>
             </nav>
         </div>
     </div>
@@ -785,6 +788,167 @@ export const adminHtml = `
                     </div>
                 </div>
             </div>
+            
+            <!-- Audio Library Tab (Phase 2: System BGM/SFX) -->
+            <div id="audioLibraryTab" class="hidden">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-lg font-bold text-gray-800">
+                        <i class="fas fa-music mr-2 text-purple-600"></i>システム音声ライブラリ
+                    </h2>
+                    <div class="flex items-center gap-3">
+                        <select id="audioLibraryTypeFilter" class="border rounded-lg px-3 py-2 text-sm" onchange="loadAudioLibrary()">
+                            <option value="">すべて</option>
+                            <option value="bgm">BGM</option>
+                            <option value="sfx">SFX</option>
+                        </select>
+                        <button onclick="openAddAudioModal()" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-sm font-semibold">
+                            <i class="fas fa-plus mr-1"></i>新規追加
+                        </button>
+                    </div>
+                </div>
+                
+                <!-- Stats Cards -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                    <div class="bg-white rounded-xl shadow p-4">
+                        <div class="text-xs text-gray-500">総数</div>
+                        <div id="audioStatTotal" class="text-2xl font-bold text-gray-900">-</div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-purple-500">
+                        <div class="text-xs text-purple-700">BGM</div>
+                        <div id="audioStatBgm" class="text-2xl font-bold text-purple-700">-</div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-blue-500">
+                        <div class="text-xs text-blue-700">SFX</div>
+                        <div id="audioStatSfx" class="text-2xl font-bold text-blue-700">-</div>
+                    </div>
+                    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-green-500">
+                        <div class="text-xs text-green-700">有効</div>
+                        <div id="audioStatActive" class="text-2xl font-bold text-green-700">-</div>
+                    </div>
+                </div>
+                
+                <!-- Audio List -->
+                <div class="bg-white rounded-xl shadow">
+                    <div class="p-4 border-b flex items-center justify-between">
+                        <h3 class="font-semibold text-gray-800">
+                            <i class="fas fa-list mr-2"></i>登録済み音声
+                        </h3>
+                        <button onclick="loadAudioLibrary()" class="px-3 py-1 bg-gray-600 text-white rounded-lg text-sm hover:bg-gray-700">
+                            <i class="fas fa-sync-alt mr-1"></i>更新
+                        </button>
+                    </div>
+                    <div id="audioLibraryList" class="divide-y">
+                        <div class="p-6 text-gray-500 text-center">読み込み中...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Add/Edit Audio Modal -->
+        <div id="addAudioModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
+            <div class="bg-white rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+                <div class="p-4 border-b flex items-center justify-between">
+                    <h3 id="addAudioModalTitle" class="font-bold text-gray-800">
+                        <i class="fas fa-music mr-2 text-purple-600"></i>音声を追加
+                    </h3>
+                    <button onclick="closeAddAudioModal()" class="text-gray-500 hover:text-gray-700">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="p-6 space-y-4">
+                    <input type="hidden" id="editAudioId" value="">
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">種別 <span class="text-red-500">*</span></label>
+                        <select id="audioType" class="w-full border rounded-lg px-3 py-2">
+                            <option value="bgm">BGM</option>
+                            <option value="sfx">SFX</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">名前 <span class="text-red-500">*</span></label>
+                        <input type="text" id="audioName" class="w-full border rounded-lg px-3 py-2" placeholder="明るいポップBGM">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">説明</label>
+                        <textarea id="audioDescription" class="w-full border rounded-lg px-3 py-2" rows="2" placeholder="動画の導入に最適な明るい雰囲気のBGM"></textarea>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">カテゴリ</label>
+                            <input type="text" id="audioCategory" class="w-full border rounded-lg px-3 py-2" placeholder="ポップ">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">雰囲気 (mood)</label>
+                            <select id="audioMood" class="w-full border rounded-lg px-3 py-2">
+                                <option value="">選択してください</option>
+                                <option value="bright">明るい</option>
+                                <option value="calm">落ち着いた</option>
+                                <option value="dramatic">ドラマチック</option>
+                                <option value="mysterious">ミステリー</option>
+                                <option value="sad">悲しい</option>
+                                <option value="exciting">盛り上がる</option>
+                                <option value="relaxing">リラックス</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">タグ (カンマ区切り)</label>
+                        <input type="text" id="audioTags" class="w-full border rounded-lg px-3 py-2" placeholder="ポップ, 明るい, YouTube">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ファイルURL <span class="text-red-500">*</span></label>
+                        <div class="flex gap-2">
+                            <input type="text" id="audioFileUrl" class="flex-1 border rounded-lg px-3 py-2" placeholder="https://...">
+                            <label class="px-4 py-2 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700">
+                                <i class="fas fa-upload mr-1"></i>アップロード
+                                <input type="file" id="audioFileInput" accept="audio/*" class="hidden" onchange="handleAudioUpload(this)">
+                            </label>
+                        </div>
+                        <div id="audioUploadProgress" class="hidden mt-2 text-sm text-blue-600">
+                            <i class="fas fa-spinner fa-spin mr-1"></i>アップロード中...
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ファイルサイズ (bytes)</label>
+                            <input type="number" id="audioFileSize" class="w-full border rounded-lg px-3 py-2" placeholder="1234567">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">長さ (ms)</label>
+                            <input type="number" id="audioDuration" class="w-full border rounded-lg px-3 py-2" placeholder="30000">
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ソース</label>
+                        <select id="audioSource" class="w-full border rounded-lg px-3 py-2">
+                            <option value="suno_ai">Suno AI</option>
+                            <option value="manual">手動アップロード</option>
+                            <option value="other">その他</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">並び順</label>
+                        <input type="number" id="audioSortOrder" class="w-full border rounded-lg px-3 py-2" value="0">
+                    </div>
+                </div>
+                <div class="p-4 border-t flex justify-end gap-3">
+                    <button onclick="closeAddAudioModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300">
+                        キャンセル
+                    </button>
+                    <button onclick="saveAudio()" class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700">
+                        <i class="fas fa-save mr-1"></i>保存
+                    </button>
+                </div>
+            </div>
         </div>
         
         <!-- Access Denied -->
@@ -804,6 +968,7 @@ export const adminHtml = `
         let allUsers = [];
         let subscriptionsLoaded = false;
         let settingsLoaded = false;
+        let audioLibraryLoaded = false;
         let salesLoaded = false;
         
         // Check auth and load users
@@ -1022,6 +1187,7 @@ export const adminHtml = `
                 document.getElementById('salesTab').classList.add('hidden');
                 document.getElementById('subscriptionsTab').classList.add('hidden');
                 document.getElementById('settingsTab').classList.add('hidden');
+                document.getElementById('audioLibraryTab')?.classList.add('hidden');
                 document.getElementById(tabName + 'Tab').classList.remove('hidden');
                 
                 if (tabName === 'cost' && !costLoaded) {
@@ -1044,6 +1210,9 @@ export const adminHtml = `
                     loadSettings();
                     loadWebhookLogs();
                     updateWebhookUrl();
+                }
+                if (tabName === 'audioLibrary' && !audioLibraryLoaded) {
+                    loadAudioLibrary();
                 }
             });
         });
@@ -2197,6 +2366,236 @@ export const adminHtml = `
             } catch (err) {
                 console.error('Failed to export sales CSV:', err);
                 alert('CSVエクスポートに失敗しました');
+            }
+        }
+        
+        // ============================================
+        // Audio Library Functions (Phase 2)
+        // ============================================
+        
+        async function loadAudioLibrary() {
+            try {
+                const typeFilter = document.getElementById('audioLibraryTypeFilter')?.value || '';
+                const qs = typeFilter ? '?type=' + typeFilter : '';
+                
+                const [audioRes, statsRes] = await Promise.all([
+                    axios.get('/api/admin/audio-library' + qs + (qs ? '&active=false' : '?active=false')),
+                    axios.get('/api/admin/audio-library/stats')
+                ]);
+                
+                const audioList = audioRes.data.audio_library || [];
+                const stats = statsRes.data;
+                audioLibraryLoaded = true;
+                
+                // Update stats
+                const bgmStat = (stats.by_type || []).find(s => s.audio_type === 'bgm') || { total: 0, active: 0 };
+                const sfxStat = (stats.by_type || []).find(s => s.audio_type === 'sfx') || { total: 0, active: 0 };
+                const totalActive = (stats.by_type || []).reduce((sum, s) => sum + (s.active || 0), 0);
+                const total = (stats.by_type || []).reduce((sum, s) => sum + (s.total || 0), 0);
+                
+                document.getElementById('audioStatTotal').textContent = total;
+                document.getElementById('audioStatBgm').textContent = bgmStat.total || 0;
+                document.getElementById('audioStatSfx').textContent = sfxStat.total || 0;
+                document.getElementById('audioStatActive').textContent = totalActive;
+                
+                // Render list
+                const listEl = document.getElementById('audioLibraryList');
+                if (audioList.length === 0) {
+                    listEl.innerHTML = '<div class="p-6 text-gray-500 text-center">登録された音声がありません</div>';
+                    return;
+                }
+                
+                const moodLabels = {
+                    'bright': '明るい',
+                    'calm': '落ち着いた',
+                    'dramatic': 'ドラマチック',
+                    'mysterious': 'ミステリー',
+                    'sad': '悲しい',
+                    'exciting': '盛り上がる',
+                    'relaxing': 'リラックス'
+                };
+                
+                listEl.innerHTML = audioList.map(a => \`
+                    <div class="p-4 flex items-center justify-between hover:bg-gray-50 \${a.is_active ? '' : 'opacity-50 bg-gray-100'}">
+                        <div class="flex items-center gap-4">
+                            <div class="w-12 h-12 rounded-lg flex items-center justify-center \${a.audio_type === 'bgm' ? 'bg-purple-100' : 'bg-blue-100'}">
+                                <i class="fas \${a.audio_type === 'bgm' ? 'fa-music text-purple-600' : 'fa-volume-up text-blue-600'} text-xl"></i>
+                            </div>
+                            <div>
+                                <div class="font-semibold text-gray-800">
+                                    \${escapeHtml(a.name)}
+                                    \${!a.is_active ? '<span class="ml-2 text-xs text-red-500">(無効)</span>' : ''}
+                                </div>
+                                <div class="text-sm text-gray-500">\${escapeHtml(a.description || '')}</div>
+                                <div class="flex items-center gap-2 mt-1">
+                                    <span class="px-2 py-0.5 rounded text-xs \${a.audio_type === 'bgm' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}">
+                                        \${a.audio_type.toUpperCase()}
+                                    </span>
+                                    \${a.mood ? '<span class="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">' + (moodLabels[a.mood] || a.mood) + '</span>' : ''}
+                                    \${a.category ? '<span class="px-2 py-0.5 rounded text-xs bg-gray-100 text-gray-700">' + escapeHtml(a.category) + '</span>' : ''}
+                                    \${a.duration_ms ? '<span class="text-xs text-gray-500">' + Math.round(a.duration_ms / 1000) + '秒</span>' : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            \${a.file_url ? '<a href="' + escapeHtml(a.file_url) + '" target="_blank" class="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 text-sm"><i class="fas fa-play mr-1"></i>試聴</a>' : ''}
+                            <button onclick="editAudio(\${a.id})" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
+                                <i class="fas fa-edit mr-1"></i>編集
+                            </button>
+                            \${a.is_active 
+                                ? '<button onclick="deactivateAudio(' + a.id + ', \'' + escapeHtml(a.name) + '\')" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"><i class="fas fa-trash mr-1"></i>無効化</button>'
+                                : '<button onclick="restoreAudio(' + a.id + ')" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm"><i class="fas fa-undo mr-1"></i>復元</button>'
+                            }
+                        </div>
+                    </div>
+                \`).join('');
+                
+            } catch (err) {
+                console.error('Failed to load audio library:', err);
+                document.getElementById('audioLibraryList').innerHTML = 
+                    '<div class="p-6 text-red-500 text-center">読み込みに失敗しました</div>';
+            }
+        }
+        
+        function openAddAudioModal() {
+            document.getElementById('editAudioId').value = '';
+            document.getElementById('addAudioModalTitle').innerHTML = '<i class="fas fa-music mr-2 text-purple-600"></i>音声を追加';
+            document.getElementById('audioType').value = 'bgm';
+            document.getElementById('audioName').value = '';
+            document.getElementById('audioDescription').value = '';
+            document.getElementById('audioCategory').value = '';
+            document.getElementById('audioMood').value = '';
+            document.getElementById('audioTags').value = '';
+            document.getElementById('audioFileUrl').value = '';
+            document.getElementById('audioFileSize').value = '';
+            document.getElementById('audioDuration').value = '';
+            document.getElementById('audioSource').value = 'suno_ai';
+            document.getElementById('audioSortOrder').value = '0';
+            document.getElementById('addAudioModal').classList.remove('hidden');
+        }
+        
+        function closeAddAudioModal() {
+            document.getElementById('addAudioModal').classList.add('hidden');
+        }
+        
+        async function editAudio(id) {
+            try {
+                const res = await axios.get('/api/admin/audio-library/' + id);
+                const a = res.data.audio;
+                
+                document.getElementById('editAudioId').value = a.id;
+                document.getElementById('addAudioModalTitle').innerHTML = '<i class="fas fa-edit mr-2 text-blue-600"></i>音声を編集';
+                document.getElementById('audioType').value = a.audio_type || 'bgm';
+                document.getElementById('audioName').value = a.name || '';
+                document.getElementById('audioDescription').value = a.description || '';
+                document.getElementById('audioCategory').value = a.category || '';
+                document.getElementById('audioMood').value = a.mood || '';
+                document.getElementById('audioTags').value = a.tags || '';
+                document.getElementById('audioFileUrl').value = a.file_url || '';
+                document.getElementById('audioFileSize').value = a.file_size || '';
+                document.getElementById('audioDuration').value = a.duration_ms || '';
+                document.getElementById('audioSource').value = a.source || 'manual';
+                document.getElementById('audioSortOrder').value = a.sort_order || 0;
+                document.getElementById('addAudioModal').classList.remove('hidden');
+                
+            } catch (err) {
+                console.error('Failed to load audio:', err);
+                alert('音声データの読み込みに失敗しました');
+            }
+        }
+        
+        async function saveAudio() {
+            const editId = document.getElementById('editAudioId').value;
+            const data = {
+                audio_type: document.getElementById('audioType').value,
+                name: document.getElementById('audioName').value.trim(),
+                description: document.getElementById('audioDescription').value.trim(),
+                category: document.getElementById('audioCategory').value.trim(),
+                mood: document.getElementById('audioMood').value,
+                tags: document.getElementById('audioTags').value.trim(),
+                file_url: document.getElementById('audioFileUrl').value.trim(),
+                file_size: parseInt(document.getElementById('audioFileSize').value) || null,
+                duration_ms: parseInt(document.getElementById('audioDuration').value) || null,
+                source: document.getElementById('audioSource').value,
+                sort_order: parseInt(document.getElementById('audioSortOrder').value) || 0
+            };
+            
+            if (!data.name) {
+                alert('名前を入力してください');
+                return;
+            }
+            if (!data.file_url) {
+                alert('ファイルURLを入力してください');
+                return;
+            }
+            
+            try {
+                if (editId) {
+                    await axios.put('/api/admin/audio-library/' + editId, data);
+                    alert('音声を更新しました');
+                } else {
+                    await axios.post('/api/admin/audio-library', data);
+                    alert('音声を追加しました');
+                }
+                closeAddAudioModal();
+                loadAudioLibrary();
+            } catch (err) {
+                console.error('Failed to save audio:', err);
+                alert('保存に失敗しました: ' + (err.response?.data?.error || err.message));
+            }
+        }
+        
+        async function handleAudioUpload(input) {
+            const file = input.files[0];
+            if (!file) return;
+            
+            const progressEl = document.getElementById('audioUploadProgress');
+            progressEl.classList.remove('hidden');
+            
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('audio_type', document.getElementById('audioType').value);
+                
+                const res = await axios.post('/api/admin/audio-library/upload', formData, {
+                    headers: { 'Content-Type': 'multipart/form-data' }
+                });
+                
+                document.getElementById('audioFileUrl').value = res.data.file_url;
+                document.getElementById('audioFileSize').value = res.data.file_size || '';
+                progressEl.classList.add('hidden');
+                alert('アップロード完了！');
+                
+            } catch (err) {
+                console.error('Failed to upload audio:', err);
+                progressEl.classList.add('hidden');
+                alert('アップロードに失敗しました: ' + (err.response?.data?.error || err.message));
+            }
+            
+            input.value = '';
+        }
+        
+        async function deactivateAudio(id, name) {
+            if (!confirm('「' + name + '」を無効化しますか？')) return;
+            
+            try {
+                await axios.delete('/api/admin/audio-library/' + id);
+                alert('無効化しました');
+                loadAudioLibrary();
+            } catch (err) {
+                console.error('Failed to deactivate audio:', err);
+                alert('無効化に失敗しました');
+            }
+        }
+        
+        async function restoreAudio(id) {
+            try {
+                await axios.post('/api/admin/audio-library/' + id + '/restore');
+                alert('復元しました');
+                loadAudioLibrary();
+            } catch (err) {
+                console.error('Failed to restore audio:', err);
+                alert('復元に失敗しました');
             }
         }
         

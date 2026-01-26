@@ -2694,7 +2694,7 @@ patches.post('/projects/:projectId/chat-edits/parse-ai', async (c) => {
 async function geminiChatWithSuggestion(
   apiKey: string,
   userMessage: string,
-  ctx: { scene_idx?: number; balloon_no?: number; video_build_id?: number; has_bgm?: boolean; has_sfx?: boolean } | null,
+  ctx: { scene_idx?: number; balloon_no?: number; video_build_id?: number; has_bgm?: boolean; has_sfx?: boolean; has_system_bgm?: boolean; has_system_sfx?: boolean } | null,
   history: Array<{ role: 'user' | 'assistant'; content: string }> = []
 ): Promise<{
   ok: true;
@@ -2719,6 +2719,11 @@ async function geminiChatWithSuggestion(
   if (ctx?.has_bgm === true) assetStatus.push('BGMあり');
   if (ctx?.has_sfx === false) assetStatus.push('SFXなし');
   if (ctx?.has_sfx === true) assetStatus.push('SFXあり');
+  
+  // Phase 2: システムライブラリの存在を追加
+  if (ctx?.has_system_bgm === true) assetStatus.push('システムBGMライブラリあり');
+  if (ctx?.has_system_sfx === true) assetStatus.push('システムSFXライブラリあり');
+  
   if (assetStatus.length > 0) {
     ctxText += `\n素材状態: ${assetStatus.join(', ')}`;
   }
@@ -2811,6 +2816,15 @@ ${ctxText}
 例3: 素材状態に「SFXなし」があり、ユーザーが「効果音を追加して」と言った場合
 → {"assistant_message": "効果音を追加したいですね！まだ効果音がないので、まずはSFXを設定しましょう。\\n\\nBuilder タブ → 各シーンの「🔊 SFX」から追加できます。\\n\\n【おすすめフリーSFXサイト】\\n・効果音ラボ\\n・OtoLogic\\n\\n設定したら教えてくださいね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
 
+【システムライブラリがある場合 - Phase 2】
+素材状態に「システムBGMライブラリあり」または「システムSFXライブラリあり」がある場合、素材がなくてもシステムライブラリから選べることを提案できます。
+
+例4: 素材状態に「BGMなし」と「システムBGMライブラリあり」があり、ユーザーが「BGMを追加して」と言った場合
+→ {"assistant_message": "BGMを追加しましょう！\\n\\n🎵 システムライブラリにBGMが用意されています！\\n\\nVideo Build タブ → BGM設定 → 「ライブラリから選ぶ」で、いくつかのBGMから選べますよ。明るい曲、落ち着いた曲など、動画の雰囲気に合わせて選んでみてください！\\n\\nもちろん、自分でアップロードすることもできます。", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+例5: 素材状態に「SFXなし」と「システムSFXライブラリあり」があり、ユーザーが「効果音を追加して」と言った場合
+→ {"assistant_message": "効果音を追加しましょう！\\n\\n🔊 システムライブラリにSFXが用意されています！\\n\\nBuilder タブ → 各シーンの「🔊 SFX」→「ライブラリから選ぶ」で、驚き・笑い・環境音などから選べますよ！\\n\\n追加したいシーンを教えてもらえれば、具体的にご案内しますね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
 【注意事項】
 - 必ずJSON形式のみで返す（マークダウンや説明文は不要）
 - 挨拶や雑談には会話のみ返す（actions は空配列）、ただし**次のアクションに自然に誘導**
@@ -2818,7 +2832,7 @@ ${ctxText}
 - suggestion_summaryは「Before → After」形式で書く
 - 音量は0-1の範囲（パーセントは変換）
 - 時間はミリ秒（秒は変換: 3秒 → 3000ms）
-- **素材がない場合は提案せずにアップロード誘導する**（上記例を参照）
+- **素材がない場合**: システムライブラリがあれば案内、なければアップロード誘導
 `;
 
   // Build conversation history for Gemini
@@ -2937,6 +2951,20 @@ patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
     const hasBgm = !!bgmTrack;
     const hasSfx = (sfxCount?.count || 0) > 0;
 
+    // Phase 2: システムライブラリの存在を確認
+    const systemBgmCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM system_audio_library 
+      WHERE audio_type = 'bgm' AND is_active = 1
+    `).first() as { count: number } | null;
+    
+    const systemSfxCount = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM system_audio_library 
+      WHERE audio_type = 'sfx' AND is_active = 1
+    `).first() as { count: number } | null;
+    
+    const hasSystemBgm = (systemBgmCount?.count || 0) > 0;
+    const hasSystemSfx = (systemSfxCount?.count || 0) > 0;
+
     // Parse context with asset status
     const ctx = body?.context && typeof body.context === 'object'
       ? {
@@ -2945,8 +2973,10 @@ patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
           video_build_id: typeof body.context.video_build_id === 'number' ? body.context.video_build_id : undefined,
           has_bgm: hasBgm,
           has_sfx: hasSfx,
+          has_system_bgm: hasSystemBgm,
+          has_system_sfx: hasSystemSfx,
         }
-      : { has_bgm: hasBgm, has_sfx: hasSfx };
+      : { has_bgm: hasBgm, has_sfx: hasSfx, has_system_bgm: hasSystemBgm, has_system_sfx: hasSystemSfx };
 
     // Parse history
     const history = Array.isArray(body?.history) 
@@ -2976,6 +3006,157 @@ patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
   } catch (e: any) {
     console.error('[chat-edits/chat] Error:', e);
     return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/system-audio - システムオーディオライブラリ（公開API）
+// ====================================================================
+// 認証不要でアクセス可能
+// ユーザーがChat Edit機能でBGM/SFXを選択する際に使用
+
+patches.get('/system-audio', async (c) => {
+  const { DB } = c.env;
+  const type = c.req.query('type'); // 'bgm' | 'sfx' | undefined (all)
+  const mood = c.req.query('mood'); // 'bright', 'calm', 'dramatic', etc.
+  
+  try {
+    let query = `
+      SELECT 
+        id, audio_type, name, description, category, mood, tags,
+        file_url, duration_ms, thumbnail_url
+      FROM system_audio_library
+      WHERE is_active = 1
+    `;
+    
+    const params: string[] = [];
+    
+    if (type && (type === 'bgm' || type === 'sfx')) {
+      query += ' AND audio_type = ?';
+      params.push(type);
+    }
+    
+    if (mood) {
+      query += ' AND mood = ?';
+      params.push(mood);
+    }
+    
+    query += ' ORDER BY sort_order ASC, name ASC';
+    
+    const result = await DB.prepare(query).bind(...params).all();
+    
+    return c.json({
+      ok: true,
+      audio: result.results || [],
+    });
+  } catch (error) {
+    console.error('Get system audio error:', error);
+    return c.json({ 
+      ok: false, 
+      error: error instanceof Error ? error.message : 'Failed to get system audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/projects/:projectId/system-audio/:audioId/apply - システムオーディオを適用
+// ====================================================================
+// 選択したシステムBGM/SFXをプロジェクトに追加
+
+patches.post('/projects/:projectId/system-audio/:audioId/apply', async (c) => {
+  const { DB } = c.env;
+  const projectId = parseInt(c.req.param('projectId'), 10);
+  const audioId = parseInt(c.req.param('audioId'), 10);
+  
+  if (isNaN(projectId) || isNaN(audioId)) {
+    return c.json({ ok: false, error: 'Invalid projectId or audioId' }, 400);
+  }
+  
+  try {
+    // システムオーディオを取得
+    const audio = await DB.prepare(`
+      SELECT id, audio_type, name, file_url, duration_ms
+      FROM system_audio_library
+      WHERE id = ? AND is_active = 1
+    `).bind(audioId).first<{
+      id: number;
+      audio_type: 'bgm' | 'sfx';
+      name: string;
+      file_url: string;
+      duration_ms: number | null;
+    }>();
+    
+    if (!audio) {
+      return c.json({ ok: false, error: 'Audio not found in system library' }, 404);
+    }
+    
+    if (audio.audio_type === 'bgm') {
+      // BGMをプロジェクトに追加
+      // 既存のBGMを非アクティブ化
+      await DB.prepare(`
+        UPDATE project_audio_tracks 
+        SET is_active = 0, updated_at = datetime('now')
+        WHERE project_id = ? AND track_type = 'bgm'
+      `).bind(projectId).run();
+      
+      // 新しいBGMを追加
+      const result = await DB.prepare(`
+        INSERT INTO project_audio_tracks (
+          project_id, track_type, track_url, original_filename, 
+          volume, loop, is_active, source_type, system_audio_id,
+          created_at, updated_at
+        ) VALUES (?, 'bgm', ?, ?, 0.5, 1, 1, 'system', ?, datetime('now'), datetime('now'))
+      `).bind(projectId, audio.file_url, audio.name, audio.id).run();
+      
+      return c.json({
+        ok: true,
+        track_id: result.meta.last_row_id,
+        message: `BGM「${audio.name}」を追加しました`,
+        audio_type: 'bgm',
+        audio_name: audio.name,
+      });
+      
+    } else {
+      // SFXの場合は、body からシーン情報を取得
+      const body = await c.req.json().catch(() => ({})) as { scene_id?: number };
+      
+      if (!body.scene_id) {
+        return c.json({ ok: false, error: 'scene_id is required for SFX' }, 400);
+      }
+      
+      // シーンが存在するか確認
+      const scene = await DB.prepare(`
+        SELECT id FROM scenes WHERE id = ? AND project_id = ?
+      `).bind(body.scene_id, projectId).first();
+      
+      if (!scene) {
+        return c.json({ ok: false, error: 'Scene not found' }, 404);
+      }
+      
+      // SFXをシーンに追加
+      const result = await DB.prepare(`
+        INSERT INTO scene_audio_cues (
+          scene_id, cue_type, audio_url, original_filename,
+          volume, trigger_type, source_type, system_audio_id,
+          created_at, updated_at
+        ) VALUES (?, 'sfx', ?, ?, 0.7, 'scene_start', 'system', ?, datetime('now'), datetime('now'))
+      `).bind(body.scene_id, audio.file_url, audio.name, audio.id).run();
+      
+      return c.json({
+        ok: true,
+        cue_id: result.meta.last_row_id,
+        message: `SFX「${audio.name}」をシーンに追加しました`,
+        audio_type: 'sfx',
+        audio_name: audio.name,
+      });
+    }
+    
+  } catch (error) {
+    console.error('Apply system audio error:', error);
+    return c.json({ 
+      ok: false, 
+      error: error instanceof Error ? error.message : 'Failed to apply system audio' 
+    }, 500);
   }
 });
 
