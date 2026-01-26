@@ -49,6 +49,13 @@ export interface VideoBuildSettings {
     preset?: 'none' | 'gentle-zoom' | 'ken-burns';
     transition?: 'cut' | 'crossfade' | 'fade';
   };
+  // PR-5-3b: テロップ設定
+  telops?: {
+    enabled?: boolean;
+    position_preset?: 'bottom' | 'center' | 'top';
+    size_preset?: 'sm' | 'md' | 'lg';
+    scene_overrides?: Record<number, boolean>;  // scene_idx -> enabled
+  };
 }
 
 export interface ProjectJsonScene {

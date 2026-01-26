@@ -1551,6 +1551,18 @@ export function buildProjectJson(
         type: 'fade',
         duration_ms: 300,
       },
+      // PR-5-3b: テロップ設定
+      telops: settings.telops ? {
+        enabled: settings.telops.enabled ?? true,
+        position_preset: settings.telops.position_preset ?? 'bottom',
+        size_preset: settings.telops.size_preset ?? 'md',
+        // シーン単位のオーバーライド（scene_idx -> enabled）
+        scene_overrides: settings.telops.scene_overrides || undefined,
+      } : {
+        enabled: true,
+        position_preset: 'bottom',
+        size_preset: 'md',
+      },
     },
     global: {
       default_scene_duration_ms: DEFAULT_SCENE_DURATION_MS,

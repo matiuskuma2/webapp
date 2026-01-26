@@ -2230,8 +2230,10 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
         ...(telopSettingsOverride.enabled !== undefined && { enabled: telopSettingsOverride.enabled }),
         ...(telopSettingsOverride.position_preset && { position_preset: telopSettingsOverride.position_preset }),
         ...(telopSettingsOverride.size_preset && { size_preset: telopSettingsOverride.size_preset }),
+        // ★ シーン単位のテロップON/OFFを適用
+        ...(telopSettingsOverride.scene_overrides && { scene_overrides: telopSettingsOverride.scene_overrides }),
       };
-      console.log(`[Chat Edit Apply] Telop settings override applied:`, buildSettings.telops);
+      console.log(`[Chat Edit Apply] Telop settings override applied:`, JSON.stringify(buildSettings.telops));
     }
 
     const activeBgm = await c.env.DB.prepare(`
