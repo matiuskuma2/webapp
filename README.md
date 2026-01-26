@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-25（Phase2 UI統合完了 - 二重モーダル根絶）
+- **最終更新**: 2026-01-26（Chat Edit機能改善 - SSOT化、シーン単位テロップ対応）
 
 ---
 
@@ -300,7 +300,74 @@ webapp/
 ### 外部API
 - **OpenAI GPT-4o**: シナリオ生成
 - **OpenAI Whisper**: 音声文字起こし
-- **Google Gemini**: 画像生成
+- **Google Gemini**: 画像生成、Chat Edit会話AI
+
+---
+
+## Chat Edit機能（動画調整AI）
+
+### 概要
+完成した動画に対して、自然言語で調整指示を出せるAIチャット機能。ChatGPTのような会話体験で動画編集ができます。
+
+### 対応アクション一覧
+
+| アクション | 説明 | 例文 |
+|-----------|------|------|
+| `bgm.set_volume` | BGM音量調整 | 「BGMを少し下げて」 |
+| `bgm.set_loop` | BGMループ設定 | 「BGMをループOFF」 |
+| `sfx.set_volume` | SE音量調整 | 「SEを大きく」 |
+| `sfx.add_from_library` | SE追加 | 「驚きのSEを追加して」 |
+| `sfx.remove` | SE削除 | 「シーン2のSEを消して」 |
+| `balloon.adjust_window` | 吹き出し表示時間 | 「吹き出しをもう少し長く」 |
+| `balloon.adjust_position` | 吹き出し位置 | 「吹き出しを上に移動」 |
+| `balloon.set_policy` | 吹き出し表示ルール | 「常に表示」「喋る時だけ」 |
+| `telop.set_enabled` | テロップ全体ON/OFF | 「テロップを消して」 |
+| `telop.set_enabled_scene` | シーン単位テロップON/OFF | 「シーン1のテロップをOFF」 |
+| `telop.set_position` | テロップ位置 | 「テロップを上に」 |
+| `telop.set_size` | テロップサイズ | 「テロップを大きく」 |
+
+### API エンドポイント
+
+```
+POST /api/projects/:projectId/chat-edits/chat
+Body: {
+  "user_message": "BGMがうるさいかも",
+  "context": {
+    "scene_idx": 1,
+    "balloon_no": 1,
+    "video_build_id": 123
+  },
+  "history": [
+    {"role": "user", "content": "よろしくね"},
+    {"role": "assistant", "content": "よろしくお願いします！..."}
+  ]
+}
+
+Response: {
+  "ok": true,
+  "assistant_message": "BGMが気になりますね。音量を下げましょうか？",
+  "suggestion": {
+    "needs_confirmation": true,
+    "summary": "Before: BGM音量 100%\nAfter: BGM音量 50%",
+    "intent": {
+      "schema": "rilarc_intent_v1",
+      "actions": [{"action": "bgm.set_volume", "volume": 0.5}]
+    },
+    "rejected_actions": []
+  }
+}
+```
+
+### フロー
+1. **会話**: ユーザー入力 → AI会話（assistant_message）
+2. **提案**: 編集提案があれば提案カード表示（suggestion）
+3. **確認**: 「確認する」→ dry-run（変更プレビュー）
+4. **適用**: 「この変更を適用する」→ apply（新ビルド生成）
+
+### テンプレート
+UIにはよく使う操作のテンプレートボタンがあります：
+- BGM: 小さく / 大きく / ループON/OFF
+- テロップ: 全部OFF / 全部ON / このシーンOFF / このシーンON / 位置変更 / サイズ変更
 
 ---
 
@@ -321,7 +388,7 @@ Proprietary - All rights reserved
 
 ---
 
-最終更新: 2026-01-20
+最終更新: 2026-01-26
 
 ---
 

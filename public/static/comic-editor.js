@@ -700,46 +700,40 @@ window.ComicEditor = {
                   <i class="fas fa-list mr-2 text-blue-600"></i>発話・吹き出し
                 </h3>
 
-                <!-- スクロール領域 -->
-                <div class="flex-1 overflow-y-auto space-y-4 pr-2">
+                <!-- スクロール領域（発話リスト） -->
+                <div class="flex-1 overflow-y-auto space-y-4 pr-2 min-h-0" style="max-height: 200px;">
                   <!-- 発話リスト -->
                   <div id="utteranceList" class="space-y-3"></div>
-
-                  <!-- 吹き出し追加 -->
-                  <div class="pt-4 border-t border-gray-200">
-                    <label class="block text-xs font-semibold text-gray-600 mb-3">
-                      吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）
-                    </label>
-                    <div class="space-y-3" id="bubbleTypeButtons">
-                      <!-- セリフ用 -->
-                      <p class="text-xs text-gray-500 font-semibold">セリフ用（Tailあり）</p>
-                      <div class="grid grid-cols-3 gap-2">
-                        <button onclick="ComicEditor.addBubble('speech')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-400 transition-colors text-sm font-medium">
-                          <i class="fas fa-comment text-blue-600 mr-1"></i>通常
-                        </button>
-                        <button onclick="ComicEditor.addBubble('whisper')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-gray-100 hover:border-gray-400 transition-colors text-sm font-medium">
-                          <i class="fas fa-comment-dots text-gray-500 mr-1"></i>小声
-                        </button>
-                        <button onclick="ComicEditor.addBubble('thought')" class="px-3 py-2 bg-white border-2 border-gray-300 rounded-lg hover:bg-purple-50 hover:border-purple-400 transition-colors text-sm font-medium">
-                          <i class="fas fa-cloud text-purple-500 mr-1"></i>思考
-                        </button>
-                      </div>
-                      
-                      <!-- ナレーション用 -->
-                      <p class="text-xs text-gray-500 font-semibold mt-3">ナレーション用（Tailなし）</p>
-                      <div class="grid grid-cols-2 gap-2">
-                        <button onclick="ComicEditor.addBubble('telop')" class="px-3 py-2 bg-gray-800 text-white border-2 border-gray-800 rounded-lg hover:bg-gray-700 transition-colors text-sm font-medium">
-                          <i class="fas fa-square mr-1"></i>テロップ帯
-                        </button>
-                        <button onclick="ComicEditor.addBubble('caption')" class="px-3 py-2 bg-white text-gray-800 border-2 border-gray-400 rounded-lg hover:bg-gray-100 transition-colors text-sm font-medium">
-                          <i class="fas fa-font mr-1"></i>字幕（枠なし）
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                   
                   <!-- エラー表示エリア -->
                   <div id="comicValidationErrors" class="hidden pt-3"></div>
+                </div>
+
+                <!-- 吹き出し追加（常に表示） -->
+                <div class="pt-3 mt-3 border-t border-gray-200 flex-shrink-0">
+                  <label class="block text-xs font-semibold text-gray-600 mb-2">
+                    <i class="fas fa-plus-circle text-green-500 mr-1"></i>吹き出しを追加（最大 ${this.MAX_BUBBLES} 個）
+                  </label>
+                  <div class="space-y-2" id="bubbleTypeButtons">
+                    <!-- セリフ用 -->
+                    <div class="flex flex-wrap gap-1.5">
+                      <button onclick="ComicEditor.addBubble('speech')" class="px-2 py-1.5 bg-white border border-gray-300 rounded hover:bg-blue-50 hover:border-blue-400 transition-colors text-xs font-medium">
+                        <i class="fas fa-comment text-blue-600 mr-1"></i>通常
+                      </button>
+                      <button onclick="ComicEditor.addBubble('whisper')" class="px-2 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-100 hover:border-gray-400 transition-colors text-xs font-medium">
+                        <i class="fas fa-comment-dots text-gray-500 mr-1"></i>小声
+                      </button>
+                      <button onclick="ComicEditor.addBubble('thought')" class="px-2 py-1.5 bg-white border border-gray-300 rounded hover:bg-purple-50 hover:border-purple-400 transition-colors text-xs font-medium">
+                        <i class="fas fa-cloud text-purple-500 mr-1"></i>思考
+                      </button>
+                      <button onclick="ComicEditor.addBubble('telop')" class="px-2 py-1.5 bg-gray-800 text-white border border-gray-800 rounded hover:bg-gray-700 transition-colors text-xs font-medium">
+                        <i class="fas fa-square mr-1"></i>テロップ
+                      </button>
+                      <button onclick="ComicEditor.addBubble('caption')" class="px-2 py-1.5 bg-white text-gray-800 border border-gray-400 rounded hover:bg-gray-100 transition-colors text-xs font-medium">
+                        <i class="fas fa-font mr-1"></i>字幕
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>

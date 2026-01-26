@@ -162,14 +162,14 @@ export const adminHtml = `
             <div id="costTab" class="hidden">
                 <!-- Cost Summary Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                    <div class="bg-white rounded-xl shadow p-6">
+                    <div class="bg-white rounded-xl shadow p-6 border-l-4 border-red-500">
                         <div class="flex items-center gap-4">
-                            <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-                                <i class="fas fa-dollar-sign text-green-600 text-xl"></i>
+                            <div class="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-hand-holding-usd text-red-600 text-xl"></i>
                             </div>
                             <div>
-                                <p class="text-gray-500 text-sm">総コスト</p>
-                                <p id="totalCost" class="text-2xl font-bold text-gray-800">\$0.00</p>
+                                <p class="text-red-700 text-sm font-medium">運営負担コスト</p>
+                                <p id="totalCost" class="text-2xl font-bold text-red-700">\$0.00</p>
                             </div>
                         </div>
                     </div>
@@ -232,14 +232,34 @@ export const adminHtml = `
                     </div>
                 </div>
                 
-                <!-- Cost by User -->
+                <!-- Cost by User (運営負担分のみ) -->
                 <div class="bg-white rounded-xl shadow mb-6">
                     <div class="p-6 border-b">
                         <h2 class="text-lg font-bold text-gray-800">
-                            <i class="fas fa-users mr-2 text-blue-600"></i>ユーザー別コスト（TOP 10）
+                            <i class="fas fa-hand-holding-usd mr-2 text-red-600"></i>運営負担コスト（TOP 10）
                         </h2>
+                        <p class="text-sm text-gray-500 mt-1">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            スポンサード利用分のみ表示（ユーザー自身のAPIキー利用は含まない）
+                        </p>
                     </div>
                     <div id="costByUser" class="divide-y">
+                        <div class="p-6 text-gray-500 text-center">読み込み中...</div>
+                    </div>
+                </div>
+                
+                <!-- Cost by User (全体参考値) -->
+                <div class="bg-gray-50 rounded-xl shadow mb-6 border border-gray-200">
+                    <div class="p-6 border-b">
+                        <h2 class="text-lg font-bold text-gray-600">
+                            <i class="fas fa-users mr-2 text-gray-500"></i>全体利用状況（参考：TOP 10）
+                        </h2>
+                        <p class="text-sm text-gray-500 mt-1">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            全ユーザーの全利用（運営負担+ユーザー負担）
+                        </p>
+                    </div>
+                    <div id="costByUserAll" class="divide-y">
                         <div class="p-6 text-gray-500 text-center">読み込み中...</div>
                     </div>
                 </div>
@@ -316,9 +336,9 @@ export const adminHtml = `
                         <div class="text-xs text-yellow-700">再試行/待機</div>
                         <div id="vbKpiRetrying" class="text-2xl font-bold text-yellow-700">-</div>
                     </div>
-                    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-blue-500">
-                        <div class="text-xs text-blue-700">推定コスト（USD）</div>
-                        <div id="vbKpiCost" class="text-2xl font-bold text-blue-700">-</div>
+                    <div class="bg-white rounded-xl shadow p-4 border-l-4 border-red-500">
+                        <div class="text-xs text-red-700">運営負担コスト（Remotion）</div>
+                        <div id="vbKpiCost" class="text-2xl font-bold text-red-700">-</div>
                     </div>
                 </div>
                 
@@ -338,6 +358,7 @@ export const adminHtml = `
                     <div class="bg-white rounded-xl shadow overflow-hidden">
                         <div class="p-4 bg-gray-50 border-b font-semibold text-gray-700">
                             <i class="fas fa-user mr-2"></i>ユーザー別（Owner）集計
+                            <span class="text-xs text-gray-500 font-normal ml-2">※全て運営負担（Remotion Lambda）</span>
                         </div>
                         <div class="overflow-x-auto">
                             <table class="w-full text-sm">
@@ -347,7 +368,7 @@ export const adminHtml = `
                                         <th class="p-3 text-right">Builds</th>
                                         <th class="p-3 text-right">OK</th>
                                         <th class="p-3 text-right">NG</th>
-                                        <th class="p-3 text-right">Cost</th>
+                                        <th class="p-3 text-right text-red-700">運営負担</th>
                                     </tr>
                                 </thead>
                                 <tbody id="vbByOwnerTbody"></tbody>
@@ -1323,7 +1344,7 @@ export const adminHtml = `
                     typeEl.innerHTML = '<div class="text-gray-500 text-center py-4">APIコストデータがありません</div>';
                 }
                 
-                // Render cost by user
+                // Render cost by user (運営負担分のみ)
                 const userEl = document.getElementById('costByUser');
                 const byUserArr = (data.byUser || []).filter(u => u.requestCount > 0);
                 if (byUserArr.length > 0) {
@@ -1331,9 +1352,9 @@ export const adminHtml = `
                         const uCostUsd = u.totalCost || 0;
                         const uCostJpy = uCostUsd * USD_JPY_RATE;
                         return \`
-                        <div class="p-4 flex items-center justify-between hover:bg-gray-50">
+                        <div class="p-4 flex items-center justify-between hover:bg-red-50">
                             <div class="flex items-center gap-4">
-                                <div class="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 font-bold text-sm">
+                                <div class="w-8 h-8 bg-red-100 rounded-full flex items-center justify-center text-red-600 font-bold text-sm">
                                     \${idx + 1}
                                 </div>
                                 <div>
@@ -1342,15 +1363,52 @@ export const adminHtml = `
                                 </div>
                             </div>
                             <div class="text-right">
-                                <div class="font-bold text-gray-800">\$\${uCostUsd.toFixed(4)}</div>
+                                <div class="font-bold text-red-700">\$\${uCostUsd.toFixed(4)}</div>
                                 <div class="text-xs text-gray-500">¥\${uCostJpy.toFixed(0)}</div>
                                 <div class="text-sm text-gray-500">\${u.requestCount || 0}リクエスト</div>
                             </div>
                         </div>
                     \`}).join('');
                 } else {
-                    userEl.innerHTML = '<div class="p-6 text-gray-500 text-center">ユーザーコストデータがありません</div>';
+                    userEl.innerHTML = '<div class="p-6 text-green-600 text-center"><i class="fas fa-check-circle mr-2"></i>運営負担コストはありません（全てユーザー負担）</div>';
                 }
+                
+                // Render cost by user (全体: 参考値)
+                const userElAll = document.getElementById('costByUserAll');
+                const byUserAllArr = (data.byUserAll || []).filter(u => u.requestCount > 0);
+                if (byUserAllArr.length > 0) {
+                    userElAll.innerHTML = byUserAllArr.slice(0, 10).map((u, idx) => {
+                        const uCostUsd = u.totalCost || 0;
+                        const uCostJpy = uCostUsd * USD_JPY_RATE;
+                        const sponsoredCost = u.sponsoredCost || 0;
+                        const userCost = u.userCost || 0;
+                        return \`
+                        <div class="p-4 flex items-center justify-between hover:bg-gray-100">
+                            <div class="flex items-center gap-4">
+                                <div class="w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center text-gray-600 font-bold text-sm">
+                                    \${idx + 1}
+                                </div>
+                                <div>
+                                    <div class="font-medium text-gray-700">\${escapeHtml(u.name || 'Unknown')}</div>
+                                    <div class="text-sm text-gray-500">\${escapeHtml(u.email || '')}</div>
+                                </div>
+                            </div>
+                            <div class="text-right">
+                                <div class="font-bold text-gray-700">\$\${uCostUsd.toFixed(4)}</div>
+                                <div class="text-xs text-gray-500">¥\${uCostJpy.toFixed(0)}</div>
+                                <div class="text-xs mt-1">
+                                    <span class="text-red-600" title="運営負担">\$\${sponsoredCost.toFixed(4)}</span>
+                                    <span class="text-gray-400 mx-1">/</span>
+                                    <span class="text-blue-600" title="ユーザー負担">\$\${userCost.toFixed(4)}</span>
+                                </div>
+                                <div class="text-xs text-gray-400">\${u.requestCount || 0}リクエスト</div>
+                            </div>
+                        </div>
+                    \`}).join('');
+                } else {
+                    userElAll.innerHTML = '<div class="p-6 text-gray-500 text-center">利用データがありません</div>';
+                }
+                
                 // Load sponsor usage data
                 loadSponsorUsage();
                 // Load operations usage data (Safe Chat v1)

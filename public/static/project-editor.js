@@ -3720,12 +3720,16 @@ window.refreshVideoUrl = async function(videoId, sceneId) {
       }
     } else if (res.data.status === 'failed') {
       showToast('動画の生成に失敗しています', 'error');
+    } else if (res.data.status === 'processing' || res.data.status === 'pending') {
+      // 処理中の場合は静かに待機（トーストなし）
+      console.log(`[refreshVideoUrl] Video ${videoId} is still ${res.data.status}`);
     } else {
-      showToast('動画URLの取得に失敗しました', 'error');
+      // その他の場合もログのみ（onerrorからの自動呼び出し時は静かに失敗）
+      console.warn(`[refreshVideoUrl] Video ${videoId} has no r2_url, status: ${res.data.status}`);
     }
   } catch (e) {
+    // ネットワークエラーの場合のみログ（トーストは出さない：onerrorからの自動呼び出しでノイズになる）
     console.error('[refreshVideoUrl] Error:', e);
-    showToast('動画の再読み込みに失敗しました', 'error');
   }
 };
 
@@ -7032,10 +7036,18 @@ async function updateVideoBuildRequirements() {
   requiredEl.innerHTML = requiredHtml;
   recommendedEl.innerHTML = recommendedHtml;
   
-  // サマリー表示
+  // サマリー表示（わかりやすく）
   if (blockReasons.length > 0) {
-    summaryEl.className = 'p-3 rounded-lg border mt-3 bg-red-50 border-red-200';
-    summaryEl.innerHTML = '<div class="flex items-center text-red-700"><i class="fas fa-ban mr-2"></i><span class="font-semibold">生成できません</span></div>';
+    summaryEl.className = 'p-4 rounded-lg border mt-3 bg-red-50 border-red-200';
+    summaryEl.innerHTML = `
+      <div class="flex items-center text-red-700 mb-2">
+        <i class="fas fa-times-circle mr-2 text-xl"></i>
+        <span class="font-bold text-lg">生成できません</span>
+      </div>
+      <p class="text-sm text-red-600 ml-7">
+        👆 上記の「必須」項目を解決してください
+      </p>
+    `;
     
     // ブロック理由を表示
     if (blockReasonEl) {
@@ -7043,12 +7055,28 @@ async function updateVideoBuildRequirements() {
       blockReasonEl.classList.remove('hidden');
     }
   } else if (summaryStatus === 'warning') {
-    summaryEl.className = 'p-3 rounded-lg border mt-3 bg-amber-50 border-amber-200';
-    summaryEl.innerHTML = '<div class="flex items-center text-amber-700"><i class="fas fa-check-circle mr-2"></i><span class="font-semibold">生成可能</span><span class="text-sm ml-2">（注意事項あり）</span></div>';
+    summaryEl.className = 'p-4 rounded-lg border mt-3 bg-amber-50 border-amber-200';
+    summaryEl.innerHTML = `
+      <div class="flex items-center text-amber-700 mb-2">
+        <i class="fas fa-check-circle mr-2 text-xl"></i>
+        <span class="font-bold text-lg">生成可能</span>
+      </div>
+      <p class="text-sm text-amber-600 ml-7">
+        ⚠️ 注意事項がありますが、動画生成は可能です
+      </p>
+    `;
     if (blockReasonEl) blockReasonEl.classList.add('hidden');
   } else {
-    summaryEl.className = 'p-3 rounded-lg border mt-3 bg-green-50 border-green-200';
-    summaryEl.innerHTML = '<div class="flex items-center text-green-700"><i class="fas fa-check-circle mr-2"></i><span class="font-semibold">準備完了</span></div>';
+    summaryEl.className = 'p-4 rounded-lg border mt-3 bg-green-50 border-green-200';
+    summaryEl.innerHTML = `
+      <div class="flex items-center text-green-700 mb-2">
+        <i class="fas fa-check-circle mr-2 text-xl"></i>
+        <span class="font-bold text-lg">✅ 準備完了！</span>
+      </div>
+      <p class="text-sm text-green-600 ml-7">
+        🎬 下の「動画を生成」ボタンをクリックしてください
+      </p>
+    `;
     if (blockReasonEl) blockReasonEl.classList.add('hidden');
   }
   
@@ -7197,11 +7225,18 @@ function toggleVideoBuildError(buildId) {
 
 /**
  * Extract error message safely (PR-4: [object Object] 根絶)
+ * 優先順位: data.error (string) > data.errors (array) > data.error.message > data.message > err.message
  */
 function extractErrorMessage(err, fallback = '失敗しました') {
   if (!err) return fallback;
   const data = err.response?.data;
   if (typeof data === 'string') return data;
+  // API直接のerrorフィールド（string）
+  if (typeof data?.error === 'string') return data.error;
+  // errorsが配列の場合
+  if (Array.isArray(data?.errors) && data.errors.length > 0) {
+    return data.errors.map(e => typeof e === 'string' ? e : e.message || JSON.stringify(e)).join('\n');
+  }
   if (data?.error?.message) return data.error.message;
   if (data?.message) return data.message;
   if (typeof err.message === 'string') return err.message;
@@ -7398,42 +7433,28 @@ function renderVideoBuildItem(build) {
   let expiryHtml = '';
   
   if (build.status === 'completed' && build.download_url) {
-    const expiry = formatDownloadExpiry(build);
-    
-    if (expiry === 'expired') {
-      actionHtml = `
-        <div class="flex flex-col items-end gap-2">
-          <button onclick="refreshVideoBuildDownload(${build.id})"
-            class="px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-sm font-semibold flex items-center gap-2">
-            <i class="fas fa-sync-alt"></i>URL再取得
-          </button>
-          <span class="text-xs text-amber-600"><i class="fas fa-exclamation-triangle mr-1"></i>期限切れ</span>
-        </div>
-      `;
-    } else {
-      // PR-4-3: プレビュー → 修正 → DL の順
-      actionHtml = `
-        <div class="flex items-center gap-2">
-          <button onclick="openVideoBuildPreviewModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
-            class="px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 text-sm font-semibold flex items-center gap-2"
-            title="プレビュー再生">
-            <i class="fas fa-play"></i>
-          </button>
-          <button onclick="openChatEditModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
-            class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-2"
-            title="チャットで修正">
-            <i class="fas fa-comments"></i>修正
-          </button>
-          <a href="${build.download_url}" target="_blank"
-            class="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold flex items-center gap-2">
-            <i class="fas fa-download"></i>DL
-          </a>
-        </div>
-      `;
-      if (expiry) {
-        expiryHtml = `<p class="text-xs text-gray-500 mt-1"><i class="fas fa-clock mr-1"></i>期限: ${expiry}</p>`;
-      }
-    }
+    // FIX: 有効期限チェックを削除 - 常にプレビュー/修正/DLボタンを表示
+    // 動画が再生できない場合はプレビューモーダル内でエラーハンドリング
+    // PR-4-3: プレビュー → 修正 → DL の順
+    actionHtml = `
+      <div class="flex items-center gap-2">
+        <button onclick="openVideoBuildPreviewModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+          class="px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 text-sm font-semibold flex items-center gap-2"
+          title="プレビュー再生">
+          <i class="fas fa-play"></i>
+        </button>
+        <button onclick="openChatEditModal(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+          class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-2"
+          title="チャットで修正">
+          <i class="fas fa-comments"></i>修正
+        </button>
+        <a href="${build.download_url}" target="_blank"
+          class="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold flex items-center gap-2">
+          <i class="fas fa-download"></i>DL
+        </a>
+      </div>
+    `;
+    // 有効期限表示も削除（ユーザーを混乱させるため）
   } else if (build.status === 'completed' && !build.download_url) {
     actionHtml = `
       <button onclick="refreshVideoBuildDownload(${build.id})"
@@ -7556,11 +7577,15 @@ async function refreshVideoBuildDownload(buildId) {
     
     const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
     
-    if (response.data.status === 'completed' && response.data.output?.presigned_url) {
+    // FIX: APIレスポンス構造に合わせる（build.download_url を参照）
+    const build = response.data.build;
+    const downloadUrl = build?.download_url;
+    
+    if (response.data.success && build?.status === 'completed' && downloadUrl) {
       // Update cache
       const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
       if (idx >= 0) {
-        window.videoBuildListCache[idx].download_url = response.data.output.presigned_url;
+        window.videoBuildListCache[idx].download_url = downloadUrl;
         window.videoBuildListCache[idx].render_completed_at = window.videoBuildListCache[idx].render_completed_at || new Date().toISOString();
       }
       
@@ -7571,8 +7596,11 @@ async function refreshVideoBuildDownload(buildId) {
       await loadVideoBuilds();
       
       showToast('新しいダウンロードURLを取得しました', 'success');
+    } else if (response.data.warning) {
+      // AWS側の問題（設定なし、ジョブIDなし等）
+      showToast(response.data.warning, 'warning');
     } else {
-      throw new Error('URLの取得に失敗しました');
+      throw new Error('URLの取得に失敗しました。動画が存在しない可能性があります。');
     }
   } catch (error) {
     console.error('[VideoBuild] Refresh download error:', error);
@@ -8714,12 +8742,69 @@ function openVideoBuildPreviewModal(buildId, videoUrl) {
   const idEl = document.getElementById('vbPreviewBuildId');
   const src = document.getElementById('vbPreviewVideoSrc');
   const video = document.getElementById('vbPreviewVideo');
+  const errorEl = document.getElementById('vbPreviewError');
 
   if (title) title.textContent = 'プレビュー（完成動画）';
   if (idEl) idEl.textContent = `Build #${buildId}`;
+  
+  // エラー表示をリセット
+  if (errorEl) errorEl.classList.add('hidden');
 
   if (src && videoUrl) {
     src.src = videoUrl;
+    
+    // FIX: 動画読み込みエラー時のハンドリング
+    video.onerror = async () => {
+      console.warn('[VideoBuild] Video load error, attempting URL refresh for build:', buildId);
+      if (errorEl) {
+        errorEl.innerHTML = `
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            動画を読み込めませんでした。URLを再取得中...
+          </div>
+        `;
+        errorEl.classList.remove('hidden');
+      }
+      
+      // 自動的にURL再取得を試みる
+      try {
+        const response = await axios.post(\`\${API_BASE}/video-builds/\${buildId}/refresh\`);
+        const newUrl = response.data.build?.download_url;
+        
+        if (response.data.success && newUrl) {
+          // 新しいURLで再読み込み
+          src.src = newUrl;
+          video.load();
+          if (errorEl) errorEl.classList.add('hidden');
+          
+          // キャッシュも更新
+          const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
+          if (idx >= 0) {
+            window.videoBuildListCache[idx].download_url = newUrl;
+          }
+          
+          // DLリンクも更新
+          const dl = document.getElementById('vbPreviewDownloadLink');
+          if (dl) dl.href = newUrl;
+          
+          showToast('URLを更新しました', 'success');
+        } else {
+          throw new Error(response.data.warning || 'URLの取得に失敗しました');
+        }
+      } catch (refreshError) {
+        console.error('[VideoBuild] URL refresh failed:', refreshError);
+        if (errorEl) {
+          errorEl.innerHTML = \`
+            <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+              <i class="fas fa-times-circle mr-1"></i>
+              動画の読み込みに失敗しました。<br/>
+              <span class="text-xs text-red-600">\${extractErrorMessage(refreshError, '動画が存在しない可能性があります')}</span>
+            </div>
+          \`;
+        }
+      }
+    };
+    
     video.load();
   }
 
@@ -8758,29 +8843,147 @@ function closeVideoBuildPreviewModal() {
 window.openVideoBuildPreviewModal = openVideoBuildPreviewModal;
 window.closeVideoBuildPreviewModal = closeVideoBuildPreviewModal;
 
+// ============================================
+// Phase C: Chat Context Helpers
+// ============================================
+
+function clampInt(n, min, max) {
+  const x = Number(n);
+  if (!Number.isFinite(x)) return min;
+  return Math.max(min, Math.min(max, Math.trunc(x)));
+}
+
+function getSceneCountFromCache() {
+  // Try various caches for scene count
+  const scenes = window.videoBuildListCacheScenes || window.lastLoadedScenes || window.builderScenesCache || [];
+  if (Array.isArray(scenes) && scenes.length > 0) return scenes.length;
+  // Fallback: try preflight summary
+  const pre = window.lastPreflightSummary?.preflight_count;
+  if (typeof pre === 'string' && pre.includes('/')) {
+    const rhs = pre.split('/')[1];
+    const v = parseInt(rhs, 10);
+    if (!Number.isNaN(v) && v > 0) return v;
+  }
+  return 10; // Default max
+}
+
+function setChatContext(sceneIdx, balloonNo) {
+  window.chatEditState = window.chatEditState || {};
+  window.chatEditState.contextSceneIdx = clampInt(sceneIdx, 1, 999);
+  window.chatEditState.contextBalloonNo = clampInt(balloonNo, 1, 999);
+
+  // Reflect to UI
+  const sceneSel = document.getElementById('chatEditContextScene');
+  const balloonInput = document.getElementById('chatEditContextBalloon');
+  if (sceneSel) sceneSel.value = String(window.chatEditState.contextSceneIdx);
+  if (balloonInput) balloonInput.value = String(window.chatEditState.contextBalloonNo);
+}
+
+function populateChatContextSelectors() {
+  const sceneSel = document.getElementById('chatEditContextScene');
+  if (!sceneSel) return;
+  
+  const count = getSceneCountFromCache();
+  const current = clampInt(window.chatEditState?.contextSceneIdx || 1, 1, Math.max(1, count));
+
+  sceneSel.innerHTML = Array.from({ length: count }, (_, i) => {
+    const v = i + 1;
+    return `<option value="${v}" ${v === current ? 'selected' : ''}>${v}</option>`;
+  }).join('');
+
+  // Bind change events once
+  if (!sceneSel.dataset.bound) {
+    sceneSel.dataset.bound = 'true';
+    sceneSel.addEventListener('change', () => {
+      setChatContext(parseInt(sceneSel.value, 10), window.chatEditState?.contextBalloonNo || 1);
+    });
+  }
+
+  const balloonInput = document.getElementById('chatEditContextBalloon');
+  if (balloonInput && !balloonInput.dataset.bound) {
+    balloonInput.dataset.bound = 'true';
+    balloonInput.addEventListener('change', () => {
+      setChatContext(window.chatEditState?.contextSceneIdx || 1, parseInt(balloonInput.value, 10));
+    });
+  }
+}
+
+function bindAiToggle() {
+  const aiToggle = document.getElementById('chatEditUseAiToggle');
+  if (!aiToggle) return;
+  
+  if (!aiToggle.dataset.bound) {
+    aiToggle.dataset.bound = 'true';
+    aiToggle.addEventListener('change', () => {
+      window.chatEditState = window.chatEditState || {};
+      window.chatEditState.useAiParse = !!aiToggle.checked;
+      // Update parse mode indicator
+      const modeLabel = document.getElementById('chatEditParseMode');
+      if (modeLabel) {
+        modeLabel.classList.toggle('hidden', !aiToggle.checked);
+      }
+    });
+  }
+  
+  // Sync state -> UI
+  if (typeof window.chatEditState?.useAiParse !== 'boolean') {
+    window.chatEditState = window.chatEditState || {};
+    window.chatEditState.useAiParse = true; // Default ON
+  }
+  aiToggle.checked = !!window.chatEditState.useAiParse;
+}
+
 /**
  * Open the chat edit modal for a specific build (v1 Center Popup)
+ * Phase C: 文脈SSOT + AIトグル対応
+ * Phase C1: シーンセレクタ連携 - SceneEditModal.currentSceneIdx を自動参照
  * @param {number} buildId 
  * @param {string} videoUrl 
+ * @param {Object} options - オプション { sceneIdx: number, balloonNo: number }
  */
-function openChatEditModal(buildId, videoUrl) {
+function openChatEditModal(buildId, videoUrl, options = {}) {
   const modal = document.getElementById('chatEditModal');
   if (!modal) return;
 
-  // Reset state
+  // Phase C1: シーンセレクタ連携
+  // 優先順位: 1. options.sceneIdx 2. SceneEditModal.currentSceneIdx 3. state保持値 4. デフォルト1
+  const sceneFromModal = window.SceneEditModal?.currentSceneIdx;
+  const contextSceneIdx = options.sceneIdx ?? sceneFromModal ?? window.chatEditState?.contextSceneIdx ?? 1;
+  const contextBalloonNo = options.balloonNo ?? window.chatEditState?.contextBalloonNo ?? 1;
+  
+  // C1: ログ出力（デバッグ用）
+  if (sceneFromModal) {
+    console.log(`[ChatEdit] Using scene ${sceneFromModal} from SceneEditModal`);
+  }
+
+  // Reset state with context SSOT + AI toggle
   window.chatEditState = {
     buildId,
     projectId: PROJECT_ID,
     videoUrl: videoUrl || null,
     patchRequestId: null,
     dryRunResult: null,
+    // Phase C: 文脈SSOT
+    contextSceneIdx,
+    contextBalloonNo,
+    // Phase C: AI parse toggle (default ON)
+    useAiParse: window.chatEditState?.useAiParse ?? true,
+    // C3: Explain初期化
+    explain: null,
   };
 
   // Update header labels
   const buildLabel = document.getElementById('chatEditBuildLabel');
   const projectLabel = document.getElementById('chatEditProjectLabel');
-  if (buildLabel) buildLabel.textContent = `Build #${buildId}`;
+  if (buildLabel) buildLabel.textContent = buildId ? `Build #${buildId}` : 'Pre-build';
   if (projectLabel) projectLabel.textContent = `Project #${PROJECT_ID}`;
+
+  // Phase C: Populate context selectors
+  populateChatContextSelectors();
+  setChatContext(contextSceneIdx, contextBalloonNo);
+  
+  // Phase C: Bind AI toggle
+  bindAiToggle();
 
   // Set video source
   const videoSrc = document.getElementById('chatEditVideoSrc');
@@ -8797,10 +9000,20 @@ function openChatEditModal(buildId, videoUrl) {
   // Hide dry-run box
   const dryBox = document.getElementById('chatEditDryRunBox');
   if (dryBox) dryBox.classList.add('hidden');
+  
+  // C3: Hide and reset Explain box
+  const explainBox = document.getElementById('chatEditExplainBox');
+  if (explainBox) explainBox.classList.add('hidden');
+  const explainContent = document.getElementById('chatEditExplainContent');
+  if (explainContent) explainContent.innerHTML = '';
 
   // Clear input
   const input = document.getElementById('chatEditInput');
   if (input) input.value = '';
+  
+  // Hide parse mode indicator initially
+  const modeLabel = document.getElementById('chatEditParseMode');
+  if (modeLabel) modeLabel.classList.add('hidden');
 
   // Show modal
   modal.classList.remove('hidden');
@@ -8958,11 +9171,27 @@ function parseMessageToIntent(message) {
     
     // manual_window の場合、開始/終了を拾う（存在すれば）
     if (policy === 'manual_window') {
-      const startMatch = message.match(/開始\s*(\d+)\s*ms/i);
-      const endMatch = message.match(/終了\s*(\d+)\s*ms/i);
-      if (startMatch && endMatch) {
-        policyAction.start_ms = parseInt(startMatch[1], 10);
-        policyAction.end_ms = parseInt(endMatch[1], 10);
+      // パターン1: 「開始Xms 終了Yms」形式
+      const msStartMatch = message.match(/開始\s*(\d+)\s*ms/i);
+      const msEndMatch = message.match(/終了\s*(\d+)\s*ms/i);
+      
+      // パターン2: 「X秒目からY秒目」「X秒からY秒まで」「X秒〜Y秒」形式 (C2: 秒数指定)
+      const secRangeMatch = message.match(/(\d+(?:\.\d+)?)\s*秒[目]?\s*(?:から|〜|～|-|−|ー)\s*(\d+(?:\.\d+)?)\s*秒/i);
+      
+      // パターン3: 「X.X秒からY.Y秒まで」形式（小数対応）
+      const secRangeMatch2 = message.match(/(\d+(?:\.\d+)?)\s*(?:秒目?(?:から)?|s)\s*(?:〜|～|-|−|ー|から)\s*(\d+(?:\.\d+)?)\s*(?:秒目?(?:まで)?|s)/i);
+      
+      if (msStartMatch && msEndMatch) {
+        policyAction.start_ms = parseInt(msStartMatch[1], 10);
+        policyAction.end_ms = parseInt(msEndMatch[1], 10);
+      } else if (secRangeMatch) {
+        // 秒をミリ秒に変換
+        policyAction.start_ms = Math.round(parseFloat(secRangeMatch[1]) * 1000);
+        policyAction.end_ms = Math.round(parseFloat(secRangeMatch[2]) * 1000);
+      } else if (secRangeMatch2) {
+        // 秒をミリ秒に変換
+        policyAction.start_ms = Math.round(parseFloat(secRangeMatch2[1]) * 1000);
+        policyAction.end_ms = Math.round(parseFloat(secRangeMatch2[2]) * 1000);
       }
     }
     
@@ -8974,11 +9203,45 @@ function parseMessageToIntent(message) {
   // For now, we just warn that this is not supported in single-action mode
   
   // ========================================
+  // C2: 秒数指定バルーン表示パターン
+  // 「シーン1のバブル1を3秒から5秒まで表示」「シーン1のバブル1を3秒目〜5秒目に表示」
+  // ========================================
+  const secBalloonMatch = message.match(
+    /(?:scene|シーン)\s*(\d+).*?(?:balloon|バブル)\s*(\d+).*?(\d+(?:\.\d+)?)\s*秒[目]?\s*(?:から|〜|～|-|−|ー)\s*(\d+(?:\.\d+)?)\s*秒[目]?\s*(?:まで|に|で)?.*?(?:表示|出)/i
+  );
+  if (secBalloonMatch && !balloonPolicyMatch) {
+    const sceneIdx = parseInt(secBalloonMatch[1], 10);
+    const balloonNo = parseInt(secBalloonMatch[2], 10);
+    const startSec = parseFloat(secBalloonMatch[3]);
+    const endSec = parseFloat(secBalloonMatch[4]);
+    
+    actions.push({
+      action: 'balloon.set_policy',
+      scene_idx: sceneIdx,
+      balloon_no: balloonNo,
+      policy: 'manual_window',
+      start_ms: Math.round(startSec * 1000),
+      end_ms: Math.round(endSec * 1000),
+    });
+  }
+  
+  // ========================================
   // PR-5-3b: テロップコマンドのパース
   // ========================================
   
-  // Pattern: テロップON/OFF (e.g., "テロップを全部ON", "テロップを全部OFF", "テロップをOFFに")
-  if (/テロップ.*?(?:全部)?(?:off|オフ|非表示|消す|消して)/i.test(message)) {
+  // Pattern: シーン単位テロップON/OFF (e.g., "シーン1のテロップをOFF", "シーン2のテロップを消して")
+  const sceneTelopMatch = message.match(/シーン\s*(\d+)\s*の?\s*テロップ.*?(?:off|オフ|非表示|消す|消して)/i);
+  const sceneTelopOnMatch = message.match(/シーン\s*(\d+)\s*の?\s*テロップ.*?(?:on|オン|表示|出す|出して)/i);
+  
+  if (sceneTelopMatch) {
+    const sceneIdx = parseInt(sceneTelopMatch[1], 10);
+    actions.push({ action: 'telop.set_enabled_scene', scene_idx: sceneIdx, enabled: false });
+  } else if (sceneTelopOnMatch) {
+    const sceneIdx = parseInt(sceneTelopOnMatch[1], 10);
+    actions.push({ action: 'telop.set_enabled_scene', scene_idx: sceneIdx, enabled: true });
+  }
+  // Pattern: テロップON/OFF 全体 (e.g., "テロップを全部ON", "テロップを全部OFF", "テロップをOFFに")
+  else if (/テロップ.*?(?:全部)?(?:off|オフ|非表示|消す|消して)/i.test(message)) {
     actions.push({ action: 'telop.set_enabled', enabled: false });
   } else if (/テロップ.*?(?:全部)?(?:on|オン|表示|出す|出して)/i.test(message)) {
     actions.push({ action: 'telop.set_enabled', enabled: true });
@@ -9002,10 +9265,31 @@ function parseMessageToIntent(message) {
     actions.push({ action: 'telop.set_size', size_preset: 'sm' });
   }
   
+  // Phase A3: エラーUX改善 - より具体的なエラーメッセージ
   if (actions.length === 0 && errors.length === 0) {
+    // 入力内容に基づいて具体的なヒントを提供
+    let hint = '';
+    
+    // バブル関連の入力があるがシーン/バブル番号がない場合
+    if (/バブル|ふきだし|吹き出し|balloon/i.test(message) && !/シーン\s*\d|scene\s*\d/i.test(message)) {
+      hint = '💡 シーン番号を追加してください。例: 「シーン1のバブル1を〜」';
+    }
+    // SFX関連の入力があるがシーン番号がない場合
+    else if (/sfx|効果音/i.test(message) && !/シーン\s*\d|scene\s*\d/i.test(message)) {
+      hint = '💡 シーン番号を追加してください。例: 「シーン1のSFX1の音量を50%に」';
+    }
+    // 数値はあるがコマンドが不明な場合
+    else if (/\d+/.test(message)) {
+      hint = '💡 対象を明示してください: BGM/バブル/SFX/テロップ';
+    }
+    // 一般的なヒント
+    else {
+      hint = '💡 テンプレボタンをクリックすると正しい形式が入力されます';
+    }
+    
     return {
       ok: false,
-      error: '修正指示を解析できませんでした。例: 「BGM音量を20%に」「シーン2のバブル1を+300ms遅らせて」',
+      error: `修正指示を解析できませんでした。\n\n${hint}\n\n📝 認識できる形式:\n• BGM: 「BGM音量を20%に」「BGMをOFFにして」\n• バブル: 「シーン1のバブル1を喋る時だけ表示にして」\n• バブル秒数指定: 「シーン1のバブル1を3秒から5秒まで表示」\n• SFX: 「シーン1のSFX1の音量を50%に」\n• テロップ: 「テロップを全部OFF」「シーン1のテロップをOFF」「テロップ位置を上に」`,
     };
   }
   
@@ -9026,20 +9310,46 @@ function parseMessageToIntent(message) {
 }
 
 /**
- * Send a chat edit message (perform dry-run) - v1 Modal
- * PR-4-4: 二重送信ガード追加
+ * Phase C: AI Intent Parse API call
+ * C3: rejected_actions も返す
+ */
+async function parseIntentWithAI(userMessage) {
+  const payload = {
+    user_message: userMessage,
+    context: {
+      scene_idx: window.chatEditState?.contextSceneIdx || 1,
+      balloon_no: window.chatEditState?.contextBalloonNo || 1,
+    },
+  };
+  const res = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/parse-ai`, payload);
+  if (!res.data?.ok) {
+    throw new Error(res.data?.error || 'AI parse failed');
+  }
+  // C3: intent + rejected_actions を返す
+  return {
+    intent: res.data.intent,
+    rejected_actions: res.data.rejected_actions || [],
+  };
+}
+
+/**
+ * 会話SSOT: ChatGPT体験 - 3層構造
+ * 1. Conversation: 常に自然文で返答
+ * 2. Suggestion: 必要時のみ編集提案を追加
+ * 3. Execution: ユーザー確認後にdry-run/apply
  */
 async function sendChatEditMessage() {
   const input = document.getElementById('chatEditInput');
   const sendBtn = document.getElementById('btnChatEditSend');
   const history = document.getElementById('chatEditHistory');
+  const modeLabel = document.getElementById('chatEditParseMode');
   
   if (!input || !sendBtn || !history) return;
   
   const message = input.value.trim();
   if (!message) return;
   
-  // PR-4-4: 二重送信ガード
+  // 二重送信ガード
   if (window.chatEditSendInFlight) {
     console.log('[ChatEdit] Send already in flight');
     return;
@@ -9052,39 +9362,287 @@ async function sendChatEditMessage() {
   
   // Add user message to history
   history.innerHTML += `
-    <div class="flex justify-end">
-      <div class="bg-indigo-600 text-white rounded-lg px-3 py-2 max-w-[80%]">
+    <div class="flex justify-end mb-2">
+      <div class="bg-purple-600 text-white rounded-lg px-3 py-2 max-w-[80%]">
         <p class="text-sm">${escapeHtml(message)}</p>
       </div>
     </div>
   `;
   history.scrollTop = history.scrollHeight;
   
-  // Parse message to intent
+  // 会話履歴の管理（最大10往復 = 20メッセージ）
+  window.chatEditConversation = window.chatEditConversation || [];
+  window.chatEditConversation.push({ role: 'user', content: message });
+  if (window.chatEditConversation.length > 20) {
+    window.chatEditConversation = window.chatEditConversation.slice(-20);
+  }
+  
+  // Check: テンプレ（ルールベース）で解釈可能か先にチェック
   const parsed = parseMessageToIntent(message);
   
-  if (!parsed.ok) {
-    // Show error
+  if (parsed.ok && parsed.intent?.actions?.length > 0) {
+    // ルールベースで解釈成功 -> 従来のdry-runフローへ
+    window.chatEditState.explain = {
+      mode: 'regex',
+      userMessage: message,
+      intent: parsed.intent,
+      rejectedActions: [],
+      context: {
+        sceneIdx: window.chatEditState?.contextSceneIdx || 1,
+        balloonNo: window.chatEditState?.contextBalloonNo || 1,
+      },
+    };
+    if (modeLabel) {
+      modeLabel.textContent = 'ルール';
+      modeLabel.className = 'text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600';
+      modeLabel.classList.remove('hidden');
+    }
+    await processDryRunWithIntent(parsed.intent, message, history, input, sendBtn);
+    return;
+  }
+  
+  // 会話APIを使用（AI解釈 + 自然な会話）
+  if (window.chatEditState?.useAiParse) {
+    // Show AI thinking message
+    const thinkingId = `thinking-${Date.now()}`;
     history.innerHTML += `
-      <div class="bg-red-50 rounded-lg p-3 border border-red-200">
-        <p class="text-sm text-red-700">
-          <i class="fas fa-exclamation-circle mr-1"></i>
-          ${escapeHtml(parsed.error)}
-        </p>
+      <div id="${thinkingId}" class="flex justify-start mb-2">
+        <div class="bg-purple-50 rounded-lg px-3 py-2 border border-purple-200">
+          <p class="text-sm text-purple-600">
+            <i class="fas fa-magic fa-spin mr-1"></i>考え中...
+          </p>
+        </div>
       </div>
     `;
-    input.value = '';
-    input.disabled = false;
-    sendBtn.disabled = false;
-    input.focus();
+    history.scrollTop = history.scrollHeight;
+    
+    if (modeLabel) {
+      modeLabel.textContent = 'AI会話';
+      modeLabel.className = 'text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700';
+      modeLabel.classList.remove('hidden');
+    }
+    
+    try {
+      // 新しい会話APIを呼び出し
+      const chatPayload = {
+        user_message: message,
+        context: {
+          scene_idx: window.chatEditState?.contextSceneIdx || 1,
+          balloon_no: window.chatEditState?.contextBalloonNo || 1,
+          video_build_id: window.chatEditState?.buildId || null,
+        },
+        history: window.chatEditConversation.slice(0, -1), // 現在のメッセージ以外
+      };
+      
+      const chatResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/chat`, chatPayload);
+      
+      // Remove thinking message
+      const thinkingEl = document.getElementById(thinkingId);
+      if (thinkingEl) thinkingEl.remove();
+      
+      if (chatResponse.data.ok) {
+        const assistantMsg = chatResponse.data.assistant_message;
+        const suggestion = chatResponse.data.suggestion;
+        
+        // 会話履歴に追加
+        window.chatEditConversation.push({ role: 'assistant', content: assistantMsg });
+        if (window.chatEditConversation.length > 20) {
+          window.chatEditConversation = window.chatEditConversation.slice(-20);
+        }
+        
+        // 会話返答を表示
+        history.innerHTML += `
+          <div class="flex justify-start mb-2">
+            <div class="bg-gray-100 rounded-lg px-3 py-2 max-w-[80%]">
+              <p class="text-sm text-gray-800">${escapeHtml(assistantMsg)}</p>
+            </div>
+          </div>
+        `;
+        
+        // 提案がある場合
+        if (suggestion && suggestion.intent?.actions?.length > 0) {
+          // Explain保存
+          window.chatEditState.explain = {
+            mode: 'ai',
+            userMessage: message,
+            intent: suggestion.intent,
+            rejectedActions: suggestion.rejected_actions || [],
+            context: {
+              sceneIdx: window.chatEditState?.contextSceneIdx || 1,
+              balloonNo: window.chatEditState?.contextBalloonNo || 1,
+            },
+          };
+          
+          // 提案カードを表示（安心感のあるUI）
+          const suggestionId = `suggestion-${Date.now()}`;
+          history.innerHTML += `
+            <div id="${suggestionId}" class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg p-4 border border-amber-200 mb-2 shadow-sm">
+              <div class="flex items-center gap-2 mb-3">
+                <span class="flex items-center justify-center w-8 h-8 bg-amber-100 rounded-full">
+                  <i class="fas fa-lightbulb text-amber-500"></i>
+                </span>
+                <div>
+                  <p class="text-sm font-medium text-amber-800">編集提案</p>
+                  <p class="text-xs text-amber-600">${suggestion.intent.actions.length}件の変更</p>
+                </div>
+              </div>
+              <div class="bg-white rounded-md p-3 mb-3 border border-amber-100">
+                <p class="text-sm text-gray-700 font-medium">${escapeHtml(suggestion.summary)}</p>
+              </div>
+              <p class="text-xs text-gray-500 mb-3">
+                <i class="fas fa-shield-alt mr-1 text-green-500"></i>
+                「確認する」を押すと変更内容を確認できます（まだ適用されません）
+              </p>
+              <div class="flex gap-2">
+                <button onclick="confirmSuggestion('${suggestionId}')" class="flex-1 px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600 transition-colors">
+                  <i class="fas fa-search mr-1"></i>確認する
+                </button>
+                <button onclick="dismissSuggestion('${suggestionId}')" class="px-4 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200 transition-colors">
+                  やめる
+                </button>
+              </div>
+            </div>
+          `;
+          
+          // 提案をstateに保存
+          window.chatEditState.pendingSuggestion = {
+            id: suggestionId,
+            intent: suggestion.intent,
+            summary: suggestion.summary,
+          };
+        }
+        
+        input.value = '';
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+        
+      } else {
+        // API failed
+        history.innerHTML += `
+          <div class="bg-red-50 rounded-lg p-3 border border-red-200 mb-2">
+            <p class="text-sm text-red-700">
+              <i class="fas fa-exclamation-circle mr-1"></i>
+              ${escapeHtml(chatResponse.data.error || '応答に失敗しました')}
+            </p>
+          </div>
+        `;
+        input.value = '';
+        input.disabled = false;
+        sendBtn.disabled = false;
+        input.focus();
+      }
+      
+    } catch (error) {
+      // Remove thinking message
+      const thinkingEl = document.getElementById(thinkingId);
+      if (thinkingEl) thinkingEl.remove();
+      
+      console.error('[ChatEdit] Chat API error:', error);
+      const errorMsg = extractErrorMessage(error, '会話に失敗しました');
+      
+      history.innerHTML += `
+        <div class="bg-red-50 rounded-lg p-3 border border-red-200 mb-2">
+          <p class="text-sm text-red-700">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            ${escapeHtml(errorMsg)}
+          </p>
+        </div>
+      `;
+      input.value = '';
+      input.disabled = false;
+      sendBtn.disabled = false;
+      input.focus();
+    } finally {
+      window.chatEditSendInFlight = false;
+    }
+    
     history.scrollTop = history.scrollHeight;
     return;
   }
   
-  // Add thinking message
+  // AIがOFFでルールベースも失敗した場合
+  history.innerHTML += `
+    <div class="flex justify-start mb-2">
+      <div class="bg-blue-50 rounded-lg px-3 py-2 border border-blue-200 max-w-[80%]">
+        <p class="text-sm text-blue-800">
+          <i class="fas fa-info-circle mr-1"></i>
+          修正指示として認識できませんでした。
+        </p>
+        <p class="text-xs text-blue-600 mt-1">
+          「BGMを20%に」「バブルを常時表示に」などの具体的な指示をお試しください。<br/>
+          <span class="text-blue-400">※テンプレボタンをクリックすると正しい形式が入力されます</span>
+        </p>
+      </div>
+    </div>
+  `;
+  input.value = '';
+  input.disabled = false;
+  sendBtn.disabled = false;
+  window.chatEditSendInFlight = false;
+  input.focus();
+  history.scrollTop = history.scrollHeight;
+}
+
+/**
+ * 提案を確認してdry-runへ進む
+ */
+async function confirmSuggestion(suggestionId) {
+  const suggestion = window.chatEditState?.pendingSuggestion;
+  if (!suggestion || suggestion.id !== suggestionId) {
+    showToast('提案が見つかりません', 'error');
+    return;
+  }
+  
+  const suggestionEl = document.getElementById(suggestionId);
+  if (suggestionEl) {
+    suggestionEl.innerHTML = `
+      <div class="text-center py-2">
+        <i class="fas fa-spinner fa-spin text-amber-600"></i>
+        <span class="text-sm text-amber-700 ml-2">変更を確認中...</span>
+      </div>
+    `;
+  }
+  
+  const history = document.getElementById('chatEditHistory');
+  const input = document.getElementById('chatEditInput');
+  const sendBtn = document.getElementById('btnChatEditSend');
+  
+  await processDryRunWithIntent(suggestion.intent, suggestion.summary, history, input, sendBtn);
+  
+  // 提案カードを削除
+  if (suggestionEl) suggestionEl.remove();
+  window.chatEditState.pendingSuggestion = null;
+}
+
+/**
+ * 提案をキャンセル
+ */
+function dismissSuggestion(suggestionId) {
+  const suggestionEl = document.getElementById(suggestionId);
+  if (suggestionEl) suggestionEl.remove();
+  window.chatEditState.pendingSuggestion = null;
+  
+  const history = document.getElementById('chatEditHistory');
+  history.innerHTML += `
+    <div class="flex justify-start mb-2">
+      <div class="bg-gray-100 rounded-lg px-3 py-2">
+        <p class="text-sm text-gray-600">
+          <i class="fas fa-undo mr-1"></i>提案をキャンセルしました
+        </p>
+      </div>
+    </div>
+  `;
+  history.scrollTop = history.scrollHeight;
+}
+
+/**
+ * intentを使ってdry-run APIを呼び出す
+ */
+async function processDryRunWithIntent(intent, userMessage, history, input, sendBtn) {
   const thinkingId = `thinking-${Date.now()}`;
   history.innerHTML += `
-    <div id="${thinkingId}" class="flex justify-start">
+    <div id="${thinkingId}" class="flex justify-start mb-2">
       <div class="bg-gray-100 rounded-lg px-3 py-2">
         <p class="text-sm text-gray-600">
           <i class="fas fa-spinner fa-spin mr-1"></i>
@@ -9096,15 +9654,14 @@ async function sendChatEditMessage() {
   history.scrollTop = history.scrollHeight;
   
   try {
-    // Call dry-run API
-    // Note: video_build_id is optional for pre-build editing
     const payload = {
-      user_message: message,
-      intent: parsed.intent,
+      user_message: userMessage,
+      intent: intent,
     };
     if (window.chatEditState.buildId) {
       payload.video_build_id = window.chatEditState.buildId;
     }
+    
     const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/dry-run`, payload);
     
     // Remove thinking message
@@ -9112,13 +9669,11 @@ async function sendChatEditMessage() {
     if (thinkingEl) thinkingEl.remove();
     
     if (response.data.ok) {
-      // Success - show dry-run result
       window.chatEditState.patchRequestId = response.data.patch_request_id;
       window.chatEditState.dryRunResult = response.data;
       
-      // Add success message to history
       history.innerHTML += `
-        <div class="bg-green-50 rounded-lg p-3 border border-green-200">
+        <div class="bg-green-50 rounded-lg p-3 border border-green-200 mb-2">
           <p class="text-sm text-green-700">
             <i class="fas fa-check-circle mr-1"></i>
             ${response.data.resolved_ops}件の変更を検出しました
@@ -9126,20 +9681,17 @@ async function sendChatEditMessage() {
         </div>
       `;
       
-      // Show dry-run result panel (v1: dry-run box appears, input stays visible)
       showDryRunResult(response.data);
       
-      // ★ BUG FIX: 成功時もinput/sendBtnを再有効化する
       input.value = '';
       input.disabled = false;
       sendBtn.disabled = false;
       input.focus();
       
     } else {
-      // Dry-run failed
       const errorMsg = response.data.errors?.join(', ') || '変更を適用できません';
       history.innerHTML += `
-        <div class="bg-red-50 rounded-lg p-3 border border-red-200">
+        <div class="bg-red-50 rounded-lg p-3 border border-red-200 mb-2">
           <p class="text-sm text-red-700">
             <i class="fas fa-times-circle mr-1"></i>
             ${escapeHtml(errorMsg)}
@@ -9154,19 +9706,21 @@ async function sendChatEditMessage() {
     }
     
   } catch (error) {
-    // Remove thinking message
     const thinkingEl = document.getElementById(thinkingId);
     if (thinkingEl) thinkingEl.remove();
     
     console.error('[ChatEdit] Dry-run error:', error);
-    // PR-4-4: エラー表示統一
     const errorMsg = extractErrorMessage(error, '変更の確認に失敗しました');
+    const statusCode = error.response?.status;
+    const stageInfo = error.response?.data?.stage ? `(${error.response.data.stage})` : '';
+    
     history.innerHTML += `
-      <div class="bg-red-50 rounded-lg p-3 border border-red-200">
+      <div class="bg-red-50 rounded-lg p-3 border border-red-200 mb-2">
         <p class="text-sm text-red-700">
           <i class="fas fa-exclamation-triangle mr-1"></i>
           ${escapeHtml(errorMsg)}
         </p>
+        ${statusCode ? `<p class="text-xs text-red-400 mt-1">ステータス: ${statusCode} ${stageInfo}</p>` : ''}
       </div>
     `;
     input.value = '';
@@ -9174,12 +9728,15 @@ async function sendChatEditMessage() {
     sendBtn.disabled = false;
     input.focus();
   } finally {
-    // PR-4-4: 必ずフラグを戻す
     window.chatEditSendInFlight = false;
   }
   
   history.scrollTop = history.scrollHeight;
 }
+
+// グローバルに公開
+window.confirmSuggestion = confirmSuggestion;
+window.dismissSuggestion = dismissSuggestion;
 
 /**
  * Show dry-run result in the modal (v1)
@@ -9197,13 +9754,15 @@ function showDryRunResult(result) {
   
   // Update status badge
   if (result.ok) {
-    badge.textContent = `${result.resolved_ops || 0}件 OK`;
-    badge.className = 'text-xs px-2 py-1 rounded-full bg-green-200 text-green-900';
+    badge.textContent = `${result.resolved_ops || 0}件の変更`;
+    badge.className = 'text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 font-medium';
     applyBtn.disabled = false;
+    applyBtn.innerHTML = '<i class="fas fa-magic mr-1"></i>この変更を適用する';
   } else {
-    badge.textContent = 'NG';
-    badge.className = 'text-xs px-2 py-1 rounded-full bg-red-200 text-red-900';
+    badge.textContent = '適用できません';
+    badge.className = 'text-xs px-2 py-1 rounded-full bg-red-100 text-red-700';
     applyBtn.disabled = true;
+    applyBtn.innerHTML = '<i class="fas fa-times mr-1"></i>適用できません';
   }
   
   // Render changes
@@ -9242,6 +9801,178 @@ function showDryRunResult(result) {
   }
   
   dryBox.classList.remove('hidden');
+  
+  // C3: Render Explain block
+  renderExplainBlock();
+}
+
+/**
+ * C3: Render Explain block showing interpretation details
+ */
+function renderExplainBlock() {
+  const explainBox = document.getElementById('chatEditExplainBox');
+  const explainContent = document.getElementById('chatEditExplainContent');
+  
+  if (!explainBox || !explainContent) return;
+  
+  const explain = window.chatEditState?.explain;
+  if (!explain) {
+    explainBox.classList.add('hidden');
+    return;
+  }
+  
+  let html = '';
+  
+  // Mode indicator
+  const modeLabel = explain.mode === 'ai' ? 
+    '<span class="inline-flex items-center px-2 py-0.5 rounded bg-purple-100 text-purple-700 text-xs font-medium"><i class="fas fa-robot mr-1"></i>AI解釈</span>' :
+    '<span class="inline-flex items-center px-2 py-0.5 rounded bg-blue-100 text-blue-700 text-xs font-medium"><i class="fas fa-code mr-1"></i>ルール解釈</span>';
+  
+  html += `<div class="mb-2">${modeLabel}</div>`;
+  
+  // User input
+  if (explain.userMessage) {
+    html += `
+      <div class="mb-2">
+        <p class="text-xs font-medium text-gray-500 mb-1">入力</p>
+        <p class="text-sm text-gray-700 bg-white rounded p-2 border border-gray-200">${escapeHtml(explain.userMessage)}</p>
+      </div>
+    `;
+  }
+  
+  // Context
+  // C3: 後方互換（sceneIdx/balloonNo と scene_idx/balloon_no の両対応）
+  if (explain.context) {
+    const ctxScene = explain.context.sceneIdx ?? explain.context.scene_idx ?? '-';
+    const ctxBalloon = explain.context.balloonNo ?? explain.context.balloon_no ?? '-';
+    
+    html += `
+      <div class="mb-2">
+        <p class="text-xs font-medium text-gray-500 mb-1">文脈</p>
+        <p class="text-xs text-gray-600 bg-gray-50 rounded p-2">
+          シーン: ${ctxScene}, バブル: ${ctxBalloon}
+        </p>
+      </div>
+    `;
+  }
+  
+  // Actions (intent)
+  if (explain.intent?.actions?.length > 0) {
+    html += `
+      <div class="mb-2">
+        <p class="text-xs font-medium text-gray-500 mb-1">解釈結果 (${explain.intent.actions.length}件)</p>
+        <div class="space-y-1">
+    `;
+    
+    explain.intent.actions.forEach((action, idx) => {
+      const actionType = action.action || 'unknown';
+      const emoji = actionType.startsWith('balloon') ? '💬' : 
+                    actionType.startsWith('sfx') ? '🔊' : 
+                    actionType.startsWith('bgm') ? '🎵' :
+                    actionType.startsWith('telop') ? '📝' : '⚙️';
+      
+      // Format action params (exclude 'action' key)
+      const params = Object.entries(action)
+        .filter(([k]) => k !== 'action')
+        .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+        .join(', ');
+      
+      html += `
+        <div class="text-xs bg-white rounded p-2 border border-gray-200">
+          <span class="font-mono">${emoji} ${escapeHtml(actionType)}</span>
+          ${params ? `<span class="text-gray-500 ml-1">(${escapeHtml(params)})</span>` : ''}
+        </div>
+      `;
+    });
+    
+    html += `</div></div>`;
+  }
+  
+  // Rejected actions (warning)
+  if (explain.rejectedActions?.length > 0) {
+    html += `
+      <div class="mb-2">
+        <p class="text-xs font-medium text-amber-600 mb-1">
+          <i class="fas fa-exclamation-triangle mr-1"></i>除外されたアクション (${explain.rejectedActions.length}件)
+        </p>
+        <div class="space-y-1">
+    `;
+    
+    explain.rejectedActions.forEach(action => {
+      html += `
+        <div class="text-xs bg-amber-50 rounded p-2 border border-amber-200 text-amber-700">
+          <span class="font-mono">${escapeHtml(action.action || JSON.stringify(action))}</span>
+        </div>
+      `;
+    });
+    
+    html += `</div></div>`;
+  }
+  
+  // C3: Error display (AI parse failure)
+  if (explain.error) {
+    html += `
+      <div class="mb-2">
+        <p class="text-xs font-medium text-red-600 mb-1">
+          <i class="fas fa-times-circle mr-1"></i>エラー
+        </p>
+        <div class="text-xs bg-red-50 rounded p-2 border border-red-200 text-red-700">
+          ${escapeHtml(explain.error)}
+        </div>
+      </div>
+    `;
+  }
+  
+  explainContent.innerHTML = html;
+  explainBox.classList.remove('hidden');
+}
+
+/**
+ * C3: Copy Explain data to clipboard
+ */
+function copyExplainToClipboard() {
+  const explain = window.chatEditState?.explain;
+  if (!explain) {
+    showToast('コピーするデータがありません', 'info');
+    return;
+  }
+  
+  const copyData = {
+    mode: explain.mode,
+    userMessage: explain.userMessage,
+    context: explain.context,
+    intent: explain.intent,
+    rejectedActions: explain.rejectedActions,
+    error: explain.error || null,
+  };
+  
+  navigator.clipboard.writeText(JSON.stringify(copyData, null, 2))
+    .then(() => showToast('クリップボードにコピーしました', 'success'))
+    .catch(err => {
+      console.error('Copy failed:', err);
+      showToast('コピーに失敗しました', 'error');
+    });
+}
+
+/**
+ * C3: Toggle Explain block visibility
+ */
+function toggleExplainBlock() {
+  const content = document.getElementById('chatEditExplainContent');
+  const toggleIcon = document.getElementById('chatEditExplainToggle');
+  
+  if (!content || !toggleIcon) return;
+  
+  const isHidden = content.classList.contains('hidden');
+  if (isHidden) {
+    content.classList.remove('hidden');
+    toggleIcon.classList.remove('fa-chevron-down');
+    toggleIcon.classList.add('fa-chevron-up');
+  } else {
+    content.classList.add('hidden');
+    toggleIcon.classList.remove('fa-chevron-up');
+    toggleIcon.classList.add('fa-chevron-down');
+  }
 }
 
 /**
@@ -9364,17 +10095,20 @@ async function applyChatEdit() {
 
 /**
  * Handle Enter key in chat input
+ * FIX1: Enter委譲のみ（clickはHTML onclick属性に任せる → 二重発火リスク解消）
  */
 document.addEventListener('DOMContentLoaded', () => {
-  const chatInput = document.getElementById('chatEditInput');
-  if (chatInput) {
-    chatInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        sendChatEditMessage();
-      }
-    });
-  }
+  // イベント委譲: document レベルでキャプチャし、chatEditInput のみ反応
+  document.addEventListener('keydown', (e) => {
+    const chatInput = document.getElementById('chatEditInput');
+    // chatEditInput にフォーカスがある場合のみ処理
+    if (e.target === chatInput && e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChatEditMessage();
+    }
+  });
+  // NOTE: 送信ボタンのclickはHTML側のonclick="sendChatEditMessage()"に任せる
+  // click委譲は二重発火リスクがあるため削除済み
 });
 
 /**
@@ -9396,18 +10130,30 @@ function escapeHtml(str) {
 /**
  * Insert template text into chat input (Quick Actions)
  * PR-5-2: 追記モード対応（既存テキストがあれば改行して追加）
+ * FIX4: chatEditState から文脈取得（window.currentXXX は使わない）
  * @param {string} text 
  */
 function insertChatTemplate(text) {
   const input = document.getElementById('chatEditInput');
   if (!input) return;
   
+  // FIX4: chatEditState から文脈を取得（SSOT）
+  // フォールバックはシーン1/バブル1（明示的）
+  const state = window.chatEditState || {};
+  const currentScene = state.contextSceneIdx ?? 1;
+  const currentBalloon = state.contextBalloonNo ?? 1;
+  
+  // プレースホルダを置換
+  let resolvedText = text;
+  resolvedText = resolvedText.replace(/\{scene\}/gi, String(currentScene));
+  resolvedText = resolvedText.replace(/\{balloon\}/gi, String(currentBalloon));
+  
   // 既存テキストがあれば追記、なければ上書き
   const existing = input.value.trim();
   if (existing) {
-    input.value = existing + '\n' + text;
+    input.value = existing + '\n' + resolvedText;
   } else {
-    input.value = text;
+    input.value = resolvedText;
   }
   
   // カーソルを末尾に移動
@@ -9439,6 +10185,49 @@ function openPreBuildChat() {
   }
 }
 
+/**
+ * C1-3: Open chat edit modal from scene edit modal
+ * - Automatically uses the current scene from SceneEditModal
+ * - Finds the latest video build for that project
+ */
+async function openChatEditFromSceneModal() {
+  const sceneIdx = window.SceneEditModal?.currentSceneIdx || 1;
+  const sceneId = window.SceneEditModal?.currentSceneId;
+  
+  console.log(`[C1-3] Opening chat edit from scene modal: sceneIdx=${sceneIdx}, sceneId=${sceneId}`);
+  
+  // Close scene edit modal first
+  const sceneModal = document.getElementById('scene-edit-modal');
+  if (sceneModal) {
+    sceneModal.classList.add('hidden');
+    document.body.classList.remove('overflow-hidden');
+  }
+  
+  // Try to find the latest video build
+  let buildId = null;
+  let videoUrl = null;
+  
+  try {
+    const res = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/video-builds?limit=1`);
+    if (res.data?.builds?.length > 0) {
+      const latestBuild = res.data.builds[0];
+      buildId = latestBuild.id;
+      videoUrl = latestBuild.download_url;
+    }
+  } catch (e) {
+    console.warn('[C1-3] Could not fetch latest video build:', e);
+  }
+  
+  // Open chat edit modal with scene context
+  openChatEditModal(buildId, videoUrl, { sceneIdx, balloonNo: 1 });
+  
+  // Update modal title to indicate scene-specific mode
+  const titleEl = document.querySelector('#chatEditModal h3');
+  if (titleEl) {
+    titleEl.innerHTML = '<i class="fas fa-comments mr-2"></i>チャットで修正';
+  }
+}
+
 // Make chat edit functions globally available (v1 Modal)
 window.openChatEditModal = openChatEditModal;
 window.closeChatEditModal = closeChatEditModal;
@@ -9449,6 +10238,9 @@ window.cancelChatEditDryRun = cancelChatEditDryRun;
 window.applyChatEdit = applyChatEdit;
 window.insertChatTemplate = insertChatTemplate;
 window.openPreBuildChat = openPreBuildChat;
+window.openChatEditFromSceneModal = openChatEditFromSceneModal; // C1-3
+window.copyExplainToClipboard = copyExplainToClipboard; // C3
+window.toggleExplainBlock = toggleExplainBlock; // C3
 
 // ===============================
 // Safe Chat v1: Builder Wizard (preflight-based)

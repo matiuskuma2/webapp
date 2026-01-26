@@ -229,12 +229,22 @@ admin.delete('/users/:id', async (c) => {
 // ====================================================================
 // GET /api/admin/usage - Get API usage summary
 // ====================================================================
+// 
+// 重要: このエンドポイントは「運営負担分のみ」を表示する
+// - sponsored_by_user_id IS NOT NULL のレコードのみ集計
+// - ユーザー自身のAPIキーで発生したコストは含まない
+// - totalCostAll / byUserAll で全体の利用状況も取得可能
+//
 
 admin.get('/usage', async (c) => {
   const { DB } = c.env;
   
   try {
-    // 1. Get usage from api_usage_logs (video_generation, video_build, image_generation, etc.)
+    // ========================================
+    // 運営負担分のみ（sponsored_by_user_id IS NOT NULL）
+    // ========================================
+    
+    // 1. Get SPONSORED usage from api_usage_logs (運営負担のみ)
     const apiResult = await DB.prepare(`
       SELECT 
         api_type,
@@ -242,10 +252,11 @@ admin.get('/usage', async (c) => {
         SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM api_usage_logs
       WHERE created_at > datetime('now', '-30 days')
+        AND sponsored_by_user_id IS NOT NULL
       GROUP BY api_type
     `).all();
     
-    // 2. Get TTS usage from tts_usage_logs
+    // 2. Get TTS usage from tts_usage_logs (TTS is always platform cost for now)
     const ttsResult = await DB.prepare(`
       SELECT 
         provider,
@@ -256,7 +267,7 @@ admin.get('/usage', async (c) => {
       GROUP BY provider
     `).all();
     
-    // 3. Get usage by user (combine api_usage_logs)
+    // 3. Get SPONSORED usage by user (運営負担のみ)
     const userResult = await DB.prepare(`
       SELECT 
         u.id as user_id,
@@ -267,17 +278,49 @@ admin.get('/usage', async (c) => {
       FROM api_usage_logs l
       JOIN users u ON l.user_id = u.id
       WHERE l.created_at > datetime('now', '-30 days')
+        AND l.sponsored_by_user_id IS NOT NULL
       GROUP BY u.id
       ORDER BY total_cost DESC
       LIMIT 20
     `).all();
     
-    // Build byType object (camelCase for frontend)
+    // ========================================
+    // 全体の利用状況（参考値）
+    // ========================================
+    
+    // 4. Get ALL usage by user (全体: 運営負担 + ユーザー負担)
+    const userResultAll = await DB.prepare(`
+      SELECT 
+        u.id as user_id,
+        u.name,
+        u.email,
+        COUNT(*) as request_count,
+        SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost,
+        SUM(CASE WHEN l.sponsored_by_user_id IS NOT NULL THEN COALESCE(l.estimated_cost_usd, 0) ELSE 0 END) as sponsored_cost,
+        SUM(CASE WHEN l.sponsored_by_user_id IS NULL THEN COALESCE(l.estimated_cost_usd, 0) ELSE 0 END) as user_cost
+      FROM api_usage_logs l
+      JOIN users u ON l.user_id = u.id
+      WHERE l.created_at > datetime('now', '-30 days')
+      GROUP BY u.id
+      ORDER BY total_cost DESC
+      LIMIT 20
+    `).all();
+    
+    // 5. Get total ALL cost (全体)
+    const totalAllResult = await DB.prepare(`
+      SELECT 
+        COUNT(*) as request_count,
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
+      FROM api_usage_logs
+      WHERE created_at > datetime('now', '-30 days')
+    `).first<{ request_count: number; total_cost: number }>();
+    
+    // Build byType object (camelCase for frontend) - 運営負担のみ
     const byType: Record<string, { cost: number; count: number }> = {};
     let totalCost = 0;
     let totalRequests = 0;
     
-    // Add API usage logs
+    // Add API usage logs (sponsored only)
     for (const row of (apiResult.results || []) as { api_type: string; request_count: number; total_cost: number }[]) {
       byType[row.api_type] = {
         cost: row.total_cost || 0,
@@ -303,7 +346,7 @@ admin.get('/usage', async (c) => {
       totalRequests += row.request_count || 0;
     }
     
-    // Build byUser array (camelCase for frontend)
+    // Build byUser array (camelCase for frontend) - 運営負担のみ
     const byUser = (userResult.results || []).map((row: { user_id: number; name: string; email: string; request_count: number; total_cost: number }) => ({
       userId: row.user_id,
       name: row.name,
@@ -312,17 +355,40 @@ admin.get('/usage', async (c) => {
       totalCost: row.total_cost || 0
     }));
     
+    // Build byUserAll array (全体: 運営負担 + ユーザー負担)
+    const byUserAll = (userResultAll.results || []).map((row: { 
+      user_id: number; name: string; email: string; 
+      request_count: number; total_cost: number;
+      sponsored_cost: number; user_cost: number 
+    }) => ({
+      userId: row.user_id,
+      name: row.name,
+      email: row.email,
+      requestCount: row.request_count || 0,
+      totalCost: row.total_cost || 0,
+      sponsoredCost: row.sponsored_cost || 0,  // 運営負担分
+      userCost: row.user_cost || 0              // ユーザー負担分
+    }));
+    
     // Return camelCase format for frontend compatibility
     return c.json({
+      // 運営負担のみ（メイン表示用）
       totalCost,
       totalRequests,
       byType,
-      byUser
+      byUser,
+      // 全体の利用状況（参考値）
+      totalCostAll: totalAllResult?.total_cost || 0,
+      totalRequestsAll: totalAllResult?.request_count || 0,
+      byUserAll
     });
   } catch (error) {
     console.error('Get usage error:', error);
     // Return empty data if table doesn't exist
-    return c.json({ totalCost: 0, totalRequests: 0, byType: {}, byUser: [] });
+    return c.json({ 
+      totalCost: 0, totalRequests: 0, byType: {}, byUser: [],
+      totalCostAll: 0, totalRequestsAll: 0, byUserAll: []
+    });
   }
 });
 

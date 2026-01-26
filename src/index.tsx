@@ -1554,11 +1554,11 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Preflight Check Card (事前チェック) -->
+                <!-- Preflight Check Card (動画生成の準備状況) -->
                 <div id="videoBuildPreflightCard" class="mb-6 bg-white rounded-xl shadow border border-gray-200">
                     <div class="p-4 border-b flex items-center justify-between">
                         <h3 class="text-lg font-bold text-gray-800 flex items-center">
-                            <i class="fas fa-clipboard-check mr-2 text-green-600"></i>事前チェック
+                            <i class="fas fa-tasks mr-2 text-indigo-600"></i>動画生成の準備状況
                         </h3>
                         <button 
                             onclick="updateVideoBuildRequirements()"
@@ -1570,12 +1570,18 @@ app.get('/projects/:id', (c) => {
                         </button>
                     </div>
                     <div class="p-4">
+                        <!-- 説明テキスト -->
+                        <p class="text-xs text-gray-500 mb-3">
+                            💡 動画を生成するには、各シーンに「画像」「漫画」「動画クリップ」のいずれかが必要です
+                        </p>
+                        
                         <!-- 必須チェック（素材） -->
                         <div id="preflightRequired" class="mb-4">
                             <div class="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-                                <span class="text-red-500">●</span> 必須（素材不足でブロック）
+                                <span class="w-2 h-2 rounded-full bg-red-500"></span> 
+                                <span>必須: 各シーンに素材（画像/漫画/動画）</span>
                             </div>
-                            <div id="preflightRequiredItems" class="space-y-1 text-sm">
+                            <div id="preflightRequiredItems" class="space-y-1 text-sm pl-4">
                                 <!-- JS で埋める -->
                             </div>
                         </div>
@@ -1583,9 +1589,10 @@ app.get('/projects/:id', (c) => {
                         <!-- 推奨チェック（音声・その他） -->
                         <div id="preflightRecommended" class="mb-4">
                             <div class="flex items-center gap-2 text-sm font-semibold text-gray-700 mb-2">
-                                <span class="text-amber-500">●</span> 推奨（なくても生成可能）
+                                <span class="w-2 h-2 rounded-full bg-amber-500"></span> 
+                                <span>オプション: 音声（なくても生成可能）</span>
                             </div>
-                            <div id="preflightRecommendedItems" class="space-y-1 text-sm">
+                            <div id="preflightRecommendedItems" class="space-y-1 text-sm pl-4">
                                 <!-- JS で埋める -->
                             </div>
                         </div>
@@ -1971,6 +1978,9 @@ app.get('/projects/:id', (c) => {
                             <source id="vbPreviewVideoSrc" src="" type="video/mp4" />
                         </video>
                     </div>
+                    
+                    <!-- FIX: エラー表示エリア -->
+                    <div id="vbPreviewError" class="hidden mt-3"></div>
 
                     <div class="mt-4 flex flex-wrap gap-2">
                         <button
@@ -2006,13 +2016,13 @@ app.get('/projects/:id', (c) => {
     </div>
 
     <!-- Safe Chat v1: Chat Edit Modal (CENTER POPUP) -->
-    <div id="chatEditModal" class="hidden fixed inset-0 z-50">
+    <div id="chatEditModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
         <!-- Backdrop -->
-        <div id="chatEditBackdrop" class="absolute inset-0 bg-black/50" onclick="closeChatEditModal()"></div>
+        <div id="chatEditBackdrop" class="fixed inset-0 bg-black/50" onclick="closeChatEditModal()"></div>
 
         <!-- Modal -->
         <div class="relative min-h-screen flex items-center justify-center p-4">
-            <div class="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+            <div class="relative w-full max-w-2xl bg-white rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
 
                 <!-- Header -->
                 <div class="bg-gradient-to-r from-indigo-600 to-purple-600 px-5 py-4 flex items-center justify-between">
@@ -2025,6 +2035,10 @@ app.get('/projects/:id', (c) => {
                                 <span class="mx-2">•</span>
                                 <span id="chatEditProjectLabel">Project -</span>
                             </p>
+                            <!-- FIX2: 文脈SSOT表示 -->
+                            <p id="chatEditContextLabel" class="hidden text-amber-300 text-xs font-medium mt-0.5">
+                                対象: シーン1 / バブル1
+                            </p>
                         </div>
                     </div>
                     <button class="text-white/90 hover:bg-white/15 p-2 rounded-lg transition-colors" onclick="closeChatEditModal()">
@@ -2033,107 +2047,53 @@ app.get('/projects/:id', (c) => {
                 </div>
 
                 <!-- Body -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-0">
-                    <!-- Left: Video Preview -->
-                    <div class="bg-gray-950 p-4">
-                        <div class="text-xs text-gray-300 mb-2 flex items-center gap-2">
-                            <i class="fas fa-film"></i>
-                            <span>プレビュー（完成動画）</span>
-                        </div>
-
+                <div class="flex-1 overflow-y-auto">
+                    <!-- Video Preview (always visible, prominent) -->
+                    <div class="bg-gray-900 p-4">
                         <div class="rounded-lg overflow-hidden border border-white/10">
                             <video id="chatEditVideo" controls class="w-full" preload="metadata">
                                 <source id="chatEditVideoSrc" src="" type="video/mp4" />
                             </video>
                         </div>
-
-                        <!-- PR-5-2: できること/できないこと カード -->
-                        <div class="mt-3 space-y-2">
-                            <!-- できること -->
-                            <div class="bg-green-900/30 border border-green-700/50 rounded-lg p-2.5">
-                                <div class="text-xs font-semibold text-green-400 mb-1.5 flex items-center gap-1.5">
-                                    <i class="fas fa-check-circle"></i>できること（今すぐ）
-                                </div>
-                                <div class="text-xs text-gray-300 space-y-1">
-                                    <div class="flex items-start gap-1.5">
-                                        <span class="text-green-400">💬</span>
-                                        <div><span class="font-medium">バブル:</span> 出し分け（常時/喋る時/手動）、位置・サイズ調整</div>
-                                    </div>
-                                    <div class="flex items-start gap-1.5">
-                                        <span class="text-green-400">🎵</span>
-                                        <div><span class="font-medium">BGM:</span> ON/OFF、音量（%）、ダッキング</div>
-                                    </div>
-                                    <div class="flex items-start gap-1.5">
-                                        <span class="text-green-400">🔔</span>
-                                        <div><span class="font-medium">効果音:</span> 追加/削除、音量、タイミング（ms）</div>
-                                    </div>
-                                    <div class="flex items-start gap-1.5">
-                                        <span class="text-green-400">📝</span>
-                                        <div><span class="font-medium">テロップ:</span> 表示ON/OFF、位置（上/中央/下）、サイズ（小/中/大）</div>
-                                    </div>
-                                </div>
-                            </div>
-                            <!-- できないこと -->
-                            <div class="bg-gray-800/50 border border-gray-600/50 rounded-lg p-2.5">
-                                <div class="text-xs font-semibold text-gray-400 mb-1.5 flex items-center gap-1.5">
-                                    <i class="fas fa-times-circle"></i>できないこと（まだ）
-                                </div>
-                                <div class="text-xs text-gray-500 space-y-0.5">
-                                    <div>📝 テロップ・字幕の本文を書き換える</div>
-                                    <div>🧩 シーンの並び替え・分割統合</div>
-                                    <div>🎞️ 大規模なカット編集</div>
-                                </div>
-                            </div>
-                            <!-- 反映ルール -->
-                            <div class="text-xs text-gray-500 flex items-center gap-1.5 pt-1">
-                                <i class="fas fa-info-circle text-blue-400"></i>
-                                <span>指示 → 差分確認 → 適用 → <span class="text-blue-400 font-medium">新ビルド生成</span></span>
-                            </div>
-                        </div>
                     </div>
 
-                    <!-- Right: Chat -->
-                    <div class="p-4 flex flex-col max-h-[70vh]">
-                        <!-- PR-5-2: 改善されたガイダンス -->
-                        <div class="bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-xl p-3 text-xs">
-                            <div class="font-semibold text-indigo-800 mb-1.5 flex items-center gap-1.5">
-                                <i class="fas fa-magic text-indigo-500"></i>
-                                自然な言葉で修正指示を出せます
-                            </div>
-                            <p class="text-gray-600 leading-relaxed">
-                                下のテンプレをクリックするか、自由に入力してください。<br/>
-                                変更内容を確認してから適用 → <span class="font-medium text-indigo-700">新ビルド生成</span>
-                            </p>
-                        </div>
-
-                        <!-- PR-5-2: 拡張クイック指示（テンプレボタン） -->
-                        <div class="mt-2 bg-white border border-gray-200 rounded-xl p-3">
-                            <div class="text-xs font-semibold text-gray-700 mb-2">
-                                <i class="fas fa-bolt text-amber-500 mr-1"></i>例文テンプレ（クリックで追記）
-                            </div>
+                    <!-- Main Chat Area -->
+                    <div class="p-4 flex flex-col">
+                        <!-- PR-5-2: 拡張クイック指示（テンプレボタン）- 折りたたみ -->
+                        <details class="bg-white border border-gray-200 rounded-xl mb-3">
+                            <summary class="px-3 py-2 text-xs font-semibold text-gray-700 cursor-pointer hover:bg-gray-50 rounded-xl flex items-center gap-1">
+                                <i class="fas fa-bolt text-amber-500 mr-1"></i>例文テンプレ（クリックで展開）
+                            </summary>
+                            <div class="px-3 pb-3">
                             <!-- バブル系 -->
+                            <!-- バブル系 - Phase A1: パーサーと整合された形式 -->
                             <div class="mb-2">
-                                <div class="text-xs text-gray-500 mb-1">💬 バブル</div>
+                                <div class="text-xs text-gray-500 mb-1">💬 バブル <span class="text-purple-400 text-[10px]">(シーン/バブル自動補完)</span></div>
                                 <div class="flex flex-wrap gap-1.5">
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                                        onclick="insertChatTemplate('バブルを喋る時だけ表示にして')">
+                                        onclick="insertChatTemplate('シーン{scene}のバブル{balloon}を喋る時だけ表示にして')">
                                         喋る時だけ
                                     </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                                        onclick="insertChatTemplate('バブルを常時表示にして')">
+                                        onclick="insertChatTemplate('シーン{scene}のバブル{balloon}を常時表示にして')">
                                         常時表示
                                     </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                                        onclick="insertChatTemplate('シーン3のバブルを右上に移動（x:+80, y:-40）')">
-                                        位置調整
+                                        onclick="insertChatTemplate('シーン{scene}のバブル{balloon}を+300ms遅らせて')">
+                                        +300ms遅らせ
                                     </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
-                                        onclick="insertChatTemplate('バブルを手動表示にして、シーン2は 0ms〜1800ms')">
-                                        手動タイミング
+                                        onclick="insertChatTemplate('シーン{scene}のバブル{balloon}を手動表示にして、開始0ms、終了1800ms')">
+                                        手動タイミング(ms)
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                        onclick="insertChatTemplate('シーン{scene}のバブル{balloon}を3秒から5秒まで表示')">
+                                        秒数指定(例:3秒〜5秒)
                                     </button>
                                 </div>
                             </div>
@@ -2158,19 +2118,19 @@ app.get('/projects/:id', (c) => {
                                     </button>
                                 </div>
                             </div>
-                            <!-- SFX系 -->
+                            <!-- SFX系 - Phase A1: パーサーと整合された形式 -->
                             <div class="mb-2">
-                                <div class="text-xs text-gray-500 mb-1">🔔 効果音</div>
+                                <div class="text-xs text-gray-500 mb-1">🔔 効果音 <span class="text-blue-400 text-[10px]">(シーン自動補完)</span></div>
                                 <div class="flex flex-wrap gap-1.5">
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                                        onclick="insertChatTemplate('効果音をシーン5の開始500msに追加、音量30%')">
-                                        追加
+                                        onclick="insertChatTemplate('シーン{scene}のSFX1の音量を50%に')">
+                                        SFX音量50%
                                     </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
-                                        onclick="insertChatTemplate('シーン3のSFX1の音量を50%に')">
-                                        音量変更
+                                        onclick="insertChatTemplate('シーン{scene}のSFX1の音量を30%に')">
+                                        SFX音量30%
                                     </button>
                                 </div>
                             </div>
@@ -2178,6 +2138,16 @@ app.get('/projects/:id', (c) => {
                             <div>
                                 <div class="text-xs text-gray-500 mb-1">📝 テロップ</div>
                                 <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('シーン{scene}のテロップをOFFにして')">
+                                        このシーンOFF
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
+                                        onclick="insertChatTemplate('シーン{scene}のテロップをONにして')">
+                                        このシーンON
+                                    </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
                                         onclick="insertChatTemplate('テロップを全部OFF')">
@@ -2206,80 +2176,119 @@ app.get('/projects/:id', (c) => {
                                 </div>
                             </div>
                         </div>
+                        </details>
 
                         <!-- History -->
                         <div id="chatEditHistory" class="flex-1 overflow-y-auto mt-3 space-y-3 pr-1 min-h-[150px]"></div>
 
-                        <!-- Dry-run Result -->
-                        <div id="chatEditDryRunBox" class="hidden mt-3 bg-amber-50 border border-amber-200 rounded-xl p-3">
-                            <div class="flex items-center justify-between">
-                                <div class="font-semibold text-amber-900 text-sm flex items-center gap-2">
-                                    <i class="fas fa-search-plus"></i>
-                                    変更プレビュー（dry-run）
+                        <!-- Dry-run Result (安心感のあるUI) -->
+                        <div id="chatEditDryRunBox" class="hidden mt-3 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4 shadow-sm">
+                            <div class="flex items-center justify-between mb-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="flex items-center justify-center w-8 h-8 bg-green-100 rounded-full">
+                                        <i class="fas fa-clipboard-check text-green-600"></i>
+                                    </span>
+                                    <div>
+                                        <p class="font-semibold text-green-900 text-sm">変更内容の確認</p>
+                                        <p class="text-xs text-green-600">以下の変更が適用されます</p>
+                                    </div>
                                 </div>
-                                <span id="chatEditDryRunBadge" class="text-xs px-2 py-1 rounded-full bg-amber-200 text-amber-900">-</span>
+                                <span id="chatEditDryRunBadge" class="text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 font-medium">-</span>
                             </div>
 
-                            <div id="chatEditDryRunChanges" class="mt-2 space-y-2 max-h-32 overflow-y-auto"></div>
+                            <div id="chatEditDryRunChanges" class="space-y-2 max-h-32 overflow-y-auto bg-white rounded-lg p-2 border border-green-100"></div>
 
                             <div id="chatEditDryRunErrors" class="hidden mt-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-2"></div>
+
+                            <div class="mt-4 p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                                <p class="text-xs text-blue-700 flex items-center">
+                                    <i class="fas fa-shield-alt text-blue-500 mr-2"></i>
+                                    <span><strong>安心ポイント:</strong> 元のビルドは残ります。新しいビルドを作成するので、いつでも戻せます。</span>
+                                </p>
+                            </div>
 
                             <div class="mt-3 flex gap-2">
                                 <button
                                     id="btnChatEditApply"
-                                    class="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold disabled:opacity-50"
+                                    class="flex-1 px-4 py-2.5 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
                                     onclick="applyChatEdit()"
                                 >
-                                    <i class="fas fa-check mr-1"></i>適用して新ビルド生成
+                                    <i class="fas fa-magic mr-1"></i>この変更を適用する
                                 </button>
                                 <button
-                                    class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors text-sm"
+                                    class="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors text-sm"
                                     onclick="cancelChatEditDryRun()"
                                 >
-                                    キャンセル
+                                    やめる
                                 </button>
                             </div>
-
-                            <div class="mt-2 text-xs text-gray-600">
-                                <i class="fas fa-info-circle text-blue-500 mr-1"></i>
-                                元のビルドは残ります。新しいビルド #XX を作成してレンダリングします。
+                            
+                            <!-- C3: Explain Block (AI解釈の可視化) -->
+                            <div id="chatEditExplainBox" class="hidden mt-3 border-t border-amber-200 pt-3">
+                                <div class="flex items-center justify-between mb-2">
+                                    <button onclick="toggleExplainBlock()" class="flex items-center gap-1.5 text-xs font-semibold text-gray-700 hover:text-purple-700 transition-colors">
+                                        <i class="fas fa-microscope text-purple-500"></i>
+                                        解釈詳細（Explain）
+                                        <i id="chatEditExplainToggle" class="fas fa-chevron-up text-gray-400"></i>
+                                    </button>
+                                    <button onclick="copyExplainToClipboard()" 
+                                        class="px-2 py-0.5 text-[10px] bg-gray-100 hover:bg-gray-200 rounded text-gray-600 transition-colors"
+                                        title="サポート用にコピー">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                                <div id="chatEditExplainContent" class="text-xs space-y-2">
+                                    <!-- Dynamically rendered by renderExplainBlock() -->
+                                </div>
                             </div>
                         </div>
 
-                        <!-- Input -->
-                        <div class="mt-3 border-t pt-3">
-                            <div class="flex gap-2">
-                                <textarea
-                                    id="chatEditInput"
-                                    rows="2"
-                                    class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm resize-none"
-                                    placeholder="修正指示を入力（Enterで送信 / Shift+Enterで改行）"
-                                ></textarea>
+                        <!-- Input Section -->
+                        <div class="mt-3 border-t pt-3 bg-gray-50 -mx-4 px-4 pb-2">
+                            <!-- Input area with inline context -->
+                            <div class="flex gap-2 items-end">
+                                <div class="flex-1">
+                                    <textarea
+                                        id="chatEditInput"
+                                        rows="2"
+                                        class="w-full px-3 py-2 border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-none"
+                                        placeholder="修正指示を入力 / Enterで送信"
+                                    ></textarea>
+                                </div>
                                 <button
                                     id="btnChatEditSend"
-                                    class="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                                    class="px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors"
                                     onclick="sendChatEditMessage()"
                                 >
                                     <i class="fas fa-paper-plane"></i>
                                 </button>
                             </div>
-                            <div class="mt-2 text-xs text-gray-500 flex items-center gap-2">
-                                <i class="fas fa-shield-alt text-green-500"></i>
-                                <span>安全な修正のみ適用（dry-run → apply）</span>
+                            
+                            <!-- Options row -->
+                            <div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                                <!-- AI toggle -->
+                                <label class="flex items-center gap-1.5 cursor-pointer">
+                                    <input id="chatEditUseAiToggle" type="checkbox" checked
+                                        class="w-3.5 h-3.5 text-purple-600 rounded focus:ring-purple-500" />
+                                    <span class="text-purple-700 font-medium">
+                                        <i class="fas fa-magic mr-0.5"></i>AI解釈
+                                    </span>
+                                </label>
+                                <span id="chatEditParseMode" class="px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 text-[10px] hidden">
+                                    AI
+                                </span>
+                                
+                                <!-- Context selectors (hidden, for template use) -->
+                                <div class="hidden">
+                                    <select id="chatEditContextScene"><option value="1">1</option></select>
+                                    <input id="chatEditContextBalloon" type="number" min="1" value="1" />
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- Footer -->
-                <div class="px-5 py-3 bg-gray-50 border-t flex items-center justify-between">
-                    <div class="text-xs text-gray-500">
-                        <span class="font-semibold">Safe Chat v1</span> (SSOT Patch)
-                    </div>
-                    <button class="text-sm text-gray-700 hover:text-gray-900" onclick="closeChatEditModal()">
-                        閉じる
-                    </button>
-                </div>
+                <!-- Footer removed for cleaner UI -->
 
             </div>
         </div>
@@ -2376,19 +2385,33 @@ app.get('/projects/:id', (c) => {
                 </div>
                 
                 <!-- Footer -->
-                <div class="bg-gray-50 px-6 py-4 rounded-b-xl flex gap-3 justify-end">
-                    <button 
-                        id="cancel-edit-scene"
-                        class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
-                    >
-                        閉じる
-                    </button>
-                    <button 
-                        id="save-edit-scene"
-                        class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        <i class="fas fa-check mr-2"></i>変更なし
-                    </button>
+                <div class="bg-gray-50 px-6 py-4 rounded-b-xl flex gap-3 justify-between">
+                    <!-- Left: Chat Edit Button (C1-3) -->
+                    <div>
+                        <button 
+                            id="scene-chat-edit-btn"
+                            onclick="openChatEditFromSceneModal()"
+                            class="px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors font-semibold"
+                            title="このシーンをチャットで修正（バブル、BGM、効果音など）"
+                        >
+                            <i class="fas fa-comments mr-2"></i>チャットで修正
+                        </button>
+                    </div>
+                    <!-- Right: Cancel / Save -->
+                    <div class="flex gap-3">
+                        <button 
+                            id="cancel-edit-scene"
+                            class="px-6 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition-colors font-semibold"
+                        >
+                            閉じる
+                        </button>
+                        <button 
+                            id="save-edit-scene"
+                            class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <i class="fas fa-check mr-2"></i>変更なし
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

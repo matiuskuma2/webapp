@@ -26,6 +26,8 @@ type Bindings = {
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;
   VIDEO_BUILD_ORCHESTRATOR_URL?: string;
+  // Phase C: AI Intent Parse
+  GEMINI_API_KEY?: string;
 };
 
 const patches = new Hono<{ Bindings: Bindings }>();
@@ -1421,6 +1423,13 @@ interface TelopSetEnabledAction {
   enabled: boolean;  // true=全テロップON, false=全テロップOFF
 }
 
+// シーン単位のテロップON/OFF
+interface TelopSetEnabledSceneAction {
+  action: 'telop.set_enabled_scene';
+  scene_idx: number;
+  enabled: boolean;  // true=このシーンのテロップON, false=OFF
+}
+
 interface TelopSetPositionAction {
   action: 'telop.set_position';
   position_preset: 'bottom' | 'center' | 'top';  // 下 / 中央 / 上
@@ -1444,6 +1453,7 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'bgm.set_loop',
   // PR-5-3b: テロップ設定（Build単位の上書き、scene_telopはいじらない）
   'telop.set_enabled',
+  'telop.set_enabled_scene',  // シーン単位のテロップON/OFF
   'telop.set_position',
   'telop.set_size',
 ]);
@@ -1459,6 +1469,8 @@ interface TelopSettingsOverride {
   enabled?: boolean;
   position_preset?: 'bottom' | 'center' | 'top';
   size_preset?: 'sm' | 'md' | 'lg';
+  // シーン単位のテロップON/OFF（scene_idx -> enabled）
+  scene_overrides?: Record<number, boolean>;
 }
 
 async function resolveIntentToOps(
@@ -1820,6 +1832,27 @@ async function resolveIntentToOps(
         resolutionLog.push({
           action: action.action,
           resolved: { enabled: telopAction.enabled },
+        });
+
+      } else if (action.action === 'telop.set_enabled_scene') {
+        // シーン単位のテロップON/OFF
+        const telopAction = action as TelopSetEnabledSceneAction;
+        const sceneIdx = telopAction.scene_idx;
+        
+        if (typeof sceneIdx !== 'number' || sceneIdx < 1) {
+          errors.push(`${prefix}: Invalid scene_idx: ${sceneIdx}. Must be >= 1`);
+          continue;
+        }
+        
+        // scene_overrides を初期化
+        if (!telopSettingsOverride.scene_overrides) {
+          telopSettingsOverride.scene_overrides = {};
+        }
+        telopSettingsOverride.scene_overrides[sceneIdx] = telopAction.enabled;
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: { scene_idx: sceneIdx, enabled: telopAction.enabled },
         });
 
       } else if (action.action === 'telop.set_position') {
@@ -2430,5 +2463,454 @@ function generateDiffSummary(
 
   return { description, changes };
 }
+
+// ============================================================
+// Phase C: AI Intent Parser
+// - AIは「Intent JSONを作るだけ」
+// - 適用可否は既存の resolveIntentToOps / dry-run で検証
+// ============================================================
+
+function safeJsonParseMaybe(text: string): any | null {
+  if (!text) return null;
+  // Try extract JSON block if model wrapped in text
+  const m = text.match(/\{[\s\S]*\}/);
+  const candidate = m ? m[0] : text;
+  try { return JSON.parse(candidate); } catch { return null; }
+}
+
+function filterAllowedActions(actions: any[], allowed: Set<string>) {
+  const filtered: any[] = [];
+  const rejected: any[] = [];
+  for (const a of actions || []) {
+    const name = a?.action;
+    if (!name || typeof name !== 'string') {
+      rejected.push({ reason: 'missing action field', action: a });
+      continue;
+    }
+    if (!allowed.has(name)) {
+      rejected.push({ reason: 'action not allowed', action: a });
+      continue;
+    }
+    filtered.push(a);
+  }
+  return { filtered, rejected };
+}
+
+async function geminiParseIntent(
+  apiKey: string,
+  userMessage: string,
+  ctx: { scene_idx?: number; balloon_no?: number } | null
+): Promise<{ ok: true; intent: any; rejected: any[] } | { ok: false; error: string; raw?: string }> {
+  const allowedList = Array.from(ALLOWED_CHAT_ACTIONS);
+  const ctxText = ctx?.scene_idx 
+    ? `\nContext: scene_idx=${ctx.scene_idx}, balloon_no=${ctx.balloon_no ?? 1}\n` 
+    : '\nContext: none\n';
+
+  const system = `
+You are a strict intent parser for a video editing tool.
+Convert the user's instruction into JSON only (no markdown, no explanation).
+
+Schema:
+{
+  "schema": "rilarc_intent_v1",
+  "actions": [ ... ]
+}
+
+Allowed actions (MUST ONLY use these):
+${allowedList.map(x => `- ${x}`).join('\n')}
+
+Action schemas:
+- balloon.adjust_window: { action, scene_idx, balloon_no, delta_start_ms?, delta_end_ms? }
+- balloon.adjust_position: { action, scene_idx, balloon_no, delta_x?, delta_y? }
+- balloon.set_policy: { action, scene_idx, balloon_no, policy: "voice_window"|"always_on"|"manual_window", start_ms?, end_ms? }
+  * For manual_window with time range, convert seconds to ms (e.g., "3秒から5秒" -> start_ms: 3000, end_ms: 5000)
+  * Supports: "X秒目からY秒目", "X秒〜Y秒", "X秒からY秒まで表示"
+- sfx.set_volume: { action, scene_idx, cue_no, volume: 0-1 }
+- bgm.set_volume: { action, volume: 0-1 }
+- bgm.set_loop: { action, loop: boolean }
+- telop.set_enabled: { action, enabled: boolean } (all scenes)
+- telop.set_enabled_scene: { action, scene_idx, enabled: boolean } (specific scene only)
+- telop.set_position: { action, position_preset: "bottom"|"center"|"top" }
+- telop.set_size: { action, size_preset: "sm"|"md"|"lg" }
+
+Rules:
+1) Output JSON only.
+2) If user is ambiguous, choose the safest minimal change.
+3) If scene/balloon is missing and needed, use the provided context.
+4) Do not invent unsupported actions.
+5) For volume percentages, convert to 0-1 scale (e.g., 20% -> 0.2).
+6) For time ranges in seconds, convert to milliseconds (e.g., "3秒から5秒" -> start_ms: 3000, end_ms: 5000).
+7) **CRITICAL**: If the user's message is a greeting, question, casual chat, or NOT related to video editing (e.g., "よろしくね", "こんにちは", "ありがとう", "どうすればいい?"), return EMPTY actions array: {"schema": "rilarc_intent_v1", "actions": []}
+`;
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const body = {
+    systemInstruction: { parts: [{ text: system.trim() }] },
+    contents: [{ role: 'user', parts: [{ text: `${ctxText}\nUser: ${userMessage}` }] }],
+    generationConfig: {
+      temperature: 0.2,
+      topP: 0.9,
+      maxOutputTokens: 512,
+    },
+  };
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  
+  if (!res.ok) {
+    const t = await res.text();
+    return { ok: false, error: `Gemini API error: ${res.status} ${t.slice(0, 200)}` };
+  }
+  
+  const data: any = await res.json();
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const parsed = safeJsonParseMaybe(text);
+  
+  if (!parsed || parsed.schema !== 'rilarc_intent_v1' || !Array.isArray(parsed.actions)) {
+    return { ok: false, error: 'AI returned invalid intent JSON', raw: text.slice(0, 300) };
+  }
+
+  // Safety filter: only allow whitelisted actions
+  const { filtered, rejected } = filterAllowedActions(parsed.actions, ALLOWED_CHAT_ACTIONS);
+  parsed.actions = filtered;
+
+  return { ok: true, intent: parsed, rejected };
+}
+
+/**
+ * POST /api/projects/:projectId/chat-edits/parse-ai
+ * 
+ * AI Intent Parser (safe)
+ * - AI only generates intent JSON
+ * - Final safety is enforced by dry-run/apply
+ */
+patches.post('/projects/:projectId/chat-edits/parse-ai', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    if (isNaN(projectId)) {
+      return c.json({ ok: false, error: 'Invalid projectId' }, 400);
+    }
+
+    const body = await c.req.json().catch(() => null) as any;
+    const userMessage = body?.user_message;
+    if (!userMessage || typeof userMessage !== 'string') {
+      return c.json({ ok: false, error: 'user_message is required' }, 400);
+    }
+
+    // Check API key
+    if (!c.env.GEMINI_API_KEY) {
+      return c.json({ ok: false, error: 'GEMINI_API_KEY is not configured' }, 500);
+    }
+
+    const ctx = body?.context && typeof body.context === 'object'
+      ? {
+          scene_idx: typeof body.context.scene_idx === 'number' ? body.context.scene_idx : undefined,
+          balloon_no: typeof body.context.balloon_no === 'number' ? body.context.balloon_no : undefined,
+        }
+      : null;
+
+    // Call Gemini
+    const result = await geminiParseIntent(c.env.GEMINI_API_KEY, userMessage, ctx);
+    
+    if (!result.ok) {
+      return c.json({ 
+        ok: false, 
+        stage: 'ai_parse', 
+        error: result.error, 
+        raw: (result as any).raw 
+      }, 400);
+    }
+
+    return c.json({
+      ok: true,
+      intent: result.intent,
+      rejected_actions: result.rejected || [],
+      note: 'Intent is AI-generated. Final safety is enforced by dry-run/apply.',
+    });
+    
+  } catch (e: any) {
+    console.error('[parse-ai] Error:', e);
+    return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
+
+/**
+ * POST /api/projects/:projectId/chat-edits/chat
+ * 
+ * 会話SSOT: ChatGPT体験 - 3層構造
+ * 1. Conversation: 常に自然文で返答
+ * 2. Suggestion: 必要時のみ編集提案を追加
+ * 3. Execution: ユーザー確認後にdry-run/apply
+ * 
+ * リクエスト:
+ * {
+ *   user_message: string,
+ *   context?: { scene_idx?: number, balloon_no?: number, video_build_id?: number },
+ *   history?: Array<{ role: 'user'|'assistant', content: string }>,
+ *   options?: { auto_suggest?: boolean }
+ * }
+ * 
+ * レスポンス:
+ * {
+ *   ok: true,
+ *   assistant_message: string,  // 必須: 会話返答
+ *   suggestion?: {              // 任意: 編集提案
+ *     needs_confirmation: boolean,
+ *     summary: string,
+ *     intent: { schema: 'rilarc_intent_v1', actions: [] },
+ *     rejected_actions?: []
+ *   }
+ * }
+ */
+async function geminiChatWithSuggestion(
+  apiKey: string,
+  userMessage: string,
+  ctx: { scene_idx?: number; balloon_no?: number; video_build_id?: number } | null,
+  history: Array<{ role: 'user' | 'assistant'; content: string }> = []
+): Promise<{
+  ok: true;
+  assistant_message: string;
+  suggestion: {
+    needs_confirmation: boolean;
+    summary: string;
+    intent: any;
+    rejected_actions: any[];
+  } | null;
+} | { ok: false; error: string }> {
+  const allowedList = Array.from(ALLOWED_CHAT_ACTIONS);
+  
+  const ctxText = ctx?.scene_idx 
+    ? `現在の文脈: シーン${ctx.scene_idx}${ctx.balloon_no ? `, バブル${ctx.balloon_no}` : ''}${ctx.video_build_id ? `, ビルド#${ctx.video_build_id}` : ''}`
+    : '文脈: なし';
+
+  const system = `
+あなたは動画編集アシスタント「Rilarc」です。フレンドリーで親しみやすい口調で、ユーザーと自然に会話しながら編集をサポートします。
+
+【キャラクター設定】
+- 親しみやすく、でも丁寧
+- 次のアクションに自然に誘導する
+- 困っていそうなら具体例を出す
+- 「！」を適度に使って明るく
+
+【重要な役割】
+1. 会話を自然に: 挨拶、質問、雑談には普通に会話として返答し、**次のアクションに誘導**
+2. 編集提案は必要時のみ: 明確な編集指示があった場合のみ提案を生成
+3. 確認を取る: 提案は「〜しましょうか？」と確認形式で
+4. 曖昧なら質問: 「どのシーンですか？」「どのくらい下げますか？」など
+
+【レスポンス形式】
+必ず以下のJSON形式で返してください（他のテキストは不要）:
+{
+  "assistant_message": "自然な会話返答（必須）",
+  "has_suggestion": true/false,
+  "suggestion_summary": "Before → After形式の要約（提案時のみ）",
+  "intent": {
+    "schema": "rilarc_intent_v1",
+    "actions": [...]
+  }
+}
+
+【使用可能なアクション】
+${allowedList.map(x => `- ${x}`).join('\n')}
+
+【アクションスキーマ】
+- balloon.adjust_window: { action, scene_idx, balloon_no, delta_start_ms?, delta_end_ms? }
+- balloon.set_policy: { action, scene_idx, balloon_no, policy: "voice_window"|"always_on"|"manual_window", start_ms?, end_ms? }
+- sfx.set_volume: { action, scene_idx, cue_no, volume: 0-1 }
+- bgm.set_volume: { action, volume: 0-1 }
+- bgm.set_loop: { action, loop: boolean }
+- telop.set_enabled: { action, enabled: boolean } (全シーン一括)
+- telop.set_enabled_scene: { action, scene_idx, enabled: boolean } (特定シーンのみ)
+- telop.set_position: { action, position_preset: "bottom"|"center"|"top" }
+- telop.set_size: { action, size_preset: "sm"|"md"|"lg" }
+
+【会話例 - 挨拶・雑談（次のアクションに誘導）】
+ユーザー: よろしくね
+→ {"assistant_message": "よろしくお願いします！今どんな動画を編集中ですか？気になるところがあれば教えてくださいね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+ユーザー: ありがとう
+→ {"assistant_message": "いえいえ！他に調整したいところがあれば、いつでも声かけてくださいね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+ユーザー: どうすればいい？
+→ {"assistant_message": "例えば「BGMを小さく」「吹き出しを声に合わせて」「テロップを大きく」などの指示ができますよ！どこから始めましょうか？", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+ユーザー: 何ができるの？
+→ {"assistant_message": "BGMの音量調整、吹き出しの表示タイミング変更、テロップの位置やサイズ変更などができます！「BGMがうるさい」「吹き出しを早く出して」みたいに話しかけてみてください！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
+【会話例 - 編集提案（Before→After形式）】
+ユーザー: BGMがちょっとうるさいかも
+→ {"assistant_message": "BGMの音量を下げましょうか？20%くらいに調整するのはいかがでしょう？", "has_suggestion": true, "suggestion_summary": "BGM音量: 100% → 20%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "bgm.set_volume", "volume": 0.2}]}}
+
+ユーザー: このシーンの吹き出し、声に合わせて表示したい
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のバブル${ctx?.balloon_no || 1}を、音声に合わせて表示するように設定しましょうか？セリフが始まるタイミングで自動的に表示されるようになります！", "has_suggestion": true, "suggestion_summary": "バブル表示: 固定 → 音声同期", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "balloon.set_policy", "scene_idx": ${ctx?.scene_idx || 1}, "balloon_no": ${ctx?.balloon_no || 1}, "policy": "voice_window"}]}}
+
+ユーザー: テロップ見にくい
+→ {"assistant_message": "テロップを大きくしましょうか？位置も中央に移動できますよ！", "has_suggestion": true, "suggestion_summary": "テロップサイズ: 標準 → 大", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_size", "size_preset": "lg"}]}}
+
+ユーザー: テロップと漫画の内容が重なってる
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のテロップを非表示にしましょうか？画像にすでにテキストがある場合は、Remotion側のテロップをOFFにすると見やすくなりますよ！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のテロップ: ON → OFF", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_enabled_scene", "scene_idx": ${ctx?.scene_idx || 1}, "enabled": false}]}}
+
+ユーザー: シーン1のテロップを消して
+→ {"assistant_message": "シーン1のテロップを非表示にしますね！", "has_suggestion": true, "suggestion_summary": "シーン1のテロップ: ON → OFF", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_enabled_scene", "scene_idx": 1, "enabled": false}]}}
+
+ユーザー: このシーンだけテロップOFF
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のテロップを非表示にしましょうか？他のシーンはそのままです！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のテロップ: ON → OFF", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_enabled_scene", "scene_idx": ${ctx?.scene_idx || 1}, "enabled": false}]}}
+
+【文脈情報】
+${ctxText}
+
+【注意事項】
+- 必ずJSON形式のみで返す（マークダウンや説明文は不要）
+- 挨拶や雑談には会話のみ返す（actions は空配列）、ただし**次のアクションに自然に誘導**
+- 編集指示が曖昧な場合は質問で確認
+- suggestion_summaryは「Before → After」形式で書く
+- 音量は0-1の範囲（パーセントは変換）
+- 時間はミリ秒（秒は変換: 3秒 → 3000ms）
+`;
+
+  // Build conversation history for Gemini
+  const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+  
+  // Add history (max 10 turns)
+  const recentHistory = history.slice(-20); // 10 turns = 20 messages
+  for (const msg of recentHistory) {
+    contents.push({
+      role: msg.role === 'user' ? 'user' : 'model',
+      parts: [{ text: msg.content }]
+    });
+  }
+  
+  // Add current message
+  contents.push({
+    role: 'user',
+    parts: [{ text: userMessage }]
+  });
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+  const body = {
+    systemInstruction: { parts: [{ text: system.trim() }] },
+    contents,
+    generationConfig: {
+      temperature: 0.7, // Slightly higher for more natural conversation
+      topP: 0.9,
+      maxOutputTokens: 1024,
+    },
+  };
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    
+    if (!res.ok) {
+      const t = await res.text();
+      return { ok: false, error: `Gemini API error: ${res.status} ${t.slice(0, 200)}` };
+    }
+    
+    const data: any = await res.json();
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    
+    // Parse JSON response
+    const parsed = safeJsonParseMaybe(text);
+    
+    if (!parsed || typeof parsed.assistant_message !== 'string') {
+      // Fallback: treat the raw text as a message
+      return {
+        ok: true,
+        assistant_message: text || '申し訳ありません、応答を生成できませんでした。',
+        suggestion: null,
+      };
+    }
+
+    // Build response
+    let suggestion = null;
+    if (parsed.has_suggestion && parsed.intent?.actions?.length > 0) {
+      // Safety filter
+      const { filtered, rejected } = filterAllowedActions(parsed.intent.actions, ALLOWED_CHAT_ACTIONS);
+      parsed.intent.actions = filtered;
+      
+      if (filtered.length > 0) {
+        suggestion = {
+          needs_confirmation: true,
+          summary: parsed.suggestion_summary || '編集提案',
+          intent: parsed.intent,
+          rejected_actions: rejected,
+        };
+      }
+    }
+
+    return {
+      ok: true,
+      assistant_message: parsed.assistant_message,
+      suggestion,
+    };
+    
+  } catch (e: any) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    if (isNaN(projectId)) {
+      return c.json({ ok: false, error: 'Invalid projectId' }, 400);
+    }
+
+    const body = await c.req.json().catch(() => null) as any;
+    const userMessage = body?.user_message;
+    if (!userMessage || typeof userMessage !== 'string') {
+      return c.json({ ok: false, error: 'user_message is required' }, 400);
+    }
+
+    // Check API key
+    if (!c.env.GEMINI_API_KEY) {
+      return c.json({ ok: false, error: 'GEMINI_API_KEY is not configured' }, 500);
+    }
+
+    // Parse context
+    const ctx = body?.context && typeof body.context === 'object'
+      ? {
+          scene_idx: typeof body.context.scene_idx === 'number' ? body.context.scene_idx : undefined,
+          balloon_no: typeof body.context.balloon_no === 'number' ? body.context.balloon_no : undefined,
+          video_build_id: typeof body.context.video_build_id === 'number' ? body.context.video_build_id : undefined,
+        }
+      : null;
+
+    // Parse history
+    const history = Array.isArray(body?.history) 
+      ? body.history.filter((h: any) => 
+          h && typeof h.role === 'string' && typeof h.content === 'string' &&
+          (h.role === 'user' || h.role === 'assistant')
+        )
+      : [];
+
+    // Call Gemini with conversation context
+    const result = await geminiChatWithSuggestion(c.env.GEMINI_API_KEY, userMessage, ctx, history);
+    
+    if (!result.ok) {
+      return c.json({ 
+        ok: false, 
+        stage: 'chat_ai', 
+        error: result.error 
+      }, 400);
+    }
+
+    return c.json({
+      ok: true,
+      assistant_message: result.assistant_message,
+      suggestion: result.suggestion,
+    });
+    
+  } catch (e: any) {
+    console.error('[chat-edits/chat] Error:', e);
+    return c.json({ ok: false, error: e?.message || String(e) }, 500);
+  }
+});
 
 export default patches;
