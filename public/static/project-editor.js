@@ -5953,68 +5953,60 @@ function updateProgressBar(status) {
   
   if (!progressBarFill || !progressPercent || !progressMessage) return;
   
-  // Define progress stages with clear next action
+  // Define progress stages - NO buttons, just clear status messages
   // step: 1=入力, 2=分割, 3=画像, 4=動画, 5=完了
   const stages = {
     'created': { 
       percent: 5, 
       step: 0, 
-      message: '📝 ステップ1: テキストまたは音声を入力してください',
-      nextAction: { tab: 'input', label: '入力を開始' }
+      message: '📝 ステップ1/4: テキストまたは音声を入力してください'
     },
     'uploaded': { 
       percent: 20, 
       step: 1, 
-      message: '✅ 入力完了 → 📋 ステップ2: シーン分割を実行してください',
-      nextAction: { tab: 'sceneSplit', label: 'Scene Splitへ進む' }
+      message: '✅ 入力完了 → 📋 ステップ2/4: 下の「フォーマット実行」ボタンをクリック'
     },
     'transcribing': { 
       percent: 25, 
       step: 1, 
-      message: '⏳ 音声を文字起こし中... しばらくお待ちください',
-      nextAction: null
+      message: '⏳ 音声を文字起こし中... しばらくお待ちください'
     },
     'transcribed': { 
       percent: 30, 
       step: 1, 
-      message: '✅ 文字起こし完了 → 📋 ステップ2: シーン分割を実行してください',
-      nextAction: { tab: 'sceneSplit', label: 'Scene Splitへ進む' }
+      message: '✅ 文字起こし完了 → 📋 ステップ2/4: 下の「フォーマット実行」ボタンをクリック'
     },
     'parsing': { 
       percent: 35, 
       step: 2, 
-      message: '⏳ テキストを解析中... しばらくお待ちください',
-      nextAction: null
+      message: '⏳ テキストを解析中... しばらくお待ちください'
     },
     'parsed': { 
       percent: 40, 
       step: 2, 
-      message: '✅ 解析完了 → フォーマットボタンをクリックしてください',
-      nextAction: { tab: 'sceneSplit', label: 'フォーマットを実行' }
+      message: '✅ 解析完了 → 下の「フォーマット実行」ボタンをクリック'
     },
     'formatting': { 
       percent: 45, 
       step: 2, 
-      message: '⏳ シーン分割中... しばらくお待ちください',
-      nextAction: null
+      message: '⏳ シーン分割中... 完了まで約1分お待ちください'
     },
     'formatted': { 
       percent: 50, 
       step: 2, 
-      message: '✅ シーン分割完了 → 🖼️ ステップ3: 画像を生成してください',
-      nextAction: { tab: 'builder', label: 'Builderへ進む' }
+      message: '✅ シーン分割完了 → 🖼️ ステップ3/4: Builderタブで画像を生成',
+      nextTab: 'builder'
     },
     'generating_images': { 
       percent: 70, 
       step: 3, 
-      message: '⏳ 画像生成中... 完了までお待ちください',
-      nextAction: null
+      message: '⏳ 画像生成中... 完了までお待ちください'
     },
     'completed': { 
       percent: 100, 
       step: 5, 
-      message: '🎉 全ステップ完了！Video Buildで動画を生成できます',
-      nextAction: { tab: 'videoBuild', label: 'Video Buildへ進む' }
+      message: '🎉 全ステップ完了！ステップ4/4: Video Buildで動画を生成',
+      nextTab: 'videoBuild'
     }
   };
   
@@ -6024,15 +6016,20 @@ function updateProgressBar(status) {
   progressBarFill.style.width = stage.percent + '%';
   progressPercent.textContent = stage.percent + '%';
   
-  // Update message with optional next action button
-  if (stage.nextAction) {
+  // Update message - only show next tab button when step is complete and ready to move on
+  // (formatted -> Builder, completed -> Video Build)
+  if (stage.nextTab) {
+    const tabLabels = {
+      'builder': 'Builderへ進む',
+      'videoBuild': 'Video Buildへ進む'
+    };
     progressMessage.innerHTML = `
       <span>${stage.message}</span>
       <button 
-        onclick="switchTab('${stage.nextAction.tab}')"
-        class="ml-3 px-4 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+        onclick="switchTab('${stage.nextTab}')"
+        class="ml-3 px-4 py-1 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors font-semibold"
       >
-        ${stage.nextAction.label} <i class="fas fa-arrow-right ml-1"></i>
+        ${tabLabels[stage.nextTab] || '次へ'} <i class="fas fa-arrow-right ml-1"></i>
       </button>
     `;
   } else {
