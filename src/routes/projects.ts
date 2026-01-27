@@ -249,6 +249,18 @@ projects.post('/:id/upload', async (c) => {
       }
     })
 
+    // ⚠️ FIX: 音声アップロード時も古いシーンを**先に**削除（データ不整合防止）
+    const existingScenes = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+    `).bind(projectId).first<{ count: number }>()
+    
+    if (existingScenes && existingScenes.count > 0) {
+      console.log(`[UploadAudio] Deleting ${existingScenes.count} old scenes for project ${projectId} BEFORE status update`)
+      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM utterances WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
+    }
+
     // DB更新 (CRITICAL: source_type='audio' must be set for proper flow detection)
     await c.env.DB.prepare(`
       UPDATE projects
@@ -378,6 +390,21 @@ projects.post('/:id/source/text', async (c) => {
           }
         }
       }, 400)
+    }
+
+    // ⚠️ FIX: ソース更新時は古いシーンを**先に**削除（データ不整合防止）
+    // シーンが存在する状態で status='uploaded' になるとUIが混乱する
+    // 順序: 1) シーン削除 → 2) ステータス更新（これで不整合が発生しない）
+    const existingScenes = await c.env.DB.prepare(`
+      SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+    `).bind(projectId).first<{ count: number }>()
+    
+    if (existingScenes && existingScenes.count > 0) {
+      console.log(`[SaveSourceText] Deleting ${existingScenes.count} old scenes for project ${projectId} BEFORE status update`)
+      // 関連データも削除（外部キー制約がないため手動で）
+      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM utterances WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
     }
 
     // テキスト保存（uploadedステータスに変更）
