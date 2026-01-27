@@ -546,4 +546,113 @@ auth.get('/auth/me', async (c) => {
   }
 });
 
+// ====================================================================
+// PUT /api/auth/me - プロフィール更新 & パスワード変更
+// ====================================================================
+
+interface UpdateMeRequest {
+  // Profile update fields
+  name?: string;
+  company?: string | null;
+  phone?: string | null;
+  // Password change fields
+  current_password?: string;
+  new_password?: string;
+}
+
+auth.put('/auth/me', async (c) => {
+  const { DB } = c.env;
+  const sessionId = getCookie(c, 'session');
+  
+  if (!sessionId) {
+    return c.json({ error: { code: 'NOT_AUTHENTICATED', message: 'ログインしてください' } }, 401);
+  }
+  
+  // Validate session
+  const session = await DB.prepare(`
+    SELECT s.user_id, u.id, u.email, u.password_hash
+    FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{
+    user_id: number;
+    id: number;
+    email: string;
+    password_hash: string;
+  }>();
+  
+  if (!session) {
+    deleteCookie(c, 'session', { path: '/' });
+    return c.json({ error: { code: 'SESSION_EXPIRED', message: 'セッションが期限切れです。再度ログインしてください' } }, 401);
+  }
+  
+  let body: UpdateMeRequest;
+  try {
+    body = await c.req.json<UpdateMeRequest>();
+  } catch {
+    return c.json({ error: { code: 'INVALID_REQUEST', message: 'リクエストが無効です' } }, 400);
+  }
+  
+  try {
+    // Check if this is a password change request
+    if (body.current_password && body.new_password) {
+      // Password change
+      console.log(`[UpdateMe] Password change request for user ${session.id}`);
+      
+      // Verify current password
+      const validCurrentPassword = await verifyPassword(body.current_password, session.password_hash);
+      if (!validCurrentPassword) {
+        console.log(`[UpdateMe] Current password verification failed for user ${session.id}`);
+        return c.json({ error: { code: 'INVALID_PASSWORD', message: '現在のパスワードが正しくありません' } }, 400);
+      }
+      
+      // Validate new password
+      if (body.new_password.length < 8) {
+        return c.json({ error: { code: 'WEAK_PASSWORD', message: '新しいパスワードは8文字以上で入力してください' } }, 400);
+      }
+      
+      // Hash new password
+      const newPasswordHash = await hashPassword(body.new_password);
+      console.log(`[UpdateMe] User ${session.id}: new password_hash format = ${newPasswordHash.split(':').length === 2 ? 'valid' : 'INVALID'}`);
+      
+      // Update password
+      await DB.prepare(`
+        UPDATE users 
+        SET password_hash = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(newPasswordHash, session.id).run();
+      
+      console.log(`[UpdateMe] User ${session.id}: Password updated successfully`);
+      return c.json({ success: true, message: 'パスワードを変更しました' });
+    }
+    
+    // Profile update
+    if (body.name !== undefined) {
+      if (!body.name || body.name.trim().length === 0) {
+        return c.json({ error: { code: 'INVALID_NAME', message: '名前を入力してください' } }, 400);
+      }
+      
+      await DB.prepare(`
+        UPDATE users 
+        SET name = ?, company = ?, phone = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(
+        body.name.trim(),
+        body.company || null,
+        body.phone || null,
+        session.id
+      ).run();
+      
+      console.log(`[UpdateMe] User ${session.id}: Profile updated`);
+      return c.json({ success: true, message: 'プロフィールを更新しました' });
+    }
+    
+    return c.json({ error: { code: 'NO_CHANGES', message: '変更する内容がありません' } }, 400);
+    
+  } catch (error) {
+    console.error('Update me error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: '更新に失敗しました' } }, 500);
+  }
+});
+
 export default auth;
