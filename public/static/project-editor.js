@@ -120,6 +120,9 @@ async function loadProject() {
     // Also update tab states for Export button
     updateTabStates(currentProject.status);
     
+    // Update progress bar
+    updateProgressBar(currentProject.status);
+    
     // R3-A: Load BGM status
     loadBgmStatus();
     
@@ -208,6 +211,9 @@ function updateStatusBadge(status) {
   const config = statusConfig[status] || statusConfig['created'];
   badge.className = `inline-block mt-2 px-3 py-1 rounded-full text-sm font-semibold ${config.color}`;
   statusText.textContent = config.text;
+  
+  // Also update progress bar
+  updateProgressBar(status);
 }
 
 // Show toast notification
@@ -5933,6 +5939,72 @@ function updateTabStates(projectStatus) {
     }
   });
 }
+
+// ========== Progress Bar ==========
+/**
+ * Update the progress bar based on project status
+ * @param {string} status - Current project status
+ */
+function updateProgressBar(status) {
+  const progressBarFill = document.getElementById('progressBarFill');
+  const progressPercent = document.getElementById('progressPercent');
+  const progressMessage = document.getElementById('progressMessage');
+  
+  if (!progressBarFill || !progressPercent || !progressMessage) return;
+  
+  // Define progress stages
+  const stages = {
+    'created': { percent: 0, step: 0, message: 'プロジェクトを作成しました。テキストまたは音声を入力してください。' },
+    'uploaded': { percent: 20, step: 1, message: '入力完了！Scene Splitタブでシーン分割を実行してください。' },
+    'transcribing': { percent: 25, step: 1, message: '音声を文字起こし中...' },
+    'transcribed': { percent: 30, step: 1, message: '文字起こし完了！Scene Splitタブでシーン分割を実行してください。' },
+    'parsing': { percent: 35, step: 2, message: 'テキストを解析中...' },
+    'parsed': { percent: 40, step: 2, message: '解析完了！フォーマットを実行してください。' },
+    'formatting': { percent: 45, step: 2, message: 'シーン分割中...' },
+    'formatted': { percent: 50, step: 2, message: 'シーン分割完了！Builderタブで画像を生成してください。' },
+    'generating_images': { percent: 70, step: 3, message: '画像生成中...' },
+    'completed': { percent: 100, step: 5, message: '🎉 完了！Video Buildで動画を生成できます。' }
+  };
+  
+  const stage = stages[status] || { percent: 0, step: 0, message: '' };
+  
+  // Update progress bar
+  progressBarFill.style.width = stage.percent + '%';
+  progressPercent.textContent = stage.percent + '%';
+  progressMessage.textContent = stage.message;
+  
+  // Update step circles
+  for (let i = 1; i <= 5; i++) {
+    const stepEl = document.getElementById(`step${i}`);
+    if (!stepEl) continue;
+    
+    const circle = stepEl.querySelector('.step-circle');
+    const label = stepEl.querySelector('.step-label');
+    
+    if (i <= stage.step) {
+      // Completed step
+      circle.classList.remove('bg-gray-300');
+      circle.classList.add('bg-green-500');
+      label.classList.remove('text-gray-500');
+      label.classList.add('text-green-600', 'font-semibold');
+    } else if (i === stage.step + 1) {
+      // Current step
+      circle.classList.remove('bg-gray-300', 'bg-green-500');
+      circle.classList.add('bg-blue-500');
+      label.classList.remove('text-gray-500', 'text-green-600');
+      label.classList.add('text-blue-600', 'font-semibold');
+    } else {
+      // Future step
+      circle.classList.remove('bg-green-500', 'bg-blue-500');
+      circle.classList.add('bg-gray-300');
+      label.classList.remove('text-green-600', 'text-blue-600', 'font-semibold');
+      label.classList.add('text-gray-500');
+    }
+  }
+}
+
+// Export for global access
+window.updateProgressBar = updateProgressBar;
 
 // Poll for single scene image generation completion
 // ========== Robust Polling with Progress Indicator ==========
