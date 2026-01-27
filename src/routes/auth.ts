@@ -78,8 +78,13 @@ async function hashPassword(password: string): Promise<string> {
 }
 
 async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  console.log(`[verifyPassword] storedHash length: ${storedHash?.length || 0}`);
   const [saltHex, expectedHashHex] = storedHash.split(':');
-  if (!saltHex || !expectedHashHex) return false;
+  if (!saltHex || !expectedHashHex) {
+    console.log(`[verifyPassword] FAILED: Invalid hash format - saltHex: ${!!saltHex}, expectedHashHex: ${!!expectedHashHex}`);
+    return false;
+  }
+  console.log(`[verifyPassword] saltHex length: ${saltHex.length}, expectedHashHex length: ${expectedHashHex.length}`);
   
   const salt = new Uint8Array(saltHex.match(/.{2}/g)!.map(byte => parseInt(byte, 16)));
   
@@ -107,7 +112,11 @@ async function verifyPassword(password: string, storedHash: string): Promise<boo
     .map(b => b.toString(16).padStart(2, '0'))
     .join('');
   
-  return computedHashHex === expectedHashHex;
+  const match = computedHashHex === expectedHashHex;
+  if (!match) {
+    console.log(`[verifyPassword] Hash mismatch - computed first 8 chars: ${computedHashHex.substring(0, 8)}, expected first 8 chars: ${expectedHashHex.substring(0, 8)}`);
+  }
+  return match;
 }
 
 function generateSessionId(): string {
@@ -166,8 +175,12 @@ auth.post('/auth/login', async (c) => {
     }
     
     // Verify password
+    console.log(`[Login] Verifying password for user ${user.id} (${user.email})`);
+    console.log(`[Login] password_hash format check: ${user.password_hash ? user.password_hash.split(':').length === 2 ? 'valid' : 'INVALID' : 'NULL'}`);
     const validPassword = await verifyPassword(password, user.password_hash);
+    console.log(`[Login] Password verification result: ${validPassword}`);
     if (!validPassword) {
+      console.log(`[Login] FAILED: Invalid password for user ${user.id}`);
       return c.json({ error: { code: 'INVALID_CREDENTIALS', message: 'Invalid email or password' } }, 401);
     }
     
@@ -454,17 +467,21 @@ auth.post('/auth/reset-password', async (c) => {
     
     // Hash new password
     const passwordHash = await hashPassword(password);
+    console.log(`[ResetPassword] User ${user.id}: new password_hash format = ${passwordHash.split(':').length === 2 ? 'valid (salt:hash)' : 'INVALID'}`);
+    console.log(`[ResetPassword] User ${user.id}: hash length = ${passwordHash.length}`);
     
     // Update password and clear token
-    await DB.prepare(`
+    const updateResult = await DB.prepare(`
       UPDATE users 
       SET password_hash = ?, reset_token = NULL, reset_token_expires = NULL, updated_at = datetime('now')
       WHERE id = ?
     `).bind(passwordHash, user.id).run();
+    console.log(`[ResetPassword] User ${user.id}: DB update result = ${JSON.stringify(updateResult.meta)}`);
     
     // Invalidate all sessions for this user
     await DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.id).run();
     
+    console.log(`[ResetPassword] User ${user.id}: Password reset completed successfully`);
     return c.json({ success: true, message: 'Password reset successfully. Please login with your new password.' });
   } catch (error) {
     console.error('Reset password error:', error);
