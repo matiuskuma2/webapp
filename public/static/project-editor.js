@@ -421,7 +421,17 @@ async function initSceneSplitTab() {
     document.getElementById('formatSection').classList.add('hidden');
     document.getElementById('scenesSection').classList.remove('hidden');
     document.getElementById('scenesEmptyState').classList.add('hidden');
-    document.getElementById('goToBuilderBtn').classList.remove('hidden');
+    
+    // Only show Builder button when format is completed (formatted status or later)
+    const builderAllowedStatuses = ['formatted', 'generating_images', 'completed'];
+    const goToBuilderBtn = document.getElementById('goToBuilderBtn');
+    if (goToBuilderBtn) {
+      if (builderAllowedStatuses.includes(currentProject?.status)) {
+        goToBuilderBtn.classList.remove('hidden');
+      } else {
+        goToBuilderBtn.classList.add('hidden');
+      }
+    }
     // Hide character warning if scenes already exist
     document.getElementById('characterWarningSection')?.classList.add('hidden');
     renderScenes(scenes);
@@ -2419,7 +2429,17 @@ window.loadScenes = async function loadScenes() {
     document.getElementById('scenesSection').classList.remove('hidden');
     document.getElementById('scenesEmptyState').classList.add('hidden');
     document.getElementById('formatSection').classList.add('hidden');
-    document.getElementById('goToBuilderBtn').classList.remove('hidden');
+    
+    // Only show Builder button when format is completed (formatted status or later)
+    const builderAllowedStatuses = ['formatted', 'generating_images', 'completed'];
+    const goToBuilderBtn = document.getElementById('goToBuilderBtn');
+    if (goToBuilderBtn) {
+      if (builderAllowedStatuses.includes(currentProject?.status)) {
+        goToBuilderBtn.classList.remove('hidden');
+      } else {
+        goToBuilderBtn.classList.add('hidden');
+      }
+    }
     
     renderScenes(scenes);
   } catch (error) {
