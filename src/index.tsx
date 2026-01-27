@@ -590,48 +590,50 @@ app.get('/projects/:id', (c) => {
             </div>
         </div>
 
-        <!-- Progress Bar -->
-        <div id="projectProgressBar" class="bg-white rounded-lg shadow-md mb-4 p-4">
-            <div class="flex items-center justify-between mb-2">
-                <span class="text-sm font-semibold text-gray-700">制作進捗</span>
-                <span id="progressPercent" class="text-sm font-bold text-blue-600">0%</span>
+        <!-- Progress Bar - Prominent workflow indicator -->
+        <div id="projectProgressBar" class="bg-gradient-to-r from-blue-50 to-purple-50 rounded-xl shadow-lg mb-4 p-6 border-2 border-blue-200">
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-lg font-bold text-gray-800">
+                    <i class="fas fa-tasks mr-2 text-blue-600"></i>制作進捗
+                </span>
+                <span id="progressPercent" class="text-2xl font-bold text-blue-600">0%</span>
             </div>
-            <div class="w-full bg-gray-200 rounded-full h-3 mb-3">
-                <div id="progressBarFill" class="bg-gradient-to-r from-blue-500 to-purple-600 h-3 rounded-full transition-all duration-500" style="width: 0%"></div>
+            <div class="w-full bg-gray-200 rounded-full h-4 mb-4 shadow-inner">
+                <div id="progressBarFill" class="bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 h-4 rounded-full transition-all duration-500 shadow-md" style="width: 0%"></div>
             </div>
-            <div class="flex justify-between text-xs">
-                <div id="step1" class="flex flex-col items-center">
-                    <div class="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle">
-                        <i class="fas fa-upload text-white text-sm"></i>
+            <div class="flex justify-between text-xs mb-4">
+                <div id="step1" class="flex flex-col items-center flex-1">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle shadow-md transition-all duration-300">
+                        <i class="fas fa-upload text-white"></i>
                     </div>
-                    <span class="text-gray-500 step-label">入力</span>
+                    <span class="text-gray-500 step-label font-medium">入力</span>
                 </div>
-                <div id="step2" class="flex flex-col items-center">
-                    <div class="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle">
-                        <i class="fas fa-cut text-white text-sm"></i>
+                <div id="step2" class="flex flex-col items-center flex-1">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle shadow-md transition-all duration-300">
+                        <i class="fas fa-cut text-white"></i>
                     </div>
-                    <span class="text-gray-500 step-label">分割</span>
+                    <span class="text-gray-500 step-label font-medium">分割</span>
                 </div>
-                <div id="step3" class="flex flex-col items-center">
-                    <div class="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle">
-                        <i class="fas fa-image text-white text-sm"></i>
+                <div id="step3" class="flex flex-col items-center flex-1">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle shadow-md transition-all duration-300">
+                        <i class="fas fa-image text-white"></i>
                     </div>
-                    <span class="text-gray-500 step-label">画像</span>
+                    <span class="text-gray-500 step-label font-medium">画像</span>
                 </div>
-                <div id="step4" class="flex flex-col items-center">
-                    <div class="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle">
-                        <i class="fas fa-film text-white text-sm"></i>
+                <div id="step4" class="flex flex-col items-center flex-1">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle shadow-md transition-all duration-300">
+                        <i class="fas fa-film text-white"></i>
                     </div>
-                    <span class="text-gray-500 step-label">動画</span>
+                    <span class="text-gray-500 step-label font-medium">動画</span>
                 </div>
-                <div id="step5" class="flex flex-col items-center">
-                    <div class="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle">
-                        <i class="fas fa-check text-white text-sm"></i>
+                <div id="step5" class="flex flex-col items-center flex-1">
+                    <div class="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center mb-1 step-circle shadow-md transition-all duration-300">
+                        <i class="fas fa-check text-white"></i>
                     </div>
-                    <span class="text-gray-500 step-label">完了</span>
+                    <span class="text-gray-500 step-label font-medium">完了</span>
                 </div>
             </div>
-            <p id="progressMessage" class="text-center text-sm text-gray-600 mt-3 font-medium"></p>
+            <div id="progressMessage" class="text-center text-base text-gray-700 font-semibold bg-white rounded-lg py-3 px-4 shadow-sm"></div>
         </div>
 
         <!-- Tabs -->

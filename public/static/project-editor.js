@@ -5943,6 +5943,7 @@ function updateTabStates(projectStatus) {
 // ========== Progress Bar ==========
 /**
  * Update the progress bar based on project status
+ * Shows clear progress percentage and next action guidance
  * @param {string} status - Current project status
  */
 function updateProgressBar(status) {
@@ -5952,26 +5953,91 @@ function updateProgressBar(status) {
   
   if (!progressBarFill || !progressPercent || !progressMessage) return;
   
-  // Define progress stages
+  // Define progress stages with clear next action
+  // step: 1=入力, 2=分割, 3=画像, 4=動画, 5=完了
   const stages = {
-    'created': { percent: 0, step: 0, message: 'プロジェクトを作成しました。テキストまたは音声を入力してください。' },
-    'uploaded': { percent: 20, step: 1, message: '入力完了！Scene Splitタブでシーン分割を実行してください。' },
-    'transcribing': { percent: 25, step: 1, message: '音声を文字起こし中...' },
-    'transcribed': { percent: 30, step: 1, message: '文字起こし完了！Scene Splitタブでシーン分割を実行してください。' },
-    'parsing': { percent: 35, step: 2, message: 'テキストを解析中...' },
-    'parsed': { percent: 40, step: 2, message: '解析完了！フォーマットを実行してください。' },
-    'formatting': { percent: 45, step: 2, message: 'シーン分割中...' },
-    'formatted': { percent: 50, step: 2, message: 'シーン分割完了！Builderタブで画像を生成してください。' },
-    'generating_images': { percent: 70, step: 3, message: '画像生成中...' },
-    'completed': { percent: 100, step: 5, message: '🎉 完了！Video Buildで動画を生成できます。' }
+    'created': { 
+      percent: 5, 
+      step: 0, 
+      message: '📝 ステップ1: テキストまたは音声を入力してください',
+      nextAction: { tab: 'input', label: '入力を開始' }
+    },
+    'uploaded': { 
+      percent: 20, 
+      step: 1, 
+      message: '✅ 入力完了 → 📋 ステップ2: シーン分割を実行してください',
+      nextAction: { tab: 'sceneSplit', label: 'Scene Splitへ進む' }
+    },
+    'transcribing': { 
+      percent: 25, 
+      step: 1, 
+      message: '⏳ 音声を文字起こし中... しばらくお待ちください',
+      nextAction: null
+    },
+    'transcribed': { 
+      percent: 30, 
+      step: 1, 
+      message: '✅ 文字起こし完了 → 📋 ステップ2: シーン分割を実行してください',
+      nextAction: { tab: 'sceneSplit', label: 'Scene Splitへ進む' }
+    },
+    'parsing': { 
+      percent: 35, 
+      step: 2, 
+      message: '⏳ テキストを解析中... しばらくお待ちください',
+      nextAction: null
+    },
+    'parsed': { 
+      percent: 40, 
+      step: 2, 
+      message: '✅ 解析完了 → フォーマットボタンをクリックしてください',
+      nextAction: { tab: 'sceneSplit', label: 'フォーマットを実行' }
+    },
+    'formatting': { 
+      percent: 45, 
+      step: 2, 
+      message: '⏳ シーン分割中... しばらくお待ちください',
+      nextAction: null
+    },
+    'formatted': { 
+      percent: 50, 
+      step: 2, 
+      message: '✅ シーン分割完了 → 🖼️ ステップ3: 画像を生成してください',
+      nextAction: { tab: 'builder', label: 'Builderへ進む' }
+    },
+    'generating_images': { 
+      percent: 70, 
+      step: 3, 
+      message: '⏳ 画像生成中... 完了までお待ちください',
+      nextAction: null
+    },
+    'completed': { 
+      percent: 100, 
+      step: 5, 
+      message: '🎉 全ステップ完了！Video Buildで動画を生成できます',
+      nextAction: { tab: 'videoBuild', label: 'Video Buildへ進む' }
+    }
   };
   
-  const stage = stages[status] || { percent: 0, step: 0, message: '' };
+  const stage = stages[status] || { percent: 0, step: 0, message: '状態を確認中...', nextAction: null };
   
   // Update progress bar
   progressBarFill.style.width = stage.percent + '%';
   progressPercent.textContent = stage.percent + '%';
-  progressMessage.textContent = stage.message;
+  
+  // Update message with optional next action button
+  if (stage.nextAction) {
+    progressMessage.innerHTML = `
+      <span>${stage.message}</span>
+      <button 
+        onclick="switchTab('${stage.nextAction.tab}')"
+        class="ml-3 px-4 py-1 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors font-semibold"
+      >
+        ${stage.nextAction.label} <i class="fas fa-arrow-right ml-1"></i>
+      </button>
+    `;
+  } else {
+    progressMessage.innerHTML = `<span>${stage.message}</span>`;
+  }
   
   // Update step circles
   for (let i = 1; i <= 5; i++) {
@@ -5983,19 +6049,19 @@ function updateProgressBar(status) {
     
     if (i <= stage.step) {
       // Completed step
-      circle.classList.remove('bg-gray-300');
+      circle.classList.remove('bg-gray-300', 'bg-blue-500');
       circle.classList.add('bg-green-500');
-      label.classList.remove('text-gray-500');
+      label.classList.remove('text-gray-500', 'text-blue-600');
       label.classList.add('text-green-600', 'font-semibold');
     } else if (i === stage.step + 1) {
-      // Current step
+      // Current step (next to do)
       circle.classList.remove('bg-gray-300', 'bg-green-500');
-      circle.classList.add('bg-blue-500');
+      circle.classList.add('bg-blue-500', 'animate-pulse');
       label.classList.remove('text-gray-500', 'text-green-600');
       label.classList.add('text-blue-600', 'font-semibold');
     } else {
       // Future step
-      circle.classList.remove('bg-green-500', 'bg-blue-500');
+      circle.classList.remove('bg-green-500', 'bg-blue-500', 'animate-pulse');
       circle.classList.add('bg-gray-300');
       label.classList.remove('text-green-600', 'text-blue-600', 'font-semibold');
       label.classList.add('text-gray-500');
