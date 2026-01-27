@@ -4693,6 +4693,16 @@ function getSceneStats(scenes) {
 
 // Generate single scene image
 async function generateSceneImage(sceneId) {
+  // ⚠️ Check project status FIRST - image generation requires 'formatted' or later
+  const allowedStatuses = ['formatted', 'generating_images', 'completed'];
+  if (currentProject && !allowedStatuses.includes(currentProject.status)) {
+    const statusMsg = currentProject.status === 'uploaded' || currentProject.status === 'transcribed'
+      ? '画像生成にはFormat（シーン分割）の完了が必要です。Scene Splitタブでフォーマットを実行してください。'
+      : `現在のプロジェクトステータス（${currentProject.status}）では画像生成できません。`;
+    showToast(statusMsg, 'error');
+    return;
+  }
+  
   // Check if bulk generation is in progress
   if (window.isBulkImageGenerating) {
     showToast('一括画像生成中です。完了後に個別生成をお試しください', 'warning');
@@ -4836,7 +4846,16 @@ async function generateSceneImage(sceneId) {
       stopGenerationWatch(sceneId);
       
       // Show detailed error message for other errors
-      const errorMsg = error.response.data?.error?.message || error.message || '画像生成中にエラーが発生しました';
+      const errorCode = error.response.data?.error?.code;
+      let errorMsg = error.response.data?.error?.message || error.message || '画像生成中にエラーが発生しました';
+      
+      // Add helpful guidance for common errors
+      if (errorCode === 'INVALID_STATUS') {
+        errorMsg = '画像生成にはFormat（シーン分割）の完了が必要です。Scene Splitタブでフォーマットを実行してください。';
+      } else if (errorMsg.includes('RATE_LIMIT_429')) {
+        errorMsg = 'APIレート制限に達しました。2〜3分待ってから再試行してください。';
+      }
+      
       showToast(errorMsg, 'error');
     } else {
       clearInterval(fakeTimer);
