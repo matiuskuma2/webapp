@@ -255,6 +255,44 @@ function setButtonLoading(buttonId, isLoading) {
 
 // ========== Tab Switching ==========
 function switchTab(tabName) {
+  // ⚠️ PHASE X-6: Enforce tab access based on project status
+  // This is the SINGLE SOURCE OF TRUTH for tab access control
+  if (currentProject) {
+    const status = currentProject.status;
+    const statusOrder = ['created', 'uploaded', 'transcribing', 'transcribed', 
+                         'parsing', 'parsed', 'formatting', 'formatted', 
+                         'generating_images', 'completed'];
+    const currentIndex = statusOrder.indexOf(status);
+    
+    // Define minimum status index for each tab
+    const tabRequirements = {
+      'sceneSplit': statusOrder.indexOf('uploaded'),  // Need at least 'uploaded'
+      'builder': statusOrder.indexOf('formatted'),     // Need at least 'formatted'
+      'export': statusOrder.indexOf('completed'),      // Need 'completed'
+      'videoBuild': statusOrder.indexOf('completed'),  // Need 'completed'
+      'styles': -1,  // Always accessible
+      'input': -1    // Always accessible
+    };
+    
+    const requiredIndex = tabRequirements[tabName];
+    if (requiredIndex !== undefined && requiredIndex >= 0 && currentIndex < requiredIndex) {
+      // Tab not allowed - show appropriate message
+      let message = '';
+      if (tabName === 'builder') {
+        message = 'Builder タブはFormat（シーン分割）完了後に利用できます。Scene Splitタブでフォーマットを実行してください。';
+      } else if (tabName === 'sceneSplit') {
+        message = 'Scene Split タブはテキスト入力または音声アップロード後に利用できます。';
+      } else if (tabName === 'export' || tabName === 'videoBuild') {
+        message = 'このタブは全ての画像生成完了後に利用できます。';
+      }
+      
+      if (message) {
+        showToast(message, 'warning');
+      }
+      return; // Don't switch tab
+    }
+  }
+  
   // Remove active class from all tabs
   const tabs = ['Input', 'SceneSplit', 'Builder', 'Export', 'VideoBuild', 'Styles'];
   tabs.forEach(tab => {
