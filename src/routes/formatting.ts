@@ -489,8 +489,9 @@ async function processTextChunks(
     return await processPreserveMode(c, projectId, project, targetSceneCount)
   }
 
-  // ステータスを 'formatting' に更新（初回のみ）
-  if (project.status === 'parsed') {
+  // ステータスを 'formatting' に更新（初回のみ：parsed または uploaded から）
+  // BUG FIX: uploaded 状態からも formatting に遷移できるように修正
+  if (project.status === 'parsed' || project.status === 'uploaded') {
     // ✅ 既存image_generationsを削除（整合性確保）
     // Note: scenes削除前に実行する必要がある
     const { results: existingScenes } = await c.env.DB.prepare(`
@@ -517,6 +518,10 @@ async function processTextChunks(
       SET status = 'formatting', updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(projectId).run()
+    
+    // project オブジェクトも更新（後続処理で参照するため）
+    project.status = 'formatting'
+    console.log(`[Format] Project ${projectId} status changed from ${project.status === 'formatting' ? 'parsed/uploaded' : project.status} to 'formatting'`)
   }
 
   // 未処理の chunk を取得（最大3件まで）

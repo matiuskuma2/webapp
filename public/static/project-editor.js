@@ -1511,12 +1511,13 @@ function startFormatPolling() {
             }
           });
         }
-      } else if (data.status === 'formatting') {
+      } else if (data.status === 'formatting' || data.status === 'uploaded') {
         // Continue polling and trigger next batch if pending > 0
+        // BUG FIX: 'uploaded' 状態でもバッチトリガーを許可（バックエンドで formatting に遷移する）
         if (data.pending > 0 && data.processing === 0) {
           // Still have pending chunks, trigger next batch
           try {
-            console.log('Triggering next batch: pending =', data.pending);
+            console.log('Triggering next batch: pending =', data.pending, 'status =', data.status);
             await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
           } catch (error) {
             console.error('Next batch format call error:', error);
