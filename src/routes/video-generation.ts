@@ -2945,6 +2945,179 @@ videoGeneration.get('/video-builds/:buildId', async (c) => {
 });
 
 // ====================================================================
+// PR-TL-1: GET /api/video-builds/:buildId/timeline
+// ====================================================================
+/**
+ * GET /api/video-builds/:buildId/timeline
+ * 
+ * ビルド時点のタイムライン（シーン別 start_ms/duration_ms/end_ms）を返す
+ * SSOT: R2に保存された project.json から取得（ビルド時点のスナップショット）
+ * 
+ * 用途:
+ * - プレビュー再生位置 → 現在シーン特定
+ * - チャット修正時の文脈設定
+ * 
+ * レスポンス:
+ * {
+ *   ok: true,
+ *   build_id: 55,
+ *   project_id: 69,
+ *   project_json_hash: "a30f...",
+ *   total_duration_ms: 131100,
+ *   total_scenes: 6,
+ *   scenes: [
+ *     { idx: 1, scene_id: 660, title: "...", start_ms: 0, duration_ms: 9080, end_ms: 9080 },
+ *     ...
+ *   ]
+ * }
+ * 
+ * エラーコード:
+ * - NOT_FOUND: ビルドが存在しない
+ * - PROJECT_JSON_NOT_FOUND: project_json_r2_key が null
+ * - PROJECT_JSON_MISSING_IN_R2: R2にオブジェクトがない
+ * - PROJECT_JSON_INVALID: JSONパース失敗
+ * - TIMELINE_INVALID: scenes[].timing が欠損/NaN
+ */
+videoGeneration.get('/video-builds/:buildId/timeline', async (c) => {
+  try {
+    const buildId = parseInt(c.req.param('buildId'), 10);
+    if (isNaN(buildId)) {
+      return c.json({ ok: false, code: 'INVALID_BUILD_ID', message: 'Invalid build ID' }, 400);
+    }
+    
+    // 1. video_builds からメタデータ取得
+    const build = await c.env.DB.prepare(`
+      SELECT id, project_id, project_json_r2_key, project_json_hash, total_duration_ms, total_scenes
+      FROM video_builds WHERE id = ?
+    `).bind(buildId).first<{
+      id: number;
+      project_id: number;
+      project_json_r2_key: string | null;
+      project_json_hash: string | null;
+      total_duration_ms: number | null;
+      total_scenes: number | null;
+    }>();
+    
+    if (!build) {
+      return c.json({ ok: false, code: 'NOT_FOUND', message: 'Build not found' }, 404);
+    }
+    
+    // 2. project_json_r2_key の存在確認
+    if (!build.project_json_r2_key) {
+      return c.json({ 
+        ok: false, 
+        code: 'PROJECT_JSON_NOT_FOUND', 
+        message: 'Project JSON was not saved for this build (project_json_r2_key is null)' 
+      }, 404);
+    }
+    
+    // 3. R2から project.json を取得
+    let projectJsonObject;
+    try {
+      projectJsonObject = await c.env.R2.get(build.project_json_r2_key);
+    } catch (r2Error) {
+      console.error(`[Timeline] R2 get error for key ${build.project_json_r2_key}:`, r2Error);
+      return c.json({ 
+        ok: false, 
+        code: 'PROJECT_JSON_MISSING_IN_R2', 
+        message: 'Failed to retrieve project.json from R2' 
+      }, 404);
+    }
+    
+    if (!projectJsonObject) {
+      return c.json({ 
+        ok: false, 
+        code: 'PROJECT_JSON_MISSING_IN_R2', 
+        message: 'Project JSON object not found in R2' 
+      }, 404);
+    }
+    
+    // 4. JSONパース
+    let projectJson: any;
+    try {
+      const jsonText = await projectJsonObject.text();
+      projectJson = JSON.parse(jsonText);
+    } catch (parseError) {
+      console.error(`[Timeline] JSON parse error for build ${buildId}:`, parseError);
+      return c.json({ 
+        ok: false, 
+        code: 'PROJECT_JSON_INVALID', 
+        message: 'Failed to parse project.json' 
+      }, 500);
+    }
+    
+    // 5. scenes[].timing を抽出・検証
+    const rawScenes = projectJson.scenes || [];
+    if (!Array.isArray(rawScenes) || rawScenes.length === 0) {
+      return c.json({ 
+        ok: false, 
+        code: 'TIMELINE_INVALID', 
+        message: 'No scenes found in project.json' 
+      }, 500);
+    }
+    
+    const scenes: Array<{
+      idx: number;
+      scene_id: number | null;
+      title: string;
+      start_ms: number;
+      duration_ms: number;
+      end_ms: number;
+    }> = [];
+    
+    for (let i = 0; i < rawScenes.length; i++) {
+      const s = rawScenes[i];
+      const timing = s.timing || {};
+      
+      // start_ms と duration_ms の検証
+      const startMs = typeof timing.start_ms === 'number' && !isNaN(timing.start_ms) 
+        ? timing.start_ms 
+        : null;
+      const durationMs = typeof timing.duration_ms === 'number' && !isNaN(timing.duration_ms) 
+        ? timing.duration_ms 
+        : null;
+      
+      if (startMs === null || durationMs === null) {
+        console.warn(`[Timeline] Invalid timing for scene idx=${s.idx || i+1}: start_ms=${timing.start_ms}, duration_ms=${timing.duration_ms}`);
+        return c.json({ 
+          ok: false, 
+          code: 'TIMELINE_INVALID', 
+          message: `Invalid timing for scene ${s.idx || i+1}: start_ms or duration_ms is missing/NaN` 
+        }, 500);
+      }
+      
+      scenes.push({
+        idx: s.idx || i + 1,
+        scene_id: s.scene_id || s.id || null,  // project.json の構造により異なる可能性
+        title: s.title || s.dialogue?.substring(0, 30) || `シーン ${s.idx || i + 1}`,
+        start_ms: startMs,
+        duration_ms: durationMs,
+        end_ms: startMs + durationMs,
+      });
+    }
+    
+    // 6. 成功レスポンス
+    return c.json({
+      ok: true,
+      build_id: build.id,
+      project_id: build.project_id,
+      project_json_hash: build.project_json_hash,
+      total_duration_ms: build.total_duration_ms || scenes.reduce((sum, s) => sum + s.duration_ms, 0),
+      total_scenes: scenes.length,
+      scenes,
+    });
+    
+  } catch (error) {
+    console.error('[Timeline] Unexpected error:', error);
+    return c.json({ 
+      ok: false, 
+      code: 'INTERNAL_ERROR', 
+      message: 'Failed to get timeline' 
+    }, 500);
+  }
+});
+
+// ====================================================================
 // GET /api/scenes/:sceneId/error-logs
 // Get error logs for a specific scene (admin only)
 // ====================================================================
