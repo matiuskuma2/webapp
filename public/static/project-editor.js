@@ -4990,6 +4990,32 @@ async function generateBulkImages(mode) {
   try {
     showToast(`${modeText}の画像生成を開始します...`, 'info');
     
+    // ★ mode === 'failed' または mode === 'all' の場合は generate-all-images を使用
+    // generate-all-images は1リクエストで全シーンを順次処理し、レート制限時のフォールバックも適切に動作する
+    if (mode === 'failed' || mode === 'all') {
+      console.log(`[BULK] Using generate-all-images endpoint with mode=${mode}`);
+      
+      try {
+        const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, { mode });
+        const { total_scenes, success_count, failed_count } = response.data;
+        
+        if (failed_count > 0) {
+          showToast(`画像生成完了！ (成功: ${success_count}件, 失敗: ${failed_count}件)`, 'warning');
+        } else {
+          showToast(`画像生成完了！ (${success_count}件)`, 'success');
+        }
+        
+        await initBuilderTab();
+      } catch (error) {
+        console.error('[BULK] generate-all-images error:', error);
+        const errorMsg = error.response?.data?.error?.message || '画像生成に失敗しました';
+        showToast(errorMsg, 'error');
+      }
+      
+      return; // early return for failed/all modes
+    }
+    
+    // mode === 'pending' の場合は従来のポーリング方式
     // 5秒ごとにステータスポーリング & 自動再実行
     let pollCount = 0;
     const maxPolls = 300; // 最大25分（5秒 x 300回）
