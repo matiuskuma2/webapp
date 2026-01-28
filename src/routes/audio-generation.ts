@@ -516,12 +516,31 @@ async function generateAndUploadAudio(args: {
 
     const r2Url = getR2PublicUrl(r2Key, (env as any).R2_PUBLIC_URL);
 
-    // completed 定義: r2_url 必須
+    // 先にこの音声のscene_idを取得
+    const audioRecord = await env.DB.prepare(`
+      SELECT scene_id FROM audio_generations WHERE id = ?
+    `).bind(audioId).first<{ scene_id: number }>();
+    
+    const sceneId = audioRecord?.scene_id;
+    
+    // 同じシーンの他の音声を非アクティブにしてから、この音声を完了&アクティブにする
+    if (sceneId) {
+      await env.DB.prepare(`
+        UPDATE audio_generations SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE scene_id = ? AND id != ?
+      `).bind(sceneId, audioId).run();
+    }
+
+    // FIX: duration_ms を概算（日本語: 文字数 * 120〜150ms程度）
+    // 最低2秒を保証
+    const estimatedDurationMs = Math.max(2000, text.length * 130);
+    
+    // completed 定義: r2_url 必須 + 自動でis_active = 1に設定 + duration_ms追加
     await env.DB.prepare(`
       UPDATE audio_generations
-      SET status = ?, r2_key = ?, r2_url = ?, updated_at = CURRENT_TIMESTAMP
+      SET status = ?, r2_key = ?, r2_url = ?, is_active = 1, duration_ms = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).bind(GENERATION_STATUS.COMPLETED, r2Key, r2Url, audioId).run();
+    `).bind(GENERATION_STATUS.COMPLETED, r2Key, r2Url, estimatedDurationMs, audioId).run();
 
     const verify = await env.DB.prepare(`SELECT r2_url FROM audio_generations WHERE id = ?`)
       .bind(audioId).first<any>();
@@ -545,6 +564,22 @@ async function generateAndUploadAudio(args: {
         errorMessage: 'R2 upload verification failed'
       });
     } else {
+      // ============================================================
+      // FIX: scene_utterances の duration_ms も更新
+      // ============================================================
+      try {
+        // この audio_generation_id を持つ scene_utterances を更新
+        await env.DB.prepare(`
+          UPDATE scene_utterances 
+          SET duration_ms = ?, updated_at = datetime('now')
+          WHERE audio_generation_id = ?
+        `).bind(estimatedDurationMs, audioId).run();
+        
+        console.log(`[Audio] Updated utterance duration_ms=${estimatedDurationMs} for audioId=${audioId}`);
+      } catch (uttErr) {
+        console.warn('[Audio] Failed to update utterance duration_ms:', uttErr);
+      }
+      
       // Phase 4: ログ記録（成功）
       await logTTSUsage({
         env,
@@ -925,6 +960,96 @@ audioGeneration.get('/tts/usage/check', async (c) => {
   } catch (error) {
     console.error('[TTS Usage Check] Error:', error);
     return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to check TTS usage'), 500);
+  }
+});
+
+// ============================================================
+// FIX: Patch endpoint to update existing audio duration_ms
+// ============================================================
+/**
+ * POST /api/audio/fix-durations
+ * シーンのaudio_generationsとscene_utterancesのduration_msを一括修正
+ * - 対象: status='completed' かつ duration_ms IS NULL
+ * - 計算: テキスト長 * 130ms（最低2秒）
+ */
+audioGeneration.post('/audio/fix-durations', async (c) => {
+  try {
+    // 1. duration_ms が NULL で completed な audio_generations を取得
+    const { results: audioList } = await c.env.DB.prepare(`
+      SELECT ag.id, ag.scene_id, ag.text, ag.duration_ms, ag.is_active, s.project_id
+      FROM audio_generations ag
+      JOIN scenes s ON ag.scene_id = s.id
+      WHERE ag.status = 'completed' AND ag.r2_url IS NOT NULL
+      ORDER BY ag.id ASC
+    `).all<{
+      id: number;
+      scene_id: number;
+      text: string;
+      duration_ms: number | null;
+      is_active: number;
+      project_id: number;
+    }>();
+    
+    let updatedAudio = 0;
+    let updatedUtterances = 0;
+    let activatedAudio = 0;
+    
+    for (const audio of audioList) {
+      // duration_ms を計算
+      const textLength = audio.text?.length || 20; // デフォルト20文字
+      const estimatedDurationMs = Math.max(2000, textLength * 130);
+      
+      // audio_generations を更新（duration_ms が NULL の場合のみ）
+      if (audio.duration_ms === null) {
+        await c.env.DB.prepare(`
+          UPDATE audio_generations 
+          SET duration_ms = ?, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(estimatedDurationMs, audio.id).run();
+        updatedAudio++;
+      }
+      
+      // is_active が 0 なら 1 に更新（同シーンの他の音声を非アクティブにしてから）
+      if (audio.is_active === 0) {
+        await c.env.DB.prepare(`
+          UPDATE audio_generations 
+          SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+          WHERE scene_id = ? AND id != ?
+        `).bind(audio.scene_id, audio.id).run();
+        
+        await c.env.DB.prepare(`
+          UPDATE audio_generations 
+          SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(audio.id).run();
+        activatedAudio++;
+      }
+      
+      // scene_utterances も更新
+      const uttResult = await c.env.DB.prepare(`
+        UPDATE scene_utterances 
+        SET duration_ms = ?, updated_at = datetime('now')
+        WHERE audio_generation_id = ? AND (duration_ms IS NULL OR duration_ms = 0)
+      `).bind(estimatedDurationMs, audio.id).run();
+      
+      if (uttResult.meta?.changes && uttResult.meta.changes > 0) {
+        updatedUtterances += uttResult.meta.changes;
+      }
+    }
+    
+    return c.json({
+      success: true,
+      message: 'Audio durations fixed',
+      stats: {
+        total_audio_checked: audioList.length,
+        updated_audio_duration: updatedAudio,
+        activated_audio: activatedAudio,
+        updated_utterances_duration: updatedUtterances,
+      },
+    });
+  } catch (error) {
+    console.error('[Audio Fix Durations] Error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Failed to fix audio durations'), 500);
   }
 });
 

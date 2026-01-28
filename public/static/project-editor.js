@@ -299,6 +299,11 @@ function switchTab(tabName) {
     }
   }
   
+  // Stop all audio when switching tabs
+  if (typeof stopAllAudioPreviews === 'function') {
+    stopAllAudioPreviews();
+  }
+  
   // Remove active class from all tabs
   const tabs = ['Input', 'SceneSplit', 'Builder', 'Export', 'VideoBuild', 'Styles'];
   tabs.forEach(tab => {
@@ -9299,13 +9304,47 @@ function closeVideoBuildPreviewModal() {
   // stop video
   const video = document.getElementById('vbPreviewVideo');
   try { video.pause(); } catch {}
+  
+  // stop all audio elements (BGM preview, etc.)
+  stopAllAudioPreviews();
+  
   modal.classList.add('hidden');
   document.body.classList.remove('overflow-hidden');
+}
+
+/**
+ * Stop all audio preview elements
+ * Called when closing modals or switching tabs
+ */
+function stopAllAudioPreviews() {
+  // Stop BGM preview
+  const bgmPlayer = document.getElementById('bgmPreviewPlayer');
+  if (bgmPlayer) {
+    try {
+      bgmPlayer.pause();
+      bgmPlayer.currentTime = 0;
+    } catch (e) {
+      console.warn('[Audio] Failed to stop BGM preview:', e);
+    }
+  }
+  
+  // Stop all audio elements in the page (scene audio, SFX, etc.)
+  document.querySelectorAll('audio').forEach(audio => {
+    try {
+      audio.pause();
+      audio.currentTime = 0;
+    } catch (e) {
+      console.warn('[Audio] Failed to stop audio:', e);
+    }
+  });
+  
+  console.log('[Audio] All audio previews stopped');
 }
 
 // Export for global access
 window.openVideoBuildPreviewModal = openVideoBuildPreviewModal;
 window.closeVideoBuildPreviewModal = closeVideoBuildPreviewModal;
+window.stopAllAudioPreviews = stopAllAudioPreviews;
 
 // ============================================
 // Phase C: Chat Context Helpers
