@@ -280,11 +280,21 @@ async function generateImageWithFallback(
   apiKeySource: 'user' | 'system';
   userId?: number;
 }> {
-  // Step 1: APIキー取得（ユーザー優先）
-  const keyResult = await getApiKey(c);
+  // Step 1: APIキー取得
+  // preferSystemKey が true の場合、システムキーを優先（一括生成でユーザーキーがレート制限に達した後）
+  const preferSystem = options.preferSystemKey && c.env.GEMINI_API_KEY;
+  
+  let keyResult: ApiKeyResult | null;
+  if (preferSystem) {
+    // システムキーを優先
+    keyResult = { apiKey: c.env.GEMINI_API_KEY!, source: 'system' };
+    console.log(`[Image Gen] Using SYSTEM key (preferSystemKey=true, user key rate limited previously)`);
+  } else {
+    keyResult = await getApiKey(c);
+  }
   
   // デバッグ: 環境変数の状態を確認
-  console.log(`[Image Gen] API Key Status: userKey=${keyResult?.source === 'user'}, systemKeyConfigured=${!!c.env.GEMINI_API_KEY}`);
+  console.log(`[Image Gen] API Key Status: source=${keyResult?.source}, systemKeyConfigured=${!!c.env.GEMINI_API_KEY}, preferSystemKey=${options.preferSystemKey}`);
   
   if (!keyResult) {
     return {
@@ -1180,6 +1190,9 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     let successCount = 0
     let failedCount = 0
     
+    // ★ 一括生成用: ユーザーキーがレート制限に達したらシステムキーを優先
+    let useSystemKeyFirst = false;
+    
     // ヘルパー関数をインポート
     const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
     const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer');
@@ -1239,12 +1252,16 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
         // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
         // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
-        // output_preset のアスペクト比を使用
+        // ★ 一括生成: 前のシーンでレート制限が発生した場合、システムキーを優先
         const imageResult = await generateImageWithFallback(
           c,
           finalPrompt,
           referenceImages,
-          { aspectRatio, skipDefaultInstructions: isPromptCustomized }
+          { 
+            aspectRatio, 
+            skipDefaultInstructions: isPromptCustomized,
+            preferSystemKey: useSystemKeyFirst  // ★ 前のシーンでレート制限なら true
+          }
         )
 
         if (!imageResult.success) {
@@ -1256,7 +1273,16 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           `).bind(imageResult.error || 'Unknown error', generationId).run()
           
           // Log failed generation
-          const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
+          const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota') ||
+                                  imageResult.error?.includes('429') ||
+                                  imageResult.error?.includes('RATE_LIMIT_429');
+          
+          // ★ レート制限エラーの場合、次のシーンからシステムキーを優先
+          if (isQuotaExceeded && imageResult.apiKeySource === 'user') {
+            console.log(`[Batch All Gen] User key rate limited at scene ${scene.id}, switching to system key for remaining scenes`);
+            useSystemKeyFirst = true;
+          }
+          
           await logImageGeneration({
             env: c.env,
             userId: imageResult.userId ?? 1,
@@ -1371,6 +1397,8 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 interface ImageGenerationOptions {
   aspectRatio?: '16:9' | '9:16' | '1:1';
   skipDefaultInstructions?: boolean;
+  /** 一括生成でユーザーキーがレート制限に達した場合、システムキーを優先 */
+  preferSystemKey?: boolean;
 }
 
 /**
