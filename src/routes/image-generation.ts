@@ -966,7 +966,11 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       return c.json({
         error: {
           code: 'GENERATION_FAILED',
-          message: imageResult.error || 'Failed to generate image'
+          message: imageResult.error || 'Failed to generate image',
+          details: {
+            api_key_source: imageResult.apiKeySource,
+            system_key_configured: !!c.env.GEMINI_API_KEY
+          }
         }
       }, 500)
     }
