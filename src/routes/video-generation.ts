@@ -2331,6 +2331,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     const { getOutputPreset } = await import('../utils/output-presets');
     const outputPresetConfig = getOutputPreset(project.output_preset);
     
+    // CRITICAL FIX: Define siteUrl in function scope for buildSettings
+    const siteUrl = c.env.SITE_URL || 'https://webapp-c7n.pages.dev';
+    
     const buildSettings = {
       // Output preset 情報（SSOT記録）
       output_preset: outputPresetConfig.id,
