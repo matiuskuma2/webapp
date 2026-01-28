@@ -5408,7 +5408,11 @@ async function downloadAll() {
 
 // Escape HTML
 function escapeHtml(text) {
-  if (!text) return '';
+  if (text === null || text === undefined) return '';
+  // 文字列以外（数値、配列など）は文字列に変換
+  if (typeof text !== 'string') {
+    text = String(text);
+  }
   const map = {
     '&': '&amp;',
     '<': '&lt;',
@@ -11250,7 +11254,8 @@ function renderAssetTypeIndicator(scene) {
  */
 function renderSceneDetailsFold(scene) {
   const bullets = scene.bullets || [];
-  const styleLabel = scene.style_preset_id || 'デフォルト';
+  // style_preset_idは数値なので、スタイル名に変換（なければID表示）
+  const styleLabel = scene.style_preset_name || (scene.style_preset_id ? `スタイルID: ${scene.style_preset_id}` : 'デフォルト');
   const prompt = scene.image_prompt || scene.prompt || '';
   
   // 漫画モードかどうかの判定
