@@ -102,10 +102,48 @@ export const settingsHtml = `
                 <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
                     <p class="font-semibold text-blue-800 mb-2">📌 Veo2 と Veo3 の違い</p>
                     <ul class="text-xs text-blue-700 space-y-1 ml-4 list-disc">
-                        <li><strong>Veo2</strong>: Google AI Studio のAPIキー（無料枠あり、手軽）</li>
+                        <li><strong>Veo2</strong>: Google AI Studio のAPIキー（GCP課金設定必須）</li>
                         <li><strong>Veo3</strong>: Vertex AI のAPIキー（高品質、GCP プロジェクト必要）</li>
                     </ul>
                 </div>
+                
+                <!-- GCP Billing Setup Guide -->
+                <div class="bg-amber-50 border border-amber-300 rounded-lg p-4">
+                    <p class="font-semibold text-amber-800 mb-2">
+                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                        ⚠️ 重要: GCP課金の有効化が必要です
+                    </p>
+                    <p class="text-xs text-amber-700 mb-3">
+                        Veo2/Veo3 で動画を生成するには、Google Cloud Platform（GCP）の課金を有効にする必要があります。
+                        APIキーを取得しただけでは動画生成できません。
+                    </p>
+                    <div class="bg-white border border-amber-200 rounded-lg p-3 mb-3">
+                        <p class="font-semibold text-gray-800 text-xs mb-2">📋 設定手順:</p>
+                        <ol class="text-xs text-gray-700 space-y-2 ml-4 list-decimal">
+                            <li>
+                                <a href="https://console.cloud.google.com/" target="_blank" class="text-blue-600 hover:underline font-medium">
+                                    Google Cloud Console
+                                    <i class="fas fa-external-link-alt ml-1 text-[10px]"></i>
+                                </a>
+                                にアクセス
+                            </li>
+                            <li>左メニューから「<strong>お支払い</strong>」を選択</li>
+                            <li>「<strong>課金アカウントをリンク</strong>」をクリック</li>
+                            <li>クレジットカード情報を登録（無料枠内なら課金されません）</li>
+                            <li>
+                                <a href="https://console.cloud.google.com/apis/library/aiplatform.googleapis.com" target="_blank" class="text-blue-600 hover:underline font-medium">
+                                    Vertex AI API
+                                    <i class="fas fa-external-link-alt ml-1 text-[10px]"></i>
+                                </a>
+                                を有効化
+                            </li>
+                        </ol>
+                    </div>
+                    <p class="text-[10px] text-amber-600">
+                        💡 ヒント: 課金を有効にしても、無料枠（毎月$300相当のクレジット）の範囲内であれば請求は発生しません。
+                    </p>
+                </div>
+                
                 <p class="text-xs text-gray-500">
                     ※ 使用する動画生成エンジンに応じて、対応するAPIキーを設定してください。
                 </p>
