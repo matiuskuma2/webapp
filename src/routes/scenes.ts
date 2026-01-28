@@ -100,7 +100,7 @@ scenes.get('/:id', async (c) => {
         LIMIT 1
       `).bind(sceneId).first()
 
-      // アクティブAI画像取得（asset_type='ai' または asset_type IS NULL）
+      // アクティブAI画像取得（asset_type='ai' または asset_type IS NULL、r2_urlが有効なもののみ）
       const activeImage = await c.env.DB.prepare(`
         SELECT 
           id,
@@ -111,10 +111,11 @@ scenes.get('/:id', async (c) => {
           created_at
         FROM image_generations
         WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+          AND r2_url IS NOT NULL AND r2_url != ''
         LIMIT 1
       `).bind(sceneId).first()
 
-      // アクティブ漫画画像取得（asset_type='comic'）
+      // アクティブ漫画画像取得（asset_type='comic'、r2_urlが有効なもののみ）
       const activeComic = await c.env.DB.prepare(`
         SELECT 
           id,
@@ -125,6 +126,7 @@ scenes.get('/:id', async (c) => {
           created_at
         FROM image_generations
         WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+          AND r2_url IS NOT NULL AND r2_url != ''
         LIMIT 1
       `).bind(sceneId).first()
 

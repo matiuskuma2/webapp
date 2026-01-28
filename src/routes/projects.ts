@@ -511,17 +511,19 @@ projects.get('/:id/scenes', async (c) => {
     if (view === 'board') {
       const scenesWithMinimalImages = await Promise.all(
         scenes.map(async (scene: any) => {
-          // アクティブAI画像（asset_type='ai' または NULL）
+          // アクティブAI画像（asset_type='ai' または NULL、r2_urlが有効なもののみ）
           const activeRecord = await c.env.DB.prepare(`
             SELECT r2_key, r2_url FROM image_generations
             WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
+              AND r2_url IS NOT NULL AND r2_url != ''
             LIMIT 1
           `).bind(scene.id).first()
 
-          // アクティブ漫画画像（asset_type='comic'）
+          // アクティブ漫画画像（asset_type='comic'、r2_urlが有効なもののみ）
           const activeComicRecord = await c.env.DB.prepare(`
             SELECT id, r2_key, r2_url FROM image_generations
             WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
+              AND r2_url IS NOT NULL AND r2_url != ''
             LIMIT 1
           `).bind(scene.id).first()
 
@@ -655,14 +657,14 @@ projects.get('/:id/scenes', async (c) => {
             active_image: activeRecord ? { 
               r2_key: activeRecord.r2_key,
               r2_url: activeRecord.r2_url,
-              image_url: activeRecord.r2_url || `/${activeRecord.r2_key}` 
+              image_url: activeRecord.r2_url || (activeRecord.r2_key ? `/${activeRecord.r2_key}` : null) 
             } : null,
             // Phase1.7: 漫画画像情報
             active_comic: activeComicRecord ? {
               id: activeComicRecord.id,
               r2_key: activeComicRecord.r2_key,
               r2_url: activeComicRecord.r2_url,
-              image_url: activeComicRecord.r2_url || `/${activeComicRecord.r2_key}`
+              image_url: activeComicRecord.r2_url || (activeComicRecord.r2_key ? `/${activeComicRecord.r2_key}` : null)
             } : null,
             // Phase1.7: display_image SSOT（display_asset_typeに基づく採用素材）
             display_image: (() => {
@@ -671,14 +673,14 @@ projects.get('/:id/scenes', async (c) => {
                 return {
                   type: 'comic',
                   r2_url: activeComicRecord.r2_url,
-                  image_url: activeComicRecord.r2_url || `/${activeComicRecord.r2_key}`
+                  image_url: activeComicRecord.r2_url || (activeComicRecord.r2_key ? `/${activeComicRecord.r2_key}` : null)
                 };
               }
               if (activeRecord) {
                 return {
                   type: 'image',
                   r2_url: activeRecord.r2_url,
-                  image_url: activeRecord.r2_url || `/${activeRecord.r2_key}`
+                  image_url: activeRecord.r2_url || (activeRecord.r2_key ? `/${activeRecord.r2_key}` : null)
                 };
               }
               return null;
