@@ -570,8 +570,9 @@ async function processTextChunks(
   const remainingTarget = Math.max(1, targetSceneCount - existingScenesCount)
   const remainingChunks = Math.max(1, pendingChunks.length)  // ★ 修正: pendingChunks.lengthを使用
   
-  // chunk単位の目標シーン数（上限5シーンに制限）
-  const MAX_SCENES_PER_CHUNK = 5
+  // chunk単位の目標シーン数（上限10シーンに制限）
+  // NOTE: 200シーン対応のため5→10に緩和（2026-01-28）
+  const MAX_SCENES_PER_CHUNK = 10
   const baseChunkTarget = Math.ceil(remainingTarget / remainingChunks)
   const chunkTargetScenes = Math.min(baseChunkTarget, MAX_SCENES_PER_CHUNK)
   
@@ -1449,7 +1450,7 @@ async function generateMiniScenesWithSchemaAI(
   try {
     // AI整理モード: 省略を極力避ける指示を追加
     const systemPrompt = `あなたは動画シナリオ作成の専門家です。
-提供された文章断片から、1-5個のシーンを生成してください。
+提供された文章断片から、1-10個のシーンを生成してください。
 
 【最重要: 省略禁止】
 - **元の文章の内容を省略しないでください**
@@ -1458,7 +1459,7 @@ async function generateMiniScenesWithSchemaAI(
 - 情報を削除せず、適切なシーンに分配してください
 
 【ルール】
-1. シーン数は **1〜5 個**（文章の長さに応じて調整、長い場合は多く）
+1. シーン数は **1〜10 個**（文章の長さに応じて調整、長い場合は多く）
 2. 各シーンの dialogue は **30〜500 文字**（元の文章を維持するため緩和）
 3. 各シーンの bullets は **2〜3 個**、各 5〜40 文字
 4. 各シーンの title は **5〜50 文字**
@@ -1499,14 +1500,14 @@ ${chunkText}
 上記の文章を元に、視聴者にとって魅力的で分かりやすいニュース風インフォグラフィック動画のシーンを作成してください。
 情報を省略せず、適切に複数シーンに分割してください。`
 
-    // JSON Schema for MiniScenes (1-5 scenes, 文字数緩和)
+    // JSON Schema for MiniScenes (1-10 scenes, 200シーン対応)
     const jsonSchema = {
       type: 'object',
       properties: {
         scenes: {
           type: 'array',
           minItems: 1,
-          maxItems: 5,
+          maxItems: 10,  // NOTE: 200シーン対応のため5→10に緩和（2026-01-28）
           items: {
             type: 'object',
             properties: {
@@ -1631,8 +1632,8 @@ async function repairMiniScenes(
 与えられたシーンJSONを、スキーマに厳密に適合するよう修正してください。
 
 【修正ルール】
-- シーン数は 1-3 個
-- dialogue は 60〜140 文字
+- シーン数は 1-10 個
+- dialogue は 30〜500 文字
 - speech_type は "dialogue"（台詞）または "narration"（ナレーション）
 - bullets は 2〜3 個、各 8〜24 文字
 - title は 10〜40 文字
@@ -1651,7 +1652,7 @@ ${brokenJson}`
         scenes: {
           type: 'array',
           minItems: 1,
-          maxItems: 3,
+          maxItems: 10,  // NOTE: 200シーン対応（2026-01-28）
           items: {
             type: 'object',
             properties: {

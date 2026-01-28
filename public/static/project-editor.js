@@ -1001,10 +1001,10 @@ function renderFormatSectionUI() {
       <div class="mb-4">
         <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数</label>
         <div class="flex items-center gap-2">
-          <input type="number" id="targetSceneCount" value="5" min="1" max="30"
+          <input type="number" id="targetSceneCount" value="5" min="1" max="200"
                  onchange="updateTargetSceneCount(this.value)"
-                 class="w-20 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
-          <span class="text-sm text-gray-500">シーン（1〜30）</span>
+                 class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
+          <span class="text-sm text-gray-500">シーン（1〜200）</span>
         </div>
       </div>
       
