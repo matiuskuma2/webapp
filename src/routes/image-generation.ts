@@ -2,6 +2,68 @@ import { Hono } from 'hono'
 import type { Bindings } from '../types/bindings'
 import { buildImagePrompt, buildR2Key, composeStyledPrompt } from '../utils/image-prompt-builder'
 
+// ===== Constants =====
+/**
+ * プロンプトの最大長（Gemini API推奨上限）
+ * 長すぎるプロンプトはトークン制限に達する可能性がある
+ */
+const MAX_PROMPT_LENGTH = 8000;
+
+/**
+ * R2アップロードの最大リトライ回数
+ */
+const MAX_R2_RETRIES = 3;
+
+/**
+ * R2アップロードの初期待機時間（ミリ秒）
+ */
+const R2_RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * R2に画像をアップロード（リトライ機構付き）
+ * 指数バックオフでリトライ: 1s, 2s, 4s
+ * 
+ * @param r2 - R2 Bucket インスタンス
+ * @param key - R2 オブジェクトキー
+ * @param data - アップロードするデータ
+ * @param maxRetries - 最大リトライ回数（デフォルト: MAX_R2_RETRIES）
+ * @returns アップロード結果
+ */
+async function uploadToR2WithRetry(
+  r2: R2Bucket,
+  key: string,
+  data: ArrayBuffer,
+  maxRetries: number = MAX_R2_RETRIES
+): Promise<{ success: boolean; error?: string }> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      await r2.put(key, data);
+      console.log(`[R2 Upload] Success: ${key} (attempt ${attempt + 1})`);
+      return { success: true };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown R2 error';
+      console.warn(`[R2 Upload] Attempt ${attempt + 1}/${maxRetries} failed for ${key}: ${errorMessage}`);
+      
+      if (attempt < maxRetries - 1) {
+        // 指数バックオフ: 1s, 2s, 4s
+        const waitTime = R2_RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        console.log(`[R2 Upload] Retrying in ${waitTime}ms...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        // 最終試行も失敗
+        console.error(`[R2 Upload] All retries failed for ${key}`);
+        return { 
+          success: false, 
+          error: `R2 upload failed after ${maxRetries} attempts: ${errorMessage}` 
+        };
+      }
+    }
+  }
+  
+  // このコードには到達しないはずだが、TypeScriptの型チェックのため
+  return { success: false, error: 'Unexpected error in R2 upload' };
+}
+
 /**
  * 参照画像の型定義（キャラクター一貫性用）
  */
@@ -9,6 +71,46 @@ interface ReferenceImage {
   base64Data: string
   mimeType: string
   characterName?: string
+}
+
+// ===== Validation Helpers =====
+/**
+ * プロンプトの安全な取得（null/undefined対応、長さ制限）
+ * @param prompt - 元のプロンプト
+ * @returns サニタイズされたプロンプト
+ */
+function sanitizePrompt(prompt: string | null | undefined): string {
+  if (!prompt) return '';
+  const trimmed = prompt.trim();
+  if (trimmed.length > MAX_PROMPT_LENGTH) {
+    console.warn(`[Image Gen] Prompt truncated: ${trimmed.length} -> ${MAX_PROMPT_LENGTH} chars`);
+    return trimmed.slice(0, MAX_PROMPT_LENGTH);
+  }
+  return trimmed;
+}
+
+/**
+ * プロジェクトIDの安全なパース
+ * @param id - 文字列のID
+ * @returns 数値のID、または無効な場合はnull
+ */
+function parseProjectId(id: string | null | undefined): number | null {
+  if (!id) return null;
+  const parsed = parseInt(id, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
+}
+
+/**
+ * シーンIDの安全なパース
+ * @param id - 文字列のID
+ * @returns 数値のID、または無効な場合はnull
+ */
+function parseSceneId(id: string | null | undefined): number | null {
+  if (!id) return null;
+  const parsed = parseInt(id, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) return null;
+  return parsed;
 }
 
 const imageGeneration = new Hono<{ Bindings: Bindings }>()
@@ -160,12 +262,17 @@ async function getApiKey(
 /**
  * 画像生成（クォータ超過時のフォールバック付き）
  * ユーザーキーでクォータ超過 → システムキーで再試行
+ * 
+ * @param c - Hono Context
+ * @param prompt - 画像生成プロンプト
+ * @param referenceImages - キャラクター参照画像
+ * @param options - 生成オプション（アスペクト比、指示スキップ）
  */
 async function generateImageWithFallback(
   c: { env: Bindings; req?: any },
   prompt: string,
   referenceImages: ReferenceImage[],
-  skipDefaultInstructions: boolean
+  options: ImageGenerationOptions = {}
 ): Promise<{
   success: boolean;
   imageData?: ArrayBuffer;
@@ -186,13 +293,13 @@ async function generateImageWithFallback(
   
   // Step 2: 最初の試行
   // リトライ回数を5回に増加（Gemini無料枠のレート制限対策）
-  console.log(`[Image Gen] Attempting with ${keyResult.source} API key`);
+  console.log(`[Image Gen] Attempting with ${keyResult.source} API key, aspectRatio: ${options.aspectRatio || '16:9'}`);
   const result = await generateImageWithRetry(
     prompt,
     keyResult.apiKey,
     5,  // 3→5 に増加（429エラー対策）
     referenceImages,
-    skipDefaultInstructions
+    options
   );
   
   // Step 3: 成功または非クォータエラー → そのまま返却
@@ -219,7 +326,7 @@ async function generateImageWithFallback(
       c.env.GEMINI_API_KEY,
       5,  // 3→5 に増加（429エラー対策）
       referenceImages,
-      skipDefaultInstructions
+      options
     );
     
     if (systemResult.success) {
@@ -247,12 +354,23 @@ async function generateImageWithFallback(
 // POST /api/projects/:id/generate-images - バッチ画像生成
 imageGeneration.post('/projects/:id/generate-images', async (c) => {
   try {
-    const projectId = c.req.param('id')
+    const projectIdRaw = c.req.param('id')
+    
+    // 入力バリデーション
+    const projectId = parseProjectId(projectIdRaw)
+    if (!projectId) {
+      return c.json({
+        error: {
+          code: 'INVALID_REQUEST',
+          message: 'Invalid project ID'
+        }
+      }, 400)
+    }
 
-    // 1. プロジェクト情報取得
+    // 1. プロジェクト情報取得（output_preset を含む）
     const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
-    `).bind(projectId).first()
+      SELECT id, status, output_preset FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null }>()
 
     if (!project) {
       return c.json({
@@ -262,6 +380,12 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
         }
       }, 404)
     }
+    
+    // output_preset からアスペクト比を取得
+    const { getOutputPreset } = await import('../utils/output-presets')
+    const outputPreset = getOutputPreset(project.output_preset)
+    const aspectRatio = outputPreset.aspect_ratio
+    console.log(`[Batch Image Gen] Project ${projectId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
 
     // 2. ステータスチェック（formatted, generating_images, completed を許可）
     const allowedStatuses = ['formatted', 'generating_images', 'completed']
@@ -389,11 +513,12 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
         // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
         // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
+        // output_preset のアスペクト比を使用
         const imageResult = await generateImageWithFallback(
           c,
           finalPrompt,
           referenceImages,
-          isPromptCustomized  // skipDefaultInstructions
+          { aspectRatio, skipDefaultInstructions: isPromptCustomized }
         )
 
         if (!imageResult.success) {
@@ -426,14 +551,31 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
           continue
         }
 
-        // R2に画像保存
+        // R2に画像保存（リトライ機構付き）
         const r2Key = buildR2Key(
           parseInt(projectId),
           scene.idx as number,
           generationId
         )
 
-        await c.env.R2.put(r2Key, imageResult.imageData)
+        const r2UploadResult = await uploadToR2WithRetry(
+          c.env.R2,
+          r2Key,
+          imageResult.imageData!
+        );
+        
+        if (!r2UploadResult.success) {
+          // R2アップロード失敗 → status = 'failed', error_message保存
+          await c.env.DB.prepare(`
+            UPDATE image_generations 
+            SET status = 'failed', error_message = ?
+            WHERE id = ?
+          `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run();
+          
+          console.error(`[Batch Gen] R2 upload failed for scene ${scene.id}: ${r2UploadResult.error}`);
+          failedCount++;
+          continue;
+        }
 
         // R2 URL: r2_key がすでに "images/" で始まっているので、"/" だけ追加
         const r2Url = `/${r2Key}`
@@ -616,10 +758,10 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 404)
     }
 
-    // 2. プロジェクト情報取得
+    // 2. プロジェクト情報取得（output_preset を含む）
     const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
-    `).bind(scene.project_id).first()
+      SELECT id, status, output_preset FROM projects WHERE id = ?
+    `).bind(scene.project_id).first<{ id: number; status: string; output_preset: string | null }>()
 
     if (!project) {
       return c.json({
@@ -629,6 +771,12 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         }
       }, 404)
     }
+    
+    // output_preset からアスペクト比を取得
+    const { getOutputPreset } = await import('../utils/output-presets')
+    const outputPreset = getOutputPreset(project.output_preset)
+    const aspectRatio = outputPreset.aspect_ratio
+    console.log(`[Single Image Gen] Scene ${sceneId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
 
     // 3. プロジェクトステータスチェック（formatted以降のみ許可）
     const allowedStatuses = ['formatted', 'generating_images', 'completed']
@@ -742,11 +890,12 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     // 9. Gemini APIで画像生成（クォータ超過時のフォールバック付き）
     // Phase X-4: カスタムプロンプトの場合は日本語指示をスキップ
     // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
+    // output_preset のアスペクト比を使用
     const imageResult = await generateImageWithFallback(
       c,
       finalPrompt,
       referenceImages,
-      isPromptCustomized  // skipDefaultInstructions
+      { aspectRatio, skipDefaultInstructions: isPromptCustomized }
     )
 
     if (!imageResult.success) {
@@ -783,28 +932,32 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       }, 500)
     }
 
-    // 10. R2に画像保存
+    // 10. R2に画像保存（リトライ機構付き）
     const r2Key = buildR2Key(
       scene.project_id as number,
       scene.idx as number,
       generationId
     )
 
-    try {
-      await c.env.R2.put(r2Key, imageResult.imageData!)
-    } catch (r2Error) {
-      console.error('R2 upload failed:', r2Error)
+    const r2UploadResult = await uploadToR2WithRetry(
+      c.env.R2,
+      r2Key,
+      imageResult.imageData!
+    );
+
+    if (!r2UploadResult.success) {
+      console.error(`[Single Gen] R2 upload failed for scene ${sceneId}: ${r2UploadResult.error}`);
 
       await c.env.DB.prepare(`
         UPDATE image_generations 
-        SET status = 'failed', error_message = 'R2 upload failed'
+        SET status = 'failed', error_message = ?
         WHERE id = ?
-      `).bind(generationId).run()
+      `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run()
 
       return c.json({
         error: {
           code: 'STORAGE_FAILED',
-          message: 'Failed to save image to storage'
+          message: 'Failed to save image to storage after multiple retries'
         }
       }, 500)
     }
@@ -890,10 +1043,10 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     const body = await c.req.json().catch(() => ({ mode: 'all' }))
     const mode = body.mode || 'all' // 'all' | 'pending' | 'failed'
 
-    // 1. プロジェクト情報取得
+    // 1. プロジェクト情報取得（output_preset を含む）
     const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
-    `).bind(projectId).first()
+      SELECT id, status, output_preset FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null }>()
 
     if (!project) {
       return c.json({
@@ -903,6 +1056,12 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
         }
       }, 404)
     }
+    
+    // output_preset からアスペクト比を取得
+    const { getOutputPreset } = await import('../utils/output-presets')
+    const outputPreset = getOutputPreset(project.output_preset)
+    const aspectRatio = outputPreset.aspect_ratio
+    console.log(`[Batch All Image Gen] Project ${projectId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
 
     // 2. ステータスチェック（formatted以降のみ許可）
     const allowedStatuses = ['formatted', 'generating_images', 'completed']
@@ -1037,11 +1196,12 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
         // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
         // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
+        // output_preset のアスペクト比を使用
         const imageResult = await generateImageWithFallback(
           c,
           finalPrompt,
           referenceImages,
-          isPromptCustomized  // skipDefaultInstructions
+          { aspectRatio, skipDefaultInstructions: isPromptCustomized }
         )
 
         if (!imageResult.success) {
@@ -1074,9 +1234,26 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           continue
         }
 
-        // R2に保存
+        // R2に保存（リトライ機構付き）
         const r2Key = buildR2Key(parseInt(projectId), scene.idx as number, generationId)
-        await c.env.R2.put(r2Key, imageResult.imageData!)
+        const r2UploadResult = await uploadToR2WithRetry(
+          c.env.R2,
+          r2Key,
+          imageResult.imageData!
+        );
+        
+        if (!r2UploadResult.success) {
+          // R2アップロード失敗
+          await c.env.DB.prepare(`
+            UPDATE image_generations 
+            SET status = 'failed', error_message = ?
+            WHERE id = ?
+          `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run();
+          
+          console.error(`[All Gen] R2 upload failed for scene ${scene.id}: ${r2UploadResult.error}`);
+          failedCount++;
+          continue;
+        }
 
         // 既存のアクティブ画像を無効化
         await c.env.DB.prepare(`
@@ -1146,24 +1323,36 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 })
 
 /**
+ * 画像生成オプション
+ */
+interface ImageGenerationOptions {
+  aspectRatio?: '16:9' | '9:16' | '1:1';
+  skipDefaultInstructions?: boolean;
+}
+
+/**
  * Gemini APIで画像生成（429リトライ付き）
  * 公式仕様: generateContent エンドポイント
  * キャラクター参照画像をサポート（最大5枚）
  * 
- * @param skipDefaultInstructions - true の場合、日本語指示などのデフォルト指示をスキップ
- *                                  （ユーザーがカスタムプロンプトを入力した場合）
+ * @param prompt - 画像生成プロンプト
+ * @param apiKey - Gemini API キー
+ * @param maxRetries - 最大リトライ回数
+ * @param referenceImages - キャラクター参照画像
+ * @param options - 生成オプション（アスペクト比、指示スキップ）
  */
 async function generateImageWithRetry(
   prompt: string,
   apiKey: string,
   maxRetries: number = 3,
   referenceImages: ReferenceImage[] = [],
-  skipDefaultInstructions: boolean = false
+  options: ImageGenerationOptions = {}
 ): Promise<{
   success: boolean
   imageData?: ArrayBuffer
   error?: string
 }> {
+  const { aspectRatio = '16:9', skipDefaultInstructions = false } = options;
   let lastError: string = ''
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
@@ -1185,6 +1374,13 @@ async function generateImageWithRetry(
       
       // Phase X-4: カスタムプロンプトの場合はデフォルト指示をスキップ
       let enhancedPrompt = prompt
+      
+      // アスペクト比に応じた解像度を決定
+      // Gemini API: 2K = 2048px on longest side
+      // 16:9 → 2048x1152, 9:16 → 1152x2048, 1:1 → 1440x1440
+      const imageSize = '2K'; // Gemini APIの2Kは自動で適切なサイズに調整
+      
+      console.log(`[Gemini Image Gen] Using aspectRatio: ${aspectRatio}, imageSize: ${imageSize}`);
       
       if (skipDefaultInstructions) {
         // カスタムプロンプト: 参照画像の説明のみ追加（日本語指示なし）
@@ -1246,8 +1442,8 @@ async function generateImageWithRetry(
             generationConfig: {
               responseModalities: ['Image'],
               imageConfig: {
-                aspectRatio: '16:9',
-                imageSize: '2K'
+                aspectRatio: aspectRatio,  // output_preset から動的に設定
+                imageSize: imageSize
               }
             }
           })

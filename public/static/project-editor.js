@@ -4917,7 +4917,12 @@ async function generateSceneImage(sceneId) {
       if (errorCode === 'INVALID_STATUS') {
         errorMsg = '画像生成にはFormat（シーン分割）の完了が必要です。Scene Splitタブでフォーマットを実行してください。';
       } else if (errorMsg.includes('RATE_LIMIT_429')) {
-        errorMsg = 'APIレート制限に達しました。2〜3分待ってから再試行してください。';
+        // レート制限時は残り時間とともに通知
+        const waitSeconds = 120; // 2分待機を推奨
+        errorMsg = `APIレート制限に達しました。約${Math.floor(waitSeconds / 60)}分後に再試行してください。\n（Gemini無料枠: 1分間に15リクエストまで）`;
+        
+        // 自動再試行カウントダウンの開始（オプション）
+        showRateLimitCountdown(sceneId, waitSeconds);
       }
       
       showToast(errorMsg, 'error');
@@ -6114,6 +6119,109 @@ function stopGenerationWatch(sceneId) {
     delete window.generatingSceneWatch[sceneId];
     console.log(`✅ Stopped watching scene ${sceneId}`);
   }
+}
+
+// Rate limit countdown state
+window.rateLimitCountdowns = window.rateLimitCountdowns || {};
+
+/**
+ * レート制限時のカウントダウン表示
+ * 待機時間経過後に自動再試行をサポート
+ */
+function showRateLimitCountdown(sceneId, waitSeconds) {
+  // 既存のカウントダウンがあれば停止
+  if (window.rateLimitCountdowns[sceneId]) {
+    clearInterval(window.rateLimitCountdowns[sceneId].timerId);
+    delete window.rateLimitCountdowns[sceneId];
+  }
+  
+  const startTime = Date.now();
+  const endTime = startTime + (waitSeconds * 1000);
+  
+  // カウントダウントーストを表示
+  const toastId = `rate-limit-toast-${sceneId}`;
+  const toastHtml = `
+    <div id="${toastId}" class="fixed bottom-20 right-4 bg-yellow-500 text-white px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-3">
+      <i class="fas fa-clock animate-pulse"></i>
+      <div>
+        <div class="font-medium">レート制限中</div>
+        <div class="text-sm">
+          再試行可能まで: <span id="${toastId}-countdown">${waitSeconds}</span>秒
+        </div>
+      </div>
+      <button onclick="cancelRateLimitCountdown(${sceneId})" class="ml-2 text-white/70 hover:text-white">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  `;
+  
+  // 既存の同じトーストを削除
+  const existingToast = document.getElementById(toastId);
+  if (existingToast) existingToast.remove();
+  
+  document.body.insertAdjacentHTML('beforeend', toastHtml);
+  
+  // カウントダウン更新
+  const timerId = setInterval(() => {
+    const remaining = Math.max(0, Math.ceil((endTime - Date.now()) / 1000));
+    const countdownEl = document.getElementById(`${toastId}-countdown`);
+    
+    if (countdownEl) {
+      countdownEl.textContent = remaining;
+    }
+    
+    if (remaining <= 0) {
+      clearInterval(timerId);
+      delete window.rateLimitCountdowns[sceneId];
+      
+      // トーストを更新して再試行ボタンを表示
+      const toast = document.getElementById(toastId);
+      if (toast) {
+        toast.className = 'fixed bottom-20 right-4 bg-green-500 text-white px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-3';
+        toast.innerHTML = `
+          <i class="fas fa-check-circle"></i>
+          <div>
+            <div class="font-medium">待機完了</div>
+            <div class="text-sm">再試行できます</div>
+          </div>
+          <button onclick="retryAfterRateLimit(${sceneId})" class="ml-2 bg-white/20 hover:bg-white/30 px-3 py-1 rounded text-sm">
+            再生成
+          </button>
+          <button onclick="document.getElementById('${toastId}').remove()" class="ml-1 text-white/70 hover:text-white">
+            <i class="fas fa-times"></i>
+          </button>
+        `;
+        
+        // 10秒後に自動で非表示
+        setTimeout(() => {
+          const t = document.getElementById(toastId);
+          if (t) t.remove();
+        }, 10000);
+      }
+    }
+  }, 1000);
+  
+  window.rateLimitCountdowns[sceneId] = { timerId, endTime };
+}
+
+// カウントダウンをキャンセル
+function cancelRateLimitCountdown(sceneId) {
+  if (window.rateLimitCountdowns[sceneId]) {
+    clearInterval(window.rateLimitCountdowns[sceneId].timerId);
+    delete window.rateLimitCountdowns[sceneId];
+  }
+  const toast = document.getElementById(`rate-limit-toast-${sceneId}`);
+  if (toast) toast.remove();
+}
+
+// レート制限後の再試行
+async function retryAfterRateLimit(sceneId) {
+  const toast = document.getElementById(`rate-limit-toast-${sceneId}`);
+  if (toast) toast.remove();
+  
+  // 少し待ってから再生成を試行
+  showToast('画像を再生成しています...', 'info');
+  await generateSceneImage(sceneId);
 }
 
 // Update button UI with progress percentage
