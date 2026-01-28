@@ -149,8 +149,33 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     if (!scene) {
       return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'), 404);
     }
-    // Phase1.7: text_override が指定されている場合はそちらを使用（漫画音声パーツ用）
-    const dialogue = textOverride?.trim() || (scene.dialogue ?? '').trim();
+    
+    // R1.6+: scene_utterances のテキストを優先（ユーザーが編集した最新テキスト）
+    // text_override > scene_utterances.text > scene.dialogue の優先順
+    let dialogue = '';
+    
+    if (textOverride?.trim()) {
+      // Phase1.7: 漫画音声パーツ用の text_override を最優先
+      dialogue = textOverride.trim();
+    } else {
+      // scene_utterances から最新のテキストを取得
+      const utterance = await c.env.DB.prepare(`
+        SELECT text FROM scene_utterances
+        WHERE scene_id = ?
+        ORDER BY order_no ASC
+        LIMIT 1
+      `).bind(sceneId).first<{ text: string }>();
+      
+      if (utterance?.text?.trim()) {
+        dialogue = utterance.text.trim();
+        console.log(`[Audio] Using text from scene_utterances for scene ${sceneId}`);
+      } else {
+        // フォールバック: scenes.dialogue を使用
+        dialogue = (scene.dialogue ?? '').trim();
+        console.log(`[Audio] Using text from scenes.dialogue for scene ${sceneId} (fallback)`);
+      }
+    }
+    
     if (!dialogue) {
       return c.json(createErrorResponse(ERROR_CODES.NO_DIALOGUE, 'Scene has no dialogue or text_override'), 400);
     }
@@ -205,13 +230,15 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
         `).bind(sceneId, dialogue, audioId).run();
         console.log(`[Audio] Auto-created utterance for scene ${sceneId} (legacy migration)`);
       } else {
-        // utterance があるが audio_generation_id が未設定の場合、紐付け
-        // order_no=1 の utterance を更新
-        await c.env.DB.prepare(`
+        // utterance がある場合、audio_generation_id を新しいものに更新
+        // ★ FIX: IS NULL 条件を削除して、常に最新の audio_generation_id に更新
+        // order_no=1 の utterance を更新（再生成時も新しい音声に紐付け）
+        const updateResult = await c.env.DB.prepare(`
           UPDATE scene_utterances 
           SET audio_generation_id = ?, updated_at = datetime('now')
-          WHERE scene_id = ? AND order_no = 1 AND audio_generation_id IS NULL
+          WHERE scene_id = ? AND order_no = 1
         `).bind(audioId, sceneId).run();
+        console.log(`[Audio] Updated utterance audio_generation_id=${audioId} for scene ${sceneId} (changes: ${updateResult.meta.changes})`);
       }
     } catch (utteranceError) {
       // utterance 作成失敗は警告ログのみ（音声生成自体は続行）

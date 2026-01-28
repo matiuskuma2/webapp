@@ -5007,13 +5007,44 @@ async function generateBulkImages(mode) {
   try {
     showToast(`${modeText}の画像生成を開始します...`, 'info');
     
-    // ★ mode === 'failed' または mode === 'all' の場合は generate-all-images を使用
-    // generate-all-images は1リクエストで全シーンを順次処理し、レート制限時のフォールバックも適切に動作する
-    if (mode === 'failed' || mode === 'all') {
+    // ★ mode === 'all' の場合のみ generate-all-images を使用（同期処理だがUI改善）
+    // mode === 'failed' と 'pending' はポーリング方式を使用してリアルタイム進捗を表示
+    if (mode === 'all') {
       console.log(`[BULK] Using generate-all-images endpoint with mode=${mode}`);
       
+      // 進捗表示を開始（バックグラウンドでポーリング）
+      const progressInterval = setInterval(async () => {
+        try {
+          const statusRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/generate-images/status`);
+          const { processed, pending, failed, generating } = statusRes.data;
+          const total = processed + pending + failed + generating;
+          const progressText = `画像生成中... (${processed}/${total})`;
+          const btn = document.getElementById(buttonId);
+          if (btn) {
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${progressText}`;
+          }
+          
+          // シーン一覧を更新して進捗を表示
+          const scenesRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
+          const scenes = scenesRes.data.scenes || [];
+          scenes.forEach(scene => {
+            const imageStatus = scene.latest_image?.status || 'pending';
+            if (imageStatus === 'generating' && !window.generatingSceneWatch?.[scene.id]) {
+              startGenerationWatch(scene.id);
+            } else if (imageStatus === 'completed' && window.generatingSceneWatch?.[scene.id]) {
+              stopGenerationWatch(scene.id);
+              updateSceneCardToCompleted(scene.id, scene.latest_image);
+            }
+          });
+        } catch (e) {
+          console.warn('[BULK] Progress polling error:', e);
+        }
+      }, 3000);
+      
       try {
-        const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, { mode });
+        const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, { mode }, {
+          timeout: 600000 // 10分タイムアウト
+        });
         const { total_scenes, success_count, failed_count } = response.data;
         
         if (failed_count > 0) {
@@ -5027,15 +5058,35 @@ async function generateBulkImages(mode) {
         console.error('[BULK] generate-all-images error:', error);
         const errorMsg = error.response?.data?.error?.message || '画像生成に失敗しました';
         showToast(errorMsg, 'error');
+      } finally {
+        clearInterval(progressInterval);
       }
       
-      return; // early return for failed/all modes
+      return; // early return for all mode
     }
     
-    // mode === 'pending' の場合は従来のポーリング方式
+    // mode === 'pending' または 'failed' の場合はポーリング方式
     // 5秒ごとにステータスポーリング & 自動再実行
+    
+    // 失敗シーンを取得（mode === 'failed' の場合）
+    let failedSceneIds = [];
+    if (mode === 'failed') {
+      const scenesRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
+      const scenes = scenesRes.data.scenes || [];
+      failedSceneIds = scenes
+        .filter(s => s.latest_image?.status === 'failed')
+        .map(s => s.id);
+      console.log(`[BULK] Found ${failedSceneIds.length} failed scenes:`, failedSceneIds);
+      
+      if (failedSceneIds.length === 0) {
+        showToast('失敗したシーンはありません', 'info');
+        return;
+      }
+    }
+    
     let pollCount = 0;
     const maxPolls = 300; // 最大25分（5秒 x 300回）
+    let currentFailedIndex = 0; // 現在処理中の失敗シーンインデックス
     
     while (pollCount < maxPolls) {
       // 1) 現在のステータス取得
@@ -5043,7 +5094,16 @@ async function generateBulkImages(mode) {
       const { processed, pending, failed, generating, status } = statusRes.data;
       
       // UI更新（進捗表示）
-      const progressText = `画像生成中... (${processed}/${processed + pending + failed})`;
+      let progressText;
+      if (mode === 'failed') {
+        const completedFailed = failedSceneIds.length - failedSceneIds.filter(id => {
+          const scene = (window.lastLoadedScenes || []).find(s => s.id === id);
+          return scene?.latest_image?.status === 'failed';
+        }).length;
+        progressText = `失敗シーン再試行中... (${completedFailed}/${failedSceneIds.length})`;
+      } else {
+        progressText = `画像生成中... (${processed}/${processed + pending + failed})`;
+      }
       const btn = document.getElementById(buttonId);
       if (btn) {
         btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${progressText}`;
@@ -5053,6 +5113,7 @@ async function generateBulkImages(mode) {
       try {
         const scenesRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
         const scenes = scenesRes.data.scenes || [];
+        window.lastLoadedScenes = scenes; // キャッシュを更新
         
         scenes.forEach(scene => {
           const latestImage = scene.latest_image;
@@ -5078,29 +5139,72 @@ async function generateBulkImages(mode) {
       }
       
       // 2) 完了判定
-      if (pending === 0 && generating === 0) {
-        // 最後のAPI呼び出しでプロジェクトステータスを 'completed' に更新
-        try {
-          await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
-        } catch (finalCallError) {
-          console.warn('Final API call error:', finalCallError);
+      if (mode === 'failed') {
+        // 失敗モード: 全ての失敗シーンが処理されたか確認
+        const remainingFailed = failedSceneIds.filter(id => {
+          const scene = (window.lastLoadedScenes || []).find(s => s.id === id);
+          return scene?.latest_image?.status === 'failed' || scene?.latest_image?.status === 'generating';
+        });
+        
+        if (remainingFailed.length === 0 && generating === 0) {
+          // 最終的な成功/失敗数をカウント
+          const finalSuccessCount = failedSceneIds.filter(id => {
+            const scene = (window.lastLoadedScenes || []).find(s => s.id === id);
+            return scene?.latest_image?.status === 'completed';
+          }).length;
+          const finalFailedCount = failedSceneIds.length - finalSuccessCount;
+          
+          if (finalFailedCount > 0) {
+            showToast(`失敗シーン再試行完了！ (成功: ${finalSuccessCount}件, 再失敗: ${finalFailedCount}件)`, 'warning');
+          } else {
+            showToast(`失敗シーン再試行完了！ (${finalSuccessCount}件)`, 'success');
+          }
+          await initBuilderTab();
+          break;
         }
         
-        const finalMessage = failed > 0 
-          ? `画像生成完了！ (成功: ${processed}件, 失敗: ${failed}件)` 
-          : `画像生成完了！ (${processed}件)`;
-        showToast(finalMessage, failed > 0 ? 'warning' : 'success');
-        await initBuilderTab();
-        break;
-      }
-      
-      // 3) 次のバッチ実行（pending > 0 の場合）
-      if (pending > 0 && generating === 0) {
-        try {
-          await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
-        } catch (batchError) {
-          console.warn('Batch generation error:', batchError);
-          // エラーでも次のポーリングで retry
+        // 3) 次の失敗シーンを処理（generating === 0 の場合）
+        if (generating === 0) {
+          const nextFailedScene = failedSceneIds.find(id => {
+            const scene = (window.lastLoadedScenes || []).find(s => s.id === id);
+            return scene?.latest_image?.status === 'failed';
+          });
+          
+          if (nextFailedScene) {
+            try {
+              console.log(`[BULK] Retrying failed scene ${nextFailedScene}`);
+              await axios.post(`${API_BASE}/scenes/${nextFailedScene}/generate-image`);
+            } catch (retryError) {
+              console.warn(`[BULK] Retry error for scene ${nextFailedScene}:`, retryError);
+            }
+          }
+        }
+      } else {
+        // pending モード: 既存のロジック
+        if (pending === 0 && generating === 0) {
+          // 最後のAPI呼び出しでプロジェクトステータスを 'completed' に更新
+          try {
+            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
+          } catch (finalCallError) {
+            console.warn('Final API call error:', finalCallError);
+          }
+          
+          const finalMessage = failed > 0 
+            ? `画像生成完了！ (成功: ${processed}件, 失敗: ${failed}件)` 
+            : `画像生成完了！ (${processed}件)`;
+          showToast(finalMessage, failed > 0 ? 'warning' : 'success');
+          await initBuilderTab();
+          break;
+        }
+        
+        // 3) 次のバッチ実行（pending > 0 の場合）
+        if (pending > 0 && generating === 0) {
+          try {
+            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-images`);
+          } catch (batchError) {
+            console.warn('Batch generation error:', batchError);
+            // エラーでも次のポーリングで retry
+          }
         }
       }
       
