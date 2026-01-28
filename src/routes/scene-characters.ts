@@ -521,6 +521,7 @@ app.get('/:sceneId/edit-context', async (c) => {
  * - image_character_keys: string[] - Characters assigned to scene
  * - voice_character_key: string | null - Character for voice (must be in image_character_keys)
  * - scene_traits: { character_key: string, override_traits: string }[] - Scene-specific overrides
+ * - image_prompt: string (optional) - Image generation prompt
  * 
  * Important: This replaces ALL scene characters and traits atomically
  * Empty override_traits will DELETE the trait entry (no garbage)
@@ -533,7 +534,8 @@ app.post('/:sceneId/save-edit-context', async (c) => {
     const { 
       image_character_keys = [], 
       voice_character_key,
-      scene_traits = []
+      scene_traits = [],
+      image_prompt
     } = body;
     
     // Validate scene exists
@@ -557,6 +559,16 @@ app.post('/:sceneId/save-edit-context', async (c) => {
       }
     } else {
       finalVoiceCharacter = null;
+    }
+    
+    // === STEP 0: Update image_prompt if provided ===
+    if (image_prompt !== undefined) {
+      await c.env.DB.prepare(`
+        UPDATE scenes 
+        SET image_prompt = ?, is_prompt_customized = 1, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(image_prompt, sceneId).run();
+      console.log(`[Save Edit Context] Updated image_prompt for scene ${sceneId}`);
     }
     
     // === STEP 1: Delete and re-insert scene_character_map (atomic replace) ===

@@ -10942,20 +10942,22 @@ function renderAssetTypeIndicator(scene) {
 }
 
 /**
- * Phase1: 詳細（折りたたみ・参照専用）
- * スタイル、画像プロンプト、要点を読み取り専用で表示
+ * Phase1: 詳細（折りたたみ・編集可能なプロンプト）
+ * スタイル、画像プロンプト（編集可能）、要点を表示
  */
 function renderSceneDetailsFold(scene) {
   const bullets = scene.bullets || [];
   const styleLabel = scene.style_preset_id || 'デフォルト';
   const prompt = scene.image_prompt || scene.prompt || '';
-  const promptText =
-    prompt.length > 240 ? prompt.slice(0, 240) + '…' : prompt;
+  
+  // 漫画モードかどうかの判定
+  const displayAssetType = scene.display_asset_type || 'image';
+  const isComicMode = displayAssetType === 'comic';
 
   return `
-    <details class="bg-gray-50 rounded-lg border border-gray-200">
+    <details class="bg-gray-50 rounded-lg border border-gray-200" id="details-fold-${scene.id}">
       <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-100">
-        <i class="fas fa-chevron-right mr-2"></i>詳細を表示
+        <i class="fas fa-chevron-right mr-2"></i>詳細・プロンプト編集
       </summary>
       <div class="px-4 pb-4 space-y-4 border-t border-gray-200 pt-3">
 
@@ -10966,16 +10968,57 @@ function renderSceneDetailsFold(scene) {
           <div class="text-sm">${escapeHtml(styleLabel)}</div>
         </div>
 
-        ${prompt ? `
-          <div>
-            <div class="text-xs font-semibold text-gray-600 mb-1">
+        <!-- 編集可能なプロンプトセクション -->
+        <div>
+          <div class="flex items-center justify-between mb-2">
+            <div class="text-xs font-semibold text-gray-600">
               <i class="fas fa-image mr-1 text-green-600"></i>画像プロンプト
             </div>
-            <div class="text-sm bg-white p-2 rounded border border-gray-100 whitespace-pre-wrap">
-              ${escapeHtml(promptText)}
-            </div>
+            <span id="prompt-saved-indicator-${scene.id}" class="text-xs text-green-600 hidden">
+              <i class="fas fa-check-circle mr-1"></i>保存済み
+            </span>
           </div>
-        ` : ''}
+          <textarea 
+            id="prompt-edit-${scene.id}"
+            rows="4"
+            class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-y"
+            placeholder="画像生成のプロンプトを入力してください..."
+            oninput="onPromptEditInput(${scene.id})"
+          >${escapeHtml(prompt)}</textarea>
+          <p class="text-xs text-amber-600 mt-1">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            ※画像内のテキストを日本語にしたい場合は、プロンプトに「文字は日本語で」と追記してください
+          </p>
+          
+          <!-- 保存 & 再生成ボタン -->
+          <div class="flex gap-2 mt-3">
+            <button 
+              id="save-prompt-btn-${scene.id}"
+              onclick="saveScenePrompt(${scene.id})"
+              class="px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+              disabled
+            >
+              <i class="fas fa-save mr-1"></i>プロンプトを保存
+            </button>
+            <button 
+              id="save-and-regenerate-btn-${scene.id}"
+              onclick="savePromptAndRegenerate(${scene.id})"
+              class="px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
+                isComicMode 
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
+                  : 'bg-green-600 text-white hover:bg-green-700'
+              }"
+              ${isComicMode ? 'disabled title="漫画採用中は画像を再生成できません"' : ''}
+            >
+              <i class="fas fa-magic mr-1"></i>保存して再生成
+            </button>
+          </div>
+          ${isComicMode ? `
+            <p class="text-xs text-orange-600 mt-2">
+              <i class="fas fa-info-circle mr-1"></i>漫画採用中は画像の再生成ができません
+            </p>
+          ` : ''}
+        </div>
 
         ${bullets.length ? `
           <div>
@@ -10988,13 +11031,185 @@ function renderSceneDetailsFold(scene) {
           </div>
         ` : ''}
 
-        <div class="text-xs text-gray-500">
-          編集は「シーンを編集」から行えます。
-        </div>
       </div>
     </details>
   `;
 }
+
+/**
+ * プロンプト編集時のハンドラー（変更検知）
+ * @param {number} sceneId 
+ */
+function onPromptEditInput(sceneId) {
+  const textarea = document.getElementById(`prompt-edit-${sceneId}`);
+  const saveBtn = document.getElementById(`save-prompt-btn-${sceneId}`);
+  const savedIndicator = document.getElementById(`prompt-saved-indicator-${sceneId}`);
+  
+  if (textarea && saveBtn) {
+    // 変更があれば保存ボタンを有効化
+    saveBtn.disabled = false;
+    saveBtn.classList.remove('bg-gray-300', 'cursor-not-allowed');
+    saveBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+  }
+  
+  // 保存済みインジケーターを非表示
+  if (savedIndicator) {
+    savedIndicator.classList.add('hidden');
+  }
+}
+
+/**
+ * プロンプトのみを保存
+ * @param {number} sceneId 
+ */
+async function saveScenePrompt(sceneId) {
+  const textarea = document.getElementById(`prompt-edit-${sceneId}`);
+  const saveBtn = document.getElementById(`save-prompt-btn-${sceneId}`);
+  const savedIndicator = document.getElementById(`prompt-saved-indicator-${sceneId}`);
+  
+  if (!textarea) return;
+  
+  const newPrompt = textarea.value.trim();
+  
+  // ボタンをローディング状態に
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>保存中...';
+  }
+  
+  try {
+    const response = await axios.put(`${API_BASE}/scenes/${sceneId}`, {
+      image_prompt: newPrompt
+    });
+    
+    if (response.data.id) {
+      showToast('プロンプトを保存しました', 'success');
+      
+      // 保存済みインジケーター表示
+      if (savedIndicator) {
+        savedIndicator.classList.remove('hidden');
+      }
+      
+      // ボタンを無効化（変更がないため）
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+        saveBtn.classList.add('bg-gray-300', 'cursor-not-allowed');
+        saveBtn.innerHTML = '<i class="fas fa-save mr-1"></i>プロンプトを保存';
+      }
+      
+      // キャッシュ更新
+      if (window.lastLoadedScenes) {
+        const idx = window.lastLoadedScenes.findIndex(s => s.id === sceneId);
+        if (idx !== -1) {
+          window.lastLoadedScenes[idx].image_prompt = newPrompt;
+        }
+      }
+    } else {
+      throw new Error('保存に失敗しました');
+    }
+  } catch (error) {
+    console.error('[saveScenePrompt] Error:', error);
+    showToast('プロンプトの保存に失敗しました', 'error');
+    
+    // ボタンを元に戻す
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.classList.add('bg-blue-600', 'hover:bg-blue-700');
+      saveBtn.classList.remove('bg-gray-300', 'cursor-not-allowed');
+      saveBtn.innerHTML = '<i class="fas fa-save mr-1"></i>プロンプトを保存';
+    }
+  }
+}
+
+/**
+ * プロンプトを保存して画像を再生成
+ * @param {number} sceneId 
+ */
+async function savePromptAndRegenerate(sceneId) {
+  const textarea = document.getElementById(`prompt-edit-${sceneId}`);
+  const regenBtn = document.getElementById(`save-and-regenerate-btn-${sceneId}`);
+  
+  if (!textarea) return;
+  
+  const newPrompt = textarea.value.trim();
+  
+  // ボタンをローディング状態に
+  if (regenBtn) {
+    regenBtn.disabled = true;
+    regenBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>保存中...';
+  }
+  
+  try {
+    // 1. プロンプトを保存
+    const saveResponse = await axios.put(`${API_BASE}/scenes/${sceneId}`, {
+      image_prompt: newPrompt
+    });
+    
+    if (!saveResponse.data.id) {
+      throw new Error('プロンプトの保存に失敗しました');
+    }
+    
+    showToast('プロンプトを保存しました。画像を再生成中...', 'info');
+    
+    // 保存ボタンの状態をリセット
+    const saveBtn = document.getElementById(`save-prompt-btn-${sceneId}`);
+    const savedIndicator = document.getElementById(`prompt-saved-indicator-${sceneId}`);
+    if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+      saveBtn.classList.add('bg-gray-300', 'cursor-not-allowed');
+    }
+    if (savedIndicator) {
+      savedIndicator.classList.remove('hidden');
+    }
+    
+    // キャッシュ更新
+    if (window.lastLoadedScenes) {
+      const idx = window.lastLoadedScenes.findIndex(s => s.id === sceneId);
+      if (idx !== -1) {
+        window.lastLoadedScenes[idx].image_prompt = newPrompt;
+      }
+    }
+    
+    // 2. 画像を再生成（既存の関数を使用）
+    if (regenBtn) {
+      regenBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>再生成中...';
+    }
+    
+    // generateImage関数を呼び出し
+    if (typeof window.generateImage === 'function') {
+      await window.generateImage(sceneId);
+    } else if (typeof generateImage === 'function') {
+      await generateImage(sceneId);
+    } else {
+      // フォールバック: 直接APIを呼び出し
+      const genResponse = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-image`);
+      if (genResponse.data.success || genResponse.data.generation_id) {
+        showToast('画像生成を開始しました', 'success');
+        // ポーリング開始
+        if (typeof watchSceneGeneration === 'function') {
+          watchSceneGeneration(sceneId);
+        }
+      }
+    }
+    
+  } catch (error) {
+    console.error('[savePromptAndRegenerate] Error:', error);
+    showToast(error.message || '処理中にエラーが発生しました', 'error');
+  } finally {
+    // ボタンを元に戻す
+    if (regenBtn) {
+      regenBtn.disabled = false;
+      regenBtn.innerHTML = '<i class="fas fa-magic mr-1"></i>保存して再生成';
+    }
+  }
+}
+
+// グローバルに公開
+window.onPromptEditInput = onPromptEditInput;
+window.saveScenePrompt = saveScenePrompt;
+window.savePromptAndRegenerate = savePromptAndRegenerate;
 
 // Export output preset functions
 window.loadOutputPreset = loadOutputPreset;

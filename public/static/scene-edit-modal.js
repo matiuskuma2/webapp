@@ -1552,12 +1552,25 @@
           });
         }
         
-        // Call SSOT save API
-        const response = await axios.post(`/api/scenes/${this.currentSceneId}/save-edit-context`, {
+        // Get image_prompt from the input field
+        const imagePromptEl = document.getElementById('edit-image-prompt');
+        const imagePrompt = imagePromptEl ? imagePromptEl.value.trim() : undefined;
+        
+        // Build request payload
+        const payload = {
           image_character_keys: this.currentState.imageCharacterKeys,
           voice_character_key: this.currentState.voiceCharacterKey,
           scene_traits: sceneTraits
-        });
+        };
+        
+        // Include image_prompt if field exists and has value
+        if (imagePrompt !== undefined) {
+          payload.image_prompt = imagePrompt;
+          console.log(`[SceneEditModal] Saving image_prompt: ${imagePrompt.substring(0, 50)}...`);
+        }
+        
+        // Call SSOT save API
+        const response = await axios.post(`/api/scenes/${this.currentSceneId}/save-edit-context`, payload);
         
         if (response.data.success) {
           // Update original state to match current (no longer dirty)
