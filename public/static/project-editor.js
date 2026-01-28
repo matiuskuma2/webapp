@@ -3578,13 +3578,16 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   }
   const isShowingComic = displayAssetType === 'comic' && comicUrl;
   
+  // ✅ displayUrl の有効性チェック強化（null/undefined/'null'/'undefined' を除外）
+  const validDisplayUrl = displayUrl && displayUrl !== 'null' && displayUrl !== 'undefined' ? displayUrl : null;
+  
   return `
     <!-- 画像/漫画エリア（常に表示） -->
     <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 ${isShowingComic ? 'border-orange-400' : 'border-gray-300'} overflow-hidden">
-      ${displayUrl 
+      ${validDisplayUrl 
         ? `<img 
              id="sceneImage-${scene.id}" 
-             src="${displayUrl}" 
+             src="${validDisplayUrl}" 
              alt="Scene ${scene.idx}"
              class="w-full h-full object-cover"
            />`
@@ -5138,11 +5141,20 @@ async function viewImageHistory(sceneId) {
               `;
             }
             
+            // ✅ image_url の有効性チェック
+            const validImageUrl = img.image_url && img.image_url !== 'null' && img.image_url !== 'undefined' ? img.image_url : null;
+            
             return `
               <div class="border-2 ${img.is_active ? 'border-blue-600' : 'border-gray-200'} rounded-lg overflow-hidden relative">
                 ${typeLabel}
                 <div class="aspect-video bg-gray-100">
-                  <img src="${img.image_url}" alt="Generated image" class="w-full h-full object-cover" />
+                  ${validImageUrl 
+                    ? `<img src="${validImageUrl}" alt="Generated image" class="w-full h-full object-cover" />`
+                    : `<div class="flex items-center justify-center h-full text-gray-400">
+                         <i class="fas fa-exclamation-triangle text-2xl"></i>
+                         <span class="ml-2 text-sm">画像なし</span>
+                       </div>`
+                  }
                 </div>
                 <div class="p-3 space-y-2">
                   <p class="text-xs text-gray-600 line-clamp-2">${escapeHtml(img.prompt || (isComic ? '漫画画像' : ''))}</p>
@@ -5746,7 +5758,8 @@ async function updateSingleSceneCard(sceneId) {
     // ===== 1. 画像表示を更新 =====
     const imgContainer = sceneCard.querySelector('.scene-image-container');
     if (imgContainer) {
-      if (imageUrl && (imageStatus === 'completed' || activeImage)) {
+      // ✅ imageUrl が有効な場合のみ画像を表示（null/undefined チェック強化）
+      if (imageUrl && imageUrl !== 'null' && imageUrl !== 'undefined') {
         imgContainer.innerHTML = `
           <img src="${imageUrl}?t=${Date.now()}" 
                class="w-full h-full object-cover"
