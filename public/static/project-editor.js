@@ -4957,15 +4957,27 @@ async function generateBulkImages(mode) {
   const stats = getSceneStats(currentScenes);
   const total = stats.completed + stats.pending + stats.failed + stats.generating;
   
+  // 🔍 DEBUG: Log stats for troubleshooting
+  console.log(`[BULK] generateBulkImages called with mode=${mode}`);
+  console.log(`[BULK] Stats:`, stats, `total=${total}`);
+  console.log(`[BULK] currentScenes count:`, currentScenes.length);
+  
   if (mode === 'all' && stats.completed === total && total > 0) {
+    console.log('[BULK] Early return: all images completed');
     showToast('すべての画像は生成済みです', 'info');
     return;
   }
   if (mode === 'pending' && stats.pending === 0) {
+    console.log('[BULK] Early return: no pending images');
     showToast('未生成の画像はありません', 'info');
     return;
   }
   if (mode === 'failed' && stats.failed === 0) {
+    console.log('[BULK] Early return: no failed images (stats.failed=0)');
+    // 🔍 DEBUG: Show actual scene statuses
+    currentScenes.forEach((s, i) => {
+      console.log(`[BULK] Scene ${i}: id=${s.id}, latest_image.status=${s.latest_image?.status}`);
+    });
     showToast('失敗した画像はありません', 'info');
     return;
   }
