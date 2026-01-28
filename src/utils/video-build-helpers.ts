@@ -1205,7 +1205,7 @@ export interface RemotionProjectJson_R1 {
  * @param options オプション
  * @returns Remotionスキーマ準拠のProjectJson
  */
-const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 
 /**
  * Convert relative R2 URL to absolute URL

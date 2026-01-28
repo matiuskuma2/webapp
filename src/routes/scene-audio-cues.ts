@@ -26,7 +26,7 @@ interface Bindings {
 
 const sceneAudioCues = new Hono<{ Bindings: Bindings }>();
 
-const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 
 /**
  * 相対URLを絶対URLに変換

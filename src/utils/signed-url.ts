@@ -41,7 +41,7 @@ async function hmacSign(message: string, secret: string): Promise<string> {
  * 
  * @param r2Key - R2オブジェクトキー（例: images/22/scene_1/56_xxx.png）
  * @param secret - HMAC署名用シークレット
- * @param origin - オリジン（例: https://webapp-c7n.pages.dev）
+ * @param origin - オリジン（例: https://app.marumuviai.com）
  * @param ttlSeconds - 有効期限（秒）デフォルト10分
  * @returns 署名付きURL
  */

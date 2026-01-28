@@ -36,7 +36,7 @@ import {
  * Default SITE_URL for webapp
  * This is used as fallback when SITE_URL is not configured in environment
  */
-const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 
 /**
  * Convert relative R2 URL to absolute URL using SITE_URL
@@ -1481,7 +1481,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     
     // PR-A2: project.json最終ゲート相当（src完全性）を preflight でも実行
     // buildProjectJsonは重いので、preflightで組める最小入力から同一の検証関数（validateRenderInputs）を使う
-    const siteUrlForBuild = c.env.SITE_URL || 'https://webapp-c7n.pages.dev';
+    const siteUrlForBuild = c.env.SITE_URL || 'https://app.marumuviai.com';
     
     const renderInputs: RenderInputScene[] = scenesWithAssets.map((s: any) => {
       // 画像候補：comic → image（display_asset_typeに応じて選択）
@@ -1807,7 +1807,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
       ducking_release_ms: number;
     }>();
     
-    const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+    const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
     const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
     
     // Build project.json with BGM settings
@@ -2332,7 +2332,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     const outputPresetConfig = getOutputPreset(project.output_preset);
     
     // CRITICAL FIX: Define siteUrl in function scope for buildSettings
-    const siteUrl = c.env.SITE_URL || 'https://webapp-c7n.pages.dev';
+    const siteUrl = c.env.SITE_URL || 'https://app.marumuviai.com';
     
     const buildSettings = {
       // Output preset 情報（SSOT記録）
@@ -2403,7 +2403,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     // 6. project.json生成
     // Output preset から aspect_ratio / resolution / fps を取得（body で上書き可能）
     // CRITICAL: Pass siteUrl for absolute URL conversion (Remotion Lambda requires absolute URLs)
-    const siteUrlForBuild = c.env.SITE_URL || 'https://webapp-c7n.pages.dev';
+    const siteUrlForBuild = c.env.SITE_URL || 'https://app.marumuviai.com';
     const projectJson = buildProjectJson(
       { id: project.id, title: project.title, user_id: ownerUserId },
       scenesWithAssets,

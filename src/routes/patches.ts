@@ -1112,7 +1112,7 @@ patches.get('/projects/:projectId/patches/:patchId', async (c) => {
 // ヘルパー関数: シーンデータ取得（video-generation.ts と同等のロジック）
 // ============================================================
 
-const DEFAULT_SITE_URL = 'https://webapp-c7n.pages.dev';
+const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 
 function toAbsoluteUrl(relativeUrl: string | null, siteUrl?: string): string | null {
   if (!relativeUrl) return null;

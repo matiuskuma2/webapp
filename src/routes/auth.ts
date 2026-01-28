@@ -395,7 +395,7 @@ auth.post('/auth/forgot-password', async (c) => {
     
     // Send email via SendGrid
     if (SENDGRID_API_KEY && SENDGRID_FROM_EMAIL) {
-      const resetUrl = `${SITE_URL || 'https://webapp-c7n.pages.dev'}/reset-password?token=${resetToken}`;
+      const resetUrl = `${SITE_URL || 'https://app.marumuviai.com'}/reset-password?token=${resetToken}`;
       
       await fetch('https://api.sendgrid.com/v3/mail/send', {
         method: 'POST',

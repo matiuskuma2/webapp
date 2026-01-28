@@ -24,7 +24,7 @@ export type Bindings = {
   SENDGRID_API_KEY?: string;
   SENDGRID_FROM_EMAIL?: string;
   // Site URL
-  SITE_URL?: string;  // e.g. https://webapp-c7n.pages.dev
+  SITE_URL?: string;  // e.g. https://app.marumuviai.com
   // Asset versioning (auto-set by deployment pipeline)
   ASSET_VERSION?: string;  // e.g. "20260125-1" or git commit hash
 }
