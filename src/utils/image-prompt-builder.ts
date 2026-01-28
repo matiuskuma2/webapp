@@ -4,13 +4,26 @@
  */
 
 /**
- * シーン固有のプロンプトをそのまま返す
+ * シーン固有のプロンプトを返す（API制限対応でトリム）
  * スタイルはスタイルプリセット（composeStyledPrompt）で適用される
  * 
+ * Flux/FAL.ai API: T5エンコーダー使用、約512トークン（~2000文字）対応
+ * 安全マージンとして2000文字でトリム
+ * 
  * @param scenePrompt - シーン固有の内容記述（scene.image_prompt）
- * @returns 画像生成プロンプト（そのまま）
+ * @returns 画像生成プロンプト（最大2000文字）
  */
+const MAX_PROMPT_LENGTH = 2000;
+
 export function buildImagePrompt(scenePrompt: string): string {
+  if (!scenePrompt) return '';
+  
+  // 2000文字を超える場合はトリム
+  if (scenePrompt.length > MAX_PROMPT_LENGTH) {
+    console.warn(`[Prompt Builder] Prompt truncated from ${scenePrompt.length} to ${MAX_PROMPT_LENGTH} chars`);
+    return scenePrompt.substring(0, MAX_PROMPT_LENGTH);
+  }
+  
   return scenePrompt;
 }
 

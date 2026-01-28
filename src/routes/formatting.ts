@@ -1457,7 +1457,7 @@ async function generateMiniScenesWithSchemaAI(
 2. 各シーンの dialogue は **30〜500 文字**（元の文章を維持するため緩和）
 3. 各シーンの bullets は **2〜3 個**、各 5〜40 文字
 4. 各シーンの title は **5〜50 文字**
-5. 各シーンの image_prompt は **30〜400 文字**（英語推奨、具体的に描写）
+5. 各シーンの image_prompt は **30〜1000 文字**（英語推奨、具体的に描写、長くても可）
 6. role は以下のいずれか: hook, context, main_point, evidence, timeline, analysis, summary, cta
 7. speech_type は **必ず判定**:
    - "dialogue": キャラクターが話す台詞（「」で囲まれた発言、直接話法）
@@ -1522,7 +1522,7 @@ ${chunkText}
                 maxItems: 3,
                 items: { type: 'string', minLength: 5, maxLength: 40 } // 緩和: 5-40文字
               },
-              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+              image_prompt: { type: 'string', minLength: 30, maxLength: 1000 }
             },
             required: ['role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
@@ -1631,7 +1631,7 @@ async function repairMiniScenes(
 - speech_type は "dialogue"（台詞）または "narration"（ナレーション）
 - bullets は 2〜3 個、各 8〜24 文字
 - title は 10〜40 文字
-- image_prompt は 30〜400 文字
+- image_prompt は 30〜1000 文字（詳細に描写可能）
 - 全フィールド必須
 
 内容を変えず、フォーマットのみ修正してください。speech_typeがない場合は内容から推測してください。`
@@ -1666,7 +1666,7 @@ ${brokenJson}`
                 maxItems: 3,
                 items: { type: 'string', minLength: 8, maxLength: 24 }
               },
-              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+              image_prompt: { type: 'string', minLength: 30, maxLength: 1000 }
             },
             required: ['role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
@@ -1837,7 +1837,7 @@ ${rawText}
                 maxItems: 3,
                 items: { type: 'string', minLength: 8, maxLength: 24 }
               },
-              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+              image_prompt: { type: 'string', minLength: 30, maxLength: 1000 }
             },
             required: ['idx', 'role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
@@ -1945,7 +1945,7 @@ async function repairScenarioFormat(
 - speech_type は "dialogue"（台詞）または "narration"（ナレーション）
 - bullets は 2〜3 個、各 8〜24 文字
 - title は 10〜40 文字
-- image_prompt は 30〜400 文字
+- image_prompt は 30〜1000 文字（詳細に描写可能）
 - 全フィールド必須
 - idx は連番
 - metadata.total_scenes は scenes.length と一致
@@ -1994,7 +1994,7 @@ ${brokenJson}`
                 maxItems: 3,
                 items: { type: 'string', minLength: 8, maxLength: 24 }
               },
-              image_prompt: { type: 'string', minLength: 30, maxLength: 400 }
+              image_prompt: { type: 'string', minLength: 30, maxLength: 1000 }
             },
             required: ['idx', 'role', 'title', 'dialogue', 'speech_type', 'bullets', 'image_prompt'],
             additionalProperties: false
