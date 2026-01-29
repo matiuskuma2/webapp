@@ -4373,7 +4373,7 @@ function renderBuilderSceneCard(scene) {
             </button>
           </div>
           
-          ${isFailed && errorMessage ? `
+          ${isFailed && errorMessage && !activeImage ? `
           <div class="bg-red-50 border-2 border-red-200 rounded-lg p-4">
             <p class="text-sm font-semibold text-red-800 mb-2">
               <i class="fas fa-exclamation-circle mr-1"></i>画像生成に失敗しました
@@ -6052,8 +6052,11 @@ async function updateSingleSceneCard(sceneId) {
     }
     
     // ===== 4. エラーメッセージ表示/非表示 =====
+    // ✅ 修正: active_imageがある場合は古いエラーを表示しない（再生成成功後のエラー残り対策）
     let errorContainer = sceneCard.querySelector('.scene-error-message');
-    if (imageStatus === 'failed' && errorMessage) {
+    const shouldShowError = imageStatus === 'failed' && errorMessage && !activeImage;
+    
+    if (shouldShowError) {
       if (!errorContainer) {
         errorContainer = document.createElement('div');
         errorContainer.className = 'scene-error-message mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm';
