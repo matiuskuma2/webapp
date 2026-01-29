@@ -9888,6 +9888,10 @@ function parseMessageToIntent(message) {
   const sceneTelopMatch = message.match(/シーン\s*(\d+)\s*の?\s*テロップ.*?(?:off|オフ|非表示|消す|消して)/i);
   const sceneTelopOnMatch = message.match(/シーン\s*(\d+)\s*の?\s*テロップ.*?(?:on|オン|表示|出す|出して)/i);
   
+  // Pattern: 「このシーン/ここの」テロップON/OFF (PlaybackContextのscene_idxを使用)
+  const thisSceneTelopOffMatch = /(?:この|今の|現在の|ここの)\s*(?:シーン)?\s*の?\s*テロップ.*?(?:off|オフ|非表示|消す|消して|けして)/i.test(message);
+  const thisSceneTelopOnMatch = /(?:この|今の|現在の|ここの)\s*(?:シーン)?\s*の?\s*テロップ.*?(?:on|オン|表示|出す|出して)/i.test(message);
+  
   if (sceneTelopMatch) {
     const sceneIdx = parseInt(sceneTelopMatch[1], 10);
     actions.push({ action: 'telop.set_enabled_scene', scene_idx: sceneIdx, enabled: false });
@@ -9895,11 +9899,26 @@ function parseMessageToIntent(message) {
     const sceneIdx = parseInt(sceneTelopOnMatch[1], 10);
     actions.push({ action: 'telop.set_enabled_scene', scene_idx: sceneIdx, enabled: true });
   }
+  // Pattern: 「このシーン」のテロップON/OFF - scene_idxはnullで、normalizeIntentで補完
+  else if (thisSceneTelopOffMatch) {
+    // scene_idx: null → normalizeIntent で PlaybackContext から補完
+    actions.push({ action: 'telop.set_enabled_scene', scene_idx: null, enabled: false, _contextual: true });
+  } else if (thisSceneTelopOnMatch) {
+    actions.push({ action: 'telop.set_enabled_scene', scene_idx: null, enabled: true, _contextual: true });
+  }
   // Pattern: テロップON/OFF 全体 (e.g., "テロップを全部ON", "テロップを全部OFF", "テロップをOFFに")
-  else if (/テロップ.*?(?:全部)?(?:off|オフ|非表示|消す|消して)/i.test(message)) {
+  // 「全部」「全て」「すべて」が明示的にある場合のみ全体扱い
+  else if (/テロップ.*?(?:全部|全て|すべて|ぜんぶ).*?(?:off|オフ|非表示|消す|消して)/i.test(message)) {
     actions.push({ action: 'telop.set_enabled', enabled: false });
-  } else if (/テロップ.*?(?:全部)?(?:on|オン|表示|出す|出して)/i.test(message)) {
+  } else if (/テロップ.*?(?:全部|全て|すべて|ぜんぶ).*?(?:on|オン|表示|出す|出して)/i.test(message)) {
     actions.push({ action: 'telop.set_enabled', enabled: true });
+  }
+  // Pattern: 単純な「テロップ消して」はコンテキストがあればシーン単位、なければ全体
+  else if (/テロップ.*?(?:off|オフ|非表示|消す|消して|けして)/i.test(message)) {
+    // コンテキスト依存: normalizeIntent で判定
+    actions.push({ action: 'telop.set_enabled_scene', scene_idx: null, enabled: false, _contextual: true });
+  } else if (/テロップ.*?(?:on|オン|表示|出す|出して)/i.test(message)) {
+    actions.push({ action: 'telop.set_enabled_scene', scene_idx: null, enabled: true, _contextual: true });
   }
   
   // Pattern: テロップ位置 (e.g., "テロップ位置を上に", "テロップを下に", "テロップ中央")
@@ -10074,17 +10093,40 @@ function isActionExplicit(action, playbackContext) {
 
 /**
  * Intent を正規化（scene_idx 自動補完）
+ * 
+ * SSOT: 
+ * - _contextual フラグがあるアクションは PlaybackContext から scene_idx を補完
+ * - scene_idx が null でシーン単位アクションの場合も補完
+ * - 補完後は _contextual フラグを削除
  */
 function normalizeIntent(intent, playbackContext) {
   if (!intent || !intent.actions) return intent;
   
   const normalizedActions = intent.actions.map(action => {
-    // scene_idx が未指定で、シーン単位のアクションの場合
-    if (action.scene_idx == null && 
-        playbackContext?.scene_idx != null && 
-        SCENE_LEVEL_ACTIONS.includes(action.action)) {
-      return { ...action, scene_idx: playbackContext.scene_idx };
+    const needsSceneIdx = action.scene_idx == null && SCENE_LEVEL_ACTIONS.includes(action.action);
+    const isContextual = action._contextual === true;
+    
+    // scene_idx 補完が必要な場合
+    if ((needsSceneIdx || isContextual) && playbackContext?.scene_idx != null) {
+      const normalized = { ...action, scene_idx: playbackContext.scene_idx };
+      delete normalized._contextual; // 内部フラグを削除
+      console.log('[ChatEdit] normalizeIntent: scene_idx補完', { 
+        action: action.action, 
+        from: action.scene_idx, 
+        to: playbackContext.scene_idx 
+      });
+      return normalized;
     }
+    
+    // _contextual だが PlaybackContext がない場合は警告
+    if (isContextual && playbackContext?.scene_idx == null) {
+      console.warn('[ChatEdit] normalizeIntent: PlaybackContextなしでコンテキスト依存アクション', action);
+      // フォールバック: scene_idx = 1（最初のシーン）
+      const normalized = { ...action, scene_idx: 1 };
+      delete normalized._contextual;
+      return normalized;
+    }
+    
     return action;
   });
   
