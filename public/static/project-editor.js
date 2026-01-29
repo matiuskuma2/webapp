@@ -9642,6 +9642,11 @@ function openChatEditModal(buildId, videoUrl, options = {}) {
     videoSrc.src = videoUrl;
     video.load();
   }
+  
+  // SSOT: Playback Context 同期をバインド（動画再生位置 → 現在シーン）
+  setTimeout(() => {
+    bindPlaybackContextSync();
+  }, 200);
 
   // Reset history
   const history = document.getElementById('chatEditHistory');
@@ -9982,6 +9987,325 @@ async function parseIntentWithAI(userMessage) {
   };
 }
 
+// ====================================================================
+// STEP④: Chat Mode 判定システム（SSOT設計書準拠）
+// ====================================================================
+
+/**
+ * シーン単位のアクション一覧（scene_idx 自動補完対象）
+ */
+const SCENE_LEVEL_ACTIONS = [
+  'telop.set_enabled_scene',
+  'balloon.adjust_window',
+  'balloon.adjust_position',
+  'balloon.set_policy',
+  'sfx.set_volume',
+  'sfx.set_timing',
+  'sfx.remove',
+  'sfx.add_from_library',
+  'motion.set_preset',
+  'image.set_active',
+];
+
+/**
+ * アクションが「明確」かを判定
+ * - 明確 = 即編集可能（Mode C）
+ * - 不明確 = 提案が必要（Mode B）
+ */
+function isActionExplicit(action, playbackContext) {
+  // scene_idx が明示 or playbackContext から取得可能
+  const hasSceneIdx = action.scene_idx != null || playbackContext?.scene_idx != null;
+  
+  switch (action.action) {
+    // BGM関連（グローバルなのでscene不要）
+    case 'bgm.set_volume':
+      return typeof action.volume === 'number' && action.volume >= 0 && action.volume <= 1;
+    case 'bgm.set_loop':
+      return typeof action.loop === 'boolean';
+    
+    // テロップ関連（グローバル）
+    case 'telop.set_enabled':
+      return typeof action.enabled === 'boolean';
+    case 'telop.set_position':
+      return ['top', 'center', 'bottom'].includes(action.position_preset);
+    case 'telop.set_size':
+      return ['sm', 'md', 'lg'].includes(action.size_preset);
+    
+    // テロップ関連（シーン単位）
+    case 'telop.set_enabled_scene':
+      return hasSceneIdx && typeof action.enabled === 'boolean';
+    
+    // バルーン関連
+    case 'balloon.set_policy':
+      return hasSceneIdx && 
+             action.balloon_no != null && 
+             ['always_on', 'voice_window', 'manual_window'].includes(action.policy);
+    case 'balloon.adjust_window':
+      return hasSceneIdx && 
+             action.balloon_no != null && 
+             (action.delta_start_ms != null || action.delta_end_ms != null || 
+              action.absolute_start_ms != null || action.absolute_end_ms != null);
+    case 'balloon.adjust_position':
+      return hasSceneIdx && 
+             action.balloon_no != null && 
+             (action.delta_x != null || action.delta_y != null || 
+              action.absolute_x != null || action.absolute_y != null);
+    
+    // SFX関連
+    case 'sfx.set_volume':
+      return hasSceneIdx && 
+             action.cue_no != null && 
+             typeof action.volume === 'number';
+    case 'sfx.set_timing':
+      return hasSceneIdx && action.cue_no != null;
+    case 'sfx.remove':
+      return hasSceneIdx && action.cue_no != null;
+    
+    // 未実装アクション（将来用）
+    case 'motion.set_preset':
+      return hasSceneIdx && action.preset != null;
+    case 'image.set_active':
+      return hasSceneIdx && action.image_generation_id != null;
+    
+    default:
+      return false;
+  }
+}
+
+/**
+ * Intent を正規化（scene_idx 自動補完）
+ */
+function normalizeIntent(intent, playbackContext) {
+  if (!intent || !intent.actions) return intent;
+  
+  const normalizedActions = intent.actions.map(action => {
+    // scene_idx が未指定で、シーン単位のアクションの場合
+    if (action.scene_idx == null && 
+        playbackContext?.scene_idx != null && 
+        SCENE_LEVEL_ACTIONS.includes(action.action)) {
+      return { ...action, scene_idx: playbackContext.scene_idx };
+    }
+    return action;
+  });
+  
+  return {
+    ...intent,
+    actions: normalizedActions
+  };
+}
+
+/**
+ * SSOT: バックエンドエラーをユーザーフレンドリーなメッセージに変換
+ */
+function convertToUserFriendlyError(errorMsg) {
+  if (!errorMsg) return '不明なエラーが発生しました';
+  
+  // Scene not found
+  const sceneMatch = errorMsg.match(/Scene not found: scene_idx=(\d+)/);
+  if (sceneMatch) {
+    return `シーン${sceneMatch[1]}が見つかりません。シーン番号を確認してください。`;
+  }
+  
+  // Balloon not found
+  const balloonMatch = errorMsg.match(/Balloon not found: scene_idx=(\d+), balloon_no=(\d+)/);
+  if (balloonMatch) {
+    return `シーン${balloonMatch[1]}にバブル${balloonMatch[2]}が見つかりません。バブル番号を確認してください。`;
+  }
+  
+  // SFX not found
+  const sfxMatch = errorMsg.match(/SFX cue not found: scene_idx=(\d+), cue_no=(\d+)/);
+  if (sfxMatch) {
+    return `シーン${sfxMatch[1]}に効果音${sfxMatch[2]}が見つかりません。`;
+  }
+  
+  // ops array is empty
+  if (errorMsg.includes('ops array is empty') || errorMsg.includes('No actions in intent')) {
+    return '指示を理解できませんでした。より具体的に教えてください。\n例: 「BGMを50%に」「テロップをOFF」';
+  }
+  
+  // Invalid scene_idx
+  if (errorMsg.includes('Invalid scene_idx')) {
+    return 'シーン番号が正しくありません。1以上の数値を指定してください。';
+  }
+  
+  // Invalid intent schema
+  if (errorMsg.includes('Invalid intent schema')) {
+    return '指示の形式が正しくありません。もう一度お試しください。';
+  }
+  
+  // Default
+  return errorMsg;
+}
+
+/**
+ * Chat Mode 判定（SSOTの中核）
+ * 
+ * Mode A: Conversation - 会話のみ（actions空）
+ * Mode B: Suggestion - 提案カード表示（曖昧な指示）
+ * Mode C: Direct Edit - dry-run直行（明確な指示）
+ * 
+ * @param {Object} input
+ * @param {string} input.userMessage - ユーザー入力
+ * @param {Object|null} input.intent - 解析されたIntent
+ * @param {Object|null} input.playbackContext - 再生中シーン情報
+ * @returns {Object} { mode: 'A'|'B'|'C', reason: string, normalizedIntent: Object|null }
+ */
+function decideChatMode({ userMessage, intent, playbackContext }) {
+  // Rule 1: actions が空 → 必ず Mode A
+  if (!intent || !intent.actions || intent.actions.length === 0) {
+    return {
+      mode: 'A',
+      reason: 'No actions in intent',
+      normalizedIntent: null
+    };
+  }
+  
+  // Intent を正規化（scene_idx 補完）
+  const normalized = normalizeIntent(intent, playbackContext);
+  
+  // Rule 2: 全アクションが「明確」かチェック
+  const allActionsExplicit = normalized.actions.every(action => 
+    isActionExplicit(action, playbackContext)
+  );
+  
+  if (allActionsExplicit) {
+    // Mode C: Direct Edit
+    return {
+      mode: 'C',
+      reason: 'All actions are explicit',
+      normalizedIntent: normalized
+    };
+  } else {
+    // Mode B: Suggestion
+    return {
+      mode: 'B',
+      reason: 'Actions contain ambiguous elements',
+      normalizedIntent: normalized
+    };
+  }
+}
+
+/**
+ * Playback Context を同期（動画再生位置からシーンを特定）
+ */
+function syncPlaybackContext() {
+  const video = document.getElementById('chatEditVideo');
+  if (!video) return;
+  
+  const currentTimeMs = video.currentTime * 1000;
+  const scenes = window.lastLoadedScenes || 
+                 window.videoBuildListCacheScenes || 
+                 window.builderScenesCache || [];
+  
+  if (scenes.length === 0) return;
+  
+  let accTime = 0;
+  for (let i = 0; i < scenes.length; i++) {
+    const scene = scenes[i];
+    const duration = scene.duration_ms || 5000;
+    
+    if (currentTimeMs < accTime + duration) {
+      // 現在のシーンを特定
+      window.chatEditState = window.chatEditState || {};
+      window.chatEditState.playbackContext = {
+        scene_idx: i + 1,
+        scene_id: scene.id,
+        playback_time_ms: currentTimeMs,
+        scene_snapshot: {
+          has_image: !!(scene.image_url || scene.images?.length),
+          has_audio: !!(scene.utterances?.length || scene.audio_url),
+          telop_enabled: scene.telop_enabled !== false,
+          balloon_count: scene.balloons?.length || 0,
+          sfx_count: scene.audio_cues?.length || 0,
+        }
+      };
+      
+      // UI更新（コンテキスト表示）
+      updatePlaybackContextDisplay();
+      return;
+    }
+    accTime += duration;
+  }
+  
+  // 最後のシーンを超えた場合、最後のシーンを設定
+  const lastScene = scenes[scenes.length - 1];
+  window.chatEditState = window.chatEditState || {};
+  window.chatEditState.playbackContext = {
+    scene_idx: scenes.length,
+    scene_id: lastScene.id,
+    playback_time_ms: currentTimeMs,
+    scene_snapshot: {
+      has_image: !!(lastScene.image_url || lastScene.images?.length),
+      has_audio: !!(lastScene.utterances?.length || lastScene.audio_url),
+      telop_enabled: lastScene.telop_enabled !== false,
+      balloon_count: lastScene.balloons?.length || 0,
+      sfx_count: lastScene.audio_cues?.length || 0,
+    }
+  };
+  updatePlaybackContextDisplay();
+}
+
+/**
+ * Playback Context のUI表示更新
+ */
+function updatePlaybackContextDisplay() {
+  const ctx = window.chatEditState?.playbackContext;
+  if (!ctx) return;
+  
+  // コンテキストセレクタを更新（存在する場合）
+  const sceneSelect = document.getElementById('chatEditContextScene');
+  if (sceneSelect && sceneSelect.value != ctx.scene_idx) {
+    sceneSelect.value = ctx.scene_idx;
+  }
+  
+  // シーン情報バッジを更新
+  const badge = document.getElementById('chatEditSceneBadge');
+  if (badge) {
+    const snapshot = ctx.scene_snapshot;
+    const icons = [];
+    if (snapshot.has_image) icons.push('🖼️');
+    if (snapshot.has_audio) icons.push('🔊');
+    if (snapshot.telop_enabled) icons.push('📝');
+    if (snapshot.balloon_count > 0) icons.push(`💬×${snapshot.balloon_count}`);
+    if (snapshot.sfx_count > 0) icons.push(`🎵×${snapshot.sfx_count}`);
+    
+    badge.innerHTML = `
+      <span class="text-xs font-medium text-purple-700">シーン${ctx.scene_idx}</span>
+      <span class="text-xs text-gray-500 ml-1">${icons.join(' ')}</span>
+    `;
+  }
+}
+
+/**
+ * 動画プレイヤーに Playback Context 同期をバインド
+ */
+function bindPlaybackContextSync() {
+  const video = document.getElementById('chatEditVideo');
+  if (!video) return;
+  
+  // 既存のリスナーを削除（二重バインド防止）
+  video.removeEventListener('timeupdate', syncPlaybackContext);
+  video.removeEventListener('seeked', syncPlaybackContext);
+  video.removeEventListener('play', syncPlaybackContext);
+  
+  // 新規バインド
+  video.addEventListener('timeupdate', syncPlaybackContext);
+  video.addEventListener('seeked', syncPlaybackContext);
+  video.addEventListener('play', syncPlaybackContext);
+  
+  // 初回同期
+  syncPlaybackContext();
+}
+
+// グローバル公開
+window.decideChatMode = decideChatMode;
+window.syncPlaybackContext = syncPlaybackContext;
+window.bindPlaybackContextSync = bindPlaybackContextSync;
+
+// ====================================================================
+// End of Chat Mode 判定システム
+// ====================================================================
+
 /**
  * 会話SSOT: ChatGPT体験 - 3層構造
  * 1. Conversation: 常に自然文で返答
@@ -10027,33 +10351,33 @@ async function sendChatEditMessage() {
     window.chatEditConversation = window.chatEditConversation.slice(-20);
   }
   
-  // Check: テンプレ（ルールベース）で解釈可能か先にチェック
+  // ====================================================================
+  // SSOT: Playback Context を取得（現在再生中のシーン）
+  // ====================================================================
+  const playbackContext = window.chatEditState?.playbackContext || null;
+  
+  // デバッグログ
+  console.log('[ChatEdit] PlaybackContext:', playbackContext);
+  
+  // ====================================================================
+  // Step 1: ルールベース解析を試行
+  // ====================================================================
   const parsed = parseMessageToIntent(message);
+  let intent = null;
+  let parseMode = null;
+  let assistantMessage = null;
+  let suggestionSummary = null;
+  let rejectedActions = [];
   
   if (parsed.ok && parsed.intent?.actions?.length > 0) {
-    // ルールベースで解釈成功 -> 従来のdry-runフローへ
-    window.chatEditState.explain = {
-      mode: 'regex',
-      userMessage: message,
-      intent: parsed.intent,
-      rejectedActions: [],
-      context: {
-        sceneIdx: window.chatEditState?.contextSceneIdx || 1,
-        balloonNo: window.chatEditState?.contextBalloonNo || 1,
-      },
-    };
-    if (modeLabel) {
-      modeLabel.textContent = 'ルール';
-      modeLabel.className = 'text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600';
-      modeLabel.classList.remove('hidden');
-    }
-    await processDryRunWithIntent(parsed.intent, message, history, input, sendBtn);
-    return;
+    intent = parsed.intent;
+    parseMode = 'regex';
   }
   
-  // 会話APIを使用（AI解釈 + 自然な会話）
-  if (window.chatEditState?.useAiParse) {
-    // Show AI thinking message
+  // ====================================================================
+  // Step 2: ルール解析失敗 → AI会話APIを使用
+  // ====================================================================
+  if (!intent && window.chatEditState?.useAiParse) {
     const thinkingId = `thinking-${Date.now()}`;
     history.innerHTML += `
       <div id="${thinkingId}" class="flex justify-start mb-2">
@@ -10066,22 +10390,20 @@ async function sendChatEditMessage() {
     `;
     history.scrollTop = history.scrollHeight;
     
-    if (modeLabel) {
-      modeLabel.textContent = 'AI会話';
-      modeLabel.className = 'text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700';
-      modeLabel.classList.remove('hidden');
-    }
-    
     try {
-      // 新しい会話APIを呼び出し
+      // Playback Context を含む強化版 context を構築
       const chatPayload = {
         user_message: message,
         context: {
-          scene_idx: window.chatEditState?.contextSceneIdx || 1,
+          scene_idx: playbackContext?.scene_idx || window.chatEditState?.contextSceneIdx || 1,
           balloon_no: window.chatEditState?.contextBalloonNo || 1,
           video_build_id: window.chatEditState?.buildId || null,
+          // SSOT: 現在シーンの詳細情報を追加
+          current_scene: playbackContext?.scene_snapshot || null,
+          total_scenes: (window.lastLoadedScenes || []).length || null,
+          playback_time_ms: playbackContext?.playback_time_ms || null,
         },
-        history: window.chatEditConversation.slice(0, -1), // 現在のメッセージ以外
+        history: window.chatEditConversation.slice(0, -1),
       };
       
       const chatResponse = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/chat-edits/chat`, chatPayload);
@@ -10091,90 +10413,21 @@ async function sendChatEditMessage() {
       if (thinkingEl) thinkingEl.remove();
       
       if (chatResponse.data.ok) {
-        const assistantMsg = chatResponse.data.assistant_message;
+        assistantMessage = chatResponse.data.assistant_message;
         const suggestion = chatResponse.data.suggestion;
         
+        if (suggestion?.intent?.actions?.length > 0) {
+          intent = suggestion.intent;
+          suggestionSummary = suggestion.summary;
+          rejectedActions = suggestion.rejected_actions || [];
+        }
+        parseMode = 'ai';
+        
         // 会話履歴に追加
-        window.chatEditConversation.push({ role: 'assistant', content: assistantMsg });
+        window.chatEditConversation.push({ role: 'assistant', content: assistantMessage });
         if (window.chatEditConversation.length > 20) {
           window.chatEditConversation = window.chatEditConversation.slice(-20);
         }
-        
-        // 会話返答を表示
-        history.innerHTML += `
-          <div class="flex justify-start mb-2">
-            <div class="bg-gray-100 rounded-lg px-3 py-2 max-w-[80%]">
-              <p class="text-sm text-gray-800">${escapeHtml(assistantMsg)}</p>
-            </div>
-          </div>
-        `;
-        
-        // 提案がある場合
-        if (suggestion && suggestion.intent?.actions?.length > 0) {
-          // Explain保存
-          window.chatEditState.explain = {
-            mode: 'ai',
-            userMessage: message,
-            intent: suggestion.intent,
-            rejectedActions: suggestion.rejected_actions || [],
-            context: {
-              sceneIdx: window.chatEditState?.contextSceneIdx || 1,
-              balloonNo: window.chatEditState?.contextBalloonNo || 1,
-            },
-          };
-          
-          // 提案カードを表示（安心感のあるUI）
-          const suggestionId = `suggestion-${Date.now()}`;
-          history.innerHTML += `
-            <div id="${suggestionId}" class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg p-4 border border-amber-200 mb-2 shadow-sm">
-              <div class="flex items-center gap-2 mb-3">
-                <span class="flex items-center justify-center w-8 h-8 bg-amber-100 rounded-full">
-                  <i class="fas fa-lightbulb text-amber-500"></i>
-                </span>
-                <div>
-                  <p class="text-sm font-medium text-amber-800">編集提案</p>
-                  <p class="text-xs text-amber-600">${suggestion.intent.actions.length}件の変更</p>
-                </div>
-              </div>
-              <div class="bg-white rounded-md p-3 mb-3 border border-amber-100">
-                <p class="text-sm text-gray-700 font-medium">${escapeHtml(suggestion.summary)}</p>
-              </div>
-              <p class="text-xs text-gray-500 mb-3">
-                <i class="fas fa-shield-alt mr-1 text-green-500"></i>
-                「確認する」を押すと変更内容を確認できます（まだ適用されません）
-              </p>
-              <div class="flex gap-2">
-                <button onclick="confirmSuggestion('${suggestionId}')" class="flex-1 px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600 transition-colors">
-                  <i class="fas fa-search mr-1"></i>確認する
-                </button>
-                <button onclick="dismissSuggestion('${suggestionId}')" class="px-4 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200 transition-colors">
-                  やめる
-                </button>
-              </div>
-            </div>
-          `;
-          
-          // 提案をstateに保存
-          window.chatEditState.pendingSuggestion = {
-            id: suggestionId,
-            intent: suggestion.intent,
-            summary: suggestion.summary,
-          };
-          
-          // 自動スクロールで提案カードを見えるようにする
-          setTimeout(() => {
-            const suggestionEl = document.getElementById(suggestionId);
-            if (suggestionEl) {
-              suggestionEl.scrollIntoView({ behavior: 'smooth', block: 'end' });
-            }
-          }, 100);
-        }
-        
-        input.value = '';
-        input.disabled = false;
-        sendBtn.disabled = false;
-        input.focus();
-        
       } else {
         // API failed
         history.innerHTML += `
@@ -10188,11 +10441,12 @@ async function sendChatEditMessage() {
         input.value = '';
         input.disabled = false;
         sendBtn.disabled = false;
+        window.chatEditSendInFlight = false;
         input.focus();
+        return;
       }
       
     } catch (error) {
-      // Remove thinking message
       const thinkingEl = document.getElementById(thinkingId);
       if (thinkingEl) thinkingEl.remove();
       
@@ -10210,36 +10464,187 @@ async function sendChatEditMessage() {
       input.value = '';
       input.disabled = false;
       sendBtn.disabled = false;
-      input.focus();
-    } finally {
       window.chatEditSendInFlight = false;
+      input.focus();
+      return;
+    }
+  }
+  
+  // ====================================================================
+  // Step 3: SSOT Mode 判定（A / B / C）
+  // ====================================================================
+  const modeDecision = decideChatMode({ userMessage: message, intent, playbackContext });
+  
+  console.log('[ChatEdit] Mode Decision:', modeDecision);
+  
+  // Explain 保存（デバッグ用）
+  window.chatEditState.explain = {
+    mode: parseMode || 'none',
+    userMessage: message,
+    intent: modeDecision.normalizedIntent,
+    rejectedActions,
+    context: {
+      sceneIdx: playbackContext?.scene_idx || 1,
+      balloonNo: window.chatEditState?.contextBalloonNo || 1,
+    },
+    modeDecision: modeDecision.mode,
+    modeReason: modeDecision.reason,
+  };
+  
+  // Mode ラベル更新
+  if (modeLabel) {
+    const modeLabels = {
+      'A': { text: '会話', class: 'bg-gray-100 text-gray-600' },
+      'B': { text: '提案', class: 'bg-amber-100 text-amber-700' },
+      'C': { text: '即編集', class: 'bg-green-100 text-green-700' },
+    };
+    const labelConfig = modeLabels[modeDecision.mode] || modeLabels['A'];
+    modeLabel.textContent = `${parseMode === 'ai' ? 'AI' : 'ルール'}→${labelConfig.text}`;
+    modeLabel.className = `text-[10px] px-1.5 py-0.5 rounded ${labelConfig.class}`;
+    modeLabel.classList.remove('hidden');
+  }
+  
+  // ====================================================================
+  // Step 4: Mode に応じた処理
+  // ====================================================================
+  
+  // --- Mode A: 会話のみ ---
+  if (modeDecision.mode === 'A') {
+    // AI会話メッセージがあれば表示
+    if (assistantMessage) {
+      history.innerHTML += `
+        <div class="flex justify-start mb-2">
+          <div class="bg-gray-100 rounded-lg px-3 py-2 max-w-[80%]">
+            <p class="text-sm text-gray-800">${escapeHtml(assistantMessage)}</p>
+          </div>
+        </div>
+      `;
+    } else {
+      // ルールベースもAIも使わなかった場合
+      history.innerHTML += `
+        <div class="flex justify-start mb-2">
+          <div class="bg-blue-50 rounded-lg px-3 py-2 border border-blue-200 max-w-[80%]">
+            <p class="text-sm text-blue-800">
+              <i class="fas fa-info-circle mr-1"></i>
+              修正指示として認識できませんでした。
+            </p>
+            <p class="text-xs text-blue-600 mt-1">
+              「BGMを20%に」「テロップをOFF」などの具体的な指示をお試しください。
+            </p>
+          </div>
+        </div>
+      `;
     }
     
+    input.value = '';
+    input.disabled = false;
+    sendBtn.disabled = false;
+    window.chatEditSendInFlight = false;
+    input.focus();
     history.scrollTop = history.scrollHeight;
     return;
   }
   
-  // AIがOFFでルールベースも失敗した場合
-  history.innerHTML += `
-    <div class="flex justify-start mb-2">
-      <div class="bg-blue-50 rounded-lg px-3 py-2 border border-blue-200 max-w-[80%]">
-        <p class="text-sm text-blue-800">
-          <i class="fas fa-info-circle mr-1"></i>
-          修正指示として認識できませんでした。
+  // --- Mode B: 提案カード表示 ---
+  if (modeDecision.mode === 'B') {
+    // AI会話メッセージを先に表示
+    if (assistantMessage) {
+      history.innerHTML += `
+        <div class="flex justify-start mb-2">
+          <div class="bg-gray-100 rounded-lg px-3 py-2 max-w-[80%]">
+            <p class="text-sm text-gray-800">${escapeHtml(assistantMessage)}</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    // 提案カードを表示
+    const suggestionId = `suggestion-${Date.now()}`;
+    const actionCount = modeDecision.normalizedIntent?.actions?.length || 0;
+    const summary = suggestionSummary || `${actionCount}件の編集`;
+    
+    history.innerHTML += `
+      <div id="${suggestionId}" class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg p-4 border border-amber-200 mb-2 shadow-sm">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="flex items-center justify-center w-8 h-8 bg-amber-100 rounded-full">
+            <i class="fas fa-lightbulb text-amber-500"></i>
+          </span>
+          <div>
+            <p class="text-sm font-medium text-amber-800">編集提案</p>
+            <p class="text-xs text-amber-600">${actionCount}件の変更</p>
+          </div>
+        </div>
+        <div class="bg-white rounded-md p-3 mb-3 border border-amber-100">
+          <p class="text-sm text-gray-700 font-medium">${escapeHtml(summary)}</p>
+        </div>
+        <p class="text-xs text-gray-500 mb-3">
+          <i class="fas fa-shield-alt mr-1 text-green-500"></i>
+          「確認する」を押すと変更内容を確認できます（まだ適用されません）
         </p>
-        <p class="text-xs text-blue-600 mt-1">
-          「BGMを20%に」「バブルを常時表示に」などの具体的な指示をお試しください。<br/>
-          <span class="text-blue-400">※テンプレボタンをクリックすると正しい形式が入力されます</span>
-        </p>
+        <div class="flex gap-2">
+          <button onclick="confirmSuggestion('${suggestionId}')" class="flex-1 px-4 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600 transition-colors">
+            <i class="fas fa-search mr-1"></i>確認する
+          </button>
+          <button onclick="dismissSuggestion('${suggestionId}')" class="px-4 py-2 bg-gray-100 text-gray-600 text-sm rounded-lg hover:bg-gray-200 transition-colors">
+            やめる
+          </button>
+        </div>
       </div>
-    </div>
-  `;
-  input.value = '';
-  input.disabled = false;
-  sendBtn.disabled = false;
-  window.chatEditSendInFlight = false;
-  input.focus();
-  history.scrollTop = history.scrollHeight;
+    `;
+    
+    // 提案を state に保存
+    window.chatEditState.pendingSuggestion = {
+      id: suggestionId,
+      intent: modeDecision.normalizedIntent,
+      summary: summary,
+    };
+    
+    // 自動スクロール
+    setTimeout(() => {
+      const suggestionEl = document.getElementById(suggestionId);
+      if (suggestionEl) {
+        suggestionEl.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      }
+    }, 100);
+    
+    input.value = '';
+    input.disabled = false;
+    sendBtn.disabled = false;
+    window.chatEditSendInFlight = false;
+    input.focus();
+    history.scrollTop = history.scrollHeight;
+    return;
+  }
+  
+  // --- Mode C: 直接 dry-run へ ---
+  if (modeDecision.mode === 'C') {
+    // 短い確認メッセージを表示（ルールベース時）
+    if (parseMode === 'regex') {
+      history.innerHTML += `
+        <div class="flex justify-start mb-2">
+          <div class="bg-green-50 rounded-lg px-3 py-2 border border-green-200 max-w-[80%]">
+            <p class="text-sm text-green-700">
+              <i class="fas fa-bolt mr-1"></i>
+              変更を確認しています...
+            </p>
+          </div>
+        </div>
+      `;
+    } else if (assistantMessage) {
+      // AI会話メッセージがあれば表示
+      history.innerHTML += `
+        <div class="flex justify-start mb-2">
+          <div class="bg-gray-100 rounded-lg px-3 py-2 max-w-[80%]">
+            <p class="text-sm text-gray-800">${escapeHtml(assistantMessage)}</p>
+          </div>
+        </div>
+      `;
+    }
+    
+    // dry-run へ直行（提案カードなし）
+    await processDryRunWithIntent(modeDecision.normalizedIntent, message, history, input, sendBtn);
+    return;
+  }
 }
 
 /**
@@ -10380,10 +10785,8 @@ async function processDryRunWithIntent(intent, userMessage, history, input, send
     let errorMsg = extractErrorMessage(error, '変更の確認に失敗しました');
     const statusCode = error.response?.status;
     
-    // ユーザーフレンドリーなエラーメッセージに変換
-    if (errorMsg.includes('ops array is empty')) {
-      errorMsg = '指示を理解できませんでした。より具体的に教えてください。\n例: 「BGMを50%に下げて」「シーン1のテロップをOFF」';
-    }
+    // SSOT: ユーザーフレンドリーなエラーメッセージに変換
+    errorMsg = convertToUserFriendlyError(errorMsg);
     const stageInfo = error.response?.data?.stage ? `(${error.response.data.stage})` : '';
     
     history.innerHTML += `

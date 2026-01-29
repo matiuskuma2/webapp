@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-26（Chat Edit機能改善 - SSOT化、シーン単位テロップ対応）
+- **最終更新**: 2026-01-29（Chat Edit SSOT完全実装 - Mode A/B/C判定、Playback Context、AIプロンプト強化）
 
 ---
 

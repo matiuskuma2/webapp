@@ -2693,10 +2693,31 @@ patches.post('/projects/:projectId/chat-edits/parse-ai', async (c) => {
  *   }
  * }
  */
+// SSOT: 強化版コンテキスト型定義
+interface ChatContext {
+  scene_idx?: number;
+  balloon_no?: number;
+  video_build_id?: number;
+  has_bgm?: boolean;
+  has_sfx?: boolean;
+  has_system_bgm?: boolean;
+  has_system_sfx?: boolean;
+  // SSOT: 現在シーンの詳細情報
+  current_scene?: {
+    has_image?: boolean;
+    has_audio?: boolean;
+    telop_enabled?: boolean;
+    balloon_count?: number;
+    sfx_count?: number;
+  } | null;
+  total_scenes?: number | null;
+  playback_time_ms?: number | null;
+}
+
 async function geminiChatWithSuggestion(
   apiKey: string,
   userMessage: string,
-  ctx: { scene_idx?: number; balloon_no?: number; video_build_id?: number; has_bgm?: boolean; has_sfx?: boolean; has_system_bgm?: boolean; has_system_sfx?: boolean } | null,
+  ctx: ChatContext | null,
   history: Array<{ role: 'user' | 'assistant'; content: string }> = []
 ): Promise<{
   ok: true;
@@ -2714,6 +2735,29 @@ async function geminiChatWithSuggestion(
   let ctxText = ctx?.scene_idx 
     ? `現在の文脈: シーン${ctx.scene_idx}${ctx.balloon_no ? `, バブル${ctx.balloon_no}` : ''}${ctx.video_build_id ? `, ビルド#${ctx.video_build_id}` : ''}`
     : '文脈: なし';
+  
+  // SSOT: 現在シーンの詳細情報を追加
+  if (ctx?.current_scene) {
+    const cs = ctx.current_scene;
+    const sceneDetails: string[] = [];
+    if (cs.has_image === true) sceneDetails.push('画像あり');
+    if (cs.has_image === false) sceneDetails.push('画像なし');
+    if (cs.has_audio === true) sceneDetails.push('音声あり');
+    if (cs.has_audio === false) sceneDetails.push('音声なし');
+    if (cs.telop_enabled === true) sceneDetails.push('テロップON');
+    if (cs.telop_enabled === false) sceneDetails.push('テロップOFF');
+    if (cs.balloon_count != null) sceneDetails.push(`バブル${cs.balloon_count}個`);
+    if (cs.sfx_count != null) sceneDetails.push(`SFX${cs.sfx_count}個`);
+    
+    if (sceneDetails.length > 0) {
+      ctxText += `\n現在シーンの状態: ${sceneDetails.join(', ')}`;
+    }
+  }
+  
+  // プロジェクト全体情報
+  if (ctx?.total_scenes) {
+    ctxText += `\n全シーン数: ${ctx.total_scenes}`;
+  }
   
   // Phase 1: 素材状態をコンテキストに追加
   const assetStatus: string[] = [];
@@ -2827,6 +2871,20 @@ ${ctxText}
 例5: 素材状態に「SFXなし」と「システムSFXライブラリあり」があり、ユーザーが「効果音を追加して」と言った場合
 → {"assistant_message": "効果音を追加しましょう！\\n\\n🔊 システムライブラリにSFXが用意されています！\\n\\nBuilder タブ → 各シーンの「🔊 SFX」→「ライブラリから選ぶ」で、驚き・笑い・環境音などから選べますよ！\\n\\n追加したいシーンを教えてもらえれば、具体的にご案内しますね！", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
 
+【SSOT: 代名詞の解決ルール - 超重要】
+- 「このシーン」「ここ」「今の」→ 文脈情報の scene_idx を使う
+- 「この画像」「今の画像」→ 現在シーンの画像
+- 「このテロップ」→ 現在シーンのテロップ
+- scene_idx が明示されていない場合、必ず文脈のシーン番号を使う
+
+例: 文脈が「シーン3」の場合
+ユーザー: ここのテロップを消して
+→ {"assistant_message": "シーン3のテロップを非表示にしますね！", "has_suggestion": true, "suggestion_summary": "シーン3のテロップ: ON → OFF", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_enabled_scene", "scene_idx": 3, "enabled": false}]}}
+
+例: 文脈が「シーン5」で、現在シーンにバブルが2個ある場合
+ユーザー: このセリフを常時表示にして
+→ {"assistant_message": "シーン5のバブルを常時表示にしますか？1番目と2番目、どちらのバブルですか？", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
+
 【注意事項】
 - 必ずJSON形式のみで返す（マークダウンや説明文は不要）
 - 挨拶や雑談には会話のみ返す（actions は空配列）、ただし**次のアクションに自然に誘導**
@@ -2835,6 +2893,7 @@ ${ctxText}
 - 音量は0-1の範囲（パーセントは変換）
 - 時間はミリ秒（秒は変換: 3秒 → 3000ms）
 - **素材がない場合**: システムライブラリがあれば案内、なければアップロード誘導
+- **「このシーン」「ここ」は必ず文脈のscene_idxを使う**（勝手に番号を推測しない）
 `;
 
   // Build conversation history for Gemini
@@ -2967,8 +3026,8 @@ patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
     const hasSystemBgm = (systemBgmCount?.count || 0) > 0;
     const hasSystemSfx = (systemSfxCount?.count || 0) > 0;
 
-    // Parse context with asset status
-    const ctx = body?.context && typeof body.context === 'object'
+    // Parse context with asset status + SSOT current_scene
+    const ctx: ChatContext = body?.context && typeof body.context === 'object'
       ? {
           scene_idx: typeof body.context.scene_idx === 'number' ? body.context.scene_idx : undefined,
           balloon_no: typeof body.context.balloon_no === 'number' ? body.context.balloon_no : undefined,
@@ -2977,6 +3036,18 @@ patches.post('/projects/:projectId/chat-edits/chat', async (c) => {
           has_sfx: hasSfx,
           has_system_bgm: hasSystemBgm,
           has_system_sfx: hasSystemSfx,
+          // SSOT: 現在シーンの詳細情報
+          current_scene: body.context.current_scene && typeof body.context.current_scene === 'object'
+            ? {
+                has_image: typeof body.context.current_scene.has_image === 'boolean' ? body.context.current_scene.has_image : undefined,
+                has_audio: typeof body.context.current_scene.has_audio === 'boolean' ? body.context.current_scene.has_audio : undefined,
+                telop_enabled: typeof body.context.current_scene.telop_enabled === 'boolean' ? body.context.current_scene.telop_enabled : undefined,
+                balloon_count: typeof body.context.current_scene.balloon_count === 'number' ? body.context.current_scene.balloon_count : undefined,
+                sfx_count: typeof body.context.current_scene.sfx_count === 'number' ? body.context.current_scene.sfx_count : undefined,
+              }
+            : null,
+          total_scenes: typeof body.context.total_scenes === 'number' ? body.context.total_scenes : null,
+          playback_time_ms: typeof body.context.playback_time_ms === 'number' ? body.context.playback_time_ms : null,
         }
       : { has_bgm: hasBgm, has_sfx: hasSfx, has_system_bgm: hasSystemBgm, has_system_sfx: hasSystemSfx };
 
