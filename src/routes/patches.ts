@@ -2393,7 +2393,11 @@ function generateDiffSummary(
 
   for (let i = 0; i < intent.actions.length; i++) {
     const action = intent.actions[i];
-    const normalizedOp = dryRunResult.plan?.ops_normalized[i];
+    // plan が配列の場合は ops_normalized にアクセス、そうでなければ undefined
+    const planObj = dryRunResult.plan as { ops_normalized?: unknown[] } | unknown[] | undefined;
+    const normalizedOp = (planObj && !Array.isArray(planObj) && planObj.ops_normalized) 
+      ? planObj.ops_normalized[i] 
+      : undefined;
 
     if (action.action.startsWith('balloon.')) {
       const balloonAction = action as BalloonAdjustWindowAction | BalloonAdjustPositionAction;
