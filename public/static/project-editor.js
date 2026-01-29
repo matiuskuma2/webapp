@@ -5769,6 +5769,42 @@ async function clearSceneStyle(sceneId) {
   }
 }
 
+// ✅ 新規: スタイルドロップダウン変更時の処理
+async function onStyleSelectChange(sceneId, value) {
+  const styleId = value ? parseInt(value) : null;
+  
+  try {
+    await axios.put(`${API_BASE}/scenes/${sceneId}/style`, {
+      style_preset_id: styleId
+    });
+    
+    const styleName = styleId 
+      ? (window.builderStylePresets?.find(s => s.id === styleId)?.name || `スタイルID: ${styleId}`)
+      : 'デフォルト';
+    
+    showToast(`スタイルを「${styleName}」に変更しました`, 'success');
+    
+    // ✅ ページ全体をリロードせず、選択状態を維持
+    console.log(`[StyleSelect] Scene ${sceneId} style changed to: ${styleName}`);
+  } catch (error) {
+    console.error('Style change error:', error);
+    showToast('スタイル変更に失敗しました', 'error');
+    
+    // エラー時は元の値に戻す
+    const select = document.getElementById(`style-select-${sceneId}`);
+    if (select) {
+      // 現在のシーンデータを取得して元に戻す
+      try {
+        const response = await axios.get(`${API_BASE}/scenes/${sceneId}`);
+        select.value = response.data.style_preset_id || '';
+      } catch (e) {
+        console.error('Failed to restore style select:', e);
+      }
+    }
+  }
+}
+window.onStyleSelectChange = onStyleSelectChange;
+
 // ========== Image Generation Polling ==========
 
 // Apply bulk style to all scenes
@@ -5976,22 +6012,18 @@ async function updateSingleSceneCard(sceneId) {
         `;
       } else {
         // 完了 or 失敗 or 未生成
-        const existingBtn = document.getElementById(`primaryBtn-${sceneId}`);
-        console.log(`[UpdateScene] Complete/Failed/Idle state - existingBtn: ${!!existingBtn}, hasImage: ${hasImage}, isFailed: ${isFailed}`);
+        console.log(`[UpdateScene] Complete/Failed/Idle state - hasImage: ${hasImage}, isFailed: ${isFailed}, imageStatus: ${imageStatus}`);
         
-        if (!existingBtn) {
-          console.log(`[UpdateScene] Creating new buttons for scene ${sceneId}`);
-          actionBtnContainer.innerHTML = `
-            <button id="primaryBtn-${sceneId}" class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
-              <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
-            </button>
-            <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})" class="px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
-              <i class="fas fa-history mr-2"></i>履歴
-            </button>
-          `;
-        } else {
-          console.log(`[UpdateScene] Keeping existing buttons for scene ${sceneId}`);
-        }
+        // ✅ 修正: ボタンを常に再作成してから状態を設定（生成中→完了の遷移を確実に反映）
+        console.log(`[UpdateScene] Recreating buttons for scene ${sceneId} to ensure state update`);
+        actionBtnContainer.innerHTML = `
+          <button id="primaryBtn-${sceneId}" class="flex-1 px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
+            <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+          </button>
+          <button id="historyBtn-${sceneId}" onclick="viewImageHistory(${sceneId})" class="px-4 py-2 bg-gray-300 text-white rounded-lg font-semibold touch-manipulation">
+            <i class="fas fa-history mr-2"></i>履歴
+          </button>
+        `;
         
         if (isFailed) {
           console.log(`[UpdateScene] Setting FAILED state for scene ${sceneId}`);
@@ -11276,7 +11308,18 @@ function renderSceneDetailsFold(scene) {
           <div class="text-xs font-semibold text-gray-600 mb-1">
             <i class="fas fa-palette mr-1 text-purple-500"></i>スタイル
           </div>
-          <div class="text-sm">${escapeHtml(styleLabel)}</div>
+          <select 
+            id="style-select-${scene.id}"
+            class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
+            onchange="onStyleSelectChange(${scene.id}, this.value)"
+          >
+            <option value="">デフォルト</option>
+            ${(window.builderStylePresets || []).map(style => `
+              <option value="${style.id}" ${scene.style_preset_id === style.id ? 'selected' : ''}>
+                ${escapeHtml(style.name)}
+              </option>
+            `).join('')}
+          </select>
         </div>
 
         <!-- 編集可能なプロンプトセクション -->
