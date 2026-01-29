@@ -72,6 +72,9 @@ export async function getSceneReferenceImages(
     
     const characters = result.results || [];
     
+    // 詳細ログ追加
+    console.log(`[CharacterRefHelper] Scene ${sceneId}: Query returned ${characters.length} characters`);
+    
     if (characters.length === 0) {
       console.log(`[CharacterRefHelper] Scene ${sceneId}: No characters assigned`);
       return [];
@@ -81,6 +84,9 @@ export async function getSceneReferenceImages(
     const charactersWithImages = characters
       .filter(c => c.reference_image_r2_url)
       .slice(0, maxImages);
+    
+    console.log(`[CharacterRefHelper] Scene ${sceneId}: ${charactersWithImages.length} characters have reference images`, 
+      charactersWithImages.map(c => ({ key: c.character_key, url: c.reference_image_r2_url })));
     
     // 3. Fetch each reference image from R2
     for (const char of charactersWithImages) {
@@ -129,6 +135,8 @@ export async function fetchReferenceImageFromR2(
     // Convert URL to R2 key (remove leading /)
     const r2Key = r2Url.startsWith('/') ? r2Url.substring(1) : r2Url;
     
+    console.log(`[CharacterRefHelper] Attempting to fetch from R2: ${r2Key}`);
+    
     // Fetch from R2
     const r2Object = await r2.get(r2Key);
     
@@ -137,9 +145,20 @@ export async function fetchReferenceImageFromR2(
       return null;
     }
     
-    // Convert to base64
+    console.log(`[CharacterRefHelper] R2 object found: ${r2Key}, size=${r2Object.size}, contentType=${r2Object.httpMetadata?.contentType}`);
+    
+    // Convert to base64 (chunked method to avoid stack overflow with large files)
     const arrayBuffer = await r2Object.arrayBuffer();
-    const base64Data = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+    const uint8Array = new Uint8Array(arrayBuffer);
+    
+    // Use chunked approach to avoid "Maximum call stack size exceeded" error
+    const CHUNK_SIZE = 0x8000; // 32KB chunks
+    let binaryString = '';
+    for (let i = 0; i < uint8Array.length; i += CHUNK_SIZE) {
+      const chunk = uint8Array.subarray(i, i + CHUNK_SIZE);
+      binaryString += String.fromCharCode.apply(null, Array.from(chunk));
+    }
+    const base64Data = btoa(binaryString);
     const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
     
     console.log(`[CharacterRefHelper] Loaded reference: ${characterKey} (${arrayBuffer.byteLength} bytes)`);
