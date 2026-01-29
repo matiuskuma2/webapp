@@ -7514,10 +7514,27 @@ async function updateVideoBuildRequirements() {
     
     // 警告があれば表示
     const warningCount = (preflight.warnings?.length || 0) + (preflight.utterance_errors?.length || 0);
+    
+    // PR-Audio-Bulk: 未生成音声のシーンをカウント
+    const audioMissingErrors = (preflight.utterance_errors || []).filter(e => e.type === 'AUDIO_MISSING' || e.type === 'NO_UTTERANCES');
+    const missingAudioSceneIds = [...new Set(audioMissingErrors.map(e => e.scene_id))];
+    const missingAudioCount = missingAudioSceneIds.length;
+    
+    // PR-Audio-Bulk: キャッシュに保存（一括生成で使用）
+    window.missingAudioSceneIds = missingAudioSceneIds;
+    
     if (warningCount > 0) {
-      recommendedHtml += '<div class="flex items-center text-amber-600">';
-      recommendedHtml += '<i class="fas fa-info-circle mr-2"></i>';
-      recommendedHtml += '注意事項 ' + warningCount + '件（生成には影響しません）';
+      recommendedHtml += '<div class="flex items-center justify-between text-amber-600">';
+      recommendedHtml += '<span><i class="fas fa-info-circle mr-2"></i>注意事項 ' + warningCount + '件（生成には影響しません）</span>';
+      // PR-Audio-Bulk: 未生成音声がある場合は一括生成ボタンを追加
+      if (missingAudioCount > 0) {
+        recommendedHtml += `
+          <button id="btnBulkAudioGenerate" 
+            onclick="generateAllMissingAudio()" 
+            class="ml-3 px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors whitespace-nowrap">
+            <i class="fas fa-volume-up mr-1"></i>音声を一括生成（${missingAudioCount}シーン）
+          </button>`;
+      }
       recommendedHtml += '</div>';
       if (summaryStatus === 'ok') summaryStatus = 'warning';
     }
@@ -12199,3 +12216,148 @@ async function generateSceneAudio(sceneId) {
 
 // グローバルに公開
 window.generateSceneAudio = generateSceneAudio;
+
+// ========== PR-Audio-Bulk: Preflight画面から一括音声生成 ==========
+/**
+ * 全シーンの未生成音声を一括生成
+ * - Preflight画面の「音声を一括生成」ボタンから呼び出し
+ * - window.missingAudioSceneIdsにキャッシュされたシーンIDを使用
+ * - 各シーンのutterancesを取得し、未生成分を順次生成
+ */
+async function generateAllMissingAudio() {
+  const btn = document.getElementById('btnBulkAudioGenerate');
+  const originalContent = btn?.innerHTML || '';
+  
+  // 対象シーン取得
+  const sceneIds = window.missingAudioSceneIds || [];
+  if (sceneIds.length === 0) {
+    showToast('未生成の音声がありません', 'info');
+    return;
+  }
+  
+  // 確認ダイアログ
+  const confirmed = confirm(`${sceneIds.length}シーンの音声を一括生成します。\n\nTTS APIの利用料金が発生します。続行しますか？`);
+  if (!confirmed) return;
+  
+  // ボタン無効化
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>準備中...';
+    btn.className = 'ml-3 px-3 py-1 text-xs bg-gray-400 text-white rounded-lg cursor-not-allowed whitespace-nowrap';
+  }
+  
+  let totalGenerated = 0;
+  let totalErrors = 0;
+  let processedScenes = 0;
+  
+  try {
+    // 各シーンを順次処理
+    for (const sceneId of sceneIds) {
+      processedScenes++;
+      
+      if (btn) {
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${processedScenes}/${sceneIds.length}シーン処理中...`;
+      }
+      
+      try {
+        // 1. シーンのutterancesを取得
+        const response = await axios.get(`${API_BASE}/scenes/${sceneId}/utterances`);
+        const utterances = response.data.utterances || [];
+        
+        // 未生成のutterancesをフィルタ
+        const pendingUtterances = utterances.filter(u => 
+          u.text && u.text.trim().length > 0 && 
+          (!u.audio_generation_id || u.audio_status !== 'completed')
+        );
+        
+        if (pendingUtterances.length === 0) {
+          console.log(`[BulkAudio] Scene ${sceneId}: No pending utterances`);
+          continue;
+        }
+        
+        // 2. 各utteranceの音声を生成
+        for (const utt of pendingUtterances) {
+          try {
+            // キャラクターのvoice_preset_idを取得
+            let voicePresetId = 'google-ja-JP-Standard-A'; // デフォルト
+            let provider = 'google';
+            
+            if (utt.character_key) {
+              const characterResponse = await axios.get(`${API_BASE}/projects/${window.currentProjectId}/characters`);
+              const characters = characterResponse.data.characters || [];
+              const character = characters.find(c => c.character_key === utt.character_key);
+              
+              if (character?.voice_preset_id) {
+                voicePresetId = character.voice_preset_id;
+                // providerを判定
+                if (voicePresetId.startsWith('el-') || voicePresetId.startsWith('elevenlabs')) {
+                  provider = 'elevenlabs';
+                } else if (voicePresetId.startsWith('fish:') || voicePresetId.startsWith('fish-')) {
+                  provider = 'fish';
+                } else {
+                  provider = 'google';
+                }
+              }
+            }
+            
+            // 音声生成API呼び出し
+            await axios.post(`${API_BASE}/utterances/${utt.id}/generate-audio`, {
+              voice_id: voicePresetId,
+              provider: provider,
+              format: 'mp3',
+              sample_rate: provider === 'fish' ? 44100 : 24000
+            });
+            
+            totalGenerated++;
+            
+            // レート制限対策
+            await new Promise(resolve => setTimeout(resolve, 500));
+            
+          } catch (err) {
+            console.error(`[BulkAudio] Failed utterance ${utt.id}:`, err);
+            totalErrors++;
+          }
+        }
+        
+        // シーン間でも少し待機
+        await new Promise(resolve => setTimeout(resolve, 300));
+        
+      } catch (err) {
+        console.error(`[BulkAudio] Failed scene ${sceneId}:`, err);
+        totalErrors++;
+      }
+    }
+    
+    // 結果通知
+    if (totalErrors === 0) {
+      showToast(`${totalGenerated}件の音声生成を開始しました`, 'success');
+    } else {
+      showToast(`${totalGenerated}件成功 / ${totalErrors}件失敗`, 'warning');
+    }
+    
+    // Preflightを再チェック
+    setTimeout(async () => {
+      await updateVideoBuildStatus();
+    }, 3000);
+    
+  } catch (error) {
+    console.error('[generateAllMissingAudio] Error:', error);
+    showToast(error.response?.data?.error?.message || '一括音声生成に失敗しました', 'error');
+  } finally {
+    // ボタンを再有効化（ただし完了メッセージに変更）
+    if (btn) {
+      if (totalGenerated > 0) {
+        btn.innerHTML = `<i class="fas fa-check mr-1"></i>生成開始済み（${totalGenerated}件）`;
+        btn.className = 'ml-3 px-3 py-1 text-xs bg-green-500 text-white rounded-lg whitespace-nowrap';
+        btn.disabled = true;
+      } else {
+        btn.innerHTML = originalContent;
+        btn.className = 'ml-3 px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors whitespace-nowrap';
+        btn.disabled = false;
+      }
+    }
+  }
+}
+
+// グローバルに公開
+window.generateAllMissingAudio = generateAllMissingAudio;
