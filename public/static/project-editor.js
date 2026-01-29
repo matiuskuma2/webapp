@@ -3535,8 +3535,8 @@ function renderSceneTextContent(scene) {
       <!-- ① セリフ概要（短縮・参照専用） -->
       ${renderDialogueSummary(scene)}
       
-      <!-- ② 発話サマリー（話者・件数・生成状態）- 編集ボタンなし -->
-      ${renderSpeakerSummarySection(scene, { showEditButton: false })}
+      <!-- ② 発話サマリー（話者・件数・生成状態）+ 音声生成ボタン -->
+      ${renderSpeakerSummarySection(scene, { showEditButton: true })}
       
       <!-- ③ 映像タイプ表示（画像/漫画） -->
       ${renderAssetTypeIndicator(scene)}
@@ -4097,6 +4097,7 @@ function renderSpeakerSummarySection(scene, opts = { showEditButton: true }) {
   const withAudio = utteranceStatus.with_audio || 0;
   const allGenerated = total > 0 && withAudio === total;
   const noneGenerated = withAudio === 0;
+  const partialGenerated = total > 0 && withAudio > 0 && withAudio < total;
   
   let statusBadge = '';
   if (total === 0) {
@@ -4109,13 +4110,30 @@ function renderSpeakerSummarySection(scene, opts = { showEditButton: true }) {
     statusBadge = `<span class="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs"><i class="fas fa-clock mr-1"></i>${withAudio}/${total}件生成済み</span>`;
   }
   
+  // PR-Audio-Direct: 音声生成ボタン（シーンカードから直接生成可能に）
+  // 未生成または一部未生成の場合に表示
+  const needsAudioGeneration = total > 0 && !allGenerated;
+  const audioGenButton = needsAudioGeneration ? `
+    <button 
+      id="audioGenBtn-${scene.id}"
+      onclick="generateSceneAudio(${scene.id})"
+      class="px-3 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-xs font-semibold flex items-center gap-1"
+      title="このシーンの音声を一括生成"
+    >
+      <i class="fas fa-volume-up"></i>
+      <span>音声生成</span>
+      <span class="bg-purple-400 px-1.5 rounded">${total - withAudio}件</span>
+    </button>
+  ` : '';
+  
   // Phase1: 編集ボタンはオプションで制御
   const editButton = opts.showEditButton ? `
     <button 
       onclick="openSceneEditModal(${scene.id}, 'audio')"
-      class="text-xs px-2 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
+      class="text-xs px-2 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition-colors"
+      title="音声タブで詳細設定"
     >
-      <i class="fas fa-edit mr-1"></i>編集
+      <i class="fas fa-cog mr-1"></i>詳細
     </button>
   ` : '';
   
@@ -4130,15 +4148,18 @@ function renderSpeakerSummarySection(scene, opts = { showEditButton: true }) {
         </div>
         ${statusBadge}
       </div>
-      ${opts.showEditButton ? `
-        <div class="mt-2 flex items-center justify-between">
-          <p class="text-xs text-gray-500">
-            <i class="fas fa-info-circle mr-1"></i>
-            音声タブで発話ごとに話者を設定できます
-          </p>
+      <!-- PR-Audio-Direct: 音声生成ボタンを追加 -->
+      <div class="mt-2 flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2">
+          ${audioGenButton}
           ${editButton}
         </div>
-      ` : ''}
+        ${total > 0 && utteranceStatus.total_duration_ms > 0 ? `
+          <span class="text-xs text-gray-500">
+            <i class="fas fa-clock mr-1"></i>${(utteranceStatus.total_duration_ms / 1000).toFixed(1)}秒
+          </span>
+        ` : ''}
+      </div>
     </div>
   `;
 }
@@ -12039,3 +12060,142 @@ window.savePromptAndRegenerate = savePromptAndRegenerate;
 window.loadOutputPreset = loadOutputPreset;
 window.saveOutputPreset = saveOutputPreset;
 window.updateOutputPresetPreview = updateOutputPresetPreview;
+
+// ========== PR-Audio-Direct: シーンカードから直接音声生成 ==========
+/**
+ * シーンの音声を一括生成
+ * - シーン編集モーダルを開かずに直接音声を生成
+ * - utterancesがあれば、未生成分をまとめて生成
+ * - 進捗をボタンに表示
+ * 
+ * @param {number} sceneId 
+ */
+async function generateSceneAudio(sceneId) {
+  const btn = document.getElementById(`audioGenBtn-${sceneId}`);
+  const originalContent = btn?.innerHTML || '';
+  
+  // ボタン連打防止
+  if (btn?.disabled) {
+    return;
+  }
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>準備中...';
+    btn.className = 'px-3 py-1.5 bg-yellow-500 text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-wait';
+  }
+  
+  try {
+    // 1. シーンのutterances一覧を取得
+    const response = await axios.get(`${API_BASE}/scenes/${sceneId}/utterances`);
+    const utterances = response.data.utterances || [];
+    
+    if (utterances.length === 0) {
+      showToast('このシーンには発話がありません', 'warning');
+      return;
+    }
+    
+    // 2. 未生成のutterancesをフィルタ
+    const pendingUtterances = utterances.filter(u => 
+      !u.audio_generation_id || u.audio_status !== 'completed'
+    );
+    
+    if (pendingUtterances.length === 0) {
+      showToast('すべての音声が生成済みです', 'success');
+      return;
+    }
+    
+    // 3. 各utteranceに対して音声生成APIを呼び出し
+    let successCount = 0;
+    let errorCount = 0;
+    const total = pendingUtterances.length;
+    
+    for (let i = 0; i < pendingUtterances.length; i++) {
+      const utt = pendingUtterances[i];
+      
+      // 進捗更新
+      if (btn) {
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${i + 1}/${total}生成中...`;
+      }
+      
+      try {
+        // voice_preset_idを決定（utteranceのキャラクター or デフォルト）
+        let voicePresetId = null;
+        
+        // utteranceにcharacter_keyがあればそのキャラの音声設定を使用
+        if (utt.character_key) {
+          // キャラクターの音声プリセットを取得
+          const charResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters`);
+          const characters = charResponse.data.characters || [];
+          const char = characters.find(c => c.character_key === utt.character_key);
+          if (char?.voice_preset_id) {
+            voicePresetId = char.voice_preset_id;
+          }
+        }
+        
+        // デフォルトの音声プリセット（fish.audioの場合）
+        if (!voicePresetId) {
+          // プロジェクトのデフォルト音声設定を取得
+          const projectCharsResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters`);
+          const chars = projectCharsResponse.data.characters || [];
+          // 最初のキャラクターの音声設定を使用
+          const firstCharWithVoice = chars.find(c => c.voice_preset_id);
+          if (firstCharWithVoice?.voice_preset_id) {
+            voicePresetId = firstCharWithVoice.voice_preset_id;
+          }
+        }
+        
+        // 音声生成API呼び出し
+        const genResponse = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
+          voice_id: voicePresetId || 'ja-JP-Standard-A', // フォールバック: Google TTS
+          text_override: utt.text
+        });
+        
+        if (genResponse.data.audio_generation?.id) {
+          // 生成開始成功 - utteranceとの紐付けを更新
+          await axios.put(`${API_BASE}/scenes/${sceneId}/utterances/${utt.id}`, {
+            audio_generation_id: genResponse.data.audio_generation.id
+          });
+          successCount++;
+        }
+        
+        // レート制限対策: 少し待機
+        if (i < pendingUtterances.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        
+      } catch (err) {
+        console.error(`[Audio] Failed to generate for utterance ${utt.id}:`, err);
+        errorCount++;
+      }
+    }
+    
+    // 4. 結果通知
+    if (errorCount === 0) {
+      showToast(`${successCount}件の音声生成を開始しました`, 'success');
+    } else {
+      showToast(`${successCount}件成功 / ${errorCount}件失敗`, errorCount > 0 ? 'warning' : 'success');
+    }
+    
+    // 5. シーンリストを更新（音声ステータス反映）
+    setTimeout(async () => {
+      if (typeof window.initBuilderTab === 'function') {
+        await window.initBuilderTab();
+      }
+    }, 2000);
+    
+  } catch (error) {
+    console.error('[generateSceneAudio] Error:', error);
+    showToast(error.response?.data?.error?.message || '音声生成に失敗しました', 'error');
+  } finally {
+    // ボタンを元に戻す
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = originalContent;
+      btn.className = 'px-3 py-1.5 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-xs font-semibold flex items-center gap-1';
+    }
+  }
+}
+
+// グローバルに公開
+window.generateSceneAudio = generateSceneAudio;
