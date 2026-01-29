@@ -9689,8 +9689,30 @@ function openChatEditPanel(buildId, videoUrl) {
 function closeChatEditModal() {
   const modal = document.getElementById('chatEditModal');
   if (!modal) return;
+  
+  // 動画を停止
+  const video = document.getElementById('chatEditVideo');
+  if (video) {
+    video.pause();
+    video.currentTime = 0;
+  }
+  
+  // 音声・BGMを停止
+  if (typeof stopAllAudioPreviews === 'function') {
+    stopAllAudioPreviews();
+  }
+  
+  // 状態をリセット
+  if (window.chatEditState) {
+    window.chatEditState.pendingSuggestion = null;
+    window.chatEditState.dryRunResult = null;
+    window.chatEditState.patchRequestId = null;
+  }
+  
   modal.classList.add('hidden');
   document.body.classList.remove('overflow-hidden');
+  
+  console.log('[ChatEdit] Modal closed, all audio/video stopped');
 }
 
 // Backward compatibility alias
