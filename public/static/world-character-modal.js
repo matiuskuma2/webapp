@@ -259,14 +259,18 @@
                 <textarea id="wc-appearance" 
                   class="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-gray-400" 
                   rows="2" 
-                  placeholder="例: 32歳の日本人女性、黒髪ショートボブ、オフィスカジュアル"></textarea>
+                  placeholder="例: 三毛猫、オレンジと白の毛並み、黄色い目、ふわふわの尻尾"></textarea>
                 <p class="text-xs text-gray-600 mt-1">
                   <i class="fas fa-info-circle mr-1"></i>
-                  このキャラの基本的な外見。全シーンで適用されます。
+                  このキャラの<strong>視覚的な外見</strong>を記載。全シーンで適用されます。
                 </p>
-                <p class="text-xs text-orange-600 mt-1">
-                  <i class="fas fa-exclamation-triangle mr-1"></i>
-                  見た目のみ記載（セリフ・感情・行動は入れない）
+                <p class="text-xs text-red-600 mt-1 font-medium">
+                  <i class="fas fa-ban mr-1"></i>
+                  NG: 性格・台詞・感情（例: 自信過剰、明るい性格）→ 画像内にテキストとして描画されます
+                </p>
+                <p class="text-xs text-green-600 mt-1">
+                  <i class="fas fa-check mr-1"></i>
+                  OK: 見た目（例: 毛並み、目の色、服装、体型、表情の傾向）
                 </p>
               </div>
               
