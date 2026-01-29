@@ -1926,8 +1926,10 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     return c.json({ error: 'Invalid JSON body' }, 400);
   }
 
-  // 1. Intent スキーマ確認
-  if (!body.intent || body.intent.schema !== 'rilarc_intent_v1') {
+  // 全体をtry-catchで囲んでエラーを詳細にログ
+  try {
+    // 1. Intent スキーマ確認
+    if (!body.intent || body.intent.schema !== 'rilarc_intent_v1') {
     return c.json({ 
       error: 'Invalid intent schema. Expected: rilarc_intent_v1',
       received: body.intent?.schema,
@@ -2057,6 +2059,20 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     // PR-5-3b: テロップ設定のオーバーライド
     telop_settings_override: resolution.telop_settings_override,
   });
+  } catch (error) {
+    // 詳細なエラーログ
+    console.error('[chat-edits/dry-run] Error:', {
+      projectId,
+      user_message: body?.user_message,
+      intent: body?.intent,
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return c.json({ 
+      error: 'Internal server error during dry-run',
+      details: error instanceof Error ? error.message : String(error),
+    }, 500);
+  }
 });
 
 /**
@@ -2458,7 +2474,14 @@ function generateDiffSummary(
         const ta = action as TelopSetEnabledAction;
         changes.push({
           type: 'telop',
-          target: 'テロップ',
+          target: 'テロップ（全体）',
+          detail: ta.enabled ? '表示: ON' : '表示: OFF',
+        });
+      } else if (action.action === 'telop.set_enabled_scene') {
+        const ta = action as TelopSetEnabledSceneAction;
+        changes.push({
+          type: 'telop',
+          target: `シーン${ta.scene_idx}のテロップ`,
           detail: ta.enabled ? '表示: ON' : '表示: OFF',
         });
       } else if (action.action === 'telop.set_position') {
