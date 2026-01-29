@@ -5940,7 +5940,10 @@ async function updateSingleSceneCard(sceneId) {
       const isGenerating = imageStatus === 'generating';
       const isFailed = imageStatus === 'failed';
       
-      if (isGenerating || isProcessing) {
+      // ✅ 修正: imageStatus が 'completed' の場合は生成中状態を無視して完了表示にする
+      const shouldShowGenerating = (isGenerating || isProcessing) && imageStatus !== 'completed';
+      
+      if (shouldShowGenerating) {
         // 生成中 - ✅ setPrimaryButtonState()を使用
         const timerRunning = window.generatingSceneWatch?.[sceneId];
         const existingBtn = document.getElementById(`primaryBtn-${sceneId}`);

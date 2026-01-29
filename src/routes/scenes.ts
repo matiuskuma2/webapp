@@ -578,7 +578,23 @@ scenes.delete('/:id', async (c) => {
 scenes.post('/:id/scenes/reorder', async (c) => {
   try {
     const projectId = c.req.param('id')
-    const { scene_ids } = await c.req.json()
+    
+    // リクエストボディを取得
+    let requestBody: any
+    try {
+      requestBody = await c.req.json()
+    } catch (parseError) {
+      console.error('[Reorder] JSON parse error:', parseError)
+      return c.json({
+        error: {
+          code: 'PARSE_ERROR',
+          message: 'Invalid JSON in request body'
+        }
+      }, 400)
+    }
+    
+    const { scene_ids } = requestBody
+    console.log(`[Reorder] projectId=${projectId}, scene_ids=`, scene_ids)
 
     // バリデーション
     if (!Array.isArray(scene_ids) || scene_ids.length === 0) {
@@ -642,12 +658,13 @@ scenes.post('/:id/scenes/reorder', async (c) => {
       message: 'Scenes reordered successfully',
       scenes: reorderedScenes
     })
-  } catch (error) {
-    console.error('Error reordering scenes:', error)
+  } catch (error: any) {
+    console.error('[Reorder] Error:', error?.message || error)
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Failed to reorder scenes'
+        message: 'Failed to reorder scenes',
+        details: error?.message || String(error)
       }
     }, 500)
   }
