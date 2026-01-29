@@ -222,7 +222,8 @@ comic.post('/:id/comic/draft', async (c) => {
 
 /**
  * PUT /api/scenes/:id/display-asset-type
- * 採用切替（image ↔ comic）
+ * 採用切替（image ↔ comic ↔ video）
+ * Phase1.8: 動画をサポート
  */
 comic.put('/:id/display-asset-type', async (c) => {
   try {
@@ -231,9 +232,9 @@ comic.put('/:id/display-asset-type', async (c) => {
     const { display_asset_type } = body
 
     // バリデーション
-    if (!['image', 'comic'].includes(display_asset_type)) {
+    if (!['image', 'comic', 'video'].includes(display_asset_type)) {
       return c.json({
-        error: { code: 'INVALID_REQUEST', message: 'display_asset_type must be "image" or "comic"' }
+        error: { code: 'INVALID_REQUEST', message: 'display_asset_type must be "image", "comic", or "video"' }
       }, 400)
     }
 
@@ -254,6 +255,19 @@ comic.put('/:id/display-asset-type', async (c) => {
       if (!comicData?.published?.image_generation_id) {
         return c.json({
           error: { code: 'NO_PUBLISHED_COMIC', message: 'No published comic available. Please publish first.' }
+        }, 400)
+      }
+    }
+
+    // videoに切り替える場合、完了済み動画が存在するか確認
+    if (display_asset_type === 'video') {
+      const video = await c.env.DB.prepare(`
+        SELECT id FROM video_generations 
+        WHERE scene_id = ? AND is_active = 1 AND status = 'completed'
+      `).bind(sceneId).first()
+      if (!video) {
+        return c.json({
+          error: { code: 'NO_COMPLETED_VIDEO', message: 'No completed video available.' }
         }, 400)
       }
     }

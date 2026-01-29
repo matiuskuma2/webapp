@@ -3622,30 +3622,44 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
     
 
     
-    <!-- Phase1.7: 採用切替ボタン（公開漫画がある場合に表示、imageUrlの有無は問わない） -->
-    ${hasPublishedComic ? `
+    <!-- Phase1.8: 採用切替ボタン（漫画または動画がある場合に表示） -->
+    ${(hasPublishedComic || hasCompletedVideo) ? `
     <div class="flex gap-2 mt-2">
       <button 
         onclick="switchDisplayAssetType(${scene.id}, 'image')"
-        class="flex-1 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+        class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
           displayAssetType === 'image' 
             ? 'bg-blue-600 text-white' 
             : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
         }"
         ${!imageUrl && !latestImageUrl ? 'disabled title="AI画像がありません"' : ''}
       >
-        <i class="fas fa-image mr-1"></i>画像を採用
+        <i class="fas fa-image mr-1"></i>画像
       </button>
+      ${hasPublishedComic ? `
       <button 
         onclick="switchDisplayAssetType(${scene.id}, 'comic')"
-        class="flex-1 px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors ${
+        class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
           displayAssetType === 'comic' 
             ? 'bg-orange-600 text-white' 
             : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
         }"
       >
-        <i class="fas fa-comment-alt mr-1"></i>漫画を採用
+        <i class="fas fa-comment-alt mr-1"></i>漫画
       </button>
+      ` : ''}
+      ${hasCompletedVideo ? `
+      <button 
+        onclick="switchDisplayAssetType(${scene.id}, 'video')"
+        class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+          displayAssetType === 'video' 
+            ? 'bg-purple-600 text-white' 
+            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+        }"
+      >
+        <i class="fas fa-video mr-1"></i>動画
+      </button>
+      ` : ''}
     </div>
     ` : ''}
     
@@ -3679,14 +3693,15 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
  */
 async function switchDisplayAssetType(sceneId, newType) {
   try {
-    showToast(`${newType === 'comic' ? '漫画' : '画像'}に切り替え中...`, 'info');
+    const typeLabel = { image: '画像', comic: '漫画', video: '動画' }[newType] || newType;
+    showToast(`${typeLabel}に切り替え中...`, 'info');
     
     const res = await axios.put(`/api/scenes/${sceneId}/display-asset-type`, {
       display_asset_type: newType
     });
     
     if (res.data.success) {
-      showToast(`${newType === 'comic' ? '漫画' : '画像'}を採用しました`, 'success');
+      showToast(`${typeLabel}を採用しました`, 'success');
       
       // Phase1.7: 対象シーンのみを再レンダリング（スクロール位置維持）
       try {
@@ -8418,8 +8433,33 @@ async function startVideoBuild() {
     },
   };
   
+  // PR-Audio-Bulk: 未生成音声チェック
+  const preflight = window.videoBuildPreflightCache;
+  const audioMissingErrors = (preflight?.utterance_errors || []).filter(
+    e => e.type === 'AUDIO_MISSING' || e.type === 'NO_UTTERANCES'
+  );
+  const missingAudioSceneIds = [...new Set(audioMissingErrors.map(e => e.scene_id))];
+  const hasMissingAudio = missingAudioSceneIds.length > 0;
+
+  // 未生成音声がある場合、先に生成するか確認
+  if (hasMissingAudio) {
+    const result = await showAudioConfirmDialog(missingAudioSceneIds.length);
+    if (result === 'cancel') {
+      window.videoBuildStartInFlight = false;
+      return;
+    }
+    if (result === 'generate') {
+      window.videoBuildStartInFlight = false;
+      // 音声生成を実行し、完了後に再度ビルドを開始
+      await generateAllMissingAudio();
+      return; // 音声生成完了後にユーザーが再度ビルドを開始
+    }
+    // result === 'skip' の場合はそのまま続行（無音動画）
+  }
+
   // Confirm
   if (!confirm('動画を生成しますか？\n\n生成後は「修正（チャット）」で調整できます。')) {
+    window.videoBuildStartInFlight = false;
     return;
   }
   
@@ -12361,3 +12401,106 @@ async function generateAllMissingAudio() {
 
 // グローバルに公開
 window.generateAllMissingAudio = generateAllMissingAudio;
+
+/**
+ * PR-Audio-Bulk: 未生成音声確認ダイアログ
+ * 動画ビルド時に未生成音声がある場合に表示
+ * @param {number} missingCount - 未生成シーン数
+ * @returns {Promise<'generate'|'skip'|'cancel'>}
+ */
+async function showAudioConfirmDialog(missingCount) {
+  return new Promise((resolve) => {
+    // モーダルを作成
+    const modalHtml = `
+      <div id="audioConfirmModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl max-w-md w-full mx-4 overflow-hidden">
+          <div class="bg-amber-500 px-4 py-3">
+            <h3 class="text-lg font-bold text-white flex items-center">
+              <i class="fas fa-exclamation-triangle mr-2"></i>
+              未生成の音声があります
+            </h3>
+          </div>
+          <div class="p-4">
+            <p class="text-gray-700 mb-4">
+              <strong>${missingCount}シーン</strong>で音声が生成されていません。<br>
+              このまま動画を作成すると、該当シーンは無音になります。
+            </p>
+            <div class="bg-gray-100 rounded-lg p-3 mb-4 text-sm">
+              <p class="text-gray-600">
+                <i class="fas fa-info-circle mr-1 text-blue-500"></i>
+                音声生成にはTTS APIの利用料金が発生します
+              </p>
+            </div>
+            <div class="flex flex-col gap-2">
+              <button 
+                id="audioConfirmGenerate" 
+                class="w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-semibold transition-colors"
+              >
+                <i class="fas fa-volume-up mr-2"></i>先に音声を生成する（推奨）
+              </button>
+              <button 
+                id="audioConfirmSkip" 
+                class="w-full px-4 py-3 bg-gray-500 hover:bg-gray-600 text-white rounded-lg font-semibold transition-colors"
+              >
+                <i class="fas fa-volume-mute mr-2"></i>無音のまま動画を作成
+              </button>
+              <button 
+                id="audioConfirmCancel" 
+                class="w-full px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg transition-colors"
+              >
+                キャンセル
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    
+    const modal = document.getElementById('audioConfirmModal');
+    const btnGenerate = document.getElementById('audioConfirmGenerate');
+    const btnSkip = document.getElementById('audioConfirmSkip');
+    const btnCancel = document.getElementById('audioConfirmCancel');
+    
+    const cleanup = () => {
+      modal.remove();
+    };
+    
+    btnGenerate.addEventListener('click', () => {
+      cleanup();
+      resolve('generate');
+    });
+    
+    btnSkip.addEventListener('click', () => {
+      cleanup();
+      resolve('skip');
+    });
+    
+    btnCancel.addEventListener('click', () => {
+      cleanup();
+      resolve('cancel');
+    });
+    
+    // モーダル外クリックでキャンセル
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        cleanup();
+        resolve('cancel');
+      }
+    });
+    
+    // ESCキーでキャンセル
+    const handleEsc = (e) => {
+      if (e.key === 'Escape') {
+        cleanup();
+        document.removeEventListener('keydown', handleEsc);
+        resolve('cancel');
+      }
+    };
+    document.addEventListener('keydown', handleEsc);
+  });
+}
+
+// グローバルに公開
+window.showAudioConfirmDialog = showAudioConfirmDialog;
