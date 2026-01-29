@@ -10,8 +10,12 @@
  * - Reference images are fetched from R2 and converted to base64
  * 
  * Usage:
- *   const refImages = await getSceneReferenceImages(db, r2, sceneId);
+ *   const refImages = await getSceneReferenceImages(db, r2, sceneId, 5, debug);
  *   // Pass to generateImageWithRetry()
+ * 
+ * Debug Mode:
+ *   - Set DEBUG_REFERENCE_IMAGES='1' in Cloudflare env for verbose logging
+ *   - Pass debug=true to getSceneReferenceImages()
  */
 
 import type { D1Database } from '@cloudflare/workers-types';
@@ -38,19 +42,46 @@ export interface CharacterForReference {
 export const MAX_REFERENCE_IMAGES = 5;
 
 /**
+ * Convert ArrayBuffer to base64 (optimized for large files)
+ * Uses chunked approach to avoid stack overflow
+ * 
+ * @param ab ArrayBuffer to convert
+ * @returns base64 encoded string
+ */
+function arrayBufferToBase64(ab: ArrayBuffer): string {
+  const bytes = new Uint8Array(ab);
+  const CHUNK_SIZE = 0x8000; // 32KB chunks
+  let binary = '';
+
+  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+    // Avoid Array.from for better performance
+    let chunkStr = '';
+    for (let j = 0; j < chunk.length; j++) {
+      chunkStr += String.fromCharCode(chunk[j]);
+    }
+    binary += chunkStr;
+  }
+
+  return btoa(binary);
+}
+
+/**
  * Fetch reference images for characters in a scene
  * 
  * @param db D1 Database
  * @param r2 R2 Bucket
  * @param sceneId Scene ID
  * @param maxImages Maximum images to return (default: 5)
+ * @param debug Enable verbose logging (default: false)
  * @returns Array of ReferenceImage objects for Gemini API
  */
 export async function getSceneReferenceImages(
   db: D1Database,
   r2: R2Bucket,
   sceneId: number,
-  maxImages: number = MAX_REFERENCE_IMAGES
+  maxImages: number = MAX_REFERENCE_IMAGES,
+  debug: boolean = false
 ): Promise<ReferenceImage[]> {
   const referenceImages: ReferenceImage[] = [];
   
@@ -72,11 +103,12 @@ export async function getSceneReferenceImages(
     
     const characters = result.results || [];
     
-    // 詳細ログ追加
-    console.log(`[CharacterRefHelper] Scene ${sceneId}: Query returned ${characters.length} characters`);
+    if (debug) {
+      console.log(`[CharacterRefHelper] Scene ${sceneId}: Query returned ${characters.length} characters`);
+    }
     
     if (characters.length === 0) {
-      console.log(`[CharacterRefHelper] Scene ${sceneId}: No characters assigned`);
+      if (debug) console.log(`[CharacterRefHelper] Scene ${sceneId}: No characters assigned`);
       return [];
     }
     
@@ -85,8 +117,10 @@ export async function getSceneReferenceImages(
       .filter(c => c.reference_image_r2_url)
       .slice(0, maxImages);
     
-    console.log(`[CharacterRefHelper] Scene ${sceneId}: ${charactersWithImages.length} characters have reference images`, 
-      charactersWithImages.map(c => ({ key: c.character_key, url: c.reference_image_r2_url })));
+    if (debug) {
+      console.log(`[CharacterRefHelper] Scene ${sceneId}: ${charactersWithImages.length} characters have reference images`, 
+        charactersWithImages.map(c => ({ key: c.character_key, url: c.reference_image_r2_url })));
+    }
     
     // 3. Fetch each reference image from R2
     for (const char of charactersWithImages) {
@@ -95,21 +129,26 @@ export async function getSceneReferenceImages(
           r2,
           char.reference_image_r2_url!,
           char.character_key,
-          char.character_name
+          char.character_name,
+          debug
         );
         
         if (refImage) {
           referenceImages.push(refImage);
         }
       } catch (error) {
+        // Always log errors (not gated by debug)
         console.warn(`[CharacterRefHelper] Failed to load ref for ${char.character_key}:`, error);
         // Continue with other characters
       }
     }
     
-    console.log(`[CharacterRefHelper] Scene ${sceneId}: Loaded ${referenceImages.length}/${charactersWithImages.length} reference images`);
+    if (debug) {
+      console.log(`[CharacterRefHelper] Scene ${sceneId}: Loaded ${referenceImages.length}/${charactersWithImages.length} reference images`);
+    }
     
   } catch (error) {
+    // Always log errors (not gated by debug)
     console.error(`[CharacterRefHelper] Error fetching scene characters:`, error);
   }
   
@@ -123,45 +162,45 @@ export async function getSceneReferenceImages(
  * @param r2Url R2 URL (e.g., "/images/characters/1/hero_123.png")
  * @param characterKey Character key for logging
  * @param characterName Character name for metadata
+ * @param debug Enable verbose logging (default: false)
  * @returns ReferenceImage or null if failed
  */
 export async function fetchReferenceImageFromR2(
   r2: R2Bucket,
   r2Url: string,
   characterKey: string,
-  characterName?: string
+  characterName?: string,
+  debug: boolean = false
 ): Promise<ReferenceImage | null> {
   try {
     // Convert URL to R2 key (remove leading /)
     const r2Key = r2Url.startsWith('/') ? r2Url.substring(1) : r2Url;
     
-    console.log(`[CharacterRefHelper] Attempting to fetch from R2: ${r2Key}`);
+    if (debug) {
+      console.log(`[CharacterRefHelper] Attempting to fetch from R2: ${r2Key}`);
+    }
     
     // Fetch from R2
     const r2Object = await r2.get(r2Key);
     
     if (!r2Object) {
+      // Always warn on missing files (not gated by debug)
       console.warn(`[CharacterRefHelper] R2 object not found: ${r2Key}`);
       return null;
     }
     
-    console.log(`[CharacterRefHelper] R2 object found: ${r2Key}, size=${r2Object.size}, contentType=${r2Object.httpMetadata?.contentType}`);
-    
-    // Convert to base64 (chunked method to avoid stack overflow with large files)
-    const arrayBuffer = await r2Object.arrayBuffer();
-    const uint8Array = new Uint8Array(arrayBuffer);
-    
-    // Use chunked approach to avoid "Maximum call stack size exceeded" error
-    const CHUNK_SIZE = 0x8000; // 32KB chunks
-    let binaryString = '';
-    for (let i = 0; i < uint8Array.length; i += CHUNK_SIZE) {
-      const chunk = uint8Array.subarray(i, i + CHUNK_SIZE);
-      binaryString += String.fromCharCode.apply(null, Array.from(chunk));
+    if (debug) {
+      console.log(`[CharacterRefHelper] R2 object found: ${r2Key}, size=${r2Object.size}, contentType=${r2Object.httpMetadata?.contentType}`);
     }
-    const base64Data = btoa(binaryString);
+    
+    // Convert to base64 (optimized, chunked method)
+    const arrayBuffer = await r2Object.arrayBuffer();
+    const base64Data = arrayBufferToBase64(arrayBuffer);
     const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
     
-    console.log(`[CharacterRefHelper] Loaded reference: ${characterKey} (${arrayBuffer.byteLength} bytes)`);
+    if (debug) {
+      console.log(`[CharacterRefHelper] Loaded reference: ${characterKey} (${arrayBuffer.byteLength} bytes)`);
+    }
     
     return {
       base64Data,
@@ -170,6 +209,7 @@ export async function fetchReferenceImageFromR2(
       characterName: characterName || characterKey
     };
   } catch (error) {
+    // Always log errors (not gated by debug)
     console.error(`[CharacterRefHelper] Failed to fetch R2 image ${r2Url}:`, error);
     return null;
   }

@@ -528,10 +528,13 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
           }
           
           // SSOT: キャラクター参照画像取得（character-reference-helper使用）
+          const debugRefImages = c.env.DEBUG_REFERENCE_IMAGES === '1';
           const ssotReferenceImages = await getSceneReferenceImages(
             c.env.DB,
             c.env.R2,
-            scene.id as number
+            scene.id as number,
+            5,
+            debugRefImages
           );
           
           referenceImages = ssotReferenceImages.map(img => ({
@@ -539,8 +542,6 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
             mimeType: img.mimeType,
             characterName: img.characterName
           }));
-          
-          console.log(`[Legacy Batch] Scene ${scene.id}: ${referenceImages.length} character refs loaded`);
         } catch (charError) {
           console.warn(`[Legacy Batch] Failed to fetch characters for scene ${scene.id}:`, charError);
         }
@@ -895,10 +896,13 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       
       // SSOT: キャラクター参照画像取得（character-reference-helper使用）
       // ※ カスタムプロンプトでも参照画像は常に使用する（視覚的一貫性のため）
+      const debugRefImages = c.env.DEBUG_REFERENCE_IMAGES === '1';
       const ssotReferenceImages = await getSceneReferenceImages(
         c.env.DB,
         c.env.R2,
-        parseInt(sceneId)
+        parseInt(sceneId),
+        5,
+        debugRefImages
       );
       
       // 型変換（characterKey → 省略）
@@ -1218,10 +1222,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           }
           
           // SSOT: キャラクター参照画像取得（character-reference-helper使用）
+          const debugRefImages = c.env.DEBUG_REFERENCE_IMAGES === '1';
           const ssotReferenceImages = await getSceneReferenceImages(
             c.env.DB,
             c.env.R2,
-            scene.id as number
+            scene.id as number,
+            5,
+            debugRefImages
           );
           
           referenceImages = ssotReferenceImages.map(img => ({
@@ -1229,8 +1236,6 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
             mimeType: img.mimeType,
             characterName: img.characterName
           }));
-          
-          console.log(`[Batch Image Gen] Scene ${scene.id}: ${referenceImages.length} character refs loaded`);
         } catch (charError) {
           console.warn(`[Batch Image Gen] Failed to fetch characters for scene ${scene.id}:`, charError);
         }
