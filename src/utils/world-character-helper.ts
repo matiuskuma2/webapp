@@ -140,14 +140,19 @@ export function enhancePromptWithWorldAndCharacters(
   }
   
   // Phase X-7: Character layer composition (A/B/C)
+  // IMPORTANT: appearance_description は視覚的特徴の説明であり、
+  // 画像内にテキストとして描画されるべきではない
   if (characters.length > 0) {
     const characterDescriptions = characters
       .filter(c => c.appearance_description || c.story_traits || c.scene_override)
       .map(c => {
         const prefix = c.is_primary ? '[Main Character]' : '[Character]';
         
-        // A層: Identity（本人性）- 常に含める
-        const identityPart = c.appearance_description || '';
+        // A層: Identity（本人性）- 視覚的特徴として含める
+        // NOTE: "visual appearance" と明示してテキスト描画を防ぐ
+        const identityPart = c.appearance_description 
+          ? `(visual appearance: ${c.appearance_description})`
+          : '';
         
         // 状態部分: CがあればC、なければB
         // C層: 例外状態（Bを上書き）
@@ -164,7 +169,7 @@ export function enhancePromptWithWorldAndCharacters(
           parts.push(statePart);
         }
         
-        const description = parts.join('。');
+        const description = parts.join(' ');
         
         // キャラ名は必ず含める（参照画像との紐付け）
         if (description) {

@@ -1473,8 +1473,11 @@ async function generateImageWithRetry(
         }
         console.log('[Gemini Image Gen] Custom prompt mode - skipping default instructions')
       } else {
-        // 通常モード: 日本語指示 + 参照画像説明
+        // 通常モード: 日本語指示 + 参照画像説明 + キャラ特徴のテキスト描画禁止
         const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
+        // キャラクターの「visual appearance」説明はキャラの見た目を指定するものであり、
+        // 画像内にテキストとして描画してはいけない
+        const characterTraitInstruction = 'NOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually (clothing, features, expression, etc.). Do NOT render these descriptions as text in the image.'
         
         if (limitedImages.length > 0) {
           const charNames = limitedImages
@@ -1482,12 +1485,12 @@ async function generateImageWithRetry(
             .map(img => img.characterName)
             .join(', ')
           if (charNames) {
-            enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency (${charNames}), generate: ${prompt}`
+            enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\nUsing the provided reference images for character consistency (${charNames}), generate: ${prompt}`
           } else {
-            enhancedPrompt = `${japaneseTextInstruction}\n\nUsing the provided reference images for character consistency, generate: ${prompt}`
+            enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\nUsing the provided reference images for character consistency, generate: ${prompt}`
           }
         } else {
-          enhancedPrompt = `${japaneseTextInstruction}\n\n${prompt}`
+          enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\n${prompt}`
         }
       }
       
