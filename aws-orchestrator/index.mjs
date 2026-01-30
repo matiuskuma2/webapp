@@ -124,6 +124,35 @@ async function handleStart(body) {
       webappJson.scenes?.reduce((sum, s) => sum + (s.duration_ms || 3000), 0) || 3000;
     const totalFrames = Math.ceil((totalDurationMs / 1000) * fps);
     
+    // Remotion Lambda has a limit of 200 concurrent functions
+    // With framesPerLambda = 60, max frames = 200 * 60 = 12000 (~400 seconds @ 30fps)
+    const FRAMES_PER_LAMBDA = 60;
+    const MAX_LAMBDA_FUNCTIONS = 200;
+    const maxFrames = MAX_LAMBDA_FUNCTIONS * FRAMES_PER_LAMBDA;
+    const estimatedFunctions = Math.ceil(totalFrames / FRAMES_PER_LAMBDA);
+    
+    if (totalFrames > maxFrames) {
+      const maxDurationSec = Math.floor(maxFrames / fps);
+      const currentDurationSec = Math.floor(totalFrames / fps);
+      console.error(`Video too long: ${totalFrames} frames (${currentDurationSec}s) exceeds max ${maxFrames} frames (${maxDurationSec}s)`);
+      return jsonResponse(400, {
+        success: false,
+        error: {
+          code: 'VIDEO_TOO_LONG',
+          message: `動画が長すぎます。現在: ${currentDurationSec}秒、最大: ${maxDurationSec}秒（約${Math.floor(maxDurationSec / 60)}分${maxDurationSec % 60}秒）。シーンを減らすか、分割してください。`
+        },
+        details: {
+          totalFrames,
+          maxFrames,
+          estimatedFunctions,
+          maxFunctions: MAX_LAMBDA_FUNCTIONS,
+          framesPerLambda: FRAMES_PER_LAMBDA,
+          currentDurationSec,
+          maxDurationSec
+        }
+      });
+    }
+    
     console.log('Starting Remotion render:', {
       video_build_id,
       renderId,
@@ -132,6 +161,8 @@ async function handleStart(body) {
       composition: 'RilarcVideo',
       totalFrames,
       totalDurationMs,
+      estimatedFunctions,
+      framesPerLambda: FRAMES_PER_LAMBDA,
       inputPropsSize: JSON.stringify(inputProps).length
     });
     
@@ -150,7 +181,7 @@ async function handleStart(body) {
       },
       // Frame range - null to let Remotion auto-calculate, or specify [start, end]
       frameRange: null,
-      framesPerLambda: 20,
+      framesPerLambda: FRAMES_PER_LAMBDA,
       concurrency: null,  // Let Remotion decide based on framesPerLambda
       logLevel: 'info',
       downloadBehavior: {
