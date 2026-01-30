@@ -246,6 +246,203 @@ audioLibrary.get('/audio-library', async (c) => {
 });
 
 // ====================================================================
+// GET /api/audio-library/system - システムライブラリ（管理者登録）一覧
+// SceneEditModalのBGMタブで呼び出される
+// ====================================================================
+audioLibrary.get('/audio-library/system', async (c) => {
+  try {
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
+    const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+    
+    // クエリパラメータ取得
+    const category = c.req.query('category'); // 'bgm' | 'sfx' (audio_type)
+    const mood = c.req.query('mood');
+    const search = c.req.query('search');
+    const limit = Math.min(100, parseInt(c.req.query('limit') || '50', 10));
+    const offset = parseInt(c.req.query('offset') || '0', 10);
+
+    // クエリ構築
+    let whereClause = 'is_active = 1';
+    const params: any[] = [];
+
+    // categoryはaudio_typeとして扱う（bgm/sfx）
+    if (category && (category === 'bgm' || category === 'sfx')) {
+      whereClause += ' AND audio_type = ?';
+      params.push(category);
+    }
+
+    if (mood) {
+      whereClause += ' AND mood = ?';
+      params.push(mood);
+    }
+
+    if (search) {
+      whereClause += ' AND (name LIKE ? OR tags LIKE ?)';
+      const searchPattern = `%${search}%`;
+      params.push(searchPattern, searchPattern);
+    }
+
+    // 総件数取得
+    const countResult = await c.env.DB.prepare(`
+      SELECT COUNT(*) as total FROM system_audio_library WHERE ${whereClause}
+    `).bind(...params).first<{ total: number }>();
+    const total = countResult?.total || 0;
+
+    // データ取得
+    params.push(limit, offset);
+    const { results } = await c.env.DB.prepare(`
+      SELECT 
+        id, audio_type, name, description,
+        category, mood, tags,
+        file_url, duration_ms, file_size,
+        source, is_active, sort_order,
+        created_at, updated_at
+      FROM system_audio_library
+      WHERE ${whereClause}
+      ORDER BY sort_order ASC, created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...params).all();
+
+    // レスポンス整形（file_urlをr2_urlとして返す）
+    const items = (results || []).map((item: any) => ({
+      id: item.id,
+      audio_type: item.audio_type,
+      name: item.name,
+      description: item.description,
+      category: item.category,
+      mood: item.mood,
+      tags: parseTags(item.tags),
+      r2_url: toAbsoluteUrl(item.file_url, siteUrl), // file_url → r2_url
+      duration_ms: item.duration_ms,
+      duration_sec: item.duration_ms ? item.duration_ms / 1000 : null,
+      file_size: item.file_size,
+      source: 'system',
+      is_active: item.is_active === 1,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+    }));
+
+    return c.json({
+      items,
+      pagination: {
+        total,
+        limit,
+        offset,
+        has_more: offset + items.length < total,
+      },
+      source: 'system',
+    });
+  } catch (error) {
+    console.error('[AudioLibrary] GET system list error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get system audio library' } }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/audio-library/user - ユーザーライブラリ（個人音素材）一覧
+// SceneEditModalのBGMタブで呼び出される
+// ====================================================================
+audioLibrary.get('/audio-library/user', async (c) => {
+  try {
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
+    const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+    
+    // クエリパラメータ取得
+    const category = c.req.query('category'); // 'bgm' | 'sfx' (audio_type)
+    const mood = c.req.query('mood');
+    const search = c.req.query('search');
+    const limit = Math.min(100, parseInt(c.req.query('limit') || '50', 10));
+    const offset = parseInt(c.req.query('offset') || '0', 10);
+
+    // クエリ構築
+    let whereClause = 'user_id = ? AND is_active = 1';
+    const params: any[] = [userId];
+
+    // categoryはaudio_typeとして扱う（bgm/sfx）
+    if (category && (category === 'bgm' || category === 'sfx')) {
+      whereClause += ' AND audio_type = ?';
+      params.push(category);
+    }
+
+    if (mood) {
+      whereClause += ' AND mood = ?';
+      params.push(mood);
+    }
+
+    if (search) {
+      whereClause += ' AND (name LIKE ? OR tags LIKE ?)';
+      const searchPattern = `%${search}%`;
+      params.push(searchPattern, searchPattern);
+    }
+
+    // 総件数取得
+    const countResult = await c.env.DB.prepare(`
+      SELECT COUNT(*) as total FROM user_audio_library WHERE ${whereClause}
+    `).bind(...params).first<{ total: number }>();
+    const total = countResult?.total || 0;
+
+    // データ取得
+    params.push(limit, offset);
+    const { results } = await c.env.DB.prepare(`
+      SELECT 
+        id, user_id, audio_type, name, description,
+        category, mood, tags,
+        r2_key, r2_url, duration_ms, file_size,
+        default_volume, default_loop, default_fade_in_ms, default_fade_out_ms,
+        is_active, use_count, created_at, updated_at
+      FROM user_audio_library
+      WHERE ${whereClause}
+      ORDER BY updated_at DESC, created_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(...params).all();
+
+    // レスポンス整形
+    const items = (results || []).map((item: any) => ({
+      id: item.id,
+      audio_type: item.audio_type,
+      name: item.name,
+      description: item.description,
+      category: item.category,
+      mood: item.mood,
+      tags: parseTags(item.tags),
+      r2_url: toAbsoluteUrl(item.r2_url, siteUrl),
+      duration_ms: item.duration_ms,
+      duration_sec: item.duration_ms ? item.duration_ms / 1000 : null,
+      file_size: item.file_size,
+      default_volume: item.default_volume,
+      default_loop: item.default_loop === 1,
+      source: 'user',
+      is_active: item.is_active === 1,
+      use_count: item.use_count,
+      created_at: item.created_at,
+      updated_at: item.updated_at,
+    }));
+
+    return c.json({
+      items,
+      pagination: {
+        total,
+        limit,
+        offset,
+        has_more: offset + items.length < total,
+      },
+      source: 'user',
+    });
+  } catch (error) {
+    console.error('[AudioLibrary] GET user list error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get user audio library' } }, 500);
+  }
+});
+
+// ====================================================================
 // GET /api/audio-library/:id
 // ====================================================================
 audioLibrary.get('/audio-library/:id', async (c) => {

@@ -1721,16 +1721,32 @@
               </h4>
               <p class="text-xs text-gray-500 mt-1">シーン内の特定タイミングで再生される効果音を追加</p>
             </div>
-            <label class="cursor-pointer px-4 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors font-semibold text-sm inline-flex items-center gap-2">
-              <i class="fas fa-plus"></i>
-              SFXを追加
-              <input 
-                type="file" 
-                accept="audio/*"
-                class="hidden"
-                onchange="SceneEditModal.handleSfxUpload(event)"
-              />
-            </label>
+            <div class="flex items-center gap-2">
+              <button 
+                onclick="SceneEditModal.openSfxLibrary('system')"
+                class="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-semibold text-sm inline-flex items-center gap-2"
+              >
+                <i class="fas fa-music"></i>
+                システムSFX
+              </button>
+              <button 
+                onclick="SceneEditModal.openSfxLibrary('user')"
+                class="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors font-semibold text-sm inline-flex items-center gap-2"
+              >
+                <i class="fas fa-user"></i>
+                マイSFX
+              </button>
+              <label class="cursor-pointer px-3 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors font-semibold text-sm inline-flex items-center gap-2">
+                <i class="fas fa-upload"></i>
+                アップロード
+                <input 
+                  type="file" 
+                  accept="audio/*"
+                  class="hidden"
+                  onchange="SceneEditModal.handleSfxUpload(event)"
+                />
+              </label>
+            </div>
           </div>
           
           ${cues.length === 0 ? `
@@ -2095,6 +2111,21 @@
             </div>
           </div>
         </div>
+        
+        <!-- SFXライブラリモーダル（動的に表示） -->
+        <div id="sfx-library-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+          <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 class="font-bold text-lg" id="sfx-library-title">効果音ライブラリ</h3>
+              <button onclick="SceneEditModal.closeSfxLibrary()" class="text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+              </button>
+            </div>
+            <div id="sfx-library-content" class="p-4 overflow-y-auto max-h-[60vh]">
+              <!-- ライブラリ内容が動的に挿入される -->
+            </div>
+          </div>
+        </div>
       `;
     },
     
@@ -2292,6 +2323,128 @@
       } catch (error) {
         console.error('[SceneEditModal] BGM delete failed:', error);
         this.showToast('削除に失敗しました', 'error');
+      }
+    },
+    
+    // ============================================================
+    // P3: SFX Library Functions
+    // ============================================================
+    
+    /**
+     * P3: Open SFX library modal
+     * @param {string} libraryType - 'system' | 'user'
+     */
+    async openSfxLibrary(libraryType) {
+      const modal = document.getElementById('sfx-library-modal');
+      const title = document.getElementById('sfx-library-title');
+      const content = document.getElementById('sfx-library-content');
+      
+      if (!modal || !content) {
+        console.warn('[SceneEditModal] SFX library modal not found');
+        return;
+      }
+      
+      title.textContent = libraryType === 'system' ? 'システム効果音ライブラリ' : 'マイ効果音ライブラリ';
+      content.innerHTML = '<div class="text-center py-8 text-gray-500"><i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...</div>';
+      modal.classList.remove('hidden');
+      
+      try {
+        const endpoint = libraryType === 'system' 
+          ? '/api/audio-library/system?category=sfx' 
+          : '/api/audio-library/user?category=sfx';
+        const response = await axios.get(endpoint);
+        const items = response.data.items || [];
+        
+        if (items.length === 0) {
+          content.innerHTML = `
+            <div class="text-center py-8 text-gray-400">
+              <i class="fas fa-drum text-4xl mb-3"></i>
+              <p>効果音が登録されていません</p>
+              ${libraryType === 'user' ? '<p class="text-xs mt-2">「アップロード」から追加できます</p>' : ''}
+            </div>
+          `;
+          return;
+        }
+        
+        content.innerHTML = `
+          <div class="space-y-2">
+            ${items.map(item => `
+              <div class="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <span class="text-2xl">💥</span>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold text-gray-800 truncate">${this.escapeHtml(item.name || 'SFX')}</div>
+                  <div class="text-xs text-gray-500">
+                    ${item.duration_sec ? Math.round(item.duration_sec * 10) / 10 + '秒' : ''}
+                    ${item.category ? ' | ' + item.category : ''}
+                  </div>
+                </div>
+                ${item.r2_url ? `
+                  <audio src="${item.r2_url}" class="w-32 h-8" controls></audio>
+                ` : ''}
+                <button 
+                  onclick="SceneEditModal.selectSfxFromLibrary('${libraryType}', ${item.id}, '${this.escapeHtml(item.name || 'SFX')}', ${item.duration_ms || 0})"
+                  class="px-3 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors text-sm font-semibold flex-shrink-0"
+                >
+                  <i class="fas fa-plus mr-1"></i>追加
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to load SFX library:', error);
+        content.innerHTML = `
+          <div class="text-center py-8 text-red-500">
+            <i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました
+          </div>
+        `;
+      }
+    },
+    
+    /**
+     * P3: Close SFX library modal
+     */
+    closeSfxLibrary() {
+      const modal = document.getElementById('sfx-library-modal');
+      if (modal) modal.classList.add('hidden');
+    },
+    
+    /**
+     * P3: Select SFX from library and add to scene
+     */
+    async selectSfxFromLibrary(libraryType, itemId, itemName, durationMs) {
+      try {
+        const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, {
+          audio_type: 'sfx',
+          library_type: libraryType,
+          library_item_id: itemId,
+          start_ms: 0,
+          volume: 0.8,
+          loop: false
+        });
+        
+        if (response.data.id) {
+          // Add to local state
+          const newCue = {
+            id: response.data.id,
+            name: itemName,
+            start_ms: 0,
+            duration_ms: durationMs || 1000,
+            volume: 0.8,
+            loop: false,
+            r2_url: response.data.r2_url
+          };
+          this.currentState.sfxCues = this.currentState.sfxCues || [];
+          this.currentState.sfxCues.push(newCue);
+          
+          this.closeSfxLibrary();
+          this.renderSfxTab();
+          this.renderTabs();
+          this.showToast(`効果音「${itemName}」を追加しました`, 'success');
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to add SFX:', error);
+        this.showToast('効果音の追加に失敗しました', 'error');
       }
     }
   };
