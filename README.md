@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-30（P1/P2: User Audio Library API & Scene Audio Assignments API 実装完了）
+- **最終更新**: 2026-01-30（P3: BGM/SFXライブラリUI完成、P5/P6: Remotionでシーン別BGM再生対応）
 
 ---
 
@@ -1656,6 +1656,8 @@ is_active, created_at, updated_at
 
 **エンドポイント**:
 - `GET /api/audio-library` - 一覧取得（type=bgm|sfx, category, mood, search, sort）
+- `GET /api/audio-library/system` - **システムライブラリ一覧**（管理者登録、category=bgm|sfx）⭐ P3追加
+- `GET /api/audio-library/user` - **ユーザーライブラリ一覧**（個人音素材、category=bgm|sfx）⭐ P3追加
 - `GET /api/audio-library/:id` - 単一取得
 - `POST /api/audio-library/upload` - アップロード（FormData: file, audio_type, name, tags等）
 - `PUT /api/audio-library/:id` - メタデータ更新
@@ -1741,17 +1743,104 @@ POST /api/scenes/123/audio-assignments
 }
 ```
 
-### 次のステップ（P3以降）
+### P3: BGM/SFXライブラリUI（実装完了）
 
-- **P3**: フロントエンドUI（シーンカードBGM/SFX表示改善）
-- **P4**: シーン別BGM選択モーダル
-- **P5**: 動画ビルドでscene_audio_assignmentsを優先取得
-- **P6**: Remotionでシーン別BGM再生（シーン切替時にBGM切替）
+シーン編集モーダルでBGM/SFXをライブラリから選択またはアップロードする機能。
+
+**BGMタブの機能**:
+1. **システムBGM選択**: 管理者登録のBGMライブラリから選択
+2. **マイBGM選択**: ユーザー自身がアップロードしたBGMライブラリから選択
+3. **アップロード**: 新しいBGMファイルを直接アップロード（最大50MB）
+4. **設定変更**: 音量・ループの調整
+5. **削除**: 割当解除
+
+**SFXタブの機能**:
+1. **システムSFX選択**: 管理者登録のSFXライブラリから選択
+2. **マイSFX選択**: ユーザー自身がアップロードしたSFXライブラリから選択
+3. **アップロード**: 新しいSFXファイルを直接アップロード（最大10MB）
+4. **設定変更**: 開始時間、音量、ループの調整
+5. **複数追加可能**: 1シーンに複数のSFXを設定可能
+
+**アップロード仕様**:
+| 項目 | BGM | SFX |
+|------|-----|-----|
+| 最大サイズ | 50MB | 10MB |
+| 対応形式 | MP3, WAV, M4A, OGG | MP3, WAV, M4A, OGG |
+| デフォルト音量 | 0.25 | 0.8 |
+| ループ | デフォルトON | デフォルトOFF |
+
+### P4: シーン別BGM選択モーダル（P3に統合済み）
+
+シーン編集モーダルのBGMタブ内にライブラリモーダルを統合。
+
+### P5: 動画ビルドでscene_audio_assignmentsを優先取得（実装完了）
+
+`video-generation.ts`でprojectJson生成時にscene_audio_assignmentsからシーン別BGMを取得。
+
+### P6: Remotionでシーン別BGM再生（実装完了）
+
+- **Scene.tsx**: シーン別BGMがあれば優先再生
+- **RilarcVideo.tsx**: シーン別BGM再生中は全体BGMを0.12（ダッキング）
+
+### 依存関係図（BGM/SFXデータフロー）
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 管理者画面                                                        │
+│ /admin                                                          │
+│ ┌─────────────────────────────────┐                             │
+│ │ system_audio_library            │                             │
+│ │ - BGM（音楽）                    │                             │
+│ │ - SFX（効果音）                  │                             │
+│ │ ※管理者がSunoAI等で作成してURLで登録│                             │
+│ └─────────────────────────────────┘                             │
+└─────────────────────────────────────────────────────────────────┘
+                       │
+                       ▼ /api/audio-library/system
+┌─────────────────────────────────────────────────────────────────┐
+│ ユーザー画面                                                      │
+│ /projects/:id                                                   │
+│                                                                 │
+│ ┌─────────────────────────────────┐                             │
+│ │ user_audio_library              │ ← /api/audio-library/user   │
+│ │ - ユーザーがアップロードしたBGM/SFX │                             │
+│ │ - プロジェクト横断で再利用可能     │                             │
+│ └─────────────────────────────────┘                             │
+│                       │                                         │
+│                       ▼ POST /api/scenes/:id/audio-assignments  │
+│ ┌─────────────────────────────────┐                             │
+│ │ scene_audio_assignments (SSOT)  │                             │
+│ │ - シーン毎のBGM/SFX割当          │                             │
+│ │ - audio_library_type: system/user/direct                      │
+│ │ - volume_override, loop_override │                             │
+│ └─────────────────────────────────┘                             │
+└─────────────────────────────────────────────────────────────────┘
+                       │
+                       ▼ /api/projects/:id/video-build/start
+┌─────────────────────────────────────────────────────────────────┐
+│ 動画生成 (Remotion)                                              │
+│                                                                 │
+│ projectJson.scenes[].bgm ← scene_audio_assignments から取得      │
+│ projectJson.assets.bgm  ← project_audio_tracks から取得（全体BGM） │
+│                                                                 │
+│ ┌─────────────────────────────────┐                             │
+│ │ 再生ルール                       │                             │
+│ │ 1. シーン別BGM優先              │                             │
+│ │ 2. シーン別BGM再生中は全体BGMをダック（0.12）                    │
+│ │ 3. シーン別BGMなしの場合は全体BGMを通常再生                      │
+│ └─────────────────────────────────┘                             │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ### Gitコミット
 ```
 a500998 P0: Add SFX playback support to Remotion + Audio library schema
 acee3aa P1/P2: User Audio Library & Scene Audio Assignments API
+c6b5ad9 P3: シーンカードUI改善 - BGM/SFX詳細表示とSceneEditModalへのリンク
+285e77d P6: Remotionでシーン別BGM再生と全体BGMのduck処理を実装
+ed49664 P5: シーン別BGMを新SSOT優先で取得・projectJsonに反映
+d47dfa0 P3-5: SceneEditModal.open(source)でチャット修正ボタンの表示をSSOT化
+33254e2 P3: BGM/SFXライブラリAPI追加とSFXタブのUI改善
 ```
 
 ---
