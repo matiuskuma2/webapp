@@ -1695,9 +1695,36 @@
         this.renderSfxTab();
       } catch (error) {
         console.error('[SceneEditModal] Failed to load SFX:', error);
+        const status = error.response?.status || 'network';
+        const apiUrl = `/api/scenes/${this.currentSceneId}/audio-cues`;
+        
+        let errorMessage = '読み込みに失敗しました';
+        let errorDetail = '';
+        
+        if (status === 404) {
+          errorMessage = 'APIが見つかりません (404)';
+          errorDetail = 'ページをハードリロード (Ctrl+Shift+R) してください';
+        } else if (status === 401) {
+          errorMessage = 'ログインが必要です';
+          errorDetail = '再ログインしてください';
+        } else if (status === 'network') {
+          errorMessage = 'ネットワークエラー';
+          errorDetail = '接続を確認してください';
+        }
+        
         container.innerHTML = `
-          <div class="p-4 text-center text-red-500">
-            <i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました
+          <div class="p-4 text-center">
+            <div class="text-red-500 mb-3">
+              <i class="fas fa-exclamation-circle mr-2"></i>${errorMessage}
+            </div>
+            <div class="text-xs text-gray-500 mb-3">${errorDetail}</div>
+            <div class="text-xs text-gray-400 mb-3 font-mono break-all">GET ${apiUrl}</div>
+            <button 
+              onclick="location.reload(true)"
+              class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
+            >
+              <i class="fas fa-sync-alt mr-2"></i>ページをリロード
+            </button>
           </div>
         `;
       }
@@ -1969,9 +1996,42 @@
         this.renderTabs(); // Update badge
       } catch (error) {
         console.error('[SceneEditModal] Failed to load BGM:', error);
+        const status = error.response?.status || 'network';
+        const errorCode = error.response?.data?.error?.code || '';
+        const apiUrl = `/api/scenes/${this.currentSceneId}/audio-assignments?audio_type=bgm`;
+        
+        let errorMessage = '読み込みに失敗しました';
+        let errorDetail = '';
+        
+        if (status === 404) {
+          if (errorCode === 'NOT_FOUND') {
+            errorMessage = 'このシーンにアクセスできません';
+            errorDetail = '権限を確認してください';
+          } else {
+            errorMessage = 'APIが見つかりません (404)';
+            errorDetail = 'ページをハードリロード (Ctrl+Shift+R) してください';
+          }
+        } else if (status === 401) {
+          errorMessage = 'ログインが必要です';
+          errorDetail = '再ログインしてください';
+        } else if (status === 'network') {
+          errorMessage = 'ネットワークエラー';
+          errorDetail = '接続を確認してください';
+        }
+        
         container.innerHTML = `
-          <div class="p-4 text-center text-red-500">
-            <i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました
+          <div class="p-4 text-center">
+            <div class="text-red-500 mb-3">
+              <i class="fas fa-exclamation-circle mr-2"></i>${errorMessage}
+            </div>
+            <div class="text-xs text-gray-500 mb-3">${errorDetail}</div>
+            <div class="text-xs text-gray-400 mb-3 font-mono break-all">GET ${apiUrl}</div>
+            <button 
+              onclick="location.reload(true)"
+              class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm"
+            >
+              <i class="fas fa-sync-alt mr-2"></i>ページをリロード
+            </button>
           </div>
         `;
       }
