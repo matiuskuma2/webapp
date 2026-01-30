@@ -1944,11 +1944,11 @@
       
       try {
         // Fetch scene BGM from scene-audio-assignments API
+        // API returns { scene_id, bgm, sfx, total }
         const response = await axios.get(`/api/scenes/${this.currentSceneId}/audio-assignments?audio_type=bgm`);
-        const assignments = response.data.assignments || [];
         
-        // Should have at most 1 BGM per scene
-        this.currentState.sceneBgm = assignments.length > 0 ? assignments[0] : null;
+        // BGM is returned as a single object (or null)
+        this.currentState.sceneBgm = response.data.bgm || null;
         this.renderBgmTab();
         this.renderTabs(); // Update badge
       } catch (error) {
