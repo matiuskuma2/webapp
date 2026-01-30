@@ -458,7 +458,7 @@ app.get('/', (c) => {
         // Check auth on page load
         checkAuth();
     </script>
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=${ASSET_VERSION}"></script>
 </body>
 </html>
   `)

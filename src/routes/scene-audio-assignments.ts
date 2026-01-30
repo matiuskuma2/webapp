@@ -235,22 +235,29 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
 // ====================================================================
 // GET /api/scenes/:sceneId/audio-assignments
 // ====================================================================
-// NOTE: GETは認証不要（scene-audio-cuesと同様）
-// POST/PUT/DELETEは認証必須
+// SSOT: 認証必須（Cookie必須）
+// - 未ログイン → 401 UNAUTHORIZED
+// - ログイン済み＋他人のシーン → 404 NOT_FOUND（存在隠し）
+// - ログイン済み＋自分のシーン → 200 OK
 sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
   try {
+    // SSOT: 認証必須 - 未ログインは401
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      console.log('[SceneAudioAssignments] GET: No session - returning 401');
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     if (!Number.isFinite(sceneId)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    // シーンの存在確認のみ（所有者チェックなし）
-    const scene = await c.env.DB.prepare(`
-      SELECT id FROM scenes WHERE id = ?
-    `).bind(sceneId).first();
-    
-    if (!scene) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404);
+    // SSOT: 所有者チェック - 他人のシーンは404（存在隠し）
+    const access = await validateSceneAccess(c, sceneId, userId);
+    if (!access.valid) {
+      console.log(`[SceneAudioAssignments] GET: Access denied for scene ${sceneId}, user ${userId}`);
+      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
     const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;

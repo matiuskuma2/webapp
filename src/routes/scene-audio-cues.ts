@@ -28,6 +28,8 @@ const sceneAudioCues = new Hono<{ Bindings: Bindings }>();
 
 const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 
+import { getCookie } from 'hono/cookie';
+
 /**
  * 相対URLを絶対URLに変換
  */
@@ -41,14 +43,87 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
   return `${baseUrl}${path}`;
 }
 
+/**
+ * SSOT: セッションからユーザーIDを取得
+ */
+async function getUserIdFromSession(c: any): Promise<number | null> {
+  try {
+    const sessionId = getCookie(c, 'session');
+    if (!sessionId) {
+      console.log('[SceneAudioCues] No session cookie found');
+      return null;
+    }
+    
+    const session = await c.env.DB.prepare(`
+      SELECT user_id FROM sessions 
+      WHERE id = ? AND expires_at > datetime('now')
+    `).bind(sessionId).first<{ user_id: number }>();
+    
+    if (!session) {
+      console.log('[SceneAudioCues] Session not found or expired');
+      return null;
+    }
+    
+    return session.user_id;
+  } catch (error) {
+    console.error('[SceneAudioCues] Session lookup error:', error);
+    return null;
+  }
+}
+
+/**
+ * SSOT: シーンの存在確認とプロジェクト所有確認
+ */
+async function validateSceneAccess(c: any, sceneId: number, userId: number): Promise<{ valid: boolean; projectId?: number; error?: string }> {
+  try {
+    const scene = await c.env.DB.prepare(`
+      SELECT s.id, s.project_id, p.user_id as project_user_id
+      FROM scenes s
+      JOIN projects p ON s.project_id = p.id
+      WHERE s.id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number; project_user_id: number }>();
+    
+    if (!scene) {
+      return { valid: false, error: 'Scene not found' };
+    }
+    
+    if (scene.project_user_id !== userId) {
+      return { valid: false, error: 'Access denied' };
+    }
+    
+    return { valid: true, projectId: scene.project_id };
+  } catch (error) {
+    console.error('[SceneAudioCues] Scene validation error:', error);
+    return { valid: false, error: 'Validation failed' };
+  }
+}
+
 // ====================================================================
 // GET /api/scenes/:sceneId/audio-cues
 // ====================================================================
+// SSOT: 認証必須（Cookie必須）
+// - 未ログイン → 401 UNAUTHORIZED
+// - ログイン済み＋他人のシーン → 404 NOT_FOUND（存在隠し）
+// - ログイン済み＋自分のシーン → 200 OK
 sceneAudioCues.get('/scenes/:sceneId/audio-cues', async (c) => {
   try {
+    // SSOT: 認証必須 - 未ログインは401
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      console.log('[SceneAudioCues] GET: No session - returning 401');
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     if (!Number.isFinite(sceneId)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
+    }
+
+    // SSOT: 所有者チェック - 他人のシーンは404（存在隠し）
+    const access = await validateSceneAccess(c, sceneId, userId);
+    if (!access.valid) {
+      console.log(`[SceneAudioCues] GET: Access denied for scene ${sceneId}, user ${userId}`);
+      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
     const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
@@ -92,20 +167,24 @@ sceneAudioCues.get('/scenes/:sceneId/audio-cues', async (c) => {
 // ====================================================================
 // POST /api/scenes/:sceneId/audio-cues/upload
 // ====================================================================
+// SSOT: 認証必須
 sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
   try {
+    // SSOT: 認証必須
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     if (!Number.isFinite(sceneId)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    // シーン存在確認 & project_id取得
-    const scene = await c.env.DB.prepare(`
-      SELECT id, project_id FROM scenes WHERE id = ?
-    `).bind(sceneId).first<{ id: number; project_id: number }>();
-
-    if (!scene) {
-      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404);
+    // SSOT: 所有者チェック
+    const access = await validateSceneAccess(c, sceneId, userId);
+    if (!access.valid) {
+      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
     const formData = await c.req.formData();
@@ -194,13 +273,26 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
 // ====================================================================
 // PUT /api/scenes/:sceneId/audio-cues/:id
 // ====================================================================
+// SSOT: 認証必須
 sceneAudioCues.put('/scenes/:sceneId/audio-cues/:id', async (c) => {
   try {
+    // SSOT: 認証必須
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     const cueId = parseInt(c.req.param('id'), 10);
     
     if (!Number.isFinite(sceneId) || !Number.isFinite(cueId)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene or cue id' } }, 400);
+    }
+
+    // SSOT: 所有者チェック
+    const access = await validateSceneAccess(c, sceneId, userId);
+    if (!access.valid) {
+      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
     const body = await c.req.json();
@@ -286,13 +378,26 @@ sceneAudioCues.put('/scenes/:sceneId/audio-cues/:id', async (c) => {
 // ====================================================================
 // DELETE /api/scenes/:sceneId/audio-cues/:id
 // ====================================================================
+// SSOT: 認証必須
 sceneAudioCues.delete('/scenes/:sceneId/audio-cues/:id', async (c) => {
   try {
+    // SSOT: 認証必須
+    const userId = await getUserIdFromSession(c);
+    if (!userId) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     const cueId = parseInt(c.req.param('id'), 10);
     
     if (!Number.isFinite(sceneId) || !Number.isFinite(cueId)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene or cue id' } }, 400);
+    }
+
+    // SSOT: 所有者チェック
+    const access = await validateSceneAccess(c, sceneId, userId);
+    if (!access.valid) {
+      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
     // 既存レコード確認
