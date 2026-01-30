@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-30（P3: BGM/SFXライブラリUI完成、P5/P6: Remotionでシーン別BGM再生対応）
+- **最終更新**: 2026-01-30（BGM/SFX API認証修正、Remotion framesPerLambda自動計算で60分超動画対応）
 
 ---
 
