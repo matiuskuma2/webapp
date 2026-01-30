@@ -57,9 +57,11 @@ async function getUserIdFromSession(c: any): Promise<number | null> {
   try {
     const sessionId = getCookie(c, 'session');
     if (!sessionId) {
-      console.log('[SceneAudioAssignments] No session cookie');
+      console.log('[SceneAudioAssignments] No session cookie found');
       return null;
     }
+    
+    console.log(`[SceneAudioAssignments] Session ID from cookie: ${sessionId.substring(0, 8)}...`);
     
     const session = await c.env.DB.prepare(`
       SELECT user_id FROM sessions 
@@ -71,6 +73,7 @@ async function getUserIdFromSession(c: any): Promise<number | null> {
       return null;
     }
     
+    console.log(`[SceneAudioAssignments] User ID from session: ${session.user_id}`);
     return session.user_id;
   } catch (error) {
     console.error('[SceneAudioAssignments] Session lookup error:', error);
@@ -81,21 +84,31 @@ async function getUserIdFromSession(c: any): Promise<number | null> {
 /**
  * シーンの存在確認とプロジェクト所有確認
  */
-async function validateSceneAccess(c: any, sceneId: number, userId: number): Promise<{ valid: boolean; projectId?: number; error?: string }> {
+async function validateSceneAccess(c: any, sceneId: number, userId: number): Promise<{ valid: boolean; projectId?: number; error?: string; details?: any }> {
   try {
+    console.log(`[SceneAudioAssignments] Validating access: sceneId=${sceneId}, userId=${userId}`);
+    
     const scene = await c.env.DB.prepare(`
-      SELECT s.id, s.project_id, p.user_id
+      SELECT s.id, s.project_id, p.user_id as project_user_id
       FROM scenes s
       JOIN projects p ON s.project_id = p.id
       WHERE s.id = ?
-    `).bind(sceneId).first<{ id: number; project_id: number; user_id: number }>();
+    `).bind(sceneId).first<{ id: number; project_id: number; project_user_id: number }>();
     
     if (!scene) {
+      console.log(`[SceneAudioAssignments] Scene ${sceneId} not found`);
       return { valid: false, error: 'Scene not found' };
     }
     
-    if (scene.user_id !== userId) {
-      return { valid: false, error: 'Access denied' };
+    console.log(`[SceneAudioAssignments] Scene found: id=${scene.id}, project_id=${scene.project_id}, project_user_id=${scene.project_user_id}, requestUserId=${userId}`);
+    
+    if (scene.project_user_id !== userId) {
+      console.log(`[SceneAudioAssignments] Access denied: project owner ${scene.project_user_id} !== request user ${userId}`);
+      return { 
+        valid: false, 
+        error: 'Access denied',
+        details: { projectOwnerId: scene.project_user_id, requestUserId: userId, sceneId, projectId: scene.project_id }
+      };
     }
     
     return { valid: true, projectId: scene.project_id };
@@ -222,21 +235,22 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
 // ====================================================================
 // GET /api/scenes/:sceneId/audio-assignments
 // ====================================================================
+// NOTE: GETは認証不要（scene-audio-cuesと同様）
+// POST/PUT/DELETEは認証必須
 sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
   try {
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
-      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
-    }
-
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     if (!Number.isFinite(sceneId)) {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    const access = await validateSceneAccess(c, sceneId, userId);
-    if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+    // シーンの存在確認のみ（所有者チェックなし）
+    const scene = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE id = ?
+    `).bind(sceneId).first();
+    
+    if (!scene) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404);
     }
 
     const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
