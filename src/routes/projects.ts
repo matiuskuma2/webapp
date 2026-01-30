@@ -626,7 +626,10 @@ projects.get('/:id/scenes', async (c) => {
           `).bind(scene.id).all()
 
           // P3: シーン別BGM取得（scene_audio_assignments から）
-          // 本番DBスキーマ: audio_library_type, system_audio_id, user_audio_id, direct_r2_url, volume_override, loop_override
+          // 本番DBスキーマ: 
+          //   scene_audio_assignments: audio_library_type, system_audio_id, user_audio_id, direct_r2_url, volume_override, loop_override
+          //   system_audio_library: file_url (NOT r2_url)
+          //   user_audio_library: r2_url
           const sceneBgm = await c.env.DB.prepare(`
             SELECT 
               saa.id,
@@ -639,7 +642,7 @@ projects.get('/:id/scenes', async (c) => {
                 ELSE saa.direct_name
               END as name,
               CASE 
-                WHEN saa.audio_library_type = 'system' THEN sal.r2_url
+                WHEN saa.audio_library_type = 'system' THEN sal.file_url
                 WHEN saa.audio_library_type = 'user' THEN ual.r2_url
                 ELSE saa.direct_r2_url
               END as url
