@@ -558,6 +558,9 @@ interface UpdateMeRequest {
   // Password change fields
   current_password?: string;
   new_password?: string;
+  // Email change fields
+  new_email?: string;
+  email_change_password?: string;  // パスワード確認用
 }
 
 auth.put('/auth/me', async (c) => {
@@ -594,6 +597,42 @@ auth.put('/auth/me', async (c) => {
   }
   
   try {
+    // Check if this is an email change request
+    if (body.new_email && body.email_change_password) {
+      console.log(`[UpdateMe] Email change request for user ${session.id}`);
+      
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      const newEmail = body.new_email.toLowerCase().trim();
+      if (!emailRegex.test(newEmail)) {
+        return c.json({ error: { code: 'INVALID_EMAIL', message: '有効なメールアドレスを入力してください' } }, 400);
+      }
+      
+      // Verify current password
+      const validPassword = await verifyPassword(body.email_change_password, session.password_hash);
+      if (!validPassword) {
+        console.log(`[UpdateMe] Password verification failed for email change, user ${session.id}`);
+        return c.json({ error: { code: 'INVALID_PASSWORD', message: 'パスワードが正しくありません' } }, 400);
+      }
+      
+      // Check if new email already exists
+      const existingUser = await DB.prepare('SELECT id FROM users WHERE email = ? AND id != ?')
+        .bind(newEmail, session.id).first();
+      if (existingUser) {
+        return c.json({ error: { code: 'EMAIL_EXISTS', message: 'このメールアドレスは既に使用されています' } }, 409);
+      }
+      
+      // Update email
+      await DB.prepare(`
+        UPDATE users 
+        SET email = ?, updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(newEmail, session.id).run();
+      
+      console.log(`[UpdateMe] User ${session.id}: Email changed from ${session.email} to ${newEmail}`);
+      return c.json({ success: true, message: 'メールアドレスを変更しました', new_email: newEmail });
+    }
+    
     // Check if this is a password change request
     if (body.current_password && body.new_password) {
       // Password change

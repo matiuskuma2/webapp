@@ -92,6 +92,37 @@ export const settingsHtml = `
             </form>
         </div>
         
+        <!-- Email Change Section -->
+        <div class="bg-white rounded-xl shadow-md p-6 mb-6">
+            <h2 class="text-lg font-bold text-gray-800 mb-4">
+                <i class="fas fa-envelope mr-2 text-orange-600"></i>
+                メールアドレス変更
+            </h2>
+            <form id="emailForm" class="space-y-4">
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">現在のメールアドレス</label>
+                    <input type="email" id="currentEmail" disabled
+                        class="w-full px-4 py-3 border border-gray-200 rounded-lg bg-gray-100 text-gray-600" />
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">新しいメールアドレス</label>
+                    <input type="email" id="newEmail" required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500" />
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">パスワード（確認用）</label>
+                    <input type="password" id="emailChangePassword" required
+                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500" />
+                    <p class="text-xs text-gray-500 mt-1">セキュリティのため、現在のパスワードを入力してください</p>
+                </div>
+                <div id="emailMessage" class="hidden text-sm p-3 rounded-lg"></div>
+                <button type="submit"
+                    class="w-full py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors font-semibold">
+                    <i class="fas fa-at mr-2"></i>メールアドレスを変更
+                </button>
+            </form>
+        </div>
+        
         <!-- Video API Key Section (Phase D-1 + Gate2) -->
         <div class="bg-white rounded-xl shadow-md p-6 mb-6">
             <h2 class="text-lg font-bold text-gray-800 mb-4">
@@ -213,6 +244,9 @@ export const settingsHtml = `
                 document.getElementById('profileCompany').value = currentUser.company || '';
                 document.getElementById('profilePhone').value = currentUser.phone || '';
                 
+                // Fill email change form
+                document.getElementById('currentEmail').value = currentUser.email;
+                
                 // Fill account info
                 document.getElementById('infoEmail').textContent = currentUser.email;
                 document.getElementById('infoRole').textContent = 
@@ -278,6 +312,46 @@ export const settingsHtml = `
                 document.getElementById('passwordForm').reset();
             } catch (err) {
                 showMessage('passwordMessage', err.response?.data?.error?.message || 'パスワード変更に失敗しました', true);
+            }
+        });
+        
+        // Email change form
+        document.getElementById('emailForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const newEmail = document.getElementById('newEmail').value.trim();
+            const password = document.getElementById('emailChangePassword').value;
+            
+            if (!newEmail) {
+                showMessage('emailMessage', '新しいメールアドレスを入力してください', true);
+                return;
+            }
+            
+            // Basic email validation
+            const emailRegex = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+            if (!emailRegex.test(newEmail)) {
+                showMessage('emailMessage', '有効なメールアドレスを入力してください', true);
+                return;
+            }
+            
+            if (newEmail.toLowerCase() === currentUser.email.toLowerCase()) {
+                showMessage('emailMessage', '現在のメールアドレスと同じです', true);
+                return;
+            }
+            
+            try {
+                const res = await axios.put('/api/auth/me', {
+                    new_email: newEmail,
+                    email_change_password: password
+                });
+                showMessage('emailMessage', 'メールアドレスを変更しました');
+                document.getElementById('emailForm').reset();
+                // Update displayed email
+                currentUser.email = res.data.new_email || newEmail;
+                document.getElementById('currentEmail').value = currentUser.email;
+                document.getElementById('infoEmail').textContent = currentUser.email;
+            } catch (err) {
+                showMessage('emailMessage', err.response?.data?.error?.message || 'メールアドレス変更に失敗しました', true);
             }
         });
         
