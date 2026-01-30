@@ -222,7 +222,7 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
 // ====================================================================
 // GET /api/scenes/:sceneId/audio-assignments
 // ====================================================================
-sceneAudioAssignments.get('/scenes/:sceneId/audio-assignments', async (c) => {
+sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
   try {
     const userId = await getUserIdFromSession(c);
     if (!userId) {
@@ -287,7 +287,7 @@ sceneAudioAssignments.get('/scenes/:sceneId/audio-assignments', async (c) => {
 // ====================================================================
 // POST /api/scenes/:sceneId/audio-assignments
 // ====================================================================
-sceneAudioAssignments.post('/scenes/:sceneId/audio-assignments', async (c) => {
+sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
   try {
     const userId = await getUserIdFromSession(c);
     if (!userId) {
@@ -420,7 +420,7 @@ sceneAudioAssignments.post('/scenes/:sceneId/audio-assignments', async (c) => {
 // ====================================================================
 // PUT /api/scenes/:sceneId/audio-assignments/:id
 // ====================================================================
-sceneAudioAssignments.put('/scenes/:sceneId/audio-assignments/:id', async (c) => {
+sceneAudioAssignments.put('/:sceneId/audio-assignments/:id', async (c) => {
   try {
     const userId = await getUserIdFromSession(c);
     if (!userId) {
@@ -515,7 +515,7 @@ sceneAudioAssignments.put('/scenes/:sceneId/audio-assignments/:id', async (c) =>
 // ====================================================================
 // DELETE /api/scenes/:sceneId/audio-assignments/:id
 // ====================================================================
-sceneAudioAssignments.delete('/scenes/:sceneId/audio-assignments/:id', async (c) => {
+sceneAudioAssignments.delete('/:sceneId/audio-assignments/:id', async (c) => {
   try {
     const userId = await getUserIdFromSession(c);
     if (!userId) {
@@ -572,7 +572,7 @@ sceneAudioAssignments.delete('/scenes/:sceneId/audio-assignments/:id', async (c)
 // POST /api/scenes/:sceneId/audio-assignments/direct
 // 直接アップロードして割当（ライブラリに登録せず使い捨て）
 // ====================================================================
-sceneAudioAssignments.post('/scenes/:sceneId/audio-assignments/direct', async (c) => {
+sceneAudioAssignments.post('/:sceneId/audio-assignments/direct', async (c) => {
   try {
     const userId = await getUserIdFromSession(c);
     if (!userId) {
@@ -685,7 +685,7 @@ sceneAudioAssignments.post('/scenes/:sceneId/audio-assignments/direct', async (c
 // POST /api/scenes/:sceneId/audio-assignments/deactivate-all
 // 全ての音割当を無効化（BGMクリア等に使用）
 // ====================================================================
-sceneAudioAssignments.post('/scenes/:sceneId/audio-assignments/deactivate-all', async (c) => {
+sceneAudioAssignments.post('/:sceneId/audio-assignments/deactivate-all', async (c) => {
   try {
     const userId = await getUserIdFromSession(c);
     if (!userId) {

@@ -101,7 +101,7 @@ app.route('/api/scene-balloons', sceneBalloons) // A案 baked: For /api/scene-ba
 app.route('/api', projectAudioTracks) // R3-A: For /api/projects/:projectId/audio-tracks
 app.route('/api', sceneAudioCues) // R3-B: For /api/scenes/:sceneId/audio-cues
 app.route('/api', audioLibrary) // P1: For /api/audio-library
-app.route('/api', sceneAudioAssignments) // P2: For /api/scenes/:sceneId/audio
+app.route('/api/scenes', sceneAudioAssignments) // P2: For /api/scenes/:sceneId/audio-assignments - MUST be before generic /api/scenes/:id
 app.route('/api', patches) // R4: For /api/projects/:projectId/patches/*
 app.route('/api/scenes', scenes) // For /api/scenes/:id (PUT/DELETE)
 app.route('/api/scenes', images) // For /api/scenes/:id/images
