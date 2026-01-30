@@ -1813,12 +1813,13 @@ admin.post('/audio-library', async (c) => {
 });
 
 // ====================================================================
-// POST /api/admin/audio-library/upload - システムオーディオR2アップロード
+// POST /api/admin/audio-library/upload - システムオーディオR2アップロード（ファイルのみ）
 // ====================================================================
+// 注意: このAPIはファイルをR2にアップロードするだけで、DBには登録しない
+// DB登録は POST /api/admin/audio-library で行う
 
 admin.post('/audio-library/upload', async (c) => {
-  const { DB, R2, SITE_URL } = c.env;
-  const user = c.get('user' as never) as { id: number; email: string };
+  const { R2, SITE_URL } = c.env;
   
   try {
     const formData = await c.req.formData();
@@ -1846,14 +1847,6 @@ admin.post('/audio-library/upload', async (c) => {
       return c.json({ success: false, error: 'audio_type must be bgm or sfx' }, 400);
     }
     
-    const name = (formData.get('name') as string) || file.name.replace(/\.[^.]+$/, '');
-    const description = formData.get('description') as string | null;
-    const category = formData.get('category') as string | null;
-    const mood = formData.get('mood') as string | null;
-    const tags = formData.get('tags') as string | null;
-    const durationMs = formData.get('duration_ms') ? parseInt(formData.get('duration_ms') as string, 10) : null;
-    const sortOrder = formData.get('sort_order') ? parseInt(formData.get('sort_order') as string, 10) : 0;
-    
     // R2にアップロード
     const timestamp = Date.now();
     const ext = fileName.split('.').pop() || 'mp3';
@@ -1866,44 +1859,19 @@ admin.post('/audio-library/upload', async (c) => {
       },
     });
     
-    // DBに保存（file_urlを相対パスで保存）
+    // 相対パスでURLを返す（DB登録は別APIで行う）
     const fileUrl = `/${r2Key}`;
-    const siteUrl = SITE_URL || 'https://app.marumuviai.com';
+    const siteUrl = SITE_URL || 'https://webapp-c7n.pages.dev';
     
-    const result = await DB.prepare(`
-      INSERT INTO system_audio_library (
-        audio_type, name, description, category, mood, tags,
-        file_url, file_size, duration_ms, thumbnail_url,
-        source, source_metadata, created_by, is_active, sort_order,
-        created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))
-    `).bind(
-      audioType,
-      name.trim(),
-      description || null,
-      category || null,
-      mood || null,
-      tags || null,
-      fileUrl,
-      arrayBuffer.byteLength,
-      durationMs,
-      null,
-      'upload',
-      null,
-      user.email,
-      sortOrder
-    ).run();
-    
-    const audioId = result.meta.last_row_id;
-    console.log(`[Admin] Audio upload: type=${audioType}, id=${audioId}, file=${r2Key}`);
+    console.log(`[Admin] Audio file uploaded: ${r2Key}, size=${arrayBuffer.byteLength}`);
     
     return c.json({
       success: true,
-      id: audioId,
       file_url: `${siteUrl}${fileUrl}`,
+      file_size: arrayBuffer.byteLength,
       r2_key: r2Key,
-      message: 'Audio uploaded and added to library',
-    }, 201);
+      message: 'File uploaded successfully. Please save to register.',
+    });
   } catch (error) {
     console.error('[Admin] Audio upload error:', error);
     return c.json({ 
