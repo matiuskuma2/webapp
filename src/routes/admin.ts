@@ -1813,6 +1813,107 @@ admin.post('/audio-library', async (c) => {
 });
 
 // ====================================================================
+// POST /api/admin/audio-library/upload - システムオーディオR2アップロード
+// ====================================================================
+
+admin.post('/audio-library/upload', async (c) => {
+  const { DB, R2, SITE_URL } = c.env;
+  const user = c.get('user' as never) as { id: number; email: string };
+  
+  try {
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File | null;
+    
+    if (!file) {
+      return c.json({ success: false, error: 'No file provided' }, 400);
+    }
+    
+    // ファイル形式チェック
+    const allowedExtensions = ['.mp3', '.wav', '.m4a', '.ogg', '.aac'];
+    const fileName = file.name.toLowerCase();
+    const hasValidExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
+    
+    if (!hasValidExtension) {
+      return c.json({ 
+        success: false, 
+        error: `Invalid file type. Allowed: ${allowedExtensions.join(', ')}`
+      }, 400);
+    }
+    
+    // パラメータ取得
+    const audioType = (formData.get('audio_type') as string) || 'bgm';
+    if (audioType !== 'bgm' && audioType !== 'sfx') {
+      return c.json({ success: false, error: 'audio_type must be bgm or sfx' }, 400);
+    }
+    
+    const name = (formData.get('name') as string) || file.name.replace(/\.[^.]+$/, '');
+    const description = formData.get('description') as string | null;
+    const category = formData.get('category') as string | null;
+    const mood = formData.get('mood') as string | null;
+    const tags = formData.get('tags') as string | null;
+    const durationMs = formData.get('duration_ms') ? parseInt(formData.get('duration_ms') as string, 10) : null;
+    const sortOrder = formData.get('sort_order') ? parseInt(formData.get('sort_order') as string, 10) : 0;
+    
+    // R2にアップロード
+    const timestamp = Date.now();
+    const ext = fileName.split('.').pop() || 'mp3';
+    const r2Key = `audio/library/system/${audioType}/${timestamp}.${ext}`;
+    
+    const arrayBuffer = await file.arrayBuffer();
+    await R2.put(r2Key, arrayBuffer, {
+      httpMetadata: {
+        contentType: file.type || 'audio/mpeg',
+      },
+    });
+    
+    // DBに保存（file_urlを相対パスで保存）
+    const fileUrl = `/${r2Key}`;
+    const siteUrl = SITE_URL || 'https://app.marumuviai.com';
+    
+    const result = await DB.prepare(`
+      INSERT INTO system_audio_library (
+        audio_type, name, description, category, mood, tags,
+        file_url, file_size, duration_ms, thumbnail_url,
+        source, source_metadata, created_by, is_active, sort_order,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, datetime('now'), datetime('now'))
+    `).bind(
+      audioType,
+      name.trim(),
+      description || null,
+      category || null,
+      mood || null,
+      tags || null,
+      fileUrl,
+      arrayBuffer.byteLength,
+      durationMs,
+      null,
+      'upload',
+      null,
+      user.email,
+      sortOrder
+    ).run();
+    
+    const audioId = result.meta.last_row_id;
+    console.log(`[Admin] Audio upload: type=${audioType}, id=${audioId}, file=${r2Key}`);
+    
+    return c.json({
+      success: true,
+      id: audioId,
+      file_url: `${siteUrl}${fileUrl}`,
+      r2_key: r2Key,
+      message: 'Audio uploaded and added to library',
+    }, 201);
+  } catch (error) {
+    console.error('[Admin] Audio upload error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to upload audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
 // PUT /api/admin/audio-library/:id - システムオーディオ更新
 // ====================================================================
 
