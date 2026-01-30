@@ -2005,11 +2005,11 @@
                 <div class="flex items-center gap-3">
                   <span class="text-3xl">🎵</span>
                   <div>
-                    <div class="font-semibold text-yellow-800">${this.escapeHtml(bgm.name || 'BGM')}</div>
+                    <div class="font-semibold text-yellow-800">${this.escapeHtml(bgm.effective?.name || bgm.library?.name || bgm.name || 'BGM')}</div>
                     <div class="text-xs text-yellow-600">
-                      ソース: ${this.getBgmSourceLabel(bgm.library_type)}
-                      ${bgm.loop ? ' | ループ: ON' : ''}
-                      ${bgm.volume ? ' | 音量: ' + Math.round((bgm.volume || 0.25) * 100) + '%' : ''}
+                      ソース: ${this.getBgmSourceLabel(bgm.audio_library_type || bgm.library_type)}
+                      ${(bgm.effective?.loop ?? bgm.loop) ? ' | ループ: ON' : ''}
+                      ${' | 音量: ' + Math.round(((bgm.effective?.volume ?? bgm.volume_override ?? bgm.volume) || 0.25) * 100) + '%'}
                     </div>
                   </div>
                 </div>
@@ -2021,8 +2021,8 @@
                   <i class="fas fa-trash"></i>
                 </button>
               </div>
-              ${bgm.url ? `
-                <audio src="${bgm.url}" controls class="w-full h-10"></audio>
+              ${(bgm.effective?.r2_url || bgm.url || bgm.library?.r2_url) ? `
+                <audio src="${bgm.effective?.r2_url || bgm.url || bgm.library?.r2_url}" controls class="w-full h-10"></audio>
               ` : ''}
               
               <!-- 音量・ループ設定 -->
@@ -2031,20 +2031,20 @@
                   <span>音量:</span>
                   <input 
                     type="range" 
-                    value="${Math.round((bgm.volume || 0.25) * 100)}"
+                    value="${Math.round(((bgm.effective?.volume ?? bgm.volume_override ?? bgm.volume) || 0.25) * 100)}"
                     min="0"
                     max="100"
                     class="w-24 h-2 accent-yellow-500"
-                    onchange="SceneEditModal.updateBgmSetting('volume', parseFloat(this.value) / 100)"
+                    onchange="SceneEditModal.updateBgmSetting('volume_override', parseFloat(this.value) / 100)"
                   />
-                  <span class="w-8">${Math.round((bgm.volume || 0.25) * 100)}%</span>
+                  <span class="w-8">${Math.round(((bgm.effective?.volume ?? bgm.volume_override ?? bgm.volume) || 0.25) * 100)}%</span>
                 </label>
                 <label class="flex items-center gap-2 text-sm text-yellow-700">
                   <input 
                     type="checkbox" 
-                    ${bgm.loop ? 'checked' : ''}
+                    ${(bgm.effective?.loop ?? bgm.loop_override ?? bgm.loop) ? 'checked' : ''}
                     class="accent-yellow-500"
-                    onchange="SceneEditModal.updateBgmSetting('loop', this.checked)"
+                    onchange="SceneEditModal.updateBgmSetting('loop_override', this.checked)"
                   />
                   <span>ループ</span>
                 </label>
@@ -2214,16 +2214,26 @@
     
     /**
      * P3: Select BGM from library
+     * Fixed: Use correct API parameter names (audio_library_type, system_audio_id/user_audio_id)
      */
     async selectBgmFromLibrary(libraryType, itemId, itemName) {
       try {
-        const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, {
+        // Build request body with correct parameter names
+        const body = {
           audio_type: 'bgm',
-          library_type: libraryType,
-          library_item_id: itemId,
-          volume: 0.25,
-          loop: true
-        });
+          audio_library_type: libraryType,  // Fixed: was 'library_type'
+          volume_override: 0.25,            // Fixed: was 'volume'
+          loop_override: true               // Fixed: was 'loop'
+        };
+        
+        // Set the appropriate ID based on library type
+        if (libraryType === 'system') {
+          body.system_audio_id = itemId;
+        } else if (libraryType === 'user') {
+          body.user_audio_id = itemId;
+        }
+        
+        const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, body);
         
         if (response.data.id) {
           this.currentState.sceneBgm = response.data;
@@ -2285,7 +2295,8 @@
     },
     
     /**
-     * P3: Update BGM setting (volume, loop)
+     * P3: Update BGM setting (volume_override, loop_override)
+     * Fixed: Use correct API parameter names
      */
     async updateBgmSetting(field, value) {
       if (!this.currentState.sceneBgm?.id) return;
@@ -2295,7 +2306,16 @@
           [field]: value
         });
         
+        // Update local state
         this.currentState.sceneBgm[field] = value;
+        // Also update effective value for UI consistency
+        if (this.currentState.sceneBgm.effective) {
+          if (field === 'volume_override') {
+            this.currentState.sceneBgm.effective.volume = value;
+          } else if (field === 'loop_override') {
+            this.currentState.sceneBgm.effective.loop = value;
+          }
+        }
         // Don't re-render to avoid audio restart
         
       } catch (error) {
@@ -2411,17 +2431,27 @@
     
     /**
      * P3: Select SFX from library and add to scene
+     * Fixed: Use correct API parameter names (audio_library_type, system_audio_id/user_audio_id)
      */
     async selectSfxFromLibrary(libraryType, itemId, itemName, durationMs) {
       try {
-        const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, {
+        // Build request body with correct parameter names
+        const body = {
           audio_type: 'sfx',
-          library_type: libraryType,
-          library_item_id: itemId,
+          audio_library_type: libraryType,  // Fixed: was 'library_type'
           start_ms: 0,
-          volume: 0.8,
-          loop: false
-        });
+          volume_override: 0.8,             // Fixed: was 'volume'
+          loop_override: false              // Fixed: was 'loop'
+        };
+        
+        // Set the appropriate ID based on library type
+        if (libraryType === 'system') {
+          body.system_audio_id = itemId;
+        } else if (libraryType === 'user') {
+          body.user_audio_id = itemId;
+        }
+        
+        const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, body);
         
         if (response.data.id) {
           // Add to local state
