@@ -392,6 +392,9 @@ app.get('/', (c) => {
 
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         // Phase C-1-1: Authentication check on page load
         window.currentUser = null;
         
@@ -2780,6 +2783,9 @@ app.get('/projects/:id', (c) => {
 
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         // Backward compatible global project id
         window.PROJECT_ID = ${projectId};
         // Keep legacy access (PROJECT_ID) for existing scripts
@@ -2877,6 +2883,9 @@ app.get('/login', (c) => {
     
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         document.getElementById('loginForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -3007,6 +3016,9 @@ app.get('/register', (c) => {
     
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         document.getElementById('registerForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -3100,6 +3112,9 @@ app.get('/forgot-password', (c) => {
     
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         document.getElementById('forgotForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -3192,6 +3207,9 @@ app.get('/reset-password', (c) => {
     
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         document.getElementById('resetForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             
@@ -3357,6 +3375,9 @@ app.get('/signup', (c) => {
     
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
     <script>
+        // SSOT: Configure axios to always send credentials (cookies) for authentication
+        axios.defaults.withCredentials = true;
+        
         document.getElementById('signupForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const name = document.getElementById('name').value;

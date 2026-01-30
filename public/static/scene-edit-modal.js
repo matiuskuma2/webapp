@@ -15,6 +15,13 @@
 (function() {
   'use strict';
 
+  // SSOT: Configure axios to always send credentials (cookies) for authentication
+  // This ensures all API calls include session cookies for proper authentication
+  if (typeof axios !== 'undefined') {
+    axios.defaults.withCredentials = true;
+    console.log('[SceneEditModal] axios.defaults.withCredentials = true (SSOT)');
+  }
+
   const SceneEditModal = {
     // State
     currentSceneId: null,
