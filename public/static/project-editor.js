@@ -680,6 +680,11 @@ async function openAddSceneTraitOverride(sceneId, sceneIdx) {
   // Use unified SceneEditModal instead of CharacterTraitModal
   if (window.SceneEditModal) {
     await window.SceneEditModal.open(sceneId);
+    // P3-UI: Builder画面から開いた場合は「チャットで修正」ボタンを非表示
+    const chatEditBtn = document.getElementById('scene-chat-edit-btn');
+    if (chatEditBtn) {
+      chatEditBtn.classList.add('hidden');
+    }
     // Switch to traits tab after opening
     setTimeout(() => {
       if (window.SceneEditModal.switchTab) {
@@ -2671,6 +2676,11 @@ async function openSceneCharacterEdit(sceneId) {
   // Use unified SceneEditModal (Phase X-6)
   if (window.SceneEditModal && typeof window.SceneEditModal.open === 'function') {
     await window.SceneEditModal.open(sceneId);
+    // P3-UI: Builder画面から開いた場合は「チャットで修正」ボタンを非表示
+    const chatEditBtn = document.getElementById('scene-chat-edit-btn');
+    if (chatEditBtn) {
+      chatEditBtn.classList.add('hidden');
+    }
     // Default to characters tab
     if (window.SceneEditModal.switchTab) {
       window.SceneEditModal.switchTab('characters');
@@ -6672,6 +6682,13 @@ function openSceneEditModal(sceneId, initialTab) {
   if (window.SceneEditModal) {
     window.SceneEditModal.open(sceneId);
     
+    // P3-UI: Builder画面から開いた場合は「チャットで修正」ボタンを非表示
+    // チャットで修正はVideo Build専用機能
+    const chatEditBtn = document.getElementById('scene-chat-edit-btn');
+    if (chatEditBtn) {
+      chatEditBtn.classList.add('hidden');
+    }
+    
     // R1.6: If initialTab specified, switch to that tab after modal opens
     if (initialTab && window.SceneEditModal.switchTab) {
       setTimeout(() => {
@@ -6701,6 +6718,12 @@ function openSceneEditModalToVoiceTab(sceneId) {
   if (window.SceneEditModal) {
     // モーダルを開く
     window.SceneEditModal.open(sceneId);
+    
+    // R1.6/P3-UI: Video Build preflightから呼ばれた場合は「チャットで修正」ボタンを表示
+    const chatEditBtn = document.getElementById('scene-chat-edit-btn');
+    if (chatEditBtn) {
+      chatEditBtn.classList.remove('hidden');
+    }
     
     // 少し待ってから発話（utterances）タブに切り替え
     // 注: 'voice' タブは存在しない。音声編集は 'utterances' タブで行う
