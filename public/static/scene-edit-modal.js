@@ -1814,10 +1814,17 @@
       const durationSec = cue.duration_ms ? (cue.duration_ms / 1000).toFixed(1) : '?';
       const volume = Math.round((cue.volume || 0.8) * 100);
       
+      // P1-B: 連番は 1-indexed（チャット参照用）
+      const sfxNumber = index + 1;
+      
       return `
         <div class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg" data-cue-id="${cue.id}">
-          <div class="flex-shrink-0">
+          <div class="flex-shrink-0 flex flex-col items-center">
             <span class="text-2xl">💥</span>
+            <!-- P1-B: 識別子ラベル（チャット参照用） -->
+            <span class="px-1.5 py-0.5 bg-pink-100 text-pink-700 text-xs font-mono rounded mt-1">
+              #${sfxNumber}
+            </span>
           </div>
           <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 mb-1">
@@ -1828,6 +1835,7 @@
                 onchange="SceneEditModal.updateSfxCue(${cue.id}, 'name', this.value)"
                 placeholder="効果音名"
               />
+              <span class="text-xs text-gray-400 font-mono">scene-${this.currentSceneId}-sfx-${sfxNumber}</span>
               <span class="text-xs text-gray-500">${durationSec}秒</span>
             </div>
             <div class="flex items-center gap-4 text-xs text-gray-600 flex-wrap">
@@ -2080,18 +2088,11 @@
           ${bgm ? `
             <!-- 現在のBGM設定 -->
             <div class="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg mb-4">
-              <div class="flex items-center justify-between mb-3">
-                <div class="flex items-center gap-3">
-                  <span class="text-3xl">🎵</span>
-                  <div>
-                    <div class="font-semibold text-yellow-800">${this.escapeHtml(bgm.effective?.name || bgm.library?.name || bgm.name || 'BGM')}</div>
-                    <div class="text-xs text-yellow-600">
-                      ソース: ${this.getBgmSourceLabel(bgm.audio_library_type || bgm.library_type)}
-                      ${(bgm.effective?.loop ?? bgm.loop) ? ' | ループ: ON' : ''}
-                      ${' | 音量: ' + Math.round(((bgm.effective?.volume ?? bgm.volume_override ?? bgm.volume) || 0.25) * 100) + '%'}
-                    </div>
-                  </div>
-                </div>
+              <!-- P1-B: 識別子ラベル（チャット参照用） -->
+              <div class="flex items-center justify-between mb-2">
+                <span class="px-2 py-0.5 bg-yellow-200 text-yellow-800 text-xs font-mono rounded">
+                  scene-${this.currentSceneId}-bgm
+                </span>
                 <button 
                   onclick="SceneEditModal.removeBgmAssignment()"
                   class="px-3 py-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
@@ -2099,6 +2100,17 @@
                 >
                   <i class="fas fa-trash"></i>
                 </button>
+              </div>
+              <div class="flex items-center gap-3 mb-3">
+                <span class="text-3xl">🎵</span>
+                <div>
+                  <div class="font-semibold text-yellow-800">${this.escapeHtml(bgm.effective?.name || bgm.library?.name || bgm.name || 'BGM')}</div>
+                  <div class="text-xs text-yellow-600">
+                    ソース: ${this.getBgmSourceLabel(bgm.audio_library_type || bgm.library_type)}
+                    ${(bgm.effective?.loop ?? bgm.loop) ? ' | ループ: ON' : ''}
+                    ${' | 音量: ' + Math.round(((bgm.effective?.volume ?? bgm.volume_override ?? bgm.volume) || 0.25) * 100) + '%'}
+                  </div>
+                </div>
               </div>
               ${(bgm.effective?.r2_url || bgm.url || bgm.library?.r2_url) ? `
                 <audio src="${bgm.effective?.r2_url || bgm.url || bgm.library?.r2_url}" controls class="w-full h-10"></audio>
