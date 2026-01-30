@@ -1648,6 +1648,60 @@ admin.get('/audio-library', async (c) => {
 });
 
 // ====================================================================
+// GET /api/admin/audio-library/stats - 統計情報
+// NOTE: This route MUST be defined BEFORE /:id to avoid "stats" being parsed as an ID
+// ====================================================================
+
+admin.get('/audio-library/stats', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    const stats = await DB.prepare(`
+      SELECT 
+        audio_type,
+        COUNT(*) as total,
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active,
+        SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) as inactive
+      FROM system_audio_library
+      GROUP BY audio_type
+    `).all();
+    
+    const byMood = await DB.prepare(`
+      SELECT 
+        mood,
+        COUNT(*) as count
+      FROM system_audio_library
+      WHERE is_active = 1 AND mood IS NOT NULL
+      GROUP BY mood
+      ORDER BY count DESC
+    `).all();
+    
+    const byCategory = await DB.prepare(`
+      SELECT 
+        category,
+        COUNT(*) as count
+      FROM system_audio_library
+      WHERE is_active = 1 AND category IS NOT NULL
+      GROUP BY category
+      ORDER BY count DESC
+    `).all();
+    
+    return c.json({
+      success: true,
+      by_type: stats.results || [],
+      by_mood: byMood.results || [],
+      by_category: byCategory.results || [],
+    });
+  } catch (error) {
+    console.error('Get audio stats error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get stats' 
+    }, 500);
+  }
+});
+
+// ====================================================================
 // GET /api/admin/audio-library/:id - システムオーディオ詳細
 // ====================================================================
 
@@ -1981,59 +2035,6 @@ admin.post('/audio-library/upload', async (c) => {
     return c.json({ 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to upload audio' 
-    }, 500);
-  }
-});
-
-// ====================================================================
-// GET /api/admin/audio-library/stats - 統計情報
-// ====================================================================
-
-admin.get('/audio-library/stats', async (c) => {
-  const { DB } = c.env;
-  
-  try {
-    const stats = await DB.prepare(`
-      SELECT 
-        audio_type,
-        COUNT(*) as total,
-        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) as active,
-        SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) as inactive
-      FROM system_audio_library
-      GROUP BY audio_type
-    `).all();
-    
-    const byMood = await DB.prepare(`
-      SELECT 
-        mood,
-        COUNT(*) as count
-      FROM system_audio_library
-      WHERE is_active = 1 AND mood IS NOT NULL
-      GROUP BY mood
-      ORDER BY count DESC
-    `).all();
-    
-    const byCategory = await DB.prepare(`
-      SELECT 
-        category,
-        COUNT(*) as count
-      FROM system_audio_library
-      WHERE is_active = 1 AND category IS NOT NULL
-      GROUP BY category
-      ORDER BY count DESC
-    `).all();
-    
-    return c.json({
-      success: true,
-      by_type: stats.results || [],
-      by_mood: byMood.results || [],
-      by_category: byCategory.results || [],
-    });
-  } catch (error) {
-    console.error('Get audio stats error:', error);
-    return c.json({ 
-      success: false, 
-      error: error instanceof Error ? error.message : 'Failed to get stats' 
     }, 500);
   }
 });
