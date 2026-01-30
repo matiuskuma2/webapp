@@ -362,40 +362,72 @@ export function computeSceneDurationMsWithReason(scene: SceneData): DurationResu
     };
   }
   
-  // 2. scene_utterances（R1.5+）の音声合計
-  //    utterances があり、かつ duration_ms が設定されているものを合計
+  // ============================================================
+  // P2 SSOT: 音声下限保証
+  // ============================================================
+  // 「セリフ（発話音声）が途中で切れる」を構造的に防止
+  // - voice_required_ms: 音声が完全に再生されるのに必要な最低尺
+  // - duration_override_ms は「希望値」として扱い、音声下限より大きい方を採用
+  // ============================================================
+  
+  // 音声の必要尺を計算
+  let voiceRequiredMs = 0;
+  
+  // 2a. scene_utterances（R1.5+）の音声合計
   const utterances = scene.utterances || [];
   const totalUtteranceDuration = utterances.reduce((sum, u) => {
     // duration_ms があるもの（音声生成済み）のみ加算
     return sum + (u.duration_ms || 0);
   }, 0);
   if (totalUtteranceDuration > 0) {
-    return {
-      duration_ms: totalUtteranceDuration + AUDIO_PADDING_MS,
-      reason: 'voice',
-    };
+    voiceRequiredMs = totalUtteranceDuration + AUDIO_PADDING_MS;
   }
   
-  // 3. duration_override_ms（無音尺の手動設定）
+  // 2b. comic モード: comic_data.utterances の合計尺（後方互換）
+  if (voiceRequiredMs === 0 && displayType === 'comic') {
+    const comicUtterances = scene.comic_data?.utterances || [];
+    const totalComicDuration = comicUtterances.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
+    if (totalComicDuration > 0) {
+      voiceRequiredMs = totalComicDuration + AUDIO_PADDING_MS;
+    }
+  }
+  
+  // 2c. active_audio（旧式音声）
+  if (voiceRequiredMs === 0 && scene.active_audio?.duration_ms) {
+    voiceRequiredMs = scene.active_audio.duration_ms + AUDIO_PADDING_MS;
+  }
+  
+  // 3. duration_override_ms がある場合
+  //    SSOT: override は「希望値」として扱い、音声下限より大きい方を採用
   if (scene.duration_override_ms != null && scene.duration_override_ms > 0) {
-    const clampedDuration = Math.min(Math.max(scene.duration_override_ms, MIN_DURATION_MS), MAX_DURATION_MS);
+    const overrideMs = Math.min(Math.max(scene.duration_override_ms, MIN_DURATION_MS), MAX_DURATION_MS);
+    
+    // 音声下限 vs 手動設定、大きい方を採用（セリフ切れ防止）
+    if (voiceRequiredMs > 0 && voiceRequiredMs > overrideMs) {
+      // 音声が override より長い → 音声優先
+      return {
+        duration_ms: voiceRequiredMs,
+        reason: 'voice',
+      };
+    }
+    // override が音声以上 → 手動設定を採用
     return {
-      duration_ms: clampedDuration,
+      duration_ms: overrideMs,
       reason: 'manual',
     };
   }
   
-  // 4. comic モード: comic_data.utterances の合計尺（後方互換）
+  // 4. 音声があれば音声尺を返す
+  if (voiceRequiredMs > 0) {
+    return {
+      duration_ms: voiceRequiredMs,
+      reason: 'voice',
+    };
+  }
+  
+  // 5. comic モード: テキストから推定
   if (displayType === 'comic') {
     const comicUtterances = scene.comic_data?.utterances || [];
-    const totalComicDuration = comicUtterances.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
-    if (totalComicDuration > 0) {
-      return {
-        duration_ms: totalComicDuration + AUDIO_PADDING_MS,
-        reason: 'voice',
-      };
-    }
-    // comic_data.utterances の duration_ms がない場合はテキストから推定
     const totalText = comicUtterances.map(u => u.text || '').join('');
     if (totalText.length > 0) {
       return {
@@ -403,14 +435,6 @@ export function computeSceneDurationMsWithReason(scene: SceneData): DurationResu
         reason: 'estimate',
       };
     }
-  }
-  
-  // 5. active_audio（旧式音声）
-  if (scene.active_audio?.duration_ms) {
-    return {
-      duration_ms: scene.active_audio.duration_ms + AUDIO_PADDING_MS,
-      reason: 'voice',
-    };
   }
   
   // 6. dialogue から推定
