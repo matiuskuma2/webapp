@@ -12176,44 +12176,14 @@ async function generateSceneAudio(sceneId) {
       }
       
       try {
-        // voice_preset_idを決定（utteranceのキャラクター or デフォルト）
-        let voicePresetId = null;
+        // PR-Audio-Fix: utterance個別の音声生成APIを使用
+        // このAPIはキャラクターの音声設定を自動で取得し、
+        // utteranceに音声生成IDを紐付ける
+        const genResponse = await axios.post(`${API_BASE}/utterances/${utt.id}/generate-audio`, {});
         
-        // utteranceにcharacter_keyがあればそのキャラの音声設定を使用
-        if (utt.character_key) {
-          // キャラクターの音声プリセットを取得
-          const charResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters`);
-          const characters = charResponse.data.characters || [];
-          const char = characters.find(c => c.character_key === utt.character_key);
-          if (char?.voice_preset_id) {
-            voicePresetId = char.voice_preset_id;
-          }
-        }
-        
-        // デフォルトの音声プリセット（fish.audioの場合）
-        if (!voicePresetId) {
-          // プロジェクトのデフォルト音声設定を取得
-          const projectCharsResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/characters`);
-          const chars = projectCharsResponse.data.characters || [];
-          // 最初のキャラクターの音声設定を使用
-          const firstCharWithVoice = chars.find(c => c.voice_preset_id);
-          if (firstCharWithVoice?.voice_preset_id) {
-            voicePresetId = firstCharWithVoice.voice_preset_id;
-          }
-        }
-        
-        // 音声生成API呼び出し
-        const genResponse = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-audio`, {
-          voice_id: voicePresetId || 'ja-JP-Standard-A', // フォールバック: Google TTS
-          text_override: utt.text
-        });
-        
-        if (genResponse.data.audio_generation?.id) {
-          // 生成開始成功 - utteranceとの紐付けを更新
-          await axios.put(`${API_BASE}/scenes/${sceneId}/utterances/${utt.id}`, {
-            audio_generation_id: genResponse.data.audio_generation.id
-          });
+        if (genResponse.data.success && genResponse.data.audio_generation_id) {
           successCount++;
+          console.log(`[Audio] Utterance ${utt.id} audio generation started: ${genResponse.data.audio_generation_id}`);
         }
         
         // レート制限対策: 少し待機
