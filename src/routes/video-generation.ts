@@ -2325,6 +2325,140 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           }
         }
         
+        // ====================================================================
+        // P5: シーン別BGM取得 - 新SSOT優先・legacyフォールバック
+        // ====================================================================
+        // 優先順位:
+        //   1. scene_audio_assignments (audio_type='bgm', is_active=1) - 新SSOT
+        //   2. 該当シーンにBGM割当がない場合は null（プロジェクト全体BGMを使用）
+        // 
+        // 仕様:
+        //   - 1シーンにつきBGMは最大1件（audio_type='bgm' AND is_active=1）
+        //   - シーン別BGMがある場合、そのシーンではプロジェクト全体BGMより優先
+        //   - Remotion側でシーン別BGMとプロジェクト全体BGMの共存処理（duck/mute）
+        // ====================================================================
+        
+        let sceneBgm: {
+          id: number;
+          name: string;
+          url: string;
+          duration_ms: number | null;
+          volume: number;
+          loop: boolean;
+          fade_in_ms: number;
+          fade_out_ms: number;
+          start_ms: number;
+          end_ms: number | null;
+          source_type: 'system' | 'user' | 'direct';
+        } | null = null;
+        
+        // 新SSOT: scene_audio_assignments から BGM を取得（1件のみ）
+        const bgmAssignment = await c.env.DB.prepare(`
+          SELECT 
+            saa.id,
+            saa.audio_library_type,
+            saa.system_audio_id,
+            saa.user_audio_id,
+            saa.direct_r2_key,
+            saa.direct_r2_url,
+            saa.direct_name,
+            saa.direct_duration_ms,
+            saa.start_ms,
+            saa.end_ms,
+            saa.volume_override,
+            saa.loop_override,
+            saa.fade_in_ms_override,
+            saa.fade_out_ms_override,
+            -- system_audio_library からの情報
+            sal.name as system_name,
+            sal.file_url as system_url,
+            sal.duration_ms as system_duration_ms,
+            -- user_audio_library からの情報
+            ual.name as user_name,
+            ual.r2_url as user_url,
+            ual.duration_ms as user_duration_ms,
+            ual.default_volume as user_default_volume,
+            ual.default_loop as user_default_loop,
+            ual.default_fade_in_ms as user_default_fade_in_ms,
+            ual.default_fade_out_ms as user_default_fade_out_ms
+          FROM scene_audio_assignments saa
+          LEFT JOIN system_audio_library sal ON saa.system_audio_id = sal.id
+          LEFT JOIN user_audio_library ual ON saa.user_audio_id = ual.id
+          WHERE saa.scene_id = ? AND saa.audio_type = 'bgm' AND saa.is_active = 1
+          LIMIT 1
+        `).bind(scene.id).first<{
+          id: number;
+          audio_library_type: 'system' | 'user' | 'direct';
+          system_audio_id: number | null;
+          user_audio_id: number | null;
+          direct_r2_key: string | null;
+          direct_r2_url: string | null;
+          direct_name: string | null;
+          direct_duration_ms: number | null;
+          start_ms: number;
+          end_ms: number | null;
+          volume_override: number | null;
+          loop_override: number | null;
+          fade_in_ms_override: number | null;
+          fade_out_ms_override: number | null;
+          system_name: string | null;
+          system_url: string | null;
+          system_duration_ms: number | null;
+          user_name: string | null;
+          user_url: string | null;
+          user_duration_ms: number | null;
+          user_default_volume: number | null;
+          user_default_loop: number | null;
+          user_default_fade_in_ms: number | null;
+          user_default_fade_out_ms: number | null;
+        }>();
+        
+        if (bgmAssignment) {
+          let name = 'BGM';
+          let url: string | null = null;
+          let duration_ms: number | null = null;
+          let defaultVolume = 0.25;
+          let defaultLoop = true;
+          let defaultFadeIn = 800;
+          let defaultFadeOut = 800;
+          
+          if (bgmAssignment.audio_library_type === 'system' && bgmAssignment.system_url) {
+            name = bgmAssignment.system_name || 'System BGM';
+            url = bgmAssignment.system_url;
+            duration_ms = bgmAssignment.system_duration_ms;
+          } else if (bgmAssignment.audio_library_type === 'user' && bgmAssignment.user_url) {
+            name = bgmAssignment.user_name || 'User BGM';
+            url = bgmAssignment.user_url;
+            duration_ms = bgmAssignment.user_duration_ms;
+            defaultVolume = bgmAssignment.user_default_volume ?? 0.25;
+            defaultLoop = (bgmAssignment.user_default_loop ?? 1) === 1;
+            defaultFadeIn = bgmAssignment.user_default_fade_in_ms ?? 800;
+            defaultFadeOut = bgmAssignment.user_default_fade_out_ms ?? 800;
+          } else if (bgmAssignment.audio_library_type === 'direct' && bgmAssignment.direct_r2_url) {
+            name = bgmAssignment.direct_name || 'Direct BGM';
+            url = bgmAssignment.direct_r2_url;
+            duration_ms = bgmAssignment.direct_duration_ms;
+          }
+          
+          if (url) {
+            sceneBgm = {
+              id: bgmAssignment.id,
+              name,
+              url: toAbsoluteUrl(url, siteUrl) || url,
+              duration_ms,
+              volume: bgmAssignment.volume_override ?? defaultVolume,
+              loop: bgmAssignment.loop_override !== null ? bgmAssignment.loop_override === 1 : defaultLoop,
+              fade_in_ms: bgmAssignment.fade_in_ms_override ?? defaultFadeIn,
+              fade_out_ms: bgmAssignment.fade_out_ms_override ?? defaultFadeOut,
+              start_ms: bgmAssignment.start_ms,
+              end_ms: bgmAssignment.end_ms,
+              source_type: bgmAssignment.audio_library_type,
+            };
+            
+            console.log(`[VideoBuild] Scene ${scene.id}: Using BGM from scene_audio_assignments (new SSOT): ${name}`);
+          }
+        }
+        
         // R2-C: scene_motion を取得（モーションプリセット）
         const motionRow = await c.env.DB.prepare(`
           SELECT sm.motion_preset_id, mp.motion_type, mp.params
@@ -2378,6 +2512,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           balloons: balloons.length > 0 ? balloons : null,
           // R3-B: sfx（効果音）
           sfx: sfx.length > 0 ? sfx : null,
+          // P5: シーン別BGM（新SSOT優先）
+          bgm: sceneBgm,
           // R2-C: motion（モーションプリセット）
           motion: motionData,
         };

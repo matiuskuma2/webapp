@@ -206,6 +206,20 @@ export interface SceneData {
     motion_type: 'none' | 'zoom' | 'pan' | 'combined';
     params: Record<string, number>;
   } | null;
+  // P5: シーン別BGM（scene_audio_assignments から読み込み）
+  bgm?: {
+    id: number;
+    name: string;
+    url: string;
+    duration_ms: number | null;
+    volume: number;
+    loop: boolean;
+    fade_in_ms: number;
+    fade_out_ms: number;
+    start_ms: number;
+    end_ms: number | null;
+    source_type: 'system' | 'user' | 'direct';
+  } | null;
 }
 
 export interface ProjectData {
@@ -1124,6 +1138,19 @@ export interface RemotionScene_R1 {
       end_y?: number;
     };
   };
+  /** P5: シーン別BGM（プロジェクト全体BGMより優先） */
+  bgm?: {
+    url: string;
+    name?: string;
+    duration_ms?: number | null;
+    volume: number;
+    loop: boolean;
+    fade_in_ms: number;
+    fade_out_ms: number;
+    start_ms: number;
+    end_ms?: number | null;
+    source_type?: 'system' | 'user' | 'direct';
+  };
   characters?: {
     image?: string[];
     voice?: string;
@@ -1524,6 +1551,21 @@ export function buildProjectJson(
         ? { id: 'none', motion_type: 'none', params: {} }
         : { id: 'kenburns_soft', motion_type: 'zoom', params: { start_scale: 1.0, end_scale: 1.05 } }
       ),
+      // P5: シーン別BGM（新SSOT優先、プロジェクト全体BGMより優先）
+      // scene.bgm がある場合は projectJson.assets.bgm より優先して再生
+      // Remotion側で duck/mute 処理
+      bgm: scene.bgm ? {
+        url: scene.bgm.url,
+        name: scene.bgm.name,
+        duration_ms: scene.bgm.duration_ms,
+        volume: scene.bgm.volume,
+        loop: scene.bgm.loop,
+        fade_in_ms: scene.bgm.fade_in_ms,
+        fade_out_ms: scene.bgm.fade_out_ms,
+        start_ms: scene.bgm.start_ms,
+        end_ms: scene.bgm.end_ms,
+        source_type: scene.bgm.source_type,
+      } : undefined,
     };
   });
   
