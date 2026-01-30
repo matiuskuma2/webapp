@@ -98,6 +98,25 @@ export const BalloonAssetSchema = z.object({
 export type BalloonAsset = z.infer<typeof BalloonAssetSchema>;
 
 // ====================================================================
+// SfxAsset - R3-B 効果音
+// ====================================================================
+
+export const SfxAssetSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  url: z.string(),
+  start_ms: z.number().default(0),
+  end_ms: z.number().optional(),
+  duration_ms: z.number().optional(),
+  volume: z.number().default(0.8),
+  loop: z.boolean().default(false),
+  fade_in_ms: z.number().default(0),
+  fade_out_ms: z.number().default(0),
+});
+
+export type SfxAsset = z.infer<typeof SfxAssetSchema>;
+
+// ====================================================================
 // ProjectScene - R1.1/R1.5/R2 対応
 // ====================================================================
 
@@ -129,6 +148,12 @@ export const ProjectSceneSchema = z.object({
    * - 未指定時は kenburns_soft がデフォルト適用
    */
   motion: MotionPresetSchema.optional(),
+  /**
+   * R3-B: sfx - シーン内効果音
+   * - シーンの特定タイミングで再生するSFX
+   * - start_ms: シーン内での再生開始タイミング
+   */
+  sfx: z.array(SfxAssetSchema).optional(),
   assets: z.object({
     image: z.object({
       url: z.string(),

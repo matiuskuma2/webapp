@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, Img, Audio, Video, Sequence, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
-import type { ProjectScene, VoiceAsset } from '../schemas/project-schema';
+import type { ProjectScene, VoiceAsset, SfxAsset } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
 import { Subtitle } from './Subtitle';
 import { MotionWrapper, getMotionPreset } from './MotionWrapper';
@@ -31,6 +31,10 @@ interface SceneProps {
  *   - 漫画の文字入りバブルPNGを100%維持
  * - text_render_mode='remotion' の場合:
  *   - balloons をスタイルに基づいてテキスト描画（従来方式）
+ * 
+ * ## R3-B SFX 対応
+ * - scene.sfx[] 配列をサポート
+ * - 各SFXは start_ms で再生開始、volume/loop を考慮
  */
 export const Scene: React.FC<SceneProps> = ({ 
   scene, 
@@ -57,6 +61,10 @@ export const Scene: React.FC<SceneProps> = ({
   const balloons = scene.balloons || [];
   const hasBalloons = balloons.length > 0;
   
+  // R3-B: SFX配列を取得
+  const sfxList: SfxAsset[] = scene.sfx || [];
+  const hasSfx = sfxList.length > 0;
+  
   // Debug: 最初のフレームでログ出力
   if (frame === 0) {
     console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
@@ -66,8 +74,12 @@ export const Scene: React.FC<SceneProps> = ({
     console.log(`[Scene ${scene.idx}] text_render_mode: ${textRenderMode}`);
     console.log(`[Scene ${scene.idx}] motion preset: ${motionPreset?.id || 'default'}`);
     console.log(`[Scene ${scene.idx}] balloons count: ${balloons.length}`);
+    console.log(`[Scene ${scene.idx}] sfx count: ${sfxList.length}`);
     if (textRenderMode === 'baked' && hasBalloons) {
       console.log(`[Scene ${scene.idx}] A案 baked: バブル画像をタイミング表示`);
+    }
+    if (hasSfx) {
+      console.log(`[Scene ${scene.idx}] R3-B: SFXを再生`, sfxList.map(s => ({ id: s.id, url: s.url, start_ms: s.start_ms })));
     }
   }
   
@@ -145,6 +157,30 @@ export const Scene: React.FC<SceneProps> = ({
             </Sequence>
           );
         })}
+        
+        {/* R3-B: SFXを再生 */}
+        {sfxList.map((sfx) => {
+          const sfxStartFrame = msToFrames(sfx.start_ms ?? 0, fps);
+          // duration_ms があればそれを使用、なければシーン終了まで
+          const sfxDurationFrames = sfx.duration_ms 
+            ? msToFrames(sfx.duration_ms, fps)
+            : durationFrames - sfxStartFrame;
+          
+          return (
+            <Sequence
+              key={sfx.id}
+              from={sfxStartFrame}
+              durationInFrames={Math.max(1, sfxDurationFrames)}
+            >
+              <Audio 
+                src={sfx.url} 
+                volume={sfx.volume ?? 0.8}
+                loop={sfx.loop ?? false}
+              />
+            </Sequence>
+          );
+        })}
+        
         {/* 字幕表示 - R2: baked/none時は描画しない */}
         {shouldRenderSubtitle && subtitleText && (
           <Subtitle
@@ -211,6 +247,29 @@ export const Scene: React.FC<SceneProps> = ({
             durationInFrames={voiceDurationFrames}
           >
             <Audio src={voice.audio_url} />
+          </Sequence>
+        );
+      })}
+      
+      {/* R3-B: SFXを再生 */}
+      {sfxList.map((sfx) => {
+        const sfxStartFrame = msToFrames(sfx.start_ms ?? 0, fps);
+        // duration_ms があればそれを使用、なければシーン終了まで
+        const sfxDurationFrames = sfx.duration_ms 
+          ? msToFrames(sfx.duration_ms, fps)
+          : durationFrames - sfxStartFrame;
+        
+        return (
+          <Sequence
+            key={sfx.id}
+            from={sfxStartFrame}
+            durationInFrames={Math.max(1, sfxDurationFrames)}
+          >
+            <Audio 
+              src={sfx.url} 
+              volume={sfx.volume ?? 0.8}
+              loop={sfx.loop ?? false}
+            />
           </Sequence>
         );
       })}
