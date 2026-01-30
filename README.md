@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-30（PR-Audio-Video: 動画素材ミュート、display_asset_type切替UI、音声一括生成）
+- **最終更新**: 2026-01-30（P0: BGM/SFX SSOT化、Remotion SFX再生、音声ライブラリ設計）
 
 ---
 
@@ -1529,6 +1529,139 @@ e8d1963 fix(PR-Audio-Fix): Use utterance-specific audio generation API
 cd508c1 feat(PR-Audio-Video): Add video asset type selector and audio confirm dialog
 3486880 feat(PR-Audio-Bulk): Preflight画面から一括音声生成ボタンを追加
 a706a3c feat(PR-Audio-Direct): シーンカードから直接音声生成ボタンを追加
+```
+
+---
+
+## 2026-01-30 P0: BGM/SFX SSOT化 + 音声ライブラリ設計
+
+### P0-1: SFX再生サポート（Remotion）
+RemotionのScene.tsxコンポーネントでシーン単位のSFX再生をサポート。
+
+**追加ファイル**:
+- `video-build-remotion/src/schemas/project-schema.ts`: SfxAssetスキーマ追加
+- `video-build-remotion/src/components/Scene.tsx`: SFX再生ロジック追加
+
+**SfxAssetスキーマ**:
+```typescript
+{
+  id: string,
+  name?: string,
+  url: string,
+  start_ms: number,  // シーン内の開始タイミング
+  end_ms?: number,
+  duration_ms?: number,
+  volume: number,    // 0.0-1.0 (default: 0.8)
+  loop: boolean,
+  fade_in_ms: number,
+  fade_out_ms: number,
+}
+```
+
+**Remotion統合**:
+- scene.sfx[]配列をSequence + Audioコンポーネントで再生
+- start_msでシーン内の開始タイミングを指定
+- duration_msがあればその長さ、なければシーン終了まで再生
+- volume/loopの設定を反映
+
+### 音声ライブラリ設計（P1/P2準備）
+
+#### 0040: user_audio_library（ユーザー音素材ライブラリ）
+BGM/SFXをプロジェクト横断で再利用可能にするテーブル。
+
+**特徴**:
+- user_idベース（プロジェクトではなくユーザーに紐付く）
+- tags/mood/categoryでAI提案に対応
+- use_countで使用回数トラッキング
+- キャラクターと同じ「再利用前提アセット」として設計
+
+**カラム**:
+```sql
+id, user_id, audio_type('bgm'|'sfx'), name, description,
+category, mood, tags(JSON),
+r2_key, r2_url, duration_ms, file_size,
+default_volume, default_loop, default_fade_in_ms, default_fade_out_ms,
+is_active, use_count, created_at, updated_at
+```
+
+#### 0041: scene_audio_assignments（シーンへの音素材割当）
+シーンとBGM/SFXの紐付けを管理するテーブル。
+
+**特徴**:
+- ライブラリ参照（system/user）または直接アップロード（direct）に対応
+- audio_type='bgm'は1シーン1件のみ、'sfx'は複数可
+- volume/loop/fade設定のオーバーライド可能
+- 既存project_audio_tracksからのフォールバックパスを確保
+
+**カラム**:
+```sql
+id, scene_id,
+audio_library_type('system'|'user'|'direct'),
+system_audio_id, user_audio_id,
+direct_r2_key, direct_r2_url, direct_name, direct_duration_ms,
+audio_type('bgm'|'sfx'),
+start_ms, end_ms,
+volume_override, loop_override, fade_in_ms_override, fade_out_ms_override,
+is_active, created_at, updated_at
+```
+
+### Audio SSOTアーキテクチャ（最終形）
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Audio Sources (SSOT)                                    │
+│                                                          │
+│  ┌────────────────────┐  ┌────────────────────┐        │
+│  │ system_audio_library │  │ user_audio_library │        │
+│  │ (管理者登録)         │  │ (ユーザー登録)      │        │
+│  └─────────┬──────────┘  └─────────┬──────────┘        │
+│            │                        │                   │
+│            └───────────┬────────────┘                   │
+│                        ▼                                │
+│            ┌─────────────────────────┐                 │
+│            │ scene_audio_assignments │                 │
+│            │ (シーン割当SSOT)        │                 │
+│            └───────────┬─────────────┘                 │
+│                        │                                │
+│  ┌─────────────────────┴─────────────────────┐        │
+│  │                                            │        │
+│  ▼                                            ▼        │
+│  ┌────────────────────┐  ┌────────────────────┐        │
+│  │ project_audio_tracks │  │ scene_audio_cues   │        │
+│  │ (BGM: 移行期間中)    │  │ (SFX: 移行期間中)  │        │
+│  └────────────────────┘  └────────────────────┘        │
+└─────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+        ┌───────────────────────────────────┐
+        │ buildProjectJson()               │
+        │ (video-build-helpers.ts)         │
+        │ ・assets.bgm: プロジェクトBGM    │
+        │ ・scene[].sfx: シーンSFX配列     │
+        └───────────────────────────────────┘
+                         │
+                         ▼
+        ┌───────────────────────────────────┐
+        │ Remotion                          │
+        │ (RilarcVideo.tsx + Scene.tsx)    │
+        │ ・BGM: projectJson.assets.bgm    │
+        │ ・SFX: scene.sfx[]               │
+        │ ・Voice: scene.assets.voices[]   │
+        └───────────────────────────────────┘
+```
+
+### 次のステップ（P1以降）
+
+- **P1**: user_audio_library API実装（CRUD + アップロード）
+- **P2**: scene_audio_assignments API実装
+- **P3**: フロントエンドUI（シーンカードBGM/SFX表示改善）
+- **P4**: シーン別BGM選択モーダル
+- **P5**: 動画ビルドでscene_audio_assignmentsから取得
+- **P6**: Remotionでシーン別BGM再生（シーン切替時にBGM切替）
+
+### Gitコミット
+```
+a500998 P0: Add SFX playback support to Remotion + Audio library schema
 ```
 
 ---
