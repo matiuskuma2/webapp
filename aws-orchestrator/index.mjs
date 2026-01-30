@@ -125,33 +125,20 @@ async function handleStart(body) {
     const totalFrames = Math.ceil((totalDurationMs / 1000) * fps);
     
     // Remotion Lambda has a limit of 200 concurrent functions
-    // With framesPerLambda = 60, max frames = 200 * 60 = 12000 (~400 seconds @ 30fps)
-    const FRAMES_PER_LAMBDA = 60;
+    // Calculate optimal framesPerLambda to stay under 200 functions
+    // Max supported: 200 scenes × 30sec avg = 6000sec = 180,000 frames @ 30fps
+    // With framesPerLambda = 900, that's 200 functions exactly
     const MAX_LAMBDA_FUNCTIONS = 200;
-    const maxFrames = MAX_LAMBDA_FUNCTIONS * FRAMES_PER_LAMBDA;
-    const estimatedFunctions = Math.ceil(totalFrames / FRAMES_PER_LAMBDA);
+    const MIN_FRAMES_PER_LAMBDA = 60;   // Minimum for quality
+    const MAX_FRAMES_PER_LAMBDA = 1200; // Maximum practical value
     
-    if (totalFrames > maxFrames) {
-      const maxDurationSec = Math.floor(maxFrames / fps);
-      const currentDurationSec = Math.floor(totalFrames / fps);
-      console.error(`Video too long: ${totalFrames} frames (${currentDurationSec}s) exceeds max ${maxFrames} frames (${maxDurationSec}s)`);
-      return jsonResponse(400, {
-        success: false,
-        error: {
-          code: 'VIDEO_TOO_LONG',
-          message: `動画が長すぎます。現在: ${currentDurationSec}秒、最大: ${maxDurationSec}秒（約${Math.floor(maxDurationSec / 60)}分${maxDurationSec % 60}秒）。シーンを減らすか、分割してください。`
-        },
-        details: {
-          totalFrames,
-          maxFrames,
-          estimatedFunctions,
-          maxFunctions: MAX_LAMBDA_FUNCTIONS,
-          framesPerLambda: FRAMES_PER_LAMBDA,
-          currentDurationSec,
-          maxDurationSec
-        }
-      });
-    }
+    // Auto-calculate: ensure we stay under 200 functions
+    let framesPerLambda = Math.ceil(totalFrames / MAX_LAMBDA_FUNCTIONS);
+    framesPerLambda = Math.max(MIN_FRAMES_PER_LAMBDA, framesPerLambda);  // At least 60
+    framesPerLambda = Math.min(MAX_FRAMES_PER_LAMBDA, framesPerLambda);  // At most 1200
+    
+    const estimatedFunctions = Math.ceil(totalFrames / framesPerLambda);
+    const durationSec = Math.round(totalDurationMs / 1000);
     
     console.log('Starting Remotion render:', {
       video_build_id,
@@ -161,8 +148,10 @@ async function handleStart(body) {
       composition: 'RilarcVideo',
       totalFrames,
       totalDurationMs,
+      durationSec,
+      durationMin: (durationSec / 60).toFixed(1),
+      framesPerLambda,
       estimatedFunctions,
-      framesPerLambda: FRAMES_PER_LAMBDA,
       inputPropsSize: JSON.stringify(inputProps).length
     });
     
@@ -181,7 +170,7 @@ async function handleStart(body) {
       },
       // Frame range - null to let Remotion auto-calculate, or specify [start, end]
       frameRange: null,
-      framesPerLambda: FRAMES_PER_LAMBDA,
+      framesPerLambda: framesPerLambda,
       concurrency: null,  // Let Remotion decide based on framesPerLambda
       logLevel: 'info',
       downloadBehavior: {
