@@ -2052,6 +2052,55 @@ admin.delete('/audio-library/:id', async (c) => {
 });
 
 // ====================================================================
+// DELETE /api/admin/audio-library/:id/permanent - システムオーディオ完全削除
+// ====================================================================
+
+admin.delete('/audio-library/:id/permanent', async (c) => {
+  const { DB, R2 } = c.env;
+  const id = parseInt(c.req.param('id'));
+  
+  if (isNaN(id)) {
+    return c.json({ success: false, error: 'Invalid ID' }, 400);
+  }
+  
+  try {
+    // レコード取得（file_urlからR2キーを特定）
+    const audio = await DB.prepare(`
+      SELECT id, name, file_url FROM system_audio_library WHERE id = ?
+    `).bind(id).first<{ id: number; name: string; file_url: string }>();
+    
+    if (!audio) {
+      return c.json({ success: false, error: 'Audio not found' }, 404);
+    }
+    
+    // R2ファイルを削除（相対パスの場合）
+    if (audio.file_url && audio.file_url.startsWith('/audio/')) {
+      const r2Key = audio.file_url.substring(1); // 先頭の/を除去
+      try {
+        await R2.delete(r2Key);
+        console.log(`[Admin] R2 file deleted: ${r2Key}`);
+      } catch (r2Error) {
+        console.warn(`[Admin] Failed to delete R2 file: ${r2Key}`, r2Error);
+      }
+    }
+    
+    // DBレコードを完全削除
+    await DB.prepare(`
+      DELETE FROM system_audio_library WHERE id = ?
+    `).bind(id).run();
+    
+    console.log(`[Admin] Audio permanently deleted: id=${id}, name=${audio.name}`);
+    return c.json({ success: true, message: 'Audio permanently deleted' });
+  } catch (error) {
+    console.error('Permanent delete audio error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to delete audio permanently' 
+    }, 500);
+  }
+});
+
+// ====================================================================
 // POST /api/admin/audio-library/:id/restore - システムオーディオ復元
 // ====================================================================
 

@@ -2446,8 +2446,9 @@ export const adminHtml = `
                                 <i class="fas fa-edit mr-1"></i>編集
                             </button>
                             \${a.is_active 
-                                ? '<button onclick="deactivateAudio(' + a.id + ', \\x27' + escapeHtml(a.name) + '\\x27)" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"><i class="fas fa-trash mr-1"></i>無効化</button>'
-                                : '<button onclick="restoreAudio(' + a.id + ')" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm"><i class="fas fa-undo mr-1"></i>復元</button>'
+                                ? '<button onclick="deactivateAudio(' + a.id + ', \\x27' + escapeHtml(a.name) + '\\x27)" class="px-3 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-sm"><i class="fas fa-ban mr-1"></i>無効化</button>'
+                                : '<button onclick="restoreAudio(' + a.id + ')" class="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 text-sm"><i class="fas fa-undo mr-1"></i>復元</button>' +
+                                  '<button onclick="deleteAudioPermanently(' + a.id + ', \\x27' + escapeHtml(a.name) + '\\x27)" class="px-3 py-1 bg-red-600 text-white rounded hover:bg-red-700 text-sm"><i class="fas fa-trash mr-1"></i>削除</button>'
                             }
                         </div>
                     </div>
@@ -2599,6 +2600,20 @@ export const adminHtml = `
             } catch (err) {
                 console.error('Failed to restore audio:', err);
                 alert('復元に失敗しました');
+            }
+        }
+        
+        async function deleteAudioPermanently(id, name) {
+            if (!confirm('「' + name + '」を完全に削除しますか？\\n\\nこの操作は取り消せません。')) return;
+            if (!confirm('本当に削除してよろしいですか？')) return;
+            
+            try {
+                await axios.delete('/api/admin/audio-library/' + id + '/permanent');
+                alert('完全に削除しました');
+                loadAudioLibrary();
+            } catch (err) {
+                console.error('Failed to delete audio permanently:', err);
+                alert('削除に失敗しました: ' + (err.response?.data?.error || err.message));
             }
         }
         
