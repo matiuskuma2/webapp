@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsoluteFill, Img, Audio, Video, Sequence, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
-import type { ProjectScene, VoiceAsset, SfxAsset } from '../schemas/project-schema';
+import type { ProjectScene, VoiceAsset, SfxAsset, SceneBgmAsset } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
 import { Subtitle } from './Subtitle';
 import { MotionWrapper, getMotionPreset } from './MotionWrapper';
@@ -13,7 +13,7 @@ interface SceneProps {
 }
 
 /**
- * Scene Component - R1.5/R2/A案baked 対応
+ * Scene Component - R1.5/R2/A案baked/P6 対応
  * 
  * ## R1.5 変更点
  * - voices[] 配列をサポート（複数話者音声）
@@ -35,6 +35,10 @@ interface SceneProps {
  * ## R3-B SFX 対応
  * - scene.sfx[] 配列をサポート
  * - 各SFXは start_ms で再生開始、volume/loop を考慮
+ * 
+ * ## P6 シーン別BGM 対応
+ * - scene.bgm がある場合、そのシーンでのみ再生
+ * - プロジェクト全体BGMより優先（全体BGMはRilarcVideo.tsxでduck）
  */
 export const Scene: React.FC<SceneProps> = ({ 
   scene, 
@@ -65,6 +69,10 @@ export const Scene: React.FC<SceneProps> = ({
   const sfxList: SfxAsset[] = scene.sfx || [];
   const hasSfx = sfxList.length > 0;
   
+  // P6: シーン別BGMを取得
+  const sceneBgm: SceneBgmAsset | undefined = scene.bgm;
+  const hasSceneBgm = !!sceneBgm?.url;
+  
   // Debug: 最初のフレームでログ出力
   if (frame === 0) {
     console.log(`[Scene ${scene.idx}] Rendering first frame (relative frame 0)`);
@@ -80,6 +88,9 @@ export const Scene: React.FC<SceneProps> = ({
     }
     if (hasSfx) {
       console.log(`[Scene ${scene.idx}] R3-B: SFXを再生`, sfxList.map(s => ({ id: s.id, url: s.url, start_ms: s.start_ms })));
+    }
+    if (hasSceneBgm) {
+      console.log(`[Scene ${scene.idx}] P6: シーン別BGMを再生`, { name: sceneBgm?.name, url: sceneBgm?.url, volume: sceneBgm?.volume });
     }
   }
   
@@ -181,6 +192,15 @@ export const Scene: React.FC<SceneProps> = ({
           );
         })}
         
+        {/* P6: シーン別BGMを再生（全体BGMより優先） */}
+        {hasSceneBgm && sceneBgm && (
+          <Audio
+            src={sceneBgm.url}
+            volume={sceneBgm.volume ?? 0.25}
+            loop={sceneBgm.loop ?? true}
+          />
+        )}
+        
         {/* 字幕表示 - R2: baked/none時は描画しない */}
         {shouldRenderSubtitle && subtitleText && (
           <Subtitle
@@ -273,6 +293,15 @@ export const Scene: React.FC<SceneProps> = ({
           </Sequence>
         );
       })}
+      
+      {/* P6: シーン別BGMを再生（全体BGMより優先） */}
+      {hasSceneBgm && sceneBgm && (
+        <Audio
+          src={sceneBgm.url}
+          volume={sceneBgm.volume ?? 0.25}
+          loop={sceneBgm.loop ?? true}
+        />
+      )}
       
       {/* 字幕表示 - R2: baked/none時は描画しない */}
       {shouldRenderSubtitle && subtitleText && (

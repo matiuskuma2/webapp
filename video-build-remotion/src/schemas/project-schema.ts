@@ -98,6 +98,25 @@ export const BalloonAssetSchema = z.object({
 export type BalloonAsset = z.infer<typeof BalloonAssetSchema>;
 
 // ====================================================================
+// SceneBgmAsset - P6 シーン別BGM
+// ====================================================================
+
+export const SceneBgmAssetSchema = z.object({
+  url: z.string(),
+  name: z.string().optional(),
+  duration_ms: z.number().optional().nullable(),
+  volume: z.number().default(0.25),
+  loop: z.boolean().default(true),
+  fade_in_ms: z.number().default(800),
+  fade_out_ms: z.number().default(800),
+  start_ms: z.number().default(0),
+  end_ms: z.number().optional().nullable(),
+  source_type: z.enum(['system', 'user', 'direct']).optional(),
+});
+
+export type SceneBgmAsset = z.infer<typeof SceneBgmAssetSchema>;
+
+// ====================================================================
 // SfxAsset - R3-B 効果音
 // ====================================================================
 
@@ -154,6 +173,13 @@ export const ProjectSceneSchema = z.object({
    * - start_ms: シーン内での再生開始タイミング
    */
   sfx: z.array(SfxAssetSchema).optional(),
+  /**
+   * P6: bgm - シーン別BGM（プロジェクト全体BGMより優先）
+   * - このシーンでのみ再生されるBGM
+   * - シーン別BGMがある場合、全体BGMは duck（音量0.12）される
+   * - 1シーンにつき最大1つ
+   */
+  bgm: SceneBgmAssetSchema.optional(),
   assets: z.object({
     image: z.object({
       url: z.string(),

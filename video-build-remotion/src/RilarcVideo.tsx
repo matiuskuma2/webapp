@@ -1,8 +1,18 @@
-import React from 'react';
-import { AbsoluteFill, Sequence, Audio, useVideoConfig } from 'remotion';
+import React, { useMemo } from 'react';
+import { AbsoluteFill, Sequence, Audio, useVideoConfig, useCurrentFrame } from 'remotion';
 import type { ProjectJson } from './schemas/project-schema';
 import { Scene } from './components/Scene';
 import { msToFrames } from './utils/timing';
+
+// P6: シーン別BGMがある区間の情報
+interface SceneBgmInterval {
+  startFrame: number;
+  endFrame: number;
+  sceneIdx: number;
+}
+
+// P6: 全体BGMのduck用定数
+const GLOBAL_BGM_DUCK_VOLUME = 0.12; // シーン別BGMがある区間での全体BGM音量
 
 interface RilarcVideoProps {
   projectJson: ProjectJson;
@@ -16,6 +26,7 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   subtitleStyle = 'default'
 }) => {
   const { fps } = useVideoConfig();
+  const frame = useCurrentFrame();
   
   // Debug: projectJson の内容を確認
   console.log('[RilarcVideo] projectJson type:', typeof projectJson);
@@ -42,19 +53,50 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
     console.log(`[RilarcVideo] Scene ${index + 1} (idx=${scene.idx}): start_ms=${scene.timing.start_ms}, duration_ms=${scene.timing.duration_ms}`);
     console.log(`[RilarcVideo] Scene ${index + 1}: startFrame=${startFrame}, durationFrames=${durationFrames}`);
     console.log(`[RilarcVideo] Scene ${index + 1} image: ${scene.assets?.image?.url}`);
+    if (scene.bgm) {
+      console.log(`[RilarcVideo] Scene ${index + 1} has scene BGM: ${scene.bgm.name || scene.bgm.url}`);
+    }
     
     return { scene, startFrame, durationFrames };
   });
   
   console.log(`[RilarcVideo] Total scenesWithFrames: ${scenesWithFrames.length}`);
   
+  // P6: シーン別BGMがある区間を検出
+  const sceneBgmIntervals: SceneBgmInterval[] = useMemo(() => {
+    return scenesWithFrames
+      .filter(({ scene }) => scene.bgm?.url)
+      .map(({ scene, startFrame, durationFrames }) => ({
+        startFrame,
+        endFrame: startFrame + durationFrames,
+        sceneIdx: scene.idx,
+      }));
+  }, [scenesWithFrames]);
+  
+  // P6: 現在フレームがシーン別BGM区間内かどうかを判定
+  const isInSceneBgmInterval = useMemo(() => {
+    return sceneBgmIntervals.some(
+      interval => frame >= interval.startFrame && frame < interval.endFrame
+    );
+  }, [frame, sceneBgmIntervals]);
+  
+  // P6: 全体BGMの音量を計算（シーン別BGMがある区間ではduck）
+  const globalBgmVolume = useMemo(() => {
+    const baseVolume = projectJson?.build_settings?.audio?.bgm_volume ?? 0.3;
+    if (isInSceneBgmInterval) {
+      console.log(`[RilarcVideo] Frame ${frame}: ducking global BGM to ${GLOBAL_BGM_DUCK_VOLUME}`);
+      return GLOBAL_BGM_DUCK_VOLUME;
+    }
+    return baseVolume;
+  }, [isInSceneBgmInterval, frame, projectJson?.build_settings?.audio?.bgm_volume]);
+  
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
-      {/* BGM（あれば） */}
+      {/* 全体BGM（あれば） - P6: シーン別BGMがある区間ではduck */}
       {projectJson?.assets?.bgm?.url && (
         <Audio
           src={projectJson.assets.bgm.url}
-          volume={projectJson.build_settings?.audio?.bgm_volume ?? 0.3}
+          volume={globalBgmVolume}
           loop
         />
       )}
