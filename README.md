@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-29（Chat Edit SSOT完全実装 - Mode A/B/C判定、Playback Context、AIプロンプト強化）
+- **最終更新**: 2026-01-30（PR-Audio-Video: 動画素材ミュート、display_asset_type切替UI、音声一括生成）
 
 ---
 
@@ -1461,6 +1461,74 @@ VIDEO_BUILD_ORCHESTRATOR_URL=...
 # 管理用
 CRON_SECRET=...
 WEBHOOK_SECRET=...
+```
+
+---
+
+## 2026-01-30 PR-Audio-Video 追加機能
+
+### 動画素材の元音声ミュート
+Remotion Lambda側の`bundle.js`を修正し、動画クリップ素材の元音声を自動ミュートするように変更。
+
+**修正内容**:
+- `Video`コンポーネントに`muted: true`を追加
+- 最終動画では素材動画の元音声（エフェクト音等）は消音される
+- TTS音声とBGMのみが最終出力に含まれる
+
+**S3バケット**: `remotionlambda-apnortheast1-ucgr0eo7k7`
+**修正ファイル**: `sites/rilarc-video-build/bundle.js`
+
+### display_asset_type 3択切替UI（Phase1.8）
+シーンカードで画像/漫画/動画を選択できるUIを追加。
+
+**表示条件**:
+- 漫画ボタン: 公開済み漫画がある場合に表示（オレンジ）
+- 動画ボタン: 完了済み動画がある場合に表示（紫）
+- 画像ボタン: 常に表示（青）
+
+**バックエンド対応**:
+- `PUT /api/scenes/:id/display-asset-type` で `video` タイプをサポート
+- 完了済み動画の存在チェックを追加
+
+### 音声一括生成機能
+
+#### Preflightからの一括生成
+Video Build画面の準備状況表示に「音声を一括生成」ボタンを追加。
+
+**表示条件**: 未生成音声（AUDIO_MISSING/NO_UTTERANCES）がある場合
+**機能**: 全シーンの未生成utteranceに対して音声生成を順次実行
+
+#### シーンカードからの音声生成
+各シーンカードに「音声生成 N件」ボタンを追加。
+
+**表示条件**: 未生成のutteranceがある場合
+**機能**: 該当シーンの未生成utteranceに対して音声生成を実行
+
+#### 動画ビルド前確認ダイアログ
+動画生成開始時に未生成音声がある場合、3択ダイアログを表示。
+
+**選択肢**:
+1. **先に音声を生成する（推奨）**: 一括音声生成を実行
+2. **無音のまま動画を作成**: そのまま続行
+3. **キャンセル**: ビルドをキャンセル
+
+### utterance個別音声生成API修正
+`generateSceneAudio`関数を修正し、utterance個別のAPIエンドポイントを使用するように変更。
+
+**問題**: 以前は`/api/scenes/:id/generate-audio`を使用しており、`order_no=1`のutteranceのみが更新されていた
+**修正**: `/api/utterances/:id/generate-audio`を使用し、各utteranceに個別に音声を生成
+
+### 変更ファイル一覧
+- `public/static/project-editor.js`: UI追加（display_asset_type切替、音声生成ボタン、確認ダイアログ）
+- `src/routes/comic.ts`: display-asset-type APIで'video'をサポート
+- **Remotion S3**: `bundle.js`にmuted設定追加
+
+### Gitコミット
+```
+e8d1963 fix(PR-Audio-Fix): Use utterance-specific audio generation API
+cd508c1 feat(PR-Audio-Video): Add video asset type selector and audio confirm dialog
+3486880 feat(PR-Audio-Bulk): Preflight画面から一括音声生成ボタンを追加
+a706a3c feat(PR-Audio-Direct): シーンカードから直接音声生成ボタンを追加
 ```
 
 ---
