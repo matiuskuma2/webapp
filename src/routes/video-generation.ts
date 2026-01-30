@@ -2158,18 +2158,78 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           bubble_height_px: b.bubble_height_px,
         }));
         
-        // R3-B: scene_audio_cues を取得（SFX/効果音）
-        const { results: sfxRows } = await c.env.DB.prepare(`
+        // ====================================================================
+        // P0-1e: SFX取得 - 新SSOT優先・legacyフォールバック
+        // ====================================================================
+        // 優先順位:
+        //   1. scene_audio_assignments (audio_type='sfx') - 新SSOT
+        //   2. scene_audio_cues - legacy fallback
+        // ====================================================================
+        
+        // 1. 新SSOT: scene_audio_assignments から SFX を取得
+        const { results: sfxAssignments } = await c.env.DB.prepare(`
           SELECT 
-            id, name, r2_key, r2_url, duration_ms,
-            volume, start_ms, end_ms, loop, fade_in_ms, fade_out_ms
-          FROM scene_audio_cues
-          WHERE scene_id = ? AND is_active = 1
-          ORDER BY start_ms ASC
+            saa.id,
+            saa.audio_library_type,
+            saa.system_audio_id,
+            saa.user_audio_id,
+            saa.direct_r2_key,
+            saa.direct_r2_url,
+            saa.direct_name,
+            saa.direct_duration_ms,
+            saa.start_ms,
+            saa.end_ms,
+            saa.volume_override,
+            saa.loop_override,
+            saa.fade_in_ms_override,
+            saa.fade_out_ms_override,
+            -- system_audio_library からの情報
+            sal.name as system_name,
+            sal.file_url as system_url,
+            sal.duration_ms as system_duration_ms,
+            -- user_audio_library からの情報
+            ual.name as user_name,
+            ual.r2_url as user_url,
+            ual.duration_ms as user_duration_ms,
+            ual.default_volume as user_default_volume,
+            ual.default_loop as user_default_loop,
+            ual.default_fade_in_ms as user_default_fade_in_ms,
+            ual.default_fade_out_ms as user_default_fade_out_ms
+          FROM scene_audio_assignments saa
+          LEFT JOIN system_audio_library sal ON saa.system_audio_id = sal.id
+          LEFT JOIN user_audio_library ual ON saa.user_audio_id = ual.id
+          WHERE saa.scene_id = ? AND saa.audio_type = 'sfx' AND saa.is_active = 1
+          ORDER BY saa.start_ms ASC
         `).bind(scene.id).all<{
           id: number;
-          name: string | null;
-          r2_key: string | null;
+          audio_library_type: 'system' | 'user' | 'direct';
+          system_audio_id: number | null;
+          user_audio_id: number | null;
+          direct_r2_key: string | null;
+          direct_r2_url: string | null;
+          direct_name: string | null;
+          direct_duration_ms: number | null;
+          start_ms: number;
+          end_ms: number | null;
+          volume_override: number | null;
+          loop_override: number | null;
+          fade_in_ms_override: number | null;
+          fade_out_ms_override: number | null;
+          system_name: string | null;
+          system_url: string | null;
+          system_duration_ms: number | null;
+          user_name: string | null;
+          user_url: string | null;
+          user_duration_ms: number | null;
+          user_default_volume: number | null;
+          user_default_loop: number | null;
+          user_default_fade_in_ms: number | null;
+          user_default_fade_out_ms: number | null;
+        }>();
+        
+        let sfx: Array<{
+          id: number;
+          name: string;
           r2_url: string | null;
           duration_ms: number | null;
           volume: number;
@@ -2178,20 +2238,92 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           loop: number;
           fade_in_ms: number;
           fade_out_ms: number;
-        }>();
+        }> = [];
         
-        const sfx = sfxRows.map(cue => ({
-          id: cue.id,
-          name: cue.name || 'SFX',
-          r2_url: cue.r2_url ? toAbsoluteUrl(cue.r2_url, siteUrl) : null,
-          duration_ms: cue.duration_ms,
-          volume: cue.volume,
-          start_ms: cue.start_ms,
-          end_ms: cue.end_ms,
-          loop: cue.loop,
-          fade_in_ms: cue.fade_in_ms,
-          fade_out_ms: cue.fade_out_ms,
-        })).filter(cue => cue.r2_url); // URL がないものは除外
+        if (sfxAssignments && sfxAssignments.length > 0) {
+          // 新SSOT から SFX を構築
+          sfx = sfxAssignments.map(assignment => {
+            let name = 'SFX';
+            let r2_url: string | null = null;
+            let duration_ms: number | null = null;
+            let defaultVolume = 0.8;
+            let defaultLoop = 0;
+            let defaultFadeIn = 0;
+            let defaultFadeOut = 0;
+            
+            if (assignment.audio_library_type === 'system' && assignment.system_url) {
+              name = assignment.system_name || 'System SFX';
+              r2_url = assignment.system_url;
+              duration_ms = assignment.system_duration_ms;
+            } else if (assignment.audio_library_type === 'user' && assignment.user_url) {
+              name = assignment.user_name || 'User SFX';
+              r2_url = assignment.user_url;
+              duration_ms = assignment.user_duration_ms;
+              defaultVolume = assignment.user_default_volume ?? 0.8;
+              defaultLoop = assignment.user_default_loop ?? 0;
+              defaultFadeIn = assignment.user_default_fade_in_ms ?? 0;
+              defaultFadeOut = assignment.user_default_fade_out_ms ?? 0;
+            } else if (assignment.audio_library_type === 'direct' && assignment.direct_r2_url) {
+              name = assignment.direct_name || 'Direct SFX';
+              r2_url = assignment.direct_r2_url;
+              duration_ms = assignment.direct_duration_ms;
+            }
+            
+            return {
+              id: assignment.id,
+              name,
+              r2_url: r2_url ? toAbsoluteUrl(r2_url, siteUrl) : null,
+              duration_ms,
+              volume: assignment.volume_override ?? defaultVolume,
+              start_ms: assignment.start_ms,
+              end_ms: assignment.end_ms,
+              loop: assignment.loop_override ?? defaultLoop,
+              fade_in_ms: assignment.fade_in_ms_override ?? defaultFadeIn,
+              fade_out_ms: assignment.fade_out_ms_override ?? defaultFadeOut,
+            };
+          }).filter(cue => cue.r2_url);
+          
+          console.log(`[VideoBuild] Scene ${scene.id}: Using ${sfx.length} SFX from scene_audio_assignments (new SSOT)`);
+        } else {
+          // 2. Legacy fallback: scene_audio_cues から取得
+          const { results: sfxRows } = await c.env.DB.prepare(`
+            SELECT 
+              id, name, r2_key, r2_url, duration_ms,
+              volume, start_ms, end_ms, loop, fade_in_ms, fade_out_ms
+            FROM scene_audio_cues
+            WHERE scene_id = ? AND is_active = 1
+            ORDER BY start_ms ASC
+          `).bind(scene.id).all<{
+            id: number;
+            name: string | null;
+            r2_key: string | null;
+            r2_url: string | null;
+            duration_ms: number | null;
+            volume: number;
+            start_ms: number;
+            end_ms: number | null;
+            loop: number;
+            fade_in_ms: number;
+            fade_out_ms: number;
+          }>();
+          
+          sfx = sfxRows.map(cue => ({
+            id: cue.id,
+            name: cue.name || 'SFX',
+            r2_url: cue.r2_url ? toAbsoluteUrl(cue.r2_url, siteUrl) : null,
+            duration_ms: cue.duration_ms,
+            volume: cue.volume,
+            start_ms: cue.start_ms,
+            end_ms: cue.end_ms,
+            loop: cue.loop,
+            fade_in_ms: cue.fade_in_ms,
+            fade_out_ms: cue.fade_out_ms,
+          })).filter(cue => cue.r2_url);
+          
+          if (sfx.length > 0) {
+            console.log(`[VideoBuild] Scene ${scene.id}: Using ${sfx.length} SFX from scene_audio_cues (legacy fallback)`);
+          }
+        }
         
         // R2-C: scene_motion を取得（モーションプリセット）
         const motionRow = await c.env.DB.prepare(`
