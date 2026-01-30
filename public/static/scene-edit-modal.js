@@ -1830,7 +1830,7 @@
               />
               <span class="text-xs text-gray-500">${durationSec}秒</span>
             </div>
-            <div class="flex items-center gap-4 text-xs text-gray-600">
+            <div class="flex items-center gap-4 text-xs text-gray-600 flex-wrap">
               <label class="flex items-center gap-1">
                 <span>開始:</span>
                 <input 
@@ -1838,8 +1838,20 @@
                   value="${startSec}"
                   min="0"
                   step="0.1"
-                  class="w-16 px-1 py-0.5 border border-gray-300 rounded text-center"
+                  class="w-14 px-1 py-0.5 border border-gray-300 rounded text-center"
                   onchange="SceneEditModal.updateSfxCue(${cue.id}, 'start_ms', Math.round(parseFloat(this.value) * 1000))"
+                />秒
+              </label>
+              <label class="flex items-center gap-1">
+                <span>終了:</span>
+                <input 
+                  type="number" 
+                  value="${cue.end_ms != null ? (cue.end_ms / 1000).toFixed(1) : ''}"
+                  min="0"
+                  step="0.1"
+                  placeholder="自動"
+                  class="w-14 px-1 py-0.5 border border-gray-300 rounded text-center"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'end_ms', this.value ? Math.round(parseFloat(this.value) * 1000) : null)"
                 />秒
               </label>
               <label class="flex items-center gap-1">
@@ -1849,7 +1861,7 @@
                   value="${volume}"
                   min="0"
                   max="100"
-                  class="w-16 h-2 accent-pink-500"
+                  class="w-14 h-2 accent-pink-500"
                   onchange="SceneEditModal.updateSfxCue(${cue.id}, 'volume', parseFloat(this.value) / 100)"
                 />
                 <span class="w-8">${volume}%</span>
@@ -2092,8 +2104,46 @@
                 <audio src="${bgm.effective?.r2_url || bgm.url || bgm.library?.r2_url}" controls class="w-full h-10"></audio>
               ` : ''}
               
+              <!-- タイミング設定（P1-A SSOT: start_ms/end_ms） -->
+              <div class="mt-3 pt-3 border-t border-yellow-200">
+                <div class="text-xs text-yellow-600 mb-2 font-semibold">
+                  <i class="fas fa-clock mr-1"></i>再生タイミング（シーン内）
+                </div>
+                <div class="flex items-center gap-4 flex-wrap">
+                  <label class="flex items-center gap-2 text-sm text-yellow-700">
+                    <span>開始:</span>
+                    <input 
+                      type="number" 
+                      value="${((bgm.effective?.start_ms ?? bgm.start_ms ?? 0) / 1000).toFixed(1)}"
+                      min="0"
+                      step="0.1"
+                      class="w-20 px-2 py-1 border border-yellow-300 rounded text-center text-sm"
+                      onchange="SceneEditModal.updateBgmSetting('start_ms', Math.round(parseFloat(this.value) * 1000))"
+                    />
+                    <span class="text-xs">秒</span>
+                  </label>
+                  <label class="flex items-center gap-2 text-sm text-yellow-700">
+                    <span>終了:</span>
+                    <input 
+                      type="number" 
+                      value="${bgm.effective?.end_ms != null ? (bgm.effective.end_ms / 1000).toFixed(1) : (bgm.end_ms != null ? (bgm.end_ms / 1000).toFixed(1) : '')}"
+                      min="0"
+                      step="0.1"
+                      placeholder="自動"
+                      class="w-20 px-2 py-1 border border-yellow-300 rounded text-center text-sm"
+                      onchange="SceneEditModal.updateBgmSetting('end_ms', this.value ? Math.round(parseFloat(this.value) * 1000) : null)"
+                    />
+                    <span class="text-xs">秒 <span class="text-gray-400">(空=自動)</span></span>
+                  </label>
+                </div>
+                <p class="text-xs text-yellow-500 mt-1">
+                  <i class="fas fa-info-circle mr-1"></i>
+                  終了を空にすると、シーン長に合わせて自動調整されます
+                </p>
+              </div>
+              
               <!-- 音量・ループ設定 -->
-              <div class="mt-3 pt-3 border-t border-yellow-200 flex items-center gap-4">
+              <div class="mt-3 pt-3 border-t border-yellow-200 flex items-center gap-4 flex-wrap">
                 <label class="flex items-center gap-2 text-sm text-yellow-700">
                   <span>音量:</span>
                   <input 
@@ -2362,8 +2412,8 @@
     },
     
     /**
-     * P3: Update BGM setting (volume_override, loop_override)
-     * Fixed: Use correct API parameter names
+     * P3: Update BGM setting (volume_override, loop_override, start_ms, end_ms)
+     * P1-A SSOT: Added start_ms/end_ms support for timing control
      */
     async updateBgmSetting(field, value) {
       if (!this.currentState.sceneBgm?.id) return;
@@ -2381,9 +2431,14 @@
             this.currentState.sceneBgm.effective.volume = value;
           } else if (field === 'loop_override') {
             this.currentState.sceneBgm.effective.loop = value;
+          } else if (field === 'start_ms') {
+            this.currentState.sceneBgm.effective.start_ms = value;
+          } else if (field === 'end_ms') {
+            this.currentState.sceneBgm.effective.end_ms = value;
           }
         }
         // Don't re-render to avoid audio restart
+        console.log(`[SceneEditModal] BGM ${field} updated to:`, value);
         
       } catch (error) {
         console.error('[SceneEditModal] BGM update failed:', error);
