@@ -116,16 +116,32 @@
     /**
      * Open modal with scene data
      * @param {number} sceneId 
+     * @param {object} options - Optional parameters
+     * @param {string} options.source - 'builder' | 'video_build' (default: 'builder')
      */
-    async open(sceneId) {
-      console.log(`[SceneEditModal] Opening for scene ${sceneId}`);
+    async open(sceneId, options = {}) {
+      const source = options.source || 'builder';
+      console.log(`[SceneEditModal] Opening for scene ${sceneId}, source=${source}`);
       this.currentSceneId = sceneId;
+      this.openSource = source; // P3-5: Store source for SSOT control
       
       try {
         // Show loading state
         const modal = document.getElementById('scene-edit-modal');
         if (modal) {
           modal.classList.remove('hidden');
+        }
+        
+        // P3-5: Control "チャットで修正" button visibility based on source (SSOT)
+        const chatEditBtn = document.getElementById('scene-chat-edit-btn');
+        if (chatEditBtn) {
+          if (source === 'builder') {
+            // Builder画面からはチャット修正ボタンを非表示（Video Build専用機能）
+            chatEditBtn.classList.add('hidden');
+          } else {
+            // Video Build画面からはチャット修正ボタンを表示
+            chatEditBtn.classList.remove('hidden');
+          }
         }
         
         // Fetch complete edit context via SSOT API
