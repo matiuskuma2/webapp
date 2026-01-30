@@ -34,7 +34,8 @@
       imageCharacterKeys: [],
       voiceCharacterKey: null,
       sceneTraits: {}, // { character_key: trait_description }
-      sfxCues: [] // R3-B: SFX cues
+      sfxCues: [], // R3-B: SFX cues
+      sceneBgm: null // P3: Scene BGM assignment { id, source, name, url, volume, loop }
     },
     
     // AI candidates (not saved until user clicks "use")
@@ -833,8 +834,11 @@
       const container = document.getElementById('scene-edit-tabs');
       if (!container) return;
       
+      // P3: BGM設定状態を確認
+      const hasBgm = this.currentState?.sceneBgm || false;
+      
       container.innerHTML = `
-        <div class="flex gap-2 mb-4 border-b border-gray-200">
+        <div class="flex gap-2 mb-4 border-b border-gray-200 flex-wrap">
           <button 
             data-scene-edit-tab="characters"
             class="px-4 py-2 font-semibold text-sm border-b-2 transition-colors scene-edit-tab-btn ${this.activeTab === 'characters' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
@@ -853,6 +857,13 @@
           >
             <i class="fas fa-user-tag mr-1"></i>特徴変化
             ${this.hasSceneTraits() ? '<span class="ml-1 bg-yellow-400 text-yellow-800 text-xs px-1.5 py-0.5 rounded-full">!</span>' : ''}
+          </button>
+          <button 
+            data-scene-edit-tab="bgm"
+            class="px-4 py-2 font-semibold text-sm border-b-2 transition-colors scene-edit-tab-btn ${this.activeTab === 'bgm' ? 'border-yellow-500 text-yellow-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
+          >
+            <i class="fas fa-music mr-1"></i>BGM
+            ${hasBgm ? '<span class="ml-1 bg-yellow-400 text-yellow-800 text-xs px-1.5 py-0.5 rounded-full">●</span>' : ''}
           </button>
           <button 
             data-scene-edit-tab="sfx"
@@ -874,7 +885,7 @@
     
     /**
      * Switch between tabs
-     * @param {string} tab - 'characters' | 'traits' | 'utterances' | 'sfx'
+     * @param {string} tab - 'characters' | 'traits' | 'utterances' | 'sfx' | 'bgm'
      */
     switchTab(tab) {
       this.activeTab = tab;
@@ -888,6 +899,8 @@
         btn.classList.toggle('text-purple-600', isActive && tab === 'utterances');
         btn.classList.toggle('border-indigo-500', isActive && tab === 'traits');
         btn.classList.toggle('text-indigo-600', isActive && tab === 'traits');
+        btn.classList.toggle('border-yellow-500', isActive && tab === 'bgm');
+        btn.classList.toggle('text-yellow-600', isActive && tab === 'bgm');
         btn.classList.toggle('border-pink-500', isActive && tab === 'sfx');
         btn.classList.toggle('text-pink-600', isActive && tab === 'sfx');
         btn.classList.toggle('border-transparent', !isActive);
@@ -898,11 +911,13 @@
       const charTab = document.getElementById('scene-edit-tab-characters');
       const traitTab = document.getElementById('scene-edit-tab-traits');
       const uttTab = document.getElementById('scene-edit-tab-utterances');
+      const bgmTab = document.getElementById('scene-edit-tab-bgm');
       const sfxTab = document.getElementById('scene-edit-tab-sfx');
       
       if (charTab) charTab.classList.toggle('hidden', tab !== 'characters');
       if (traitTab) traitTab.classList.toggle('hidden', tab !== 'traits');
       if (uttTab) uttTab.classList.toggle('hidden', tab !== 'utterances');
+      if (bgmTab) bgmTab.classList.toggle('hidden', tab !== 'bgm');
       if (sfxTab) sfxTab.classList.toggle('hidden', tab !== 'sfx');
       
       // Load utterances when switching to that tab
@@ -913,6 +928,11 @@
       // Load SFX when switching to that tab
       if (tab === 'sfx' && this.currentSceneId) {
         this.loadSfxCues();
+      }
+      
+      // P3: Load BGM when switching to that tab
+      if (tab === 'bgm' && this.currentSceneId) {
+        this.loadBgmAssignment();
       }
     },
     
@@ -1885,6 +1905,376 @@
         
       } catch (error) {
         console.error('[SceneEditModal] SFX delete failed:', error);
+        this.showToast('削除に失敗しました', 'error');
+      }
+    },
+    
+    // ============================================================
+    // P3: BGM (Scene Background Music) Management
+    // ============================================================
+    
+    /**
+     * P3: Load BGM assignment for the current scene
+     */
+    async loadBgmAssignment() {
+      const container = document.getElementById('scene-edit-tab-bgm');
+      if (!container || !this.currentSceneId) return;
+      
+      container.innerHTML = `
+        <div class="p-4 text-center text-gray-500">
+          <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+        </div>
+      `;
+      
+      try {
+        // Fetch scene BGM from scene-audio-assignments API
+        const response = await axios.get(`/api/scenes/${this.currentSceneId}/audio-assignments?audio_type=bgm`);
+        const assignments = response.data.assignments || [];
+        
+        // Should have at most 1 BGM per scene
+        this.currentState.sceneBgm = assignments.length > 0 ? assignments[0] : null;
+        this.renderBgmTab();
+        this.renderTabs(); // Update badge
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to load BGM:', error);
+        container.innerHTML = `
+          <div class="p-4 text-center text-red-500">
+            <i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました
+          </div>
+        `;
+      }
+    },
+    
+    /**
+     * P3: Render BGM Tab content
+     */
+    renderBgmTab() {
+      const container = document.getElementById('scene-edit-tab-bgm');
+      if (!container) return;
+      
+      const bgm = this.currentState.sceneBgm;
+      const hasProjectBgm = window.currentBgm;
+      
+      container.innerHTML = `
+        <div class="p-4 border border-gray-200 rounded-lg bg-gray-50 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <h4 class="font-semibold text-gray-700">
+                <i class="fas fa-music mr-2 text-yellow-600"></i>シーン別BGM
+              </h4>
+              <p class="text-xs text-gray-500 mt-1">このシーンで再生するBGMを設定（プロジェクトBGMより優先）</p>
+            </div>
+          </div>
+          
+          ${bgm ? `
+            <!-- 現在のBGM設定 -->
+            <div class="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg mb-4">
+              <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-3">
+                  <span class="text-3xl">🎵</span>
+                  <div>
+                    <div class="font-semibold text-yellow-800">${this.escapeHtml(bgm.name || 'BGM')}</div>
+                    <div class="text-xs text-yellow-600">
+                      ソース: ${this.getBgmSourceLabel(bgm.library_type)}
+                      ${bgm.loop ? ' | ループ: ON' : ''}
+                      ${bgm.volume ? ' | 音量: ' + Math.round((bgm.volume || 0.25) * 100) + '%' : ''}
+                    </div>
+                  </div>
+                </div>
+                <button 
+                  onclick="SceneEditModal.removeBgmAssignment()"
+                  class="px-3 py-2 text-red-600 hover:bg-red-100 rounded-lg transition-colors"
+                  title="BGMを削除"
+                >
+                  <i class="fas fa-trash"></i>
+                </button>
+              </div>
+              ${bgm.url ? `
+                <audio src="${bgm.url}" controls class="w-full h-10"></audio>
+              ` : ''}
+              
+              <!-- 音量・ループ設定 -->
+              <div class="mt-3 pt-3 border-t border-yellow-200 flex items-center gap-4">
+                <label class="flex items-center gap-2 text-sm text-yellow-700">
+                  <span>音量:</span>
+                  <input 
+                    type="range" 
+                    value="${Math.round((bgm.volume || 0.25) * 100)}"
+                    min="0"
+                    max="100"
+                    class="w-24 h-2 accent-yellow-500"
+                    onchange="SceneEditModal.updateBgmSetting('volume', parseFloat(this.value) / 100)"
+                  />
+                  <span class="w-8">${Math.round((bgm.volume || 0.25) * 100)}%</span>
+                </label>
+                <label class="flex items-center gap-2 text-sm text-yellow-700">
+                  <input 
+                    type="checkbox" 
+                    ${bgm.loop ? 'checked' : ''}
+                    class="accent-yellow-500"
+                    onchange="SceneEditModal.updateBgmSetting('loop', this.checked)"
+                  />
+                  <span>ループ</span>
+                </label>
+              </div>
+            </div>
+          ` : `
+            <div class="text-center py-8 text-gray-400 border-2 border-dashed border-gray-300 rounded-lg mb-4">
+              <i class="fas fa-music text-4xl mb-3"></i>
+              <p>シーン別BGMが設定されていません</p>
+              ${hasProjectBgm ? `
+                <p class="text-xs mt-1 text-yellow-600">
+                  <i class="fas fa-info-circle mr-1"></i>
+                  プロジェクト全体BGMが使用されます
+                </p>
+              ` : `
+                <p class="text-xs mt-1">BGMなしで再生されます</p>
+              `}
+            </div>
+          `}
+          
+          <!-- BGM選択ボタン -->
+          <div class="flex gap-2 flex-wrap">
+            <button 
+              onclick="SceneEditModal.openBgmLibrary('system')"
+              class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-semibold"
+            >
+              <i class="fas fa-database mr-2"></i>システムライブラリから選択
+            </button>
+            <button 
+              onclick="SceneEditModal.openBgmLibrary('user')"
+              class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-semibold"
+            >
+              <i class="fas fa-folder mr-2"></i>マイライブラリから選択
+            </button>
+            <label class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm font-semibold cursor-pointer">
+              <i class="fas fa-upload mr-2"></i>ファイルアップロード
+              <input 
+                type="file" 
+                accept="audio/*"
+                class="hidden"
+                onchange="SceneEditModal.handleBgmUpload(event)"
+              />
+            </label>
+          </div>
+        </div>
+        
+        <div class="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
+          <i class="fas fa-info-circle mr-2"></i>
+          <strong>ヒント:</strong> シーン別BGMを設定すると、プロジェクト全体BGMより優先されます。
+          全体BGMはシーン別BGM再生中は音量が下がります（ダッキング）。
+        </div>
+        
+        <!-- BGMライブラリモーダル（動的に表示） -->
+        <div id="bgm-library-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+          <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 class="font-bold text-lg" id="bgm-library-title">BGMライブラリ</h3>
+              <button onclick="SceneEditModal.closeBgmLibrary()" class="text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+              </button>
+            </div>
+            <div id="bgm-library-content" class="p-4 overflow-y-auto max-h-[60vh]">
+              <!-- ライブラリ内容が動的に挿入される -->
+            </div>
+          </div>
+        </div>
+      `;
+    },
+    
+    /**
+     * P3: Get BGM source label
+     */
+    getBgmSourceLabel(source) {
+      const labels = { system: 'システム', user: 'マイライブラリ', direct: 'アップロード' };
+      return labels[source] || source || '不明';
+    },
+    
+    /**
+     * P3: Open BGM library modal
+     * @param {string} libraryType - 'system' | 'user'
+     */
+    async openBgmLibrary(libraryType) {
+      const modal = document.getElementById('bgm-library-modal');
+      const title = document.getElementById('bgm-library-title');
+      const content = document.getElementById('bgm-library-content');
+      
+      if (!modal || !content) return;
+      
+      title.textContent = libraryType === 'system' ? 'システムBGMライブラリ' : 'マイBGMライブラリ';
+      content.innerHTML = '<div class="text-center py-8 text-gray-500"><i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...</div>';
+      modal.classList.remove('hidden');
+      
+      try {
+        const endpoint = libraryType === 'system' 
+          ? '/api/audio-library/system?category=bgm' 
+          : '/api/audio-library/user?category=bgm';
+        const response = await axios.get(endpoint);
+        const items = response.data.items || [];
+        
+        if (items.length === 0) {
+          content.innerHTML = `
+            <div class="text-center py-8 text-gray-400">
+              <i class="fas fa-music-slash text-4xl mb-3"></i>
+              <p>BGMが登録されていません</p>
+            </div>
+          `;
+          return;
+        }
+        
+        content.innerHTML = `
+          <div class="space-y-2">
+            ${items.map(item => `
+              <div class="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                <span class="text-2xl">🎵</span>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold text-gray-800 truncate">${this.escapeHtml(item.name || 'BGM')}</div>
+                  <div class="text-xs text-gray-500">
+                    ${item.duration_sec ? Math.round(item.duration_sec) + '秒' : ''}
+                    ${item.category ? ' | ' + item.category : ''}
+                  </div>
+                </div>
+                ${item.r2_url ? `
+                  <audio src="${item.r2_url}" class="w-32 h-8" controls></audio>
+                ` : ''}
+                <button 
+                  onclick="SceneEditModal.selectBgmFromLibrary('${libraryType}', ${item.id}, '${this.escapeHtml(item.name || 'BGM')}')"
+                  class="px-3 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors text-sm font-semibold flex-shrink-0"
+                >
+                  <i class="fas fa-check mr-1"></i>選択
+                </button>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to load BGM library:', error);
+        content.innerHTML = `
+          <div class="text-center py-8 text-red-500">
+            <i class="fas fa-exclamation-circle mr-2"></i>読み込みに失敗しました
+          </div>
+        `;
+      }
+    },
+    
+    /**
+     * P3: Close BGM library modal
+     */
+    closeBgmLibrary() {
+      const modal = document.getElementById('bgm-library-modal');
+      if (modal) modal.classList.add('hidden');
+    },
+    
+    /**
+     * P3: Select BGM from library
+     */
+    async selectBgmFromLibrary(libraryType, itemId, itemName) {
+      try {
+        const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, {
+          audio_type: 'bgm',
+          library_type: libraryType,
+          library_item_id: itemId,
+          volume: 0.25,
+          loop: true
+        });
+        
+        if (response.data.id) {
+          this.currentState.sceneBgm = response.data;
+          this.closeBgmLibrary();
+          this.renderBgmTab();
+          this.renderTabs();
+          this.showToast(`BGM「${itemName}」を設定しました`, 'success');
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to set BGM:', error);
+        this.showToast('BGM設定に失敗しました', 'error');
+      }
+    },
+    
+    /**
+     * P3: Handle BGM file upload
+     */
+    async handleBgmUpload(event) {
+      const file = event.target.files?.[0];
+      if (!file || !this.currentSceneId) return;
+      
+      if (!file.type.startsWith('audio/')) {
+        this.showToast('音声ファイルを選択してください', 'error');
+        return;
+      }
+      
+      const maxSize = 50 * 1024 * 1024; // 50MB for BGM
+      if (file.size > maxSize) {
+        this.showToast('ファイルサイズは50MB以下にしてください', 'error');
+        return;
+      }
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('audio_type', 'bgm');
+        formData.append('name', file.name.replace(/\.[^.]+$/, '') || 'BGM');
+        formData.append('volume', '0.25');
+        formData.append('loop', 'true');
+        
+        const response = await axios.post(
+          `/api/scenes/${this.currentSceneId}/audio-assignments/upload`,
+          formData,
+          { headers: { 'Content-Type': 'multipart/form-data' } }
+        );
+        
+        if (response.data.id) {
+          this.currentState.sceneBgm = response.data;
+          this.renderBgmTab();
+          this.renderTabs();
+          this.showToast('BGMをアップロードしました', 'success');
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] BGM upload failed:', error);
+        this.showToast('アップロードに失敗しました', 'error');
+      }
+      
+      event.target.value = '';
+    },
+    
+    /**
+     * P3: Update BGM setting (volume, loop)
+     */
+    async updateBgmSetting(field, value) {
+      if (!this.currentState.sceneBgm?.id) return;
+      
+      try {
+        await axios.put(`/api/scenes/${this.currentSceneId}/audio-assignments/${this.currentState.sceneBgm.id}`, {
+          [field]: value
+        });
+        
+        this.currentState.sceneBgm[field] = value;
+        // Don't re-render to avoid audio restart
+        
+      } catch (error) {
+        console.error('[SceneEditModal] BGM update failed:', error);
+        this.showToast('更新に失敗しました', 'error');
+      }
+    },
+    
+    /**
+     * P3: Remove BGM assignment
+     */
+    async removeBgmAssignment() {
+      if (!this.currentState.sceneBgm?.id) return;
+      
+      if (!confirm('このシーンのBGM設定を削除しますか？')) return;
+      
+      try {
+        await axios.delete(`/api/scenes/${this.currentSceneId}/audio-assignments/${this.currentState.sceneBgm.id}`);
+        
+        this.currentState.sceneBgm = null;
+        this.renderBgmTab();
+        this.renderTabs();
+        this.showToast('BGMを削除しました', 'success');
+        
+      } catch (error) {
+        console.error('[SceneEditModal] BGM delete failed:', error);
         this.showToast('削除に失敗しました', 'error');
       }
     }

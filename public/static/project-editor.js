@@ -3317,35 +3317,84 @@ function renderSceneStatusBar(scene, utteranceStatus) {
           <span class="font-semibold">${durationSec}秒</span>
         </span>
         
-        <!-- R3-A: BGM（プロジェクト共通） -->
-        ${window.currentBgm ? `
-        <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-yellow-100 text-yellow-800" title="プロジェクトBGM設定あり">
-          <span>🎵</span>
-          <span class="font-semibold">BGM</span>
-        </span>
-        ` : `
-        <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-100 text-gray-500" title="BGM未設定（Step4で設定可能）">
-          <span>🔇</span>
-          <span class="font-semibold">BGMなし</span>
-        </span>
-        `}
+        <!-- P3: シーン別BGM -->
+        ${(() => {
+          const sceneBgm = scene.scene_bgm;
+          const hasProjectBgm = window.currentBgm;
+          
+          if (sceneBgm) {
+            // シーン別BGMがある場合（新SSOT優先）
+            const sourceLabel = { system: 'システム', user: 'ユーザー', direct: 'URL' }[sceneBgm.source] || sceneBgm.source;
+            const bgmName = sceneBgm.name || 'BGM';
+            const truncatedName = bgmName.length > 12 ? bgmName.substring(0, 12) + '...' : bgmName;
+            return `
+              <button 
+                onclick="openSceneEditModal(${scene.id}, 'bgm')"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-yellow-100 text-yellow-800 hover:bg-yellow-200 transition-colors cursor-pointer" 
+                title="シーンBGM: ${bgmName}（${sourceLabel}）クリックで編集"
+              >
+                <span>🎵</span>
+                <span class="font-semibold">${truncatedName}</span>
+                <span class="text-xs opacity-60">[${sourceLabel}]</span>
+              </button>
+            `;
+          } else if (hasProjectBgm) {
+            // プロジェクト共通BGMがある場合
+            return `
+              <button 
+                onclick="openSceneEditModal(${scene.id}, 'bgm')"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-yellow-50 text-yellow-700 hover:bg-yellow-100 transition-colors cursor-pointer" 
+                title="プロジェクトBGM使用中。クリックでシーン別BGMを設定"
+              >
+                <span>🎵</span>
+                <span class="font-semibold">全体BGM</span>
+              </button>
+            `;
+          } else {
+            // BGMなし
+            return `
+              <button 
+                onclick="openSceneEditModal(${scene.id}, 'bgm')"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-100 text-gray-500 hover:bg-gray-200 transition-colors cursor-pointer" 
+                title="BGM未設定。クリックでシーン別BGMを設定"
+              >
+                <span>🔇</span>
+                <span class="font-semibold">BGMなし</span>
+              </button>
+            `;
+          }
+        })()}
         
-        <!-- R3-B: SFX（効果音） -->
+        <!-- P3: SFX（効果音）改善 -->
         ${(() => {
           const sfxCount = scene.sfx_count || 0;
+          const sfxPreview = scene.sfx_preview || [];
+          
           if (sfxCount > 0) {
+            // SFXがある場合：件数＋先頭2件のname
+            const previewText = sfxPreview.length > 0 ? sfxPreview.join(', ') : 'SFX';
+            const truncatedPreview = previewText.length > 15 ? previewText.substring(0, 15) + '...' : previewText;
             return `
-              <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-pink-100 text-pink-800" title="効果音: ${sfxCount}件設定あり">
+              <button 
+                onclick="openSceneEditModal(${scene.id}, 'sfx')"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-pink-100 text-pink-800 hover:bg-pink-200 transition-colors cursor-pointer" 
+                title="効果音: ${sfxCount}件（${sfxPreview.join(', ') || 'SFX'}）クリックで編集"
+              >
                 <span>💥</span>
                 <span class="font-semibold">SFX ${sfxCount}</span>
-              </span>
+                <span class="text-xs opacity-70">${truncatedPreview}</span>
+              </button>
             `;
           } else {
             return `
-              <span class="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-100 text-gray-400" title="効果音なし（シーン編集で追加可能）">
+              <button 
+                onclick="openSceneEditModal(${scene.id}, 'sfx')"
+                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-gray-100 text-gray-400 hover:bg-gray-200 transition-colors cursor-pointer" 
+                title="効果音なし。クリックでSFXを追加"
+              >
                 <span>💥</span>
                 <span class="font-semibold">SFXなし</span>
-              </span>
+              </button>
             `;
           }
         })()}

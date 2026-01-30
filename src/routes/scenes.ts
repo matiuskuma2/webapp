@@ -178,6 +178,39 @@ scenes.get('/:id', async (c) => {
       `).bind(sceneId).first<{ count: number }>()
       const sfxCount = sfxCountResult?.count || 0
 
+      // P3: SFX詳細情報取得（先頭2件のnameを含む）
+      const { results: sfxDetails } = await c.env.DB.prepare(`
+        SELECT name, start_ms
+        FROM scene_audio_cues
+        WHERE scene_id = ? AND is_active = 1
+        ORDER BY start_ms ASC
+        LIMIT 2
+      `).bind(sceneId).all()
+
+      // P3: シーン別BGM取得（scene_audio_assignments から）
+      const sceneBgm = await c.env.DB.prepare(`
+        SELECT 
+          saa.id,
+          saa.library_type,
+          saa.volume,
+          saa.loop,
+          CASE 
+            WHEN saa.library_type = 'system' THEN sal.name
+            WHEN saa.library_type = 'user' THEN ual.name
+            ELSE saa.direct_url
+          END as name,
+          CASE 
+            WHEN saa.library_type = 'system' THEN sal.r2_url
+            WHEN saa.library_type = 'user' THEN ual.r2_url
+            ELSE saa.direct_url
+          END as url
+        FROM scene_audio_assignments saa
+        LEFT JOIN system_audio_library sal ON saa.library_type = 'system' AND saa.library_item_id = sal.id
+        LEFT JOIN user_audio_library ual ON saa.library_type = 'user' AND saa.library_item_id = ual.id
+        WHERE saa.scene_id = ? AND saa.audio_type = 'bgm' AND saa.is_active = 1
+        LIMIT 1
+      `).bind(sceneId).first()
+
       // キャラクター情報取得（プロジェクトIDを取得してから）
       // A/B/C層の特徴も取得: A=appearance_description, B=story_traits, C=scene_trait
       const projectId = scene.project_id
@@ -299,7 +332,18 @@ scenes.get('/:id', async (c) => {
           voice_preset_id: voiceCharacter.voice_preset_id
         } : null,
         // R3-B: SFX数
-        sfx_count: sfxCount
+        sfx_count: sfxCount,
+        // P3: SFX詳細（先頭2件のname）
+        sfx_preview: (sfxDetails || []).map((s: any) => s.name || 'SFX'),
+        // P3: シーン別BGM
+        scene_bgm: sceneBgm ? {
+          id: sceneBgm.id,
+          source: sceneBgm.library_type || 'direct',
+          name: sceneBgm.name || 'BGM',
+          url: sceneBgm.url,
+          volume: sceneBgm.volume,
+          loop: sceneBgm.loop
+        } : null
       })
     }
 

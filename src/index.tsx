@@ -2432,6 +2432,77 @@ app.get('/projects/:id', (c) => {
                     <div id="scene-edit-tab-sfx" class="hidden space-y-4">
                         <!-- Dynamically populated by scene-edit-modal.js -->
                     </div>
+                    
+                    <!-- Tab E: BGM (P3) -->
+                    <div id="scene-edit-tab-bgm" class="hidden space-y-4">
+                        <!-- BGM管理タブ -->
+                        <div class="p-4 bg-amber-50 rounded-lg border border-amber-200">
+                            <p class="text-sm text-amber-700">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                <strong>シーン別BGM</strong>を設定できます。シーン別BGMは全体BGMより優先されます。
+                            </p>
+                        </div>
+                        
+                        <!-- プロジェクト全体BGM表示 -->
+                        <div id="scene-bgm-project-bgm" class="p-4 bg-gray-50 rounded-lg border border-gray-200">
+                            <h4 class="font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-music mr-2 text-gray-500"></i>プロジェクト全体BGM
+                            </h4>
+                            <div id="scene-bgm-project-info" class="text-sm text-gray-600">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+                        
+                        <!-- シーン別BGM設定 -->
+                        <div class="p-4 bg-white rounded-lg border border-amber-300">
+                            <h4 class="font-semibold text-amber-700 mb-3">
+                                <i class="fas fa-layer-group mr-2"></i>このシーンのBGM
+                            </h4>
+                            
+                            <!-- 現在のシーンBGM -->
+                            <div id="scene-bgm-current" class="mb-4">
+                                <!-- Populated dynamically -->
+                            </div>
+                            
+                            <!-- BGM設定オプション -->
+                            <div class="space-y-3">
+                                <div class="flex gap-2">
+                                    <button id="scene-bgm-select-btn" 
+                                        class="flex-1 px-4 py-2 bg-amber-500 text-white rounded-lg hover:bg-amber-600 transition-colors text-sm font-semibold">
+                                        <i class="fas fa-folder-open mr-1"></i>ライブラリから選択
+                                    </button>
+                                    <button id="scene-bgm-upload-btn"
+                                        class="flex-1 px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-semibold">
+                                        <i class="fas fa-upload mr-1"></i>アップロード
+                                    </button>
+                                </div>
+                                
+                                <div id="scene-bgm-remove-container" class="hidden">
+                                    <button id="scene-bgm-remove-btn"
+                                        class="w-full px-4 py-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200 transition-colors text-sm font-semibold">
+                                        <i class="fas fa-trash-alt mr-1"></i>シーンBGMを削除（全体BGMに戻す）
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <!-- 音量調整 -->
+                            <div id="scene-bgm-volume-container" class="hidden mt-4 p-3 bg-amber-50 rounded-lg">
+                                <label class="block text-sm font-semibold text-amber-700 mb-2">
+                                    <i class="fas fa-volume-up mr-1"></i>シーンBGM音量
+                                </label>
+                                <input type="range" id="scene-bgm-volume" min="0" max="100" value="25" 
+                                    class="w-full h-2 bg-amber-200 rounded-lg appearance-none cursor-pointer">
+                                <div class="flex justify-between text-xs text-amber-600 mt-1">
+                                    <span>0%</span>
+                                    <span id="scene-bgm-volume-value">25%</span>
+                                    <span>100%</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- 隠しファイル入力 -->
+                        <input type="file" id="scene-bgm-file-input" accept="audio/*" class="hidden">
+                    </div>
                 </div>
                 
                 <!-- Footer -->
