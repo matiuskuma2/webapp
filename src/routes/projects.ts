@@ -626,25 +626,26 @@ projects.get('/:id/scenes', async (c) => {
           `).bind(scene.id).all()
 
           // P3: シーン別BGM取得（scene_audio_assignments から）
+          // 本番DBスキーマ: audio_library_type, system_audio_id, user_audio_id, direct_r2_url, volume_override, loop_override
           const sceneBgm = await c.env.DB.prepare(`
             SELECT 
               saa.id,
-              saa.library_type,
-              saa.volume,
-              saa.loop,
+              saa.audio_library_type as library_type,
+              saa.volume_override as volume,
+              saa.loop_override as loop,
               CASE 
-                WHEN saa.library_type = 'system' THEN sal.name
-                WHEN saa.library_type = 'user' THEN ual.name
-                ELSE saa.direct_url
+                WHEN saa.audio_library_type = 'system' THEN sal.name
+                WHEN saa.audio_library_type = 'user' THEN ual.name
+                ELSE saa.direct_name
               END as name,
               CASE 
-                WHEN saa.library_type = 'system' THEN sal.r2_url
-                WHEN saa.library_type = 'user' THEN ual.r2_url
-                ELSE saa.direct_url
+                WHEN saa.audio_library_type = 'system' THEN sal.r2_url
+                WHEN saa.audio_library_type = 'user' THEN ual.r2_url
+                ELSE saa.direct_r2_url
               END as url
             FROM scene_audio_assignments saa
-            LEFT JOIN system_audio_library sal ON saa.library_type = 'system' AND saa.library_item_id = sal.id
-            LEFT JOIN user_audio_library ual ON saa.library_type = 'user' AND saa.library_item_id = ual.id
+            LEFT JOIN system_audio_library sal ON saa.audio_library_type = 'system' AND saa.system_audio_id = sal.id
+            LEFT JOIN user_audio_library ual ON saa.audio_library_type = 'user' AND saa.user_audio_id = ual.id
             WHERE saa.scene_id = ? AND saa.audio_type = 'bgm' AND saa.is_active = 1
             LIMIT 1
           `).bind(scene.id).first()
