@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-30（P0: BGM/SFX SSOT化、Remotion SFX再生、音声ライブラリ設計）
+- **最終更新**: 2026-01-30（P1/P2: User Audio Library API & Scene Audio Assignments API 実装完了）
 
 ---
 
@@ -1650,18 +1650,108 @@ is_active, created_at, updated_at
         └───────────────────────────────────┘
 ```
 
-### 次のステップ（P1以降）
+### P1: User Audio Library API（実装完了）
 
-- **P1**: user_audio_library API実装（CRUD + アップロード）
-- **P2**: scene_audio_assignments API実装
+ユーザーがアップロードしたBGM/SFXをプロジェクト横断で再利用するAPI。
+
+**エンドポイント**:
+- `GET /api/audio-library` - 一覧取得（type=bgm|sfx, category, mood, search, sort）
+- `GET /api/audio-library/:id` - 単一取得
+- `POST /api/audio-library/upload` - アップロード（FormData: file, audio_type, name, tags等）
+- `PUT /api/audio-library/:id` - メタデータ更新
+- `DELETE /api/audio-library/:id` - 削除（R2ファイルも削除）
+- `POST /api/audio-library/:id/increment-use` - 使用回数インクリメント
+
+**レスポンス例**:
+```json
+{
+  "items": [{
+    "id": 1,
+    "audio_type": "bgm",
+    "name": "Calm Piano",
+    "tags": ["calm", "piano", "background"],
+    "r2_url": "https://app.marumuviai.com/audio/library/user_1/bgm/xxx.mp3",
+    "duration_ms": 120000,
+    "default_volume": 0.25,
+    "default_loop": true,
+    "use_count": 5
+  }],
+  "pagination": { "total": 10, "limit": 50, "offset": 0, "has_more": false },
+  "filters": { "categories": ["bgm", "relaxing"], "moods": ["calm", "happy"] }
+}
+```
+
+### P2: Scene Audio Assignments API（実装完了）
+
+シーンへのBGM/SFX割当を管理するAPI。ライブラリ参照 or 直接アップロードに対応。
+
+**エンドポイント**:
+- `GET /api/scenes/:sceneId/audio-assignments` - シーンの音割当一覧（bgm + sfx[]）
+- `POST /api/scenes/:sceneId/audio-assignments` - 新規割当（ライブラリから）
+- `PUT /api/scenes/:sceneId/audio-assignments/:id` - 割当設定更新
+- `DELETE /api/scenes/:sceneId/audio-assignments/:id` - 割当削除
+- `POST /api/scenes/:sceneId/audio-assignments/direct` - 直接アップロード＆割当
+- `POST /api/scenes/:sceneId/audio-assignments/deactivate-all` - 全音割当を無効化
+
+**ライブラリタイプ**:
+- `system`: system_audio_library（管理者登録）
+- `user`: user_audio_library（ユーザー登録）
+- `direct`: 直接アップロード（ライブラリ未登録）
+
+**ルール**:
+- BGM: 1シーン最大1つ（新規追加時は既存を自動無効化）
+- SFX: 1シーンに複数可能（start_msでタイミング指定）
+
+**リクエスト例（ライブラリから割当）**:
+```json
+POST /api/scenes/123/audio-assignments
+{
+  "audio_library_type": "user",
+  "user_audio_id": 5,
+  "audio_type": "bgm",
+  "volume_override": 0.3
+}
+```
+
+**レスポンス例**:
+```json
+{
+  "scene_id": 123,
+  "bgm": {
+    "id": 1,
+    "audio_library_type": "user",
+    "audio_type": "bgm",
+    "library": {
+      "type": "user",
+      "id": 5,
+      "name": "Calm Piano",
+      "r2_url": "https://...",
+      "duration_ms": 120000,
+      "default_volume": 0.25
+    },
+    "effective": {
+      "r2_url": "https://...",
+      "name": "Calm Piano",
+      "volume": 0.3,
+      "loop": true
+    }
+  },
+  "sfx": [],
+  "total": 1
+}
+```
+
+### 次のステップ（P3以降）
+
 - **P3**: フロントエンドUI（シーンカードBGM/SFX表示改善）
 - **P4**: シーン別BGM選択モーダル
-- **P5**: 動画ビルドでscene_audio_assignmentsから取得
+- **P5**: 動画ビルドでscene_audio_assignmentsを優先取得
 - **P6**: Remotionでシーン別BGM再生（シーン切替時にBGM切替）
 
 ### Gitコミット
 ```
 a500998 P0: Add SFX playback support to Remotion + Audio library schema
+acee3aa P1/P2: User Audio Library & Scene Audio Assignments API
 ```
 
 ---
