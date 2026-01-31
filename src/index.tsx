@@ -141,6 +141,7 @@ app.route('/api/admin', admin) // For /api/admin/* (superadmin only)
 // Root route - serve HTML
 // Root route - with authentication check
 app.get('/', (c) => {
+  const ASSET_VERSION = getAssetVersion(c.env)
   return c.html(`
 <!DOCTYPE html>
 <html lang="ja">
