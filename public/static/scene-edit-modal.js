@@ -2085,6 +2085,31 @@
             </div>
           </div>
           
+          <!-- BGM選択ボタン（上部に配置） -->
+          <div class="flex gap-2 flex-wrap mb-4">
+            <button 
+              onclick="SceneEditModal.openBgmLibrary('system')"
+              class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-semibold"
+            >
+              <i class="fas fa-database mr-2"></i>システムライブラリから選択
+            </button>
+            <button 
+              onclick="SceneEditModal.openBgmLibrary('user')"
+              class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-semibold"
+            >
+              <i class="fas fa-folder mr-2"></i>マイライブラリから選択
+            </button>
+            <label class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm font-semibold cursor-pointer">
+              <i class="fas fa-upload mr-2"></i>ファイルアップロード
+              <input 
+                type="file" 
+                accept="audio/*"
+                class="hidden"
+                onchange="SceneEditModal.handleBgmUpload(event)"
+              />
+            </label>
+          </div>
+          
           ${bgm ? `
             <!-- 現在のBGM設定 -->
             <div class="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg mb-4">
@@ -2193,31 +2218,6 @@
               `}
             </div>
           `}
-          
-          <!-- BGM選択ボタン -->
-          <div class="flex gap-2 flex-wrap">
-            <button 
-              onclick="SceneEditModal.openBgmLibrary('system')"
-              class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-semibold"
-            >
-              <i class="fas fa-database mr-2"></i>システムライブラリから選択
-            </button>
-            <button 
-              onclick="SceneEditModal.openBgmLibrary('user')"
-              class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors text-sm font-semibold"
-            >
-              <i class="fas fa-folder mr-2"></i>マイライブラリから選択
-            </button>
-            <label class="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm font-semibold cursor-pointer">
-              <i class="fas fa-upload mr-2"></i>ファイルアップロード
-              <input 
-                type="file" 
-                accept="audio/*"
-                class="hidden"
-                onchange="SceneEditModal.handleBgmUpload(event)"
-              />
-            </label>
-          </div>
         </div>
         
         <div class="p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">

@@ -190,6 +190,119 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
 });
 
 // ====================================================================
+// POST /api/projects/:projectId/audio-tracks/bgm/from-library
+// BGMをシステムライブラリまたはユーザーライブラリから選択して設定
+// ====================================================================
+projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/from-library', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('projectId'), 10);
+    if (!Number.isFinite(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400);
+    }
+
+    const body = await c.req.json();
+    const { audio_library_type, system_audio_id, user_audio_id, volume, loop } = body;
+
+    if (!audio_library_type || !['system', 'user'].includes(audio_library_type)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'audio_library_type must be "system" or "user"' } }, 400);
+    }
+
+    const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+    let sourceAudio: any = null;
+
+    // ライブラリからソースオーディオを取得
+    if (audio_library_type === 'system') {
+      if (!system_audio_id) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'system_audio_id required for system type' } }, 400);
+      }
+      sourceAudio = await c.env.DB.prepare(`
+        SELECT id, audio_type, name, file_url, duration_ms 
+        FROM system_audio_library 
+        WHERE id = ? AND is_active = 1
+      `).bind(system_audio_id).first();
+      
+      if (!sourceAudio) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'System audio not found' } }, 404);
+      }
+    } else {
+      if (!user_audio_id) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'user_audio_id required for user type' } }, 400);
+      }
+      sourceAudio = await c.env.DB.prepare(`
+        SELECT id, audio_type, name, r2_url, duration_ms 
+        FROM user_audio_library 
+        WHERE id = ? AND is_active = 1
+      `).bind(user_audio_id).first();
+      
+      if (!sourceAudio) {
+        return c.json({ error: { code: 'NOT_FOUND', message: 'User audio not found' } }, 404);
+      }
+      
+      // use_countをインクリメント
+      await c.env.DB.prepare(`
+        UPDATE user_audio_library 
+        SET use_count = use_count + 1, updated_at = datetime('now') 
+        WHERE id = ?
+      `).bind(user_audio_id).run();
+    }
+
+    // 既存のactive BGMを非アクティブに
+    await c.env.DB.prepare(`
+      UPDATE project_audio_tracks 
+      SET is_active = 0, updated_at = datetime('now')
+      WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
+    `).bind(projectId).run();
+
+    // r2_urlを取得
+    const sourceR2Url = audio_library_type === 'system' 
+      ? sourceAudio.file_url 
+      : sourceAudio.r2_url;
+
+    // 新しいBGMトラックを挿入
+    const effectiveVolume = volume !== undefined ? Math.max(0, Math.min(1, parseFloat(volume))) : 0.25;
+    const effectiveLoop = loop !== undefined ? (loop ? 1 : 0) : 1;
+
+    const result = await c.env.DB.prepare(`
+      INSERT INTO project_audio_tracks (
+        project_id, track_type, r2_key, r2_url,
+        audio_library_type, system_audio_id, user_audio_id,
+        duration_ms, volume, loop, fade_in_ms, fade_out_ms,
+        is_active, created_at, updated_at
+      ) VALUES (?, 'bgm', NULL, ?, ?, ?, ?, ?, ?, ?, 800, 800, 1, datetime('now'), datetime('now'))
+    `).bind(
+      projectId,
+      sourceR2Url,
+      audio_library_type,
+      audio_library_type === 'system' ? system_audio_id : null,
+      audio_library_type === 'user' ? user_audio_id : null,
+      sourceAudio.duration_ms || null,
+      effectiveVolume,
+      effectiveLoop
+    ).run();
+
+    const trackId = result.meta.last_row_id;
+
+    return c.json({
+      id: trackId,
+      project_id: projectId,
+      track_type: 'bgm',
+      name: sourceAudio.name || 'BGM',
+      r2_url: toAbsoluteUrl(sourceR2Url, siteUrl),
+      audio_library_type,
+      system_audio_id: audio_library_type === 'system' ? system_audio_id : null,
+      user_audio_id: audio_library_type === 'user' ? user_audio_id : null,
+      duration_ms: sourceAudio.duration_ms,
+      volume: effectiveVolume,
+      loop: effectiveLoop === 1,
+      is_active: true,
+    });
+  } catch (error) {
+    console.error('[ProjectAudioTracks] from-library error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to set BGM from library' } }, 500);
+  }
+});
+
+// ====================================================================
 // PUT /api/projects/:projectId/audio-tracks/:id
 // ====================================================================
 projectAudioTracks.put('/projects/:projectId/audio-tracks/:id', async (c) => {

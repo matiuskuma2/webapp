@@ -1228,10 +1228,24 @@ app.get('/projects/:id', (c) => {
                                         <p class="text-xs">ボイスなしのシーンも音ありで生成できます</p>
                                     </div>
                                 </div>
-                                <div class="mt-3">
+                                <div class="mt-3 flex gap-2 flex-wrap">
+                                    <button
+                                        onclick="openProjectBgmLibrary('system')"
+                                        class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-semibold inline-flex items-center gap-2"
+                                    >
+                                        <i class="fas fa-database"></i>
+                                        システムBGM
+                                    </button>
+                                    <button
+                                        onclick="openProjectBgmLibrary('user')"
+                                        class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors font-semibold inline-flex items-center gap-2"
+                                    >
+                                        <i class="fas fa-folder"></i>
+                                        マイBGM
+                                    </button>
                                     <label class="cursor-pointer px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors font-semibold inline-flex items-center gap-2">
                                         <i class="fas fa-upload"></i>
-                                        BGMをアップロード
+                                        アップロード
                                         <input 
                                             type="file" 
                                             id="bgmFileInput"

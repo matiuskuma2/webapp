@@ -9284,6 +9284,171 @@ window.updateBgmLoop = updateBgmLoop;
 window.loadBgmStatus = loadBgmStatus;
 
 // ============================================
+// R3-A-2: Project BGM Library Selection
+// ============================================
+
+/**
+ * Open project-level BGM library modal
+ * @param {string} libraryType - 'system' or 'user'
+ */
+async function openProjectBgmLibrary(libraryType) {
+  // Check if modal exists, create if not
+  let modal = document.getElementById('projectBgmLibraryModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'projectBgmLibraryModal';
+    modal.className = 'hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center';
+    modal.innerHTML = `
+      <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden mx-4">
+        <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+          <h3 class="font-bold text-lg" id="projectBgmLibraryTitle">BGMライブラリ</h3>
+          <button onclick="closeProjectBgmLibrary()" class="text-gray-500 hover:text-gray-700">
+            <i class="fas fa-times text-xl"></i>
+          </button>
+        </div>
+        <div id="projectBgmLibraryContent" class="p-4 overflow-y-auto max-h-[60vh]">
+          <!-- Library content will be loaded dynamically -->
+        </div>
+      </div>
+    `;
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeProjectBgmLibrary();
+    });
+    document.body.appendChild(modal);
+  }
+  
+  // Set title based on library type
+  const titleEl = document.getElementById('projectBgmLibraryTitle');
+  if (titleEl) {
+    titleEl.textContent = libraryType === 'system' ? 'システムBGMライブラリ' : 'マイBGMライブラリ';
+  }
+  
+  // Show modal with loading spinner
+  modal.classList.remove('hidden');
+  const contentEl = document.getElementById('projectBgmLibraryContent');
+  if (contentEl) {
+    contentEl.innerHTML = `
+      <div class="p-4 text-center text-gray-500">
+        <i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...
+      </div>
+    `;
+  }
+  
+  // Fetch library items
+  try {
+    const endpoint = libraryType === 'system' 
+      ? `${API_BASE}/audio-library/system?category=bgm`
+      : `${API_BASE}/audio-library?type=bgm`;
+    
+    const response = await axios.get(endpoint);
+    const items = response.data.items || [];
+    
+    if (items.length === 0) {
+      contentEl.innerHTML = `
+        <div class="p-4 text-center text-gray-500">
+          <i class="fas fa-music text-4xl mb-3"></i>
+          <p>BGMが登録されていません</p>
+        </div>
+      `;
+      return;
+    }
+    
+    contentEl.innerHTML = `
+      <div class="space-y-3">
+        ${items.map(item => `
+          <div class="p-3 border border-gray-200 rounded-lg hover:border-blue-300 hover:bg-blue-50 transition-colors">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="text-2xl">🎵</span>
+                <div>
+                  <div class="font-semibold text-gray-800">${escapeHtml(item.name || 'BGM')}</div>
+                  <div class="text-xs text-gray-500">
+                    ${item.duration_ms ? Math.round(item.duration_ms / 1000) + '秒' : ''}
+                    ${item.category ? ' | ' + item.category : ''}
+                    ${item.mood ? ' | ' + item.mood : ''}
+                  </div>
+                </div>
+              </div>
+              <button 
+                onclick="selectProjectBgm('${libraryType}', ${item.id}, '${escapeHtml(item.name || 'BGM')}')"
+                class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors text-sm font-semibold"
+              >
+                <i class="fas fa-check mr-1"></i>選択
+              </button>
+            </div>
+            ${item.r2_url ? `
+              <audio src="${item.r2_url}" controls class="w-full mt-2 h-8"></audio>
+            ` : ''}
+          </div>
+        `).join('')}
+      </div>
+    `;
+  } catch (error) {
+    console.error('[ProjectBGM] Library load error:', error);
+    contentEl.innerHTML = `
+      <div class="p-4 text-center text-red-500">
+        <i class="fas fa-exclamation-circle mr-2"></i>
+        読み込みに失敗しました
+      </div>
+    `;
+  }
+}
+
+/**
+ * Close project BGM library modal
+ */
+function closeProjectBgmLibrary() {
+  const modal = document.getElementById('projectBgmLibraryModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+/**
+ * Select BGM from library for project-wide use
+ * @param {string} libraryType - 'system' or 'user'
+ * @param {number} itemId - Audio library item ID
+ * @param {string} itemName - Item name for display
+ */
+async function selectProjectBgm(libraryType, itemId, itemName) {
+  try {
+    const payload = {
+      audio_library_type: libraryType,
+      volume: 0.25,
+      loop: true
+    };
+    
+    if (libraryType === 'system') {
+      payload.system_audio_id = itemId;
+    } else {
+      payload.user_audio_id = itemId;
+    }
+    
+    const response = await axios.post(
+      `${API_BASE}/projects/${PROJECT_ID}/audio-tracks/bgm/from-library`,
+      payload
+    );
+    
+    closeProjectBgmLibrary();
+    showToast(`BGM「${itemName}」を設定しました`, 'success');
+    
+    // Update UI with the new BGM
+    if (response.data) {
+      window.currentBgm = response.data;
+      showBgmActiveState(response.data);
+    } else {
+      loadBgmStatus();
+    }
+  } catch (error) {
+    console.error('[ProjectBGM] Select error:', error);
+    showToast('BGMの設定に失敗しました', 'error');
+  }
+}
+
+// Expose functions globally
+window.openProjectBgmLibrary = openProjectBgmLibrary;
+window.closeProjectBgmLibrary = closeProjectBgmLibrary;
+window.selectProjectBgm = selectProjectBgm;
+
+// ============================================
 // R4: Patch History (SSOT Patch)
 // ============================================
 
