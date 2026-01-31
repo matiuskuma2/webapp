@@ -169,13 +169,26 @@ export const Scene: React.FC<SceneProps> = ({
           );
         })}
         
-        {/* R3-B: SFXを再生 */}
+        {/* P6-2: SFXを再生（SSOT: end_ms優先、ワンショット音） */}
         {sfxList.map((sfx) => {
           const sfxStartFrame = msToFrames(sfx.start_ms ?? 0, fps);
-          // duration_ms があればそれを使用、なければシーン終了まで
-          const sfxDurationFrames = sfx.duration_ms 
-            ? msToFrames(sfx.duration_ms, fps)
-            : durationFrames - sfxStartFrame;
+          
+          // P6-2 SSOT: end_ms を優先、なければ duration_ms、どちらもなければシーン終了まで
+          let sfxDurationFrames: number;
+          if (sfx.end_ms !== undefined && sfx.end_ms !== null) {
+            // end_ms が指定されている場合
+            const sfxEndFrame = msToFrames(sfx.end_ms, fps);
+            sfxDurationFrames = sfxEndFrame - sfxStartFrame;
+          } else if (sfx.duration_ms !== undefined && sfx.duration_ms !== null) {
+            // duration_ms が指定されている場合
+            sfxDurationFrames = msToFrames(sfx.duration_ms, fps);
+          } else {
+            // どちらもなければシーン終了まで
+            sfxDurationFrames = durationFrames - sfxStartFrame;
+          }
+          
+          // safety: 不正データ防止
+          if (sfxDurationFrames <= 0) return null;
           
           return (
             <Sequence
@@ -186,20 +199,37 @@ export const Scene: React.FC<SceneProps> = ({
               <Audio 
                 src={sfx.url} 
                 volume={sfx.volume ?? 0.8}
-                loop={sfx.loop ?? false}
+                // P6-2 SSOT: SFXはワンショット音、loop原則不使用
               />
             </Sequence>
           );
         })}
         
-        {/* P6: シーン別BGMを再生（全体BGMより優先） */}
-        {hasSceneBgm && sceneBgm && (
-          <Audio
-            src={sceneBgm.url}
-            volume={sceneBgm.volume ?? 0.25}
-            loop={sceneBgm.loop ?? true}
-          />
-        )}
+        {/* P6-1: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止） */}
+        {hasSceneBgm && sceneBgm && (() => {
+          // P6-1: start_ms / end_ms をフレーム精度で反映
+          const bgmStartFrame = msToFrames(sceneBgm.start_ms ?? 0, fps);
+          // end_ms が未指定 or null の場合はシーン終了まで再生
+          const bgmEndMs = sceneBgm.end_ms ?? scene.timing.duration_ms;
+          const bgmEndFrame = msToFrames(bgmEndMs, fps);
+          const bgmDurationFrames = Math.max(1, bgmEndFrame - bgmStartFrame);
+          
+          // safety: 不正データ防止
+          if (bgmDurationFrames <= 0) return null;
+          
+          return (
+            <Sequence
+              from={bgmStartFrame}
+              durationInFrames={bgmDurationFrames}
+            >
+              <Audio
+                src={sceneBgm.url}
+                volume={sceneBgm.volume ?? 0.25}
+                // P6-1 SSOT: loop禁止（途中で切れてOK、次シーンに持ち越さない）
+              />
+            </Sequence>
+          );
+        })()}
         
         {/* 字幕表示 - R2: baked/none時は描画しない */}
         {shouldRenderSubtitle && subtitleText && (
@@ -271,13 +301,26 @@ export const Scene: React.FC<SceneProps> = ({
         );
       })}
       
-      {/* R3-B: SFXを再生 */}
+      {/* P6-2: SFXを再生（SSOT: end_ms優先、ワンショット音） */}
       {sfxList.map((sfx) => {
         const sfxStartFrame = msToFrames(sfx.start_ms ?? 0, fps);
-        // duration_ms があればそれを使用、なければシーン終了まで
-        const sfxDurationFrames = sfx.duration_ms 
-          ? msToFrames(sfx.duration_ms, fps)
-          : durationFrames - sfxStartFrame;
+        
+        // P6-2 SSOT: end_ms を優先、なければ duration_ms、どちらもなければシーン終了まで
+        let sfxDurationFrames: number;
+        if (sfx.end_ms !== undefined && sfx.end_ms !== null) {
+          // end_ms が指定されている場合
+          const sfxEndFrame = msToFrames(sfx.end_ms, fps);
+          sfxDurationFrames = sfxEndFrame - sfxStartFrame;
+        } else if (sfx.duration_ms !== undefined && sfx.duration_ms !== null) {
+          // duration_ms が指定されている場合
+          sfxDurationFrames = msToFrames(sfx.duration_ms, fps);
+        } else {
+          // どちらもなければシーン終了まで
+          sfxDurationFrames = durationFrames - sfxStartFrame;
+        }
+        
+        // safety: 不正データ防止
+        if (sfxDurationFrames <= 0) return null;
         
         return (
           <Sequence
@@ -288,20 +331,37 @@ export const Scene: React.FC<SceneProps> = ({
             <Audio 
               src={sfx.url} 
               volume={sfx.volume ?? 0.8}
-              loop={sfx.loop ?? false}
+              // P6-2 SSOT: SFXはワンショット音、loop原則不使用
             />
           </Sequence>
         );
       })}
       
-      {/* P6: シーン別BGMを再生（全体BGMより優先） */}
-      {hasSceneBgm && sceneBgm && (
-        <Audio
-          src={sceneBgm.url}
-          volume={sceneBgm.volume ?? 0.25}
-          loop={sceneBgm.loop ?? true}
-        />
-      )}
+      {/* P6-1: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止） */}
+      {hasSceneBgm && sceneBgm && (() => {
+        // P6-1: start_ms / end_ms をフレーム精度で反映
+        const bgmStartFrame = msToFrames(sceneBgm.start_ms ?? 0, fps);
+        // end_ms が未指定 or null の場合はシーン終了まで再生
+        const bgmEndMs = sceneBgm.end_ms ?? scene.timing.duration_ms;
+        const bgmEndFrame = msToFrames(bgmEndMs, fps);
+        const bgmDurationFrames = Math.max(1, bgmEndFrame - bgmStartFrame);
+        
+        // safety: 不正データ防止
+        if (bgmDurationFrames <= 0) return null;
+        
+        return (
+          <Sequence
+            from={bgmStartFrame}
+            durationInFrames={bgmDurationFrames}
+          >
+            <Audio
+              src={sceneBgm.url}
+              volume={sceneBgm.volume ?? 0.25}
+              // P6-1 SSOT: loop禁止（途中で切れてOK、次シーンに持ち越さない）
+            />
+          </Sequence>
+        );
+      })()}
       
       {/* 字幕表示 - R2: baked/none時は描画しない */}
       {shouldRenderSubtitle && subtitleText && (

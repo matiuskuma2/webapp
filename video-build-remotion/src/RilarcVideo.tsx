@@ -11,8 +11,9 @@ interface SceneBgmInterval {
   sceneIdx: number;
 }
 
-// P6: 全体BGMのduck用定数
-const GLOBAL_BGM_DUCK_VOLUME = 0.12; // シーン別BGMがある区間での全体BGM音量
+// P6-3 SSOT: sceneBGM区間ではprojectBGMを即時ミュート（二重BGM事故防止）
+// 以前は duck (0.12) だったが、SSOT方針では完全ミュートを推奨
+const GLOBAL_BGM_MUTE_VOLUME = 0; // sceneBGMがある区間でのprojectBGM音量
 
 interface RilarcVideoProps {
   projectJson: ProjectJson;
@@ -80,12 +81,13 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
     );
   }, [frame, sceneBgmIntervals]);
   
-  // P6: 全体BGMの音量を計算（シーン別BGMがある区間ではduck）
+  // P6-3 SSOT: projectBGMの音量を計算（sceneBGMがある区間では即時ミュート）
   const globalBgmVolume = useMemo(() => {
     const baseVolume = projectJson?.build_settings?.audio?.bgm_volume ?? 0.3;
     if (isInSceneBgmInterval) {
-      console.log(`[RilarcVideo] Frame ${frame}: ducking global BGM to ${GLOBAL_BGM_DUCK_VOLUME}`);
-      return GLOBAL_BGM_DUCK_VOLUME;
+      // P6-3: sceneBGM区間ではprojectBGMを完全ミュート（二重BGM事故防止）
+      console.log(`[RilarcVideo] Frame ${frame}: muting projectBGM (sceneBGM active)`);
+      return GLOBAL_BGM_MUTE_VOLUME;
     }
     return baseVolume;
   }, [isInSceneBgmInterval, frame, projectJson?.build_settings?.audio?.bgm_volume]);
