@@ -519,6 +519,7 @@ export async function getVideoBuildStatus(
 
 export interface VideoBuildEnv {
   AWS_ORCH_BASE_URL?: string;
+  VIDEO_BUILD_ORCHESTRATOR_URL?: string;  // Alias for AWS_ORCH_BASE_URL
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;
   AWS_REGION?: string;
@@ -527,15 +528,18 @@ export interface VideoBuildEnv {
 /**
  * 環境変数からクライアント設定を生成
  * 認証情報が不足している場合は null を返す
+ * VIDEO_BUILD_ORCHESTRATOR_URL と AWS_ORCH_BASE_URL の両方をサポート
  */
 export function createVideoBuildClientConfig(env: VideoBuildEnv): VideoBuildClientConfig | null {
-  if (!env.AWS_ORCH_BASE_URL || !env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
+  const baseUrl = env.AWS_ORCH_BASE_URL || env.VIDEO_BUILD_ORCHESTRATOR_URL;
+  
+  if (!baseUrl || !env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
     console.warn('[VideoBuildClient] Missing AWS credentials or base URL');
     return null;
   }
   
   return {
-    baseUrl: env.AWS_ORCH_BASE_URL,
+    baseUrl,
     accessKeyId: env.AWS_ACCESS_KEY_ID,
     secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
     region: env.AWS_REGION || DEFAULT_AWS_REGION,

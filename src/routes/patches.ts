@@ -26,6 +26,7 @@ type Bindings = {
   AWS_ACCESS_KEY_ID?: string;
   AWS_SECRET_ACCESS_KEY?: string;
   VIDEO_BUILD_ORCHESTRATOR_URL?: string;
+  AWS_ORCH_BASE_URL?: string;  // Alias for VIDEO_BUILD_ORCHESTRATOR_URL
   // Phase C: AI Intent Parse
   GEMINI_API_KEY?: string;
 };
@@ -971,7 +972,7 @@ patches.post('/projects/:projectId/patches/apply', async (c) => {
 
     // 8. AWS Orchestrator呼び出し（オプション - 設定がなければスキップ）
     const hasAwsConfig = c.env.AWS_REGION && c.env.AWS_ACCESS_KEY_ID && 
-                         c.env.AWS_SECRET_ACCESS_KEY && c.env.VIDEO_BUILD_ORCHESTRATOR_URL;
+                         c.env.AWS_SECRET_ACCESS_KEY && (c.env.VIDEO_BUILD_ORCHESTRATOR_URL || c.env.AWS_ORCH_BASE_URL);
 
     if (hasAwsConfig) {
       try {
@@ -3060,7 +3061,7 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
     `).bind(r2Key, newVideoBuildId).run();
 
     const hasAwsConfig = c.env.AWS_REGION && c.env.AWS_ACCESS_KEY_ID && 
-                         c.env.AWS_SECRET_ACCESS_KEY && c.env.VIDEO_BUILD_ORCHESTRATOR_URL;
+                         c.env.AWS_SECRET_ACCESS_KEY && (c.env.VIDEO_BUILD_ORCHESTRATOR_URL || c.env.AWS_ORCH_BASE_URL);
 
     if (hasAwsConfig) {
       try {
