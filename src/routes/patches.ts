@@ -2635,9 +2635,12 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
 
   // 基本バリデーション
   // PR-5-3b: telopアクションのみの場合はopsが空でもOK（telop_settings_overrideで処理）
+  // PR2: audio_automationアクションのみの場合もopsが空でもOK
   const hasTelopOverrideOnly = resolution.ops.length === 0 && resolution.telop_settings_override;
+  const hasAudioAutomationOverrideOnlyForValidation = resolution.ops.length === 0 && resolution.audio_automation_override;
+  const hasSettingsOverrideOnlyForValidation = hasTelopOverrideOnly || hasAudioAutomationOverrideOnlyForValidation;
   
-  if (!hasTelopOverrideOnly) {
+  if (!hasSettingsOverrideOnlyForValidation) {
     const validation = validatePatchRequest(patchRequest, projectId);
     if (!validation.valid) {
       return c.json({
