@@ -337,7 +337,7 @@ export const Scene: React.FC<SceneProps> = ({
         );
       })}
       
-      {/* P6-1: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止） */}
+      {/* P6-1/P6-4: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止、フェード付き） */}
       {hasSceneBgm && sceneBgm && (() => {
         const durationMs = scene.timing.duration_ms;
         
@@ -356,6 +356,33 @@ export const Scene: React.FC<SceneProps> = ({
         // safety: 不正データ防止（ゴミ区間は再生しない）
         if (bgmDurationFrames <= 0) return null;
         
+        // P6-4: フェード設定（パツッとした切替を防ぐ）
+        const fadeMs = 120;
+        const fadeFrames = msToFrames(fadeMs, fps);
+        const baseVolume = sceneBgm.volume ?? 0.25;
+        
+        // P6-4: フレームに応じた音量計算（フェードイン/アウト）
+        const volumeCallback = (f: number) => {
+          // fはSequence内の相対フレーム（0から始まる）
+          // fadeIn: 開始からfadeFramesの間
+          if (f < fadeFrames) {
+            return interpolate(f, [0, fadeFrames], [0, baseVolume], {
+              extrapolateLeft: 'clamp',
+              extrapolateRight: 'clamp',
+            });
+          }
+          // fadeOut: 終了前fadeFramesの間
+          if (f >= bgmDurationFrames - fadeFrames) {
+            return interpolate(
+              f,
+              [bgmDurationFrames - fadeFrames, bgmDurationFrames],
+              [baseVolume, 0],
+              { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+            );
+          }
+          return baseVolume;
+        };
+        
         return (
           <Sequence
             from={bgmStartFrame}
@@ -363,7 +390,7 @@ export const Scene: React.FC<SceneProps> = ({
           >
             <Audio
               src={sceneBgm.url}
-              volume={sceneBgm.volume ?? 0.25}
+              volume={volumeCallback}
               // P6-1 SSOT: loop禁止（途中で切れてOK、次シーンに持ち越さない）
             />
           </Sequence>

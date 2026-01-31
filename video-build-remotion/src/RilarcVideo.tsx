@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { AbsoluteFill, Sequence, Audio, useVideoConfig, useCurrentFrame } from 'remotion';
+import { AbsoluteFill, Sequence, Audio, useVideoConfig, useCurrentFrame, interpolate } from 'remotion';
 import type { ProjectJson } from './schemas/project-schema';
 import { Scene } from './components/Scene';
 import { msToFrames } from './utils/timing';
@@ -14,6 +14,9 @@ interface SceneBgmInterval {
 // P6-3 SSOT: sceneBGM区間ではprojectBGMを即時ミュート（二重BGM事故防止）
 // 以前は duck (0.12) だったが、SSOT方針では完全ミュートを推奨
 const GLOBAL_BGM_MUTE_VOLUME = 0; // sceneBGMがある区間でのprojectBGM音量
+
+// P6-4: BGMフェード設定（パツッとした切替を防ぐ）
+const BGM_FADE_MS = 120; // フェード時間（ms）
 
 interface RilarcVideoProps {
   projectJson: ProjectJson;
@@ -103,16 +106,43 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
     );
   }, [frame, sceneBgmIntervals]);
   
-  // P6-3 SSOT: projectBGMの音量を計算（sceneBGMがある区間では即時ミュート）
+  // P6-4: BGMフェードフレーム数
+  const fadeFrames = msToFrames(BGM_FADE_MS, fps);
+  
+  // P6-3/P6-4 SSOT: projectBGMの音量を計算（sceneBGMがある区間ではミュート + フェード）
   const globalBgmVolume = useMemo(() => {
     const baseVolume = projectJson?.build_settings?.audio?.bgm_volume ?? 0.3;
+    
+    // sceneBGM区間内なら完全ミュート
     if (isInSceneBgmInterval) {
-      // P6-3: sceneBGM区間ではprojectBGMを完全ミュート（二重BGM事故防止）
-      console.log(`[RilarcVideo] Frame ${frame}: muting projectBGM (sceneBGM active)`);
       return GLOBAL_BGM_MUTE_VOLUME;
     }
+    
+    // P6-4: sceneBGM区間の前後でフェードイン/アウト
+    // 直近のsceneBGM区間を探してフェード計算
+    for (const interval of sceneBgmIntervals) {
+      // sceneBGM開始直前（fadeOut: baseVolume → 0）
+      if (frame >= interval.startFrame - fadeFrames && frame < interval.startFrame) {
+        return interpolate(
+          frame,
+          [interval.startFrame - fadeFrames, interval.startFrame],
+          [baseVolume, GLOBAL_BGM_MUTE_VOLUME],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+        );
+      }
+      // sceneBGM終了直後（fadeIn: 0 → baseVolume）
+      if (frame >= interval.endFrame && frame < interval.endFrame + fadeFrames) {
+        return interpolate(
+          frame,
+          [interval.endFrame, interval.endFrame + fadeFrames],
+          [GLOBAL_BGM_MUTE_VOLUME, baseVolume],
+          { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+        );
+      }
+    }
+    
     return baseVolume;
-  }, [isInSceneBgmInterval, frame, projectJson?.build_settings?.audio?.bgm_volume]);
+  }, [isInSceneBgmInterval, frame, sceneBgmIntervals, fadeFrames, projectJson?.build_settings?.audio?.bgm_volume]);
   
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
