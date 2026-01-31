@@ -21,7 +21,7 @@
  */
 
 import { Hono } from 'hono';
-import { getCookie } from 'hono/cookie';
+import { getUserFromSession, validateSceneAccess as validateSceneAccessHelper, type AuthUser } from '../utils/auth-helper';
 
 interface Bindings {
   DB: D1Database;
@@ -51,71 +51,11 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string):
 }
 
 /**
- * セッションからユーザーIDを取得
+ * シーンアクセス検証ラッパー（共通ヘルパーを使用）
+ * SSOT: Superadmin は全データにアクセス可能
  */
-async function getUserIdFromSession(c: any): Promise<number | null> {
-  try {
-    const sessionId = getCookie(c, 'session');
-    if (!sessionId) {
-      console.log('[SceneAudioAssignments] No session cookie found');
-      return null;
-    }
-    
-    console.log(`[SceneAudioAssignments] Session ID from cookie: ${sessionId.substring(0, 8)}...`);
-    
-    const session = await c.env.DB.prepare(`
-      SELECT user_id FROM sessions 
-      WHERE id = ? AND expires_at > datetime('now')
-    `).bind(sessionId).first<{ user_id: number }>();
-    
-    if (!session) {
-      console.log('[SceneAudioAssignments] Session not found or expired');
-      return null;
-    }
-    
-    console.log(`[SceneAudioAssignments] User ID from session: ${session.user_id}`);
-    return session.user_id;
-  } catch (error) {
-    console.error('[SceneAudioAssignments] Session lookup error:', error);
-    return null;
-  }
-}
-
-/**
- * シーンの存在確認とプロジェクト所有確認
- */
-async function validateSceneAccess(c: any, sceneId: number, userId: number): Promise<{ valid: boolean; projectId?: number; error?: string; details?: any }> {
-  try {
-    console.log(`[SceneAudioAssignments] Validating access: sceneId=${sceneId}, userId=${userId}`);
-    
-    const scene = await c.env.DB.prepare(`
-      SELECT s.id, s.project_id, p.user_id as project_user_id
-      FROM scenes s
-      JOIN projects p ON s.project_id = p.id
-      WHERE s.id = ?
-    `).bind(sceneId).first<{ id: number; project_id: number; project_user_id: number }>();
-    
-    if (!scene) {
-      console.log(`[SceneAudioAssignments] Scene ${sceneId} not found`);
-      return { valid: false, error: 'Scene not found' };
-    }
-    
-    console.log(`[SceneAudioAssignments] Scene found: id=${scene.id}, project_id=${scene.project_id}, project_user_id=${scene.project_user_id}, requestUserId=${userId}`);
-    
-    if (scene.project_user_id !== userId) {
-      console.log(`[SceneAudioAssignments] Access denied: project owner ${scene.project_user_id} !== request user ${userId}`);
-      return { 
-        valid: false, 
-        error: 'Access denied',
-        details: { projectOwnerId: scene.project_user_id, requestUserId: userId, sceneId, projectId: scene.project_id }
-      };
-    }
-    
-    return { valid: true, projectId: scene.project_id };
-  } catch (error) {
-    console.error('[SceneAudioAssignments] Scene validation error:', error);
-    return { valid: false, error: 'Validation failed' };
-  }
+async function validateSceneAccess(c: any, sceneId: number, user: AuthUser): Promise<{ valid: boolean; projectId?: number; error?: string; details?: any }> {
+  return validateSceneAccessHelper(c, sceneId, user);
 }
 
 /**
@@ -242,8 +182,8 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
 sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
   try {
     // SSOT: 認証必須 - 未ログインは401
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       console.log('[SceneAudioAssignments] GET: No session - returning 401');
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
@@ -253,10 +193,10 @@ sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    // SSOT: 所有者チェック - 他人のシーンは404（存在隠し）
-    const access = await validateSceneAccess(c, sceneId, userId);
+    // SSOT: 所有者チェック - Superadminは全データにアクセス可能
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      console.log(`[SceneAudioAssignments] GET: Access denied for scene ${sceneId}, user ${userId}`);
+      console.log(`[SceneAudioAssignments] GET: Access denied for scene ${sceneId}, user ${user.id}`);
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
@@ -310,8 +250,8 @@ sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
 // ====================================================================
 sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
   try {
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -320,7 +260,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    const access = await validateSceneAccess(c, sceneId, userId);
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
@@ -364,7 +304,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
       }
       const userAudio = await c.env.DB.prepare(`
         SELECT id FROM user_audio_library WHERE id = ? AND user_id = ? AND is_active = 1
-      `).bind(body.user_audio_id, userId).first();
+      `).bind(body.user_audio_id, user.id).first();
       if (!userAudio) {
         return c.json({ error: { code: 'NOT_FOUND', message: 'User audio not found' } }, 404);
       }
@@ -443,8 +383,8 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
 // ====================================================================
 sceneAudioAssignments.put('/:sceneId/audio-assignments/:id', async (c) => {
   try {
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -454,7 +394,7 @@ sceneAudioAssignments.put('/:sceneId/audio-assignments/:id', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid id' } }, 400);
     }
 
-    const access = await validateSceneAccess(c, sceneId, userId);
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
@@ -538,8 +478,8 @@ sceneAudioAssignments.put('/:sceneId/audio-assignments/:id', async (c) => {
 // ====================================================================
 sceneAudioAssignments.delete('/:sceneId/audio-assignments/:id', async (c) => {
   try {
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -549,7 +489,7 @@ sceneAudioAssignments.delete('/:sceneId/audio-assignments/:id', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid id' } }, 400);
     }
 
-    const access = await validateSceneAccess(c, sceneId, userId);
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
@@ -595,8 +535,8 @@ sceneAudioAssignments.delete('/:sceneId/audio-assignments/:id', async (c) => {
 // ====================================================================
 sceneAudioAssignments.post('/:sceneId/audio-assignments/direct', async (c) => {
   try {
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -605,7 +545,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/direct', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    const access = await validateSceneAccess(c, sceneId, userId);
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
@@ -708,8 +648,8 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/direct', async (c) => {
 // ====================================================================
 sceneAudioAssignments.post('/:sceneId/audio-assignments/deactivate-all', async (c) => {
   try {
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -718,7 +658,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/deactivate-all', async (
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    const access = await validateSceneAccess(c, sceneId, userId);
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }

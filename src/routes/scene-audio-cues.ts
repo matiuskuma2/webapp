@@ -17,6 +17,7 @@
 
 import { Hono } from 'hono';
 import { logSfxUpload } from '../utils/usage-logger';
+import { getUserFromSession, validateSceneAccess as validateSceneAccessHelper, type AuthUser } from '../utils/auth-helper';
 
 interface Bindings {
   DB: D1Database;
@@ -27,8 +28,6 @@ interface Bindings {
 const sceneAudioCues = new Hono<{ Bindings: Bindings }>();
 
 const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
-
-import { getCookie } from 'hono/cookie';
 
 /**
  * 相対URLを絶対URLに変換
@@ -44,58 +43,11 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
 }
 
 /**
- * SSOT: セッションからユーザーIDを取得
+ * シーンアクセス検証ラッパー（共通ヘルパーを使用）
+ * SSOT: Superadmin は全データにアクセス可能
  */
-async function getUserIdFromSession(c: any): Promise<number | null> {
-  try {
-    const sessionId = getCookie(c, 'session');
-    if (!sessionId) {
-      console.log('[SceneAudioCues] No session cookie found');
-      return null;
-    }
-    
-    const session = await c.env.DB.prepare(`
-      SELECT user_id FROM sessions 
-      WHERE id = ? AND expires_at > datetime('now')
-    `).bind(sessionId).first<{ user_id: number }>();
-    
-    if (!session) {
-      console.log('[SceneAudioCues] Session not found or expired');
-      return null;
-    }
-    
-    return session.user_id;
-  } catch (error) {
-    console.error('[SceneAudioCues] Session lookup error:', error);
-    return null;
-  }
-}
-
-/**
- * SSOT: シーンの存在確認とプロジェクト所有確認
- */
-async function validateSceneAccess(c: any, sceneId: number, userId: number): Promise<{ valid: boolean; projectId?: number; error?: string }> {
-  try {
-    const scene = await c.env.DB.prepare(`
-      SELECT s.id, s.project_id, p.user_id as project_user_id
-      FROM scenes s
-      JOIN projects p ON s.project_id = p.id
-      WHERE s.id = ?
-    `).bind(sceneId).first<{ id: number; project_id: number; project_user_id: number }>();
-    
-    if (!scene) {
-      return { valid: false, error: 'Scene not found' };
-    }
-    
-    if (scene.project_user_id !== userId) {
-      return { valid: false, error: 'Access denied' };
-    }
-    
-    return { valid: true, projectId: scene.project_id };
-  } catch (error) {
-    console.error('[SceneAudioCues] Scene validation error:', error);
-    return { valid: false, error: 'Validation failed' };
-  }
+async function validateSceneAccess(c: any, sceneId: number, user: AuthUser): Promise<{ valid: boolean; projectId?: number; error?: string }> {
+  return validateSceneAccessHelper(c, sceneId, user);
 }
 
 // ====================================================================
@@ -108,8 +60,8 @@ async function validateSceneAccess(c: any, sceneId: number, userId: number): Pro
 sceneAudioCues.get('/scenes/:sceneId/audio-cues', async (c) => {
   try {
     // SSOT: 認証必須 - 未ログインは401
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       console.log('[SceneAudioCues] GET: No session - returning 401');
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
@@ -119,10 +71,10 @@ sceneAudioCues.get('/scenes/:sceneId/audio-cues', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    // SSOT: 所有者チェック - 他人のシーンは404（存在隠し）
-    const access = await validateSceneAccess(c, sceneId, userId);
+    // SSOT: 所有者チェック - Superadminは全データにアクセス可能
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      console.log(`[SceneAudioCues] GET: Access denied for scene ${sceneId}, user ${userId}`);
+      console.log(`[SceneAudioCues] GET: Access denied for scene ${sceneId}, user ${user.id}`);
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
 
@@ -171,8 +123,8 @@ sceneAudioCues.get('/scenes/:sceneId/audio-cues', async (c) => {
 sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
   try {
     // SSOT: 認証必須
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -181,8 +133,8 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
     }
 
-    // SSOT: 所有者チェック
-    const access = await validateSceneAccess(c, sceneId, userId);
+    // SSOT: 所有者チェック - Superadminは全データにアクセス可能
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
@@ -211,7 +163,7 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
     // R2にアップロード
     const timestamp = Date.now();
     const ext = file.name.split('.').pop() || 'mp3';
-    const r2Key = `audio/sfx/project_${scene.project_id}/scene_${sceneId}/${timestamp}.${ext}`;
+    const r2Key = `audio/sfx/project_${access.projectId}/scene_${sceneId}/${timestamp}.${ext}`;
     
     const arrayBuffer = await file.arrayBuffer();
     await c.env.R2.put(r2Key, arrayBuffer, {
@@ -242,8 +194,8 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
 
     // Log usage event
     await logSfxUpload(c.env.DB, {
-      userId: 1, // TODO: Get from session
-      projectId: scene.project_id,
+      userId: user.id,
+      projectId: access.projectId!,
       sceneId,
       cueId: cueId as number,
       bytes: arrayBuffer.byteLength,
@@ -277,8 +229,8 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
 sceneAudioCues.put('/scenes/:sceneId/audio-cues/:id', async (c) => {
   try {
     // SSOT: 認証必須
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -289,8 +241,8 @@ sceneAudioCues.put('/scenes/:sceneId/audio-cues/:id', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene or cue id' } }, 400);
     }
 
-    // SSOT: 所有者チェック
-    const access = await validateSceneAccess(c, sceneId, userId);
+    // SSOT: 所有者チェック - Superadminは全データにアクセス可能
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
@@ -382,8 +334,8 @@ sceneAudioCues.put('/scenes/:sceneId/audio-cues/:id', async (c) => {
 sceneAudioCues.delete('/scenes/:sceneId/audio-cues/:id', async (c) => {
   try {
     // SSOT: 認証必須
-    const userId = await getUserIdFromSession(c);
-    if (!userId) {
+    const user = await getUserFromSession(c);
+    if (!user) {
       return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
     }
 
@@ -394,8 +346,8 @@ sceneAudioCues.delete('/scenes/:sceneId/audio-cues/:id', async (c) => {
       return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene or cue id' } }, 400);
     }
 
-    // SSOT: 所有者チェック
-    const access = await validateSceneAccess(c, sceneId, userId);
+    // SSOT: 所有者チェック - Superadminは全データにアクセス可能
+    const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
     }
