@@ -339,14 +339,21 @@ export const Scene: React.FC<SceneProps> = ({
       
       {/* P6-1: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止） */}
       {hasSceneBgm && sceneBgm && (() => {
-        // P6-1: start_ms / end_ms をフレーム精度で反映
-        const bgmStartFrame = msToFrames(sceneBgm.start_ms ?? 0, fps);
-        // end_ms が未指定 or null の場合はシーン終了まで再生
-        const bgmEndMs = sceneBgm.end_ms ?? scene.timing.duration_ms;
-        const bgmEndFrame = msToFrames(bgmEndMs, fps);
-        const bgmDurationFrames = Math.max(1, bgmEndFrame - bgmStartFrame);
+        const durationMs = scene.timing.duration_ms;
         
-        // safety: 不正データ防止
+        // P6-1: start_ms / end_ms をフレーム精度で反映 + safety clamp
+        const startMsRaw = sceneBgm.start_ms ?? 0;
+        const endMsRaw = sceneBgm.end_ms ?? durationMs;
+        
+        // safety clamp: はみ出し防止
+        const startMs = Math.max(0, Math.min(startMsRaw, durationMs));
+        const endMs = Math.max(startMs, Math.min(endMsRaw, durationMs));
+        
+        const bgmStartFrame = msToFrames(startMs, fps);
+        const bgmEndFrame = msToFrames(endMs, fps);
+        const bgmDurationFrames = bgmEndFrame - bgmStartFrame;
+        
+        // safety: 不正データ防止（ゴミ区間は再生しない）
         if (bgmDurationFrames <= 0) return null;
         
         return (

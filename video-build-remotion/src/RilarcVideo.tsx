@@ -63,16 +63,38 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   
   console.log(`[RilarcVideo] Total scenesWithFrames: ${scenesWithFrames.length}`);
   
-  // P6: シーン別BGMがある区間を検出
+  // P6-3 SSOT: sceneBGMが「鳴っている区間だけ」をミュート対象にする
+  // 以前はシーン全体だったが、start_ms/end_ms を反映して正確な区間を計算
   const sceneBgmIntervals: SceneBgmInterval[] = useMemo(() => {
     return scenesWithFrames
       .filter(({ scene }) => scene.bgm?.url)
-      .map(({ scene, startFrame, durationFrames }) => ({
-        startFrame,
-        endFrame: startFrame + durationFrames,
-        sceneIdx: scene.idx,
-      }));
-  }, [scenesWithFrames]);
+      .map(({ scene, startFrame, durationFrames }) => {
+        const durationMs = scene.timing?.duration_ms ?? 0;
+        
+        // scene.bgm の start_ms/end_ms は「シーン内の相対ms」
+        const startMsRaw = scene.bgm?.start_ms ?? 0;
+        const endMsRaw = scene.bgm?.end_ms ?? durationMs;
+        
+        // safety clamp: はみ出し防止
+        const startMs = Math.max(0, Math.min(startMsRaw, durationMs));
+        const endMs = Math.max(startMs, Math.min(endMsRaw, durationMs));
+        
+        // シーン内相対msをフレームに変換し、シーン開始フレームを加算
+        const bgmStartFrame = startFrame + msToFrames(startMs, fps);
+        const bgmEndFrame = Math.min(
+          startFrame + durationFrames,
+          startFrame + msToFrames(endMs, fps)
+        );
+        
+        return {
+          startFrame: bgmStartFrame,
+          endFrame: bgmEndFrame,
+          sceneIdx: scene.idx,
+        };
+      })
+      // ゴミ区間（start >= end）を除外
+      .filter((interval) => interval.endFrame > interval.startFrame);
+  }, [scenesWithFrames, fps]);
   
   // P6: 現在フレームがシーン別BGM区間内かどうかを判定
   const isInSceneBgmInterval = useMemo(() => {
