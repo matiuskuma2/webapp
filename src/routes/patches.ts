@@ -106,6 +106,7 @@ const ALLOWED_ENTITIES: Record<string, {
       'start_ms', 'end_ms',          // タイミング
       'z_index',                     // 重なり順
       'is_active',                   // 有効/無効
+      'display_policy',              // 表示ポリシー: always_on | voice_window | manual_window
     ],
     required_for_create: ['scene_id', 'x', 'y', 'w', 'h'],
   },
@@ -142,6 +143,23 @@ const ALLOWED_ENTITIES: Record<string, {
       'ducking_volume',              // ダッキング時音量
     ],
     required_for_create: ['project_id', 'track_type'],
+  },
+  // P7: シーン別BGM/SFX（scene_audio_assignments SSOT）
+  scene_audio_assignments: {
+    pk_field: 'id',
+    scene_id_field: 'scene_id',
+    allowed_fields: [
+      'audio_type',                  // 'bgm' | 'sfx'
+      'audio_library_type',          // 'system' | 'user' | 'direct'
+      'system_audio_id',             // system_audio_library.id
+      'user_audio_id',               // user_audio_library.id
+      'start_ms', 'end_ms',          // タイミング
+      'volume_override',             // 音量上書き (0-1)
+      'loop_override',               // ループ上書き (0/1)
+      'fade_in_override', 'fade_out_override',  // フェード上書き
+      'is_active',                   // 有効/無効
+    ],
+    required_for_create: ['scene_id', 'audio_type', 'audio_library_type'],
   },
   scene_utterances: {
     pk_field: 'id',
@@ -1339,6 +1357,14 @@ type IntentAction =
   | SfxRemoveAction
   | BgmSetVolumeAction
   | BgmSetLoopAction
+  // P7: シーン別BGM操作（scene_audio_assignments SSOT）
+  | SceneBgmSetVolumeAction
+  | SceneBgmSetTimingAction
+  | SceneBgmAssignAction
+  | SceneBgmRemoveAction
+  // P7: シーン別SFX操作（scene_audio_assignments SSOT）
+  | SceneSfxSetVolumeAction
+  | SceneSfxSetTimingAction
   // PR-5-3b: テロップ設定（Build単位の上書き）
   | TelopSetEnabledAction
   | TelopSetPositionAction
@@ -1416,6 +1442,90 @@ interface BgmSetLoopAction {
   loop: boolean;
 }
 
+// ====================================================================
+// P7: シーン別BGM操作（scene_audio_assignments SSOT）
+// ====================================================================
+// 「このシーンのBGM」を操作する。プロジェクト全体BGM（bgm.set_volume）とは別。
+// scene_audio_assignments テーブルの audio_type='bgm' レコードを対象。
+
+/**
+ * シーン別BGM音量変更
+ * 例: 「このシーンのBGMを小さくして」→ scene_bgm.set_volume
+ */
+interface SceneBgmSetVolumeAction {
+  action: 'scene_bgm.set_volume';
+  scene_idx: number;
+  volume: number;  // 0-1
+}
+
+/**
+ * シーン別BGMタイミング変更
+ * 例: 「このシーンのBGMを10秒で終わらせて」→ scene_bgm.set_timing
+ */
+interface SceneBgmSetTimingAction {
+  action: 'scene_bgm.set_timing';
+  scene_idx: number;
+  start_ms?: number;
+  end_ms?: number;
+  delta_start_ms?: number;
+  delta_end_ms?: number;
+}
+
+/**
+ * シーン別BGM割当（ライブラリから）
+ * 例: 「前のシーンのBGMをここで使って」→ scene_bgm.assign
+ */
+interface SceneBgmAssignAction {
+  action: 'scene_bgm.assign';
+  scene_idx: number;
+  source_type: 'system' | 'user' | 'copy_from_scene';
+  system_audio_id?: number;
+  user_audio_id?: number;
+  copy_from_scene_idx?: number;
+  volume?: number;
+  loop?: boolean;
+}
+
+/**
+ * シーン別BGM削除
+ * 例: 「このシーンのBGMを削除して」→ scene_bgm.remove
+ */
+interface SceneBgmRemoveAction {
+  action: 'scene_bgm.remove';
+  scene_idx: number;
+}
+
+// ====================================================================
+// P7: シーン別SFX操作（scene_audio_assignments SSOT）
+// ====================================================================
+// scene_audio_assignments テーブルの audio_type='sfx' レコードを対象。
+// sfx_no は start_ms 昇順で 1-indexed。
+
+/**
+ * シーン別SFX音量変更
+ * 例: 「効果音#2を小さくして」→ scene_sfx.set_volume
+ */
+interface SceneSfxSetVolumeAction {
+  action: 'scene_sfx.set_volume';
+  scene_idx: number;
+  sfx_no: number;  // 1-indexed, start_ms順
+  volume: number;  // 0-1
+}
+
+/**
+ * シーン別SFXタイミング変更
+ * 例: 「効果音#1を3秒遅らせて」→ scene_sfx.set_timing
+ */
+interface SceneSfxSetTimingAction {
+  action: 'scene_sfx.set_timing';
+  scene_idx: number;
+  sfx_no: number;  // 1-indexed
+  start_ms?: number;
+  end_ms?: number;
+  delta_start_ms?: number;
+  delta_end_ms?: number;
+}
+
 // PR-5-3b: テロップ設定アクション（Build単位の上書き）
 // 注意: これらはDBエンティティを更新せず、次回ビルドの settings_json.telops を変更する
 interface TelopSetEnabledAction {
@@ -1451,6 +1561,14 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'sfx.remove',
   'bgm.set_volume',
   'bgm.set_loop',
+  // P7: シーン別BGM操作（scene_audio_assignments SSOT）
+  'scene_bgm.set_volume',
+  'scene_bgm.set_timing',
+  'scene_bgm.assign',
+  'scene_bgm.remove',
+  // P7: シーン別SFX操作（scene_audio_assignments SSOT）
+  'scene_sfx.set_volume',
+  'scene_sfx.set_timing',
   // PR-5-3b: テロップ設定（Build単位の上書き、scene_telopはいじらない）
   'telop.set_enabled',
   'telop.set_enabled_scene',  // シーン単位のテロップON/OFF
@@ -1824,6 +1942,362 @@ async function resolveIntentToOps(
             reason: `Chat: bgm.set_loop`,
           });
         }
+
+      // ====================================================================
+      // P7: シーン別BGM操作（scene_audio_assignments SSOT）
+      // ====================================================================
+      } else if (action.action === 'scene_bgm.set_volume') {
+        const bgmAction = action as SceneBgmSetVolumeAction;
+        
+        // scene_idx → scene_id 解決
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        // シーンのアクティブBGM割当を取得
+        const bgmAssignment = await db.prepare(`
+          SELECT id FROM scene_audio_assignments
+          WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
+          LIMIT 1
+        `).bind(scene.id).first<{ id: number }>();
+
+        if (!bgmAssignment) {
+          errors.push(`${prefix}: No active BGM found for scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        // volume バリデーション
+        const volume = Math.max(0, Math.min(1, bgmAction.volume));
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: bgmAction.scene_idx,
+            scene_id: scene.id,
+            assignment_id: bgmAssignment.id,
+            volume,
+          },
+        });
+
+        ops.push({
+          op: 'update',
+          entity: 'scene_audio_assignments',
+          where: { id: bgmAssignment.id },
+          set: { volume_override: volume },
+          reason: `Chat: scene_bgm.set_volume (scene_idx=${bgmAction.scene_idx})`,
+        });
+
+      } else if (action.action === 'scene_bgm.set_timing') {
+        const bgmAction = action as SceneBgmSetTimingAction;
+        
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        const bgmAssignment = await db.prepare(`
+          SELECT id FROM scene_audio_assignments
+          WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
+          LIMIT 1
+        `).bind(scene.id).first<{ id: number }>();
+
+        if (!bgmAssignment) {
+          errors.push(`${prefix}: No active BGM found for scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        const setFields: Record<string, unknown> = {};
+        if (bgmAction.start_ms !== undefined) setFields.start_ms = bgmAction.start_ms;
+        if (bgmAction.end_ms !== undefined) setFields.end_ms = bgmAction.end_ms;
+        if (bgmAction.delta_start_ms !== undefined) setFields.start_ms = { delta_ms: bgmAction.delta_start_ms };
+        if (bgmAction.delta_end_ms !== undefined) setFields.end_ms = { delta_ms: bgmAction.delta_end_ms };
+
+        if (Object.keys(setFields).length === 0) {
+          warnings.push(`${prefix}: No timing changes specified`);
+          continue;
+        }
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: bgmAction.scene_idx,
+            scene_id: scene.id,
+            assignment_id: bgmAssignment.id,
+          },
+        });
+
+        ops.push({
+          op: 'update',
+          entity: 'scene_audio_assignments',
+          where: { id: bgmAssignment.id },
+          set: setFields,
+          reason: `Chat: scene_bgm.set_timing (scene_idx=${bgmAction.scene_idx})`,
+        });
+
+      } else if (action.action === 'scene_bgm.remove') {
+        const bgmAction = action as SceneBgmRemoveAction;
+        
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        const bgmAssignment = await db.prepare(`
+          SELECT id FROM scene_audio_assignments
+          WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
+          LIMIT 1
+        `).bind(scene.id).first<{ id: number }>();
+
+        if (!bgmAssignment) {
+          warnings.push(`${prefix}: No active BGM to remove for scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: bgmAction.scene_idx,
+            scene_id: scene.id,
+            assignment_id: bgmAssignment.id,
+          },
+        });
+
+        ops.push({
+          op: 'update',  // 論理削除
+          entity: 'scene_audio_assignments',
+          where: { id: bgmAssignment.id },
+          set: { is_active: 0 },
+          reason: `Chat: scene_bgm.remove (scene_idx=${bgmAction.scene_idx})`,
+        });
+
+      } else if (action.action === 'scene_bgm.assign') {
+        const bgmAction = action as SceneBgmAssignAction;
+        
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          continue;
+        }
+
+        // ソースによって処理を分岐
+        let sourceAudioId: number | null = null;
+        let audioLibraryType: string = '';
+
+        if (bgmAction.source_type === 'system' && bgmAction.system_audio_id) {
+          const systemAudio = await db.prepare(`
+            SELECT id FROM system_audio_library WHERE id = ? AND is_active = 1
+          `).bind(bgmAction.system_audio_id).first<{ id: number }>();
+          if (!systemAudio) {
+            errors.push(`${prefix}: System audio not found: id=${bgmAction.system_audio_id}`);
+            continue;
+          }
+          sourceAudioId = bgmAction.system_audio_id;
+          audioLibraryType = 'system';
+        } else if (bgmAction.source_type === 'user' && bgmAction.user_audio_id) {
+          const userAudio = await db.prepare(`
+            SELECT id FROM user_audio_library WHERE id = ? AND is_active = 1
+          `).bind(bgmAction.user_audio_id).first<{ id: number }>();
+          if (!userAudio) {
+            errors.push(`${prefix}: User audio not found: id=${bgmAction.user_audio_id}`);
+            continue;
+          }
+          sourceAudioId = bgmAction.user_audio_id;
+          audioLibraryType = 'user';
+        } else if (bgmAction.source_type === 'copy_from_scene' && bgmAction.copy_from_scene_idx !== undefined) {
+          // 別シーンからコピー
+          const sourceScene = await db.prepare(`
+            SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+          `).bind(projectId, bgmAction.copy_from_scene_idx).first<{ id: number }>();
+          if (!sourceScene) {
+            errors.push(`${prefix}: Source scene not found: scene_idx=${bgmAction.copy_from_scene_idx}`);
+            continue;
+          }
+          const sourceAssignment = await db.prepare(`
+            SELECT audio_library_type, system_audio_id, user_audio_id, volume_override, loop_override
+            FROM scene_audio_assignments
+            WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
+            LIMIT 1
+          `).bind(sourceScene.id).first<{
+            audio_library_type: string;
+            system_audio_id: number | null;
+            user_audio_id: number | null;
+            volume_override: number | null;
+            loop_override: number | null;
+          }>();
+          if (!sourceAssignment) {
+            errors.push(`${prefix}: No BGM in source scene: scene_idx=${bgmAction.copy_from_scene_idx}`);
+            continue;
+          }
+          audioLibraryType = sourceAssignment.audio_library_type;
+          sourceAudioId = sourceAssignment.system_audio_id || sourceAssignment.user_audio_id;
+          
+          // コピー元の設定を使用（上書き指定がなければ）
+          if (bgmAction.volume === undefined && sourceAssignment.volume_override) {
+            bgmAction.volume = sourceAssignment.volume_override;
+          }
+          if (bgmAction.loop === undefined && sourceAssignment.loop_override !== null) {
+            bgmAction.loop = sourceAssignment.loop_override === 1;
+          }
+        } else {
+          errors.push(`${prefix}: Invalid source_type or missing required ID`);
+          continue;
+        }
+
+        // 既存のBGMを非アクティブに
+        await db.prepare(`
+          UPDATE scene_audio_assignments
+          SET is_active = 0, updated_at = datetime('now')
+          WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
+        `).bind(scene.id).run();
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: bgmAction.scene_idx,
+            scene_id: scene.id,
+            source_type: bgmAction.source_type,
+            audio_library_type: audioLibraryType,
+            source_audio_id: sourceAudioId,
+          },
+        });
+
+        // 新規割当を作成
+        ops.push({
+          op: 'create',
+          entity: 'scene_audio_assignments',
+          set: {
+            scene_id: scene.id,
+            audio_type: 'bgm',
+            audio_library_type: audioLibraryType,
+            system_audio_id: audioLibraryType === 'system' ? sourceAudioId : null,
+            user_audio_id: audioLibraryType === 'user' ? sourceAudioId : null,
+            volume_override: bgmAction.volume ?? 0.25,
+            loop_override: bgmAction.loop !== undefined ? (bgmAction.loop ? 1 : 0) : 1,
+            is_active: 1,
+          },
+          reason: `Chat: scene_bgm.assign (scene_idx=${bgmAction.scene_idx}, source=${bgmAction.source_type})`,
+        });
+
+      // ====================================================================
+      // P7: シーン別SFX操作（scene_audio_assignments SSOT）
+      // ====================================================================
+      } else if (action.action === 'scene_sfx.set_volume') {
+        const sfxAction = action as SceneSfxSetVolumeAction;
+        
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, sfxAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${sfxAction.scene_idx}`);
+          continue;
+        }
+
+        // sfx_no → assignment_id 解決（start_ms順で1-indexed）
+        const sfxResult = await db.prepare(`
+          SELECT id FROM scene_audio_assignments
+          WHERE scene_id = ? AND audio_type = 'sfx' AND is_active = 1
+          ORDER BY start_ms ASC, id ASC
+        `).bind(scene.id).all();
+
+        const sfxIndex = sfxAction.sfx_no - 1;
+        if (sfxIndex < 0 || sfxIndex >= sfxResult.results.length) {
+          errors.push(`${prefix}: SFX not found: scene_idx=${sfxAction.scene_idx}, sfx_no=${sfxAction.sfx_no} (available: ${sfxResult.results.length})`);
+          continue;
+        }
+
+        const sfxId = sfxResult.results[sfxIndex].id as number;
+        const volume = Math.max(0, Math.min(1, sfxAction.volume));
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: sfxAction.scene_idx,
+            scene_id: scene.id,
+            sfx_no: sfxAction.sfx_no,
+            sfx_id: sfxId,
+            volume,
+          },
+        });
+
+        ops.push({
+          op: 'update',
+          entity: 'scene_audio_assignments',
+          where: { id: sfxId },
+          set: { volume_override: volume },
+          reason: `Chat: scene_sfx.set_volume (scene_idx=${sfxAction.scene_idx}, sfx_no=${sfxAction.sfx_no})`,
+        });
+
+      } else if (action.action === 'scene_sfx.set_timing') {
+        const sfxAction = action as SceneSfxSetTimingAction;
+        
+        const scene = await db.prepare(`
+          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
+        `).bind(projectId, sfxAction.scene_idx).first<{ id: number }>();
+        
+        if (!scene) {
+          errors.push(`${prefix}: Scene not found: scene_idx=${sfxAction.scene_idx}`);
+          continue;
+        }
+
+        const sfxResult = await db.prepare(`
+          SELECT id FROM scene_audio_assignments
+          WHERE scene_id = ? AND audio_type = 'sfx' AND is_active = 1
+          ORDER BY start_ms ASC, id ASC
+        `).bind(scene.id).all();
+
+        const sfxIndex = sfxAction.sfx_no - 1;
+        if (sfxIndex < 0 || sfxIndex >= sfxResult.results.length) {
+          errors.push(`${prefix}: SFX not found: scene_idx=${sfxAction.scene_idx}, sfx_no=${sfxAction.sfx_no}`);
+          continue;
+        }
+
+        const sfxId = sfxResult.results[sfxIndex].id as number;
+
+        const setFields: Record<string, unknown> = {};
+        if (sfxAction.start_ms !== undefined) setFields.start_ms = sfxAction.start_ms;
+        if (sfxAction.end_ms !== undefined) setFields.end_ms = sfxAction.end_ms;
+        if (sfxAction.delta_start_ms !== undefined) setFields.start_ms = { delta_ms: sfxAction.delta_start_ms };
+        if (sfxAction.delta_end_ms !== undefined) setFields.end_ms = { delta_ms: sfxAction.delta_end_ms };
+
+        if (Object.keys(setFields).length === 0) {
+          warnings.push(`${prefix}: No timing changes specified`);
+          continue;
+        }
+
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: sfxAction.scene_idx,
+            scene_id: scene.id,
+            sfx_no: sfxAction.sfx_no,
+            sfx_id: sfxId,
+          },
+        });
+
+        ops.push({
+          op: 'update',
+          entity: 'scene_audio_assignments',
+          where: { id: sfxId },
+          set: setFields,
+          reason: `Chat: scene_sfx.set_timing (scene_idx=${sfxAction.scene_idx}, sfx_no=${sfxAction.sfx_no})`,
+        });
 
       // PR-5-3b: テロップ設定アクション（Build単位の上書き、DBは更新しない）
       } else if (action.action === 'telop.set_enabled') {
