@@ -1660,6 +1660,21 @@ interface TelopSettingsOverride {
   scene_overrides?: Record<number, boolean>;
 }
 
+// PR2: Timeline BGM ダッキング設定（projects.settings_json.audio_automationに保存）
+interface TimelineBgmDuckEntry {
+  id: string;                    // 一意ID（auto_timestamp）
+  type: 'duck' | 'set_volume';   // 操作タイプ
+  start_ms: number;              // 開始時間
+  end_ms: number;                // 終了時間
+  volume: number;                // 音量 (0-1)
+  fade_in_ms: number;            // フェードイン (ms)
+  fade_out_ms: number;           // フェードアウト (ms)
+}
+
+interface AudioAutomationOverride {
+  timeline_bgm?: TimelineBgmDuckEntry[];
+}
+
 async function resolveIntentToOps(
   db: D1Database,
   projectId: number,
@@ -1672,6 +1687,8 @@ async function resolveIntentToOps(
   resolution_log: Array<{ action: string; resolved: Record<string, unknown> }>;
   // PR-5-3b: テロップ設定の上書き（次回ビルドのsettings_json.telopsに反映）
   telop_settings_override?: TelopSettingsOverride;
+  // PR2: Timeline BGM設定の上書き（projects.settings_jsonに保存）
+  audio_automation_override?: AudioAutomationOverride;
 }> {
   const ops: PatchOp[] = [];
   const errors: string[] = [];
@@ -1679,6 +1696,8 @@ async function resolveIntentToOps(
   const resolutionLog: Array<{ action: string; resolved: Record<string, unknown> }> = [];
   // PR-5-3b: テロップ設定の収集（DBは更新せず、次回ビルドに反映）
   const telopSettingsOverride: TelopSettingsOverride = {};
+  // PR2: Timeline BGM設定の収集
+  const audioAutomationOverride: AudioAutomationOverride = {};
 
   for (let i = 0; i < intent.actions.length; i++) {
     const action = intent.actions[i];
@@ -2433,6 +2452,86 @@ async function resolveIntentToOps(
           action: action.action,
           resolved: { size_preset: telopAction.size_preset },
         });
+
+      // ====================================================================
+      // PR2: Timeline操作（動画全体タイムライン基準）
+      // ====================================================================
+      } else if (action.action === 'timeline_bgm.duck' || action.action === 'timeline_bgm.set_volume') {
+        const timelineAction = action as TimelineBgmDuckAction | TimelineBgmSetVolumeAction;
+        
+        // バリデーション: start_ms < end_ms
+        if (timelineAction.start_ms >= timelineAction.end_ms) {
+          errors.push(`${prefix}: start_ms (${timelineAction.start_ms}) must be less than end_ms (${timelineAction.end_ms})`);
+          continue;
+        }
+        
+        // バリデーション: volume 0-1 clamp
+        let volume = timelineAction.volume;
+        if (volume < 0) {
+          warnings.push(`${prefix}: volume clamped from ${volume} to 0`);
+          volume = 0;
+        }
+        if (volume > 1) {
+          warnings.push(`${prefix}: volume clamped from ${volume} to 1`);
+          volume = 1;
+        }
+        
+        // フェード設定（デフォルト200ms）
+        let fadeInMs = 200;
+        let fadeOutMs = 200;
+        
+        if (action.action === 'timeline_bgm.duck') {
+          const duckAction = action as TimelineBgmDuckAction;
+          if (duckAction.fade_in_ms !== undefined) fadeInMs = duckAction.fade_in_ms;
+          if (duckAction.fade_out_ms !== undefined) fadeOutMs = duckAction.fade_out_ms;
+        }
+        
+        // フェードが区間より長い場合は自動で半分にclamp
+        const duration = timelineAction.end_ms - timelineAction.start_ms;
+        if (fadeInMs + fadeOutMs > duration) {
+          const halfDuration = Math.floor(duration / 2);
+          warnings.push(`${prefix}: fade durations (${fadeInMs}+${fadeOutMs}=${fadeInMs + fadeOutMs}ms) exceed interval (${duration}ms), clamping to ${halfDuration}ms each`);
+          fadeInMs = halfDuration;
+          fadeOutMs = halfDuration;
+        }
+        
+        // 新しいエントリを作成
+        const newEntry: TimelineBgmDuckEntry = {
+          id: `auto_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          type: action.action === 'timeline_bgm.duck' ? 'duck' : 'set_volume',
+          start_ms: timelineAction.start_ms,
+          end_ms: timelineAction.end_ms,
+          volume,
+          fade_in_ms: fadeInMs,
+          fade_out_ms: fadeOutMs,
+        };
+        
+        // audio_automation_override に追加
+        if (!audioAutomationOverride.timeline_bgm) {
+          audioAutomationOverride.timeline_bgm = [];
+        }
+        audioAutomationOverride.timeline_bgm.push(newEntry);
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            entry_id: newEntry.id,
+            start_ms: newEntry.start_ms,
+            end_ms: newEntry.end_ms,
+            volume: newEntry.volume,
+            fade_in_ms: newEntry.fade_in_ms,
+            fade_out_ms: newEntry.fade_out_ms,
+            formatted_range: `${Math.floor(newEntry.start_ms / 60000)}:${String(Math.floor((newEntry.start_ms % 60000) / 1000)).padStart(2, '0')} ~ ${Math.floor(newEntry.end_ms / 60000)}:${String(Math.floor((newEntry.end_ms % 60000) / 1000)).padStart(2, '0')}`,
+          },
+        });
+
+      } else if (action.action === 'timeline_sfx.move' || action.action === 'timeline_sfx.copy') {
+        // PR2-3以降で実装（今はスキップしてwarning）
+        warnings.push(`${prefix}: ${action.action} is not yet implemented (PR2-3)`);
+        resolutionLog.push({
+          action: action.action,
+          resolved: { status: 'not_implemented' },
+        });
       }
 
     } catch (error) {
@@ -2442,6 +2541,9 @@ async function resolveIntentToOps(
 
   // PR-5-3b: テロップ設定が空でない場合のみ含める
   const hasTelopOverride = Object.keys(telopSettingsOverride).length > 0;
+  
+  // PR2: AudioAutomation設定が空でない場合のみ含める
+  const hasAudioAutomationOverride = Object.keys(audioAutomationOverride).length > 0;
 
   return {
     ok: errors.length === 0,
@@ -2450,6 +2552,7 @@ async function resolveIntentToOps(
     warnings,
     resolution_log: resolutionLog,
     ...(hasTelopOverride && { telop_settings_override: telopSettingsOverride }),
+    ...(hasAudioAutomationOverride && { audio_automation_override: audioAutomationOverride }),
   };
 }
 
@@ -2548,9 +2651,21 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
 
   // Dry-run実行
   // PR-5-3b: telopアクションのみの場合はdry-runをスキップして成功扱い
+  // PR2: audio_automationアクションのみの場合も同様
+  const hasAudioAutomationOverrideOnly = resolution.ops.length === 0 && resolution.audio_automation_override;
+  const hasSettingsOverrideOnly = hasTelopOverrideOnly || hasAudioAutomationOverrideOnly;
+  
   let dryRunResult: { ok: boolean; plan: unknown[]; errors: string[]; warnings: string[] };
   
-  if (hasTelopOverrideOnly) {
+  if (hasSettingsOverrideOnly) {
+    // settings_jsonへの書き込みのみ: dry-runは不要、直接成功
+    dryRunResult = {
+      ok: true,
+      plan: [],
+      errors: [],
+      warnings: [],
+    };
+  } else if (hasTelopOverrideOnly) {
     // telopアクションのみ: dry-runは不要、直接成功
     dryRunResult = {
       ok: true,
@@ -2564,10 +2679,12 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
 
   // patch_requestsに記録
   // PR-5-3b: テロップ設定のオーバーライドも保存
+  // PR2: AudioAutomation設定も保存
   const status = dryRunResult.ok ? 'dry_run_ok' : 'dry_run_failed';
-  const dryRunResultWithTelop = {
+  const dryRunResultWithOverrides = {
     ...dryRunResult,
     telop_settings_override: resolution.telop_settings_override,
+    audio_automation_override: resolution.audio_automation_override,
   };
   
   const insertResult = await c.env.DB.prepare(`
@@ -2581,7 +2698,7 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     body.user_message,
     JSON.stringify(body.intent),
     JSON.stringify(resolution.ops),
-    JSON.stringify(dryRunResultWithTelop),
+    JSON.stringify(dryRunResultWithOverrides),
     status
   ).run();
 
@@ -2598,12 +2715,15 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     (resolution.telop_settings_override.size_preset ? 1 : 0)
     : 0;
 
+  // PR2: audio_automationのアクション数もカウント
+  const audioAutomationActionCount = resolution.audio_automation_override?.timeline_bgm?.length || 0;
+
   return c.json({
     ok: dryRunResult.ok,
     patch_request_id: patchRequestId,
     status,
     intent_actions: body.intent.actions.length,
-    resolved_ops: resolution.ops.length + telopActionCount,
+    resolved_ops: resolution.ops.length + telopActionCount + audioAutomationActionCount,
     resolution_log: resolution.resolution_log,
     plan: dryRunResult.plan,
     summary,
@@ -2611,6 +2731,8 @@ patches.post('/projects/:projectId/chat-edits/dry-run', async (c) => {
     warnings: [...resolution.warnings, ...dryRunResult.warnings],
     // PR-5-3b: テロップ設定のオーバーライド
     telop_settings_override: resolution.telop_settings_override,
+    // PR2: AudioAutomation設定のオーバーライド
+    audio_automation_override: resolution.audio_automation_override,
   });
   } catch (error) {
     // 詳細なエラーログ
@@ -2687,10 +2809,13 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
   };
 
   // PR-5-3b: dry_run_result_jsonからテロップ設定のオーバーライドを取得
+  // PR2: audio_automation設定のオーバーライドも取得
   let telopSettingsOverride: TelopSettingsOverride | undefined;
+  let audioAutomationOverride: AudioAutomationOverride | undefined;
   try {
     const dryRunResult = JSON.parse(existing.dry_run_result_json as string);
     telopSettingsOverride = dryRunResult.telop_settings_override;
+    audioAutomationOverride = dryRunResult.audio_automation_override;
   } catch { /* ignore */ }
 
   // Apply実行
@@ -2803,6 +2928,69 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
         ...(telopSettingsOverride.scene_overrides && { scene_overrides: telopSettingsOverride.scene_overrides }),
       };
       console.log(`[Chat Edit Apply] Telop settings override applied:`, JSON.stringify(buildSettings.telops));
+    }
+
+    // PR2: AudioAutomation設定のオーバーライドを適用（projects.settings_jsonにも永続保存）
+    if (audioAutomationOverride && audioAutomationOverride.timeline_bgm) {
+      // 既存のaudio_automation設定を取得
+      let existingAudioAutomation = (buildSettings.audio_automation as { timeline_bgm?: TimelineBgmDuckEntry[] }) || {};
+      let existingTimelineBgm = existingAudioAutomation.timeline_bgm || [];
+      
+      // 新しいエントリをマージ（重複区間は最新で上書き、それ以外は追加）
+      for (const newEntry of audioAutomationOverride.timeline_bgm) {
+        // 同一区間（start_ms, end_msが完全一致）の既存エントリを探す
+        const existingIndex = existingTimelineBgm.findIndex(
+          (e: TimelineBgmDuckEntry) => e.start_ms === newEntry.start_ms && e.end_ms === newEntry.end_ms
+        );
+        
+        if (existingIndex >= 0) {
+          // 既存エントリを更新
+          existingTimelineBgm[existingIndex] = newEntry;
+          console.log(`[Chat Edit Apply] Timeline BGM entry updated: ${newEntry.start_ms}-${newEntry.end_ms}ms → ${newEntry.volume * 100}%`);
+        } else {
+          // 新規エントリを追加
+          existingTimelineBgm.push(newEntry);
+          console.log(`[Chat Edit Apply] Timeline BGM entry added: ${newEntry.start_ms}-${newEntry.end_ms}ms → ${newEntry.volume * 100}%`);
+        }
+      }
+      
+      // buildSettingsに反映
+      buildSettings.audio_automation = {
+        ...existingAudioAutomation,
+        timeline_bgm: existingTimelineBgm,
+      };
+      
+      // projects.settings_jsonにも永続保存（次回以降のビルドでも有効にする）
+      try {
+        // 既存のprojects.settings_jsonを取得
+        const projectSettings = await c.env.DB.prepare(`
+          SELECT settings_json FROM projects WHERE id = ?
+        `).bind(projectId).first<{ settings_json: string | null }>();
+        
+        let projectSettingsJson: Record<string, unknown> = {};
+        if (projectSettings?.settings_json) {
+          try {
+            projectSettingsJson = JSON.parse(projectSettings.settings_json);
+          } catch { /* ignore */ }
+        }
+        
+        // audio_automationをマージ
+        const existingProjectAudioAutomation = (projectSettingsJson.audio_automation as { timeline_bgm?: TimelineBgmDuckEntry[] }) || {};
+        projectSettingsJson.audio_automation = {
+          ...existingProjectAudioAutomation,
+          timeline_bgm: existingTimelineBgm,
+        };
+        
+        // projects.settings_jsonを更新
+        await c.env.DB.prepare(`
+          UPDATE projects SET settings_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(JSON.stringify(projectSettingsJson), projectId).run();
+        
+        console.log(`[Chat Edit Apply] Project settings_json updated with audio_automation`);
+      } catch (settingsError) {
+        console.error(`[Chat Edit Apply] Failed to update project settings_json:`, settingsError);
+        // ビルドには影響しないので続行
+      }
     }
 
     const activeBgm = await c.env.DB.prepare(`
