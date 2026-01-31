@@ -1366,6 +1366,11 @@ type IntentAction =
   // P7: シーン別SFX操作（scene_audio_assignments SSOT）
   | SceneSfxSetVolumeAction
   | SceneSfxSetTimingAction
+  // PR2: Timeline操作（動画全体タイムライン基準）
+  | TimelineBgmDuckAction
+  | TimelineBgmSetVolumeAction
+  | TimelineSfxMoveAction
+  | TimelineSfxCopyAction
   // PR-5-3b: テロップ設定（Build単位の上書き）
   | TelopSetEnabledAction
   | TelopSetPositionAction
@@ -1527,6 +1532,64 @@ interface SceneSfxSetTimingAction {
   delta_end_ms?: number;
 }
 
+// ====================================================================
+// PR2: Timeline操作（動画全体タイムライン基準）
+// ====================================================================
+// project_audio_tracks または build_settings で管理。
+// 時間指定は動画全体の絶対タイムライン（ms）。
+
+/**
+ * Timeline BGM ダッキング（部分区間の音量変更）
+ * 例: 「1:10〜1:25までBGMを下げて」→ timeline_bgm.duck
+ * 
+ * SSOT:
+ * - projectBGMのみを対象（sceneBGM/SFX/セリフは触らない）
+ * - 既存のP6フェードと干渉しない
+ */
+interface TimelineBgmDuckAction {
+  action: 'timeline_bgm.duck';
+  start_ms: number;      // 動画全体タイムラインでの開始位置
+  end_ms: number;        // 動画全体タイムラインでの終了位置
+  volume: number;        // ダッキング中の音量 (0-1)
+  fade_in_ms?: number;   // ダッキング開始時のフェードイン（省略時: 200ms）
+  fade_out_ms?: number;  // ダッキング終了時のフェードアウト（省略時: 200ms）
+}
+
+/**
+ * Timeline BGM 音量変更（特定区間）
+ * 例: 「30秒から1分までBGMを20%にして」→ timeline_bgm.set_volume
+ */
+interface TimelineBgmSetVolumeAction {
+  action: 'timeline_bgm.set_volume';
+  start_ms: number;
+  end_ms: number;
+  volume: number;        // 0-1
+}
+
+/**
+ * Timeline SFX 移動
+ * 例: 「30秒の効果音を1:10に移動して」→ timeline_sfx.move
+ * 
+ * SSOT: 
+ * - target_time_ms に最も近いSFXを特定
+ * - ±500ms以内のSFXが対象
+ */
+interface TimelineSfxMoveAction {
+  action: 'timeline_sfx.move';
+  target_time_ms: number;    // 移動対象のSFXがある時間（±500ms許容）
+  new_start_ms: number;      // 移動先の開始時間
+}
+
+/**
+ * Timeline SFX 複製
+ * 例: 「30秒の効果音を1:10でもう一回」→ timeline_sfx.copy
+ */
+interface TimelineSfxCopyAction {
+  action: 'timeline_sfx.copy';
+  source_time_ms: number;    // コピー元のSFXがある時間
+  new_start_ms: number;      // コピー先の開始時間
+}
+
 // PR-5-3b: テロップ設定アクション（Build単位の上書き）
 // 注意: これらはDBエンティティを更新せず、次回ビルドの settings_json.telops を変更する
 interface TelopSetEnabledAction {
@@ -1570,6 +1633,11 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   // P7: シーン別SFX操作（scene_audio_assignments SSOT）
   'scene_sfx.set_volume',
   'scene_sfx.set_timing',
+  // PR2: Timeline操作（動画全体タイムライン基準）
+  'timeline_bgm.duck',       // 部分区間のBGM音量変更（ダッキング）
+  'timeline_bgm.set_volume', // 部分区間のBGM音量設定
+  'timeline_sfx.move',       // SFXを別の時間に移動
+  'timeline_sfx.copy',       // SFXを別の時間にコピー
   // PR-5-3b: テロップ設定（Build単位の上書き、scene_telopはいじらない）
   'telop.set_enabled',
   'telop.set_enabled_scene',  // シーン単位のテロップON/OFF
@@ -3228,6 +3296,13 @@ interface ChatContext {
   } | null;
   total_scenes?: number | null;
   playback_time_ms?: number | null;
+  // PR2: Timeline操作用のPlaybackContext
+  playback?: {
+    current_time_global_ms?: number;     // 動画全体での現在再生位置
+    scene_start_global_ms?: number;      // 現在シーンの開始時間（動画全体基準）
+    scene_end_global_ms?: number;        // 現在シーンの終了時間（動画全体基準）
+    total_duration_ms?: number;          // 動画全体の長さ
+  } | null;
 }
 
 async function geminiChatWithSuggestion(
@@ -3289,6 +3364,32 @@ async function geminiChatWithSuggestion(
   if (assetStatus.length > 0) {
     ctxText += `\n素材状態: ${assetStatus.join(', ')}`;
   }
+  
+  // PR2: PlaybackContext（タイムライン情報）を追加
+  if (ctx?.playback) {
+    const pb = ctx.playback;
+    const formatTime = (ms: number): string => {
+      const totalSeconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    };
+    
+    const playbackDetails: string[] = [];
+    if (pb.current_time_global_ms != null) {
+      playbackDetails.push(`現在再生位置: ${formatTime(pb.current_time_global_ms)}`);
+    }
+    if (pb.scene_start_global_ms != null && pb.scene_end_global_ms != null) {
+      playbackDetails.push(`現在シーンの範囲: ${formatTime(pb.scene_start_global_ms)}〜${formatTime(pb.scene_end_global_ms)}`);
+    }
+    if (pb.total_duration_ms != null) {
+      playbackDetails.push(`動画全体: ${formatTime(pb.total_duration_ms)}`);
+    }
+    
+    if (playbackDetails.length > 0) {
+      ctxText += `\n再生状態: ${playbackDetails.join(', ')}`;
+    }
+  }
 
   const system = `
 あなたは動画編集アシスタント「Rilarc」です。フレンドリーで親しみやすい口調で、ユーザーと自然に会話しながら編集をサポートします。
@@ -3331,13 +3432,35 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 - telop.set_position: { action, position_preset: "bottom"|"center"|"top" }
 - telop.set_size: { action, size_preset: "sm"|"md"|"lg" }
 
-【P7: シーン別BGM/SFX操作 - NEW!】
+【P7: シーン別BGM/SFX操作】
 - scene_bgm.set_volume: { action, scene_idx, volume: 0-1 }  ※特定シーンのBGM音量
 - scene_bgm.set_timing: { action, scene_idx, start_ms?, end_ms?, delta_start_ms?, delta_end_ms? }  ※BGMのフェードイン/アウトタイミング
 - scene_bgm.assign: { action, scene_idx, source_type: "system"|"user"|"copy_from_scene", system_audio_id?, user_audio_id?, copy_from_scene_idx?, volume?, loop? }  ※新規割当
 - scene_bgm.remove: { action, scene_idx }  ※シーンBGMを削除（全体BGMに戻す）
 - scene_sfx.set_volume: { action, scene_idx, sfx_no: 1-N, volume: 0-1 }  ※特定シーンの特定SFX
 - scene_sfx.set_timing: { action, scene_idx, sfx_no: 1-N, start_ms?, end_ms?, delta_start_ms?, delta_end_ms? }  ※SFXのタイミング調整
+
+【PR2: Timeline操作（動画全体タイムライン基準） - NEW!】
+時間指定は「分:秒」形式をミリ秒に変換して使用。
+- timeline_bgm.duck: { action, start_ms, end_ms, volume: 0-1, fade_in_ms?, fade_out_ms? }  ※部分区間のBGM音量を下げる
+- timeline_bgm.set_volume: { action, start_ms, end_ms, volume: 0-1 }  ※部分区間のBGM音量設定
+- timeline_sfx.move: { action, target_time_ms, new_start_ms }  ※SFXを別の時間に移動
+- timeline_sfx.copy: { action, source_time_ms, new_start_ms }  ※SFXを別の時間にコピー
+
+【Timeline操作のSSOT解釈ルール - 超重要】
+1. 「何分:何秒」指定 → 動画全体タイムラインがデフォルト
+2. 「このシーンの〜」が明示された場合のみ → シーン内相対
+3. 矛盾が出たら → 確認質問にフォールバック
+
+【Timeline操作のデフォルト対象】
+- 「〜までBGM下げて」→ projectBGMのみを対象（sceneBGM/SFX/セリフは触らない）
+- sceneBGM / SFX を下げたい場合は「このシーンの」「効果音も」などの明示が必要
+
+【時間変換ルール】
+- 1:10 → 70000 (70秒 × 1000)
+- 1:25 → 85000 (85秒 × 1000)
+- 30秒 → 30000
+- 2分30秒 → 150000
 
 【会話例 - 挨拶・雑談（次のアクションに誘導）】
 ユーザー: よろしくね
@@ -3399,8 +3522,23 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 【BGM音量変更の使い分け - 重要】
 - bgm.set_volume: プロジェクト全体のBGM音量を変更（全シーンに影響）
 - scene_bgm.set_volume: 特定シーンのみBGM音量を変更（そのシーンだけ）
+- timeline_bgm.duck: 動画全体の特定時間範囲のBGM音量を変更（その時間だけ）
 ユーザーが「このシーンの」「ここの」などと言った場合は scene_bgm.set_volume を使う
 ユーザーが「全体の」「BGM全部」などと言った場合は bgm.set_volume を使う
+ユーザーが「1:10〜1:25まで」のように時間を指定した場合は timeline_bgm.duck を使う
+
+【PR2: Timeline操作の会話例 - NEW!】
+ユーザー: 1:10から1:25までBGM下げて
+→ {"assistant_message": "1分10秒から1分25秒までのBGM音量を下げましょうか？15%に調整しますね！", "has_suggestion": true, "suggestion_summary": "BGM音量: 1:10〜1:25 → 15%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "timeline_bgm.duck", "start_ms": 70000, "end_ms": 85000, "volume": 0.15}]}}
+
+ユーザー: 30秒から1分までBGMを小さくして
+→ {"assistant_message": "30秒から1分までのBGM音量を下げましょうか？", "has_suggestion": true, "suggestion_summary": "BGM音量: 0:30〜1:00 → 15%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "timeline_bgm.duck", "start_ms": 30000, "end_ms": 60000, "volume": 0.15}]}}
+
+ユーザー: 30秒の効果音を1:10に移動して
+→ {"assistant_message": "30秒付近の効果音を1分10秒に移動しましょうか？", "has_suggestion": true, "suggestion_summary": "SFX: 0:30 → 1:10に移動", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "timeline_sfx.move", "target_time_ms": 30000, "new_start_ms": 70000}]}}
+
+ユーザー: 30秒の効果音を1:10でもう一回
+→ {"assistant_message": "30秒付近の効果音を1分10秒にもコピーしましょうか？", "has_suggestion": true, "suggestion_summary": "SFX: 0:30をコピー → 1:10にも配置", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "timeline_sfx.copy", "source_time_ms": 30000, "new_start_ms": 70000}]}}
 
 【文脈情報】
 ${ctxText}
