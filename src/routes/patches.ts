@@ -3372,8 +3372,11 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 → {"assistant_message": "シーン${ctx?.scene_idx || 1}のテロップを非表示にしましょうか？他のシーンはそのままです！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のテロップ: ON → OFF", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_enabled_scene", "scene_idx": ${ctx?.scene_idx || 1}, "enabled": false}]}}
 
 【P7: シーン別BGM/SFX操作の会話例 - NEW!】
-ユーザー: このシーンのBGMを小さくして
-→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のBGM音量を下げましょうか？15%くらいに調整するのはいかがでしょう？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のBGM音量: 現在 → 15%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "volume": 0.15}]}}
+ユーザー: このシーンのBGMを少し小さくして
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のBGM音量を少し下げましょうか？15%に調整しますね！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のBGM音量: 25% → 15%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "volume": 0.15}]}}
+
+ユーザー: このシーンのBGMをもっと下げて
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のBGM音量をもっと下げましょうか？5%に調整しますね！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のBGM音量: 25% → 5%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "volume": 0.05}]}}
 
 ユーザー: このシーンのBGMを10秒で消して
 → {"assistant_message": "シーン${ctx?.scene_idx || 1}のBGMを10秒でフェードアウトさせましょうか？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のBGM終了: 10秒後", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.set_timing", "scene_idx": ${ctx?.scene_idx || 1}, "end_ms": 10000}]}}
@@ -3384,8 +3387,11 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 ユーザー: このシーンのBGMを削除して
 → {"assistant_message": "シーン${ctx?.scene_idx || 1}のシーン別BGMを削除しますね！全体BGMに戻ります。", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のシーンBGM: 削除", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.remove", "scene_idx": ${ctx?.scene_idx || 1}}]}}
 
-ユーザー: 効果音の2番目を小さく
-→ {"assistant_message": "シーン${ctx?.scene_idx || 1}の2番目の効果音の音量を下げましょうか？30%くらいに調整するのはいかがでしょう？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のSFX#2音量: 現在 → 30%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_sfx.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "sfx_no": 2, "volume": 0.3}]}}
+ユーザー: 効果音の2番目を少し小さく
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}の2番目の効果音の音量を少し下げましょうか？70%に調整しますね！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のSFX#2音量: 80% → 70%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_sfx.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "sfx_no": 2, "volume": 0.70}]}}
+
+ユーザー: 効果音#2をもっと小さくして
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}の2番目の効果音の音量をもっと下げましょうか？60%に調整しますね！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のSFX#2音量: 80% → 60%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_sfx.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "sfx_no": 2, "volume": 0.60}]}}
 
 ユーザー: 効果音#1を3秒遅らせて
 → {"assistant_message": "シーン${ctx?.scene_idx || 1}の1番目の効果音を3秒遅らせましょうか？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のSFX#1: +3秒", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_sfx.set_timing", "scene_idx": ${ctx?.scene_idx || 1}, "sfx_no": 1, "delta_start_ms": 3000}]}}
@@ -3434,15 +3440,34 @@ ${ctxText}
 ユーザー: このセリフを常時表示にして
 → {"assistant_message": "シーン5のバブルを常時表示にしますか？1番目と2番目、どちらのバブルですか？", "has_suggestion": false, "intent": {"schema": "rilarc_intent_v1", "actions": []}}
 
+【音量の相対変更ルール（SSOT確定）】
+相対表現が使われた場合、以下のデルタ値を基準値に適用する：
+- 「少し」：±0.10
+- 「もっと」：±0.20
+- 「かなり」：±0.30
+
+基準値（現在値が不明/NULLの場合）：
+- シーンBGM：0.25
+- 効果音（SFX）：0.80
+
+計算例：
+- 「少し小さく」→ 基準値 - 0.10
+- 「もっと大きく」→ 基準値 + 0.20
+- 「かなり下げて」→ 基準値 - 0.30
+
+例: シーンBGMで「少し小さく」→ 0.25 - 0.10 = 0.15
+例: 効果音で「もっと小さく」→ 0.80 - 0.20 = 0.60
+
 【注意事項】
 - 必ずJSON形式のみで返す（マークダウンや説明文は不要）
 - 挨拶や雑談には会話のみ返す（actions は空配列）、ただし**次のアクションに自然に誘導**
 - 編集指示が曖昧な場合は質問で確認
 - suggestion_summaryは「Before → After」形式で書く
-- 音量は0-1の範囲（パーセントは変換）
+- 音量は0-1の範囲（パーセントは変換）、0.0未満は0.0に、1.0超は1.0にクランプ
 - 時間はミリ秒（秒は変換: 3秒 → 3000ms）
 - **素材がない場合**: システムライブラリがあれば案内、なければアップロード誘導
 - **「このシーン」「ここ」は必ず文脈のscene_idxを使う**（勝手に番号を推測しない）
+- **相対表現**（少し/もっと/かなり）は上記デルタ値を使う、数値指定があればそちらを優先
 `;
 
   // Build conversation history for Gemini
