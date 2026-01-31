@@ -149,6 +149,7 @@ const ALLOWED_ENTITIES: Record<string, {
     pk_field: 'id',
     scene_id_field: 'scene_id',
     allowed_fields: [
+      'scene_id',                    // create時に必要
       'audio_type',                  // 'bgm' | 'sfx'
       'audio_library_type',          // 'system' | 'user' | 'direct'
       'system_audio_id',             // system_audio_library.id
@@ -156,7 +157,7 @@ const ALLOWED_ENTITIES: Record<string, {
       'start_ms', 'end_ms',          // タイミング
       'volume_override',             // 音量上書き (0-1)
       'loop_override',               // ループ上書き (0/1)
-      'fade_in_override', 'fade_out_override',  // フェード上書き
+      'fade_in_ms_override', 'fade_out_ms_override',  // フェード上書き（ms付き）
       'is_active',                   // 有効/無効
     ],
     required_for_create: ['scene_id', 'audio_type', 'audio_library_type'],
@@ -2159,12 +2160,21 @@ async function resolveIntentToOps(
           continue;
         }
 
-        // 既存のBGMを非アクティブに
-        await db.prepare(`
-          UPDATE scene_audio_assignments
-          SET is_active = 0, updated_at = datetime('now')
+        // 既存のBGMがあれば非アクティブ化opを追加
+        const existingBgm = await db.prepare(`
+          SELECT id FROM scene_audio_assignments
           WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
-        `).bind(scene.id).run();
+        `).bind(scene.id).first<{ id: number }>();
+
+        if (existingBgm) {
+          ops.push({
+            op: 'update',
+            entity: 'scene_audio_assignments',
+            where: { id: existingBgm.id },
+            set: { is_active: 0 },
+            reason: `Chat: scene_bgm.assign deactivate old (scene_idx=${bgmAction.scene_idx})`,
+          });
+        }
 
         resolutionLog.push({
           action: action.action,
@@ -2174,6 +2184,7 @@ async function resolveIntentToOps(
             source_type: bgmAction.source_type,
             audio_library_type: audioLibraryType,
             source_audio_id: sourceAudioId,
+            deactivated_assignment_id: existingBgm?.id ?? null,
           },
         });
 
@@ -3210,6 +3221,10 @@ interface ChatContext {
     telop_enabled?: boolean;
     balloon_count?: number;
     sfx_count?: number;
+    // P7: シーン別BGM/SFX情報
+    has_scene_bgm?: boolean;          // シーン別BGMがあるか
+    scene_bgm_volume?: number | null; // シーンBGM音量（0-1）
+    scene_sfx_count?: number;         // シーン別SFX数
   } | null;
   total_scenes?: number | null;
   playback_time_ms?: number | null;
@@ -3308,13 +3323,21 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 【アクションスキーマ】
 - balloon.adjust_window: { action, scene_idx, balloon_no, delta_start_ms?, delta_end_ms? }
 - balloon.set_policy: { action, scene_idx, balloon_no, policy: "voice_window"|"always_on"|"manual_window", start_ms?, end_ms? }
-- sfx.set_volume: { action, scene_idx, cue_no, volume: 0-1 }
-- bgm.set_volume: { action, volume: 0-1 }
+- sfx.set_volume: { action, scene_idx, cue_no, volume: 0-1 }  ※プロジェクト全体SFX
+- bgm.set_volume: { action, volume: 0-1 }  ※プロジェクト全体BGM
 - bgm.set_loop: { action, loop: boolean }
 - telop.set_enabled: { action, enabled: boolean } (全シーン一括)
 - telop.set_enabled_scene: { action, scene_idx, enabled: boolean } (特定シーンのみ)
 - telop.set_position: { action, position_preset: "bottom"|"center"|"top" }
 - telop.set_size: { action, size_preset: "sm"|"md"|"lg" }
+
+【P7: シーン別BGM/SFX操作 - NEW!】
+- scene_bgm.set_volume: { action, scene_idx, volume: 0-1 }  ※特定シーンのBGM音量
+- scene_bgm.set_timing: { action, scene_idx, start_ms?, end_ms?, delta_start_ms?, delta_end_ms? }  ※BGMのフェードイン/アウトタイミング
+- scene_bgm.assign: { action, scene_idx, source_type: "system"|"user"|"copy_from_scene", system_audio_id?, user_audio_id?, copy_from_scene_idx?, volume?, loop? }  ※新規割当
+- scene_bgm.remove: { action, scene_idx }  ※シーンBGMを削除（全体BGMに戻す）
+- scene_sfx.set_volume: { action, scene_idx, sfx_no: 1-N, volume: 0-1 }  ※特定シーンの特定SFX
+- scene_sfx.set_timing: { action, scene_idx, sfx_no: 1-N, start_ms?, end_ms?, delta_start_ms?, delta_end_ms? }  ※SFXのタイミング調整
 
 【会話例 - 挨拶・雑談（次のアクションに誘導）】
 ユーザー: よろしくね
@@ -3347,6 +3370,31 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 
 ユーザー: このシーンだけテロップOFF
 → {"assistant_message": "シーン${ctx?.scene_idx || 1}のテロップを非表示にしましょうか？他のシーンはそのままです！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のテロップ: ON → OFF", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_enabled_scene", "scene_idx": ${ctx?.scene_idx || 1}, "enabled": false}]}}
+
+【P7: シーン別BGM/SFX操作の会話例 - NEW!】
+ユーザー: このシーンのBGMを小さくして
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のBGM音量を下げましょうか？15%くらいに調整するのはいかがでしょう？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のBGM音量: 現在 → 15%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "volume": 0.15}]}}
+
+ユーザー: このシーンのBGMを10秒で消して
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のBGMを10秒でフェードアウトさせましょうか？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のBGM終了: 10秒後", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.set_timing", "scene_idx": ${ctx?.scene_idx || 1}, "end_ms": 10000}]}}
+
+ユーザー: 前のシーンのBGMをここで使って
+→ {"assistant_message": "シーン${(ctx?.scene_idx || 1) - 1}のBGMをシーン${ctx?.scene_idx || 1}にコピーしましょうか？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}にBGMをコピー", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.assign", "scene_idx": ${ctx?.scene_idx || 1}, "source_type": "copy_from_scene", "copy_from_scene_idx": ${(ctx?.scene_idx || 1) - 1}}]}}
+
+ユーザー: このシーンのBGMを削除して
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のシーン別BGMを削除しますね！全体BGMに戻ります。", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のシーンBGM: 削除", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_bgm.remove", "scene_idx": ${ctx?.scene_idx || 1}}]}}
+
+ユーザー: 効果音の2番目を小さく
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}の2番目の効果音の音量を下げましょうか？30%くらいに調整するのはいかがでしょう？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のSFX#2音量: 現在 → 30%", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_sfx.set_volume", "scene_idx": ${ctx?.scene_idx || 1}, "sfx_no": 2, "volume": 0.3}]}}
+
+ユーザー: 効果音#1を3秒遅らせて
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}の1番目の効果音を3秒遅らせましょうか？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のSFX#1: +3秒", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "scene_sfx.set_timing", "scene_idx": ${ctx?.scene_idx || 1}, "sfx_no": 1, "delta_start_ms": 3000}]}}
+
+【BGM音量変更の使い分け - 重要】
+- bgm.set_volume: プロジェクト全体のBGM音量を変更（全シーンに影響）
+- scene_bgm.set_volume: 特定シーンのみBGM音量を変更（そのシーンだけ）
+ユーザーが「このシーンの」「ここの」などと言った場合は scene_bgm.set_volume を使う
+ユーザーが「全体の」「BGM全部」などと言った場合は bgm.set_volume を使う
 
 【文脈情報】
 ${ctxText}
