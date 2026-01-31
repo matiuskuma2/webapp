@@ -56,6 +56,18 @@ export interface VideoBuildSettings {
     size_preset?: 'sm' | 'md' | 'lg';
     scene_overrides?: Record<number, boolean>;  // scene_idx -> enabled
   };
+  // PR2: Timeline オーディオ自動化
+  audio_automation?: {
+    timeline_bgm?: Array<{
+      id: string;
+      type: 'duck' | 'set_volume';
+      start_ms: number;
+      end_ms: number;
+      volume: number;
+      fade_in_ms?: number;
+      fade_out_ms?: number;
+    }>;
+  };
 }
 
 export interface ProjectJsonScene {

@@ -1210,6 +1210,25 @@ export interface RemotionProjectJson_R1 {
       type: 'none' | 'fade' | 'slide' | 'wipe';
       duration_ms: number;
     };
+    // PR-5-3b: テロップ設定
+    telops?: {
+      enabled?: boolean;
+      position_preset?: 'bottom' | 'center' | 'top';
+      size_preset?: 'sm' | 'md' | 'lg';
+      scene_overrides?: Record<number, boolean>;
+    };
+    // PR2: Timeline オーディオ自動化（BGMダッキング等）
+    audio_automation?: {
+      timeline_bgm?: Array<{
+        id: string;
+        type: 'duck' | 'set_volume';
+        start_ms: number;
+        end_ms: number;
+        volume: number;
+        fade_in_ms?: number;
+        fade_out_ms?: number;
+      }>;
+    };
   };
   global: {
     default_scene_duration_ms: number;
@@ -1629,6 +1648,10 @@ export function buildProjectJson(
         position_preset: 'bottom',
         size_preset: 'md',
       },
+      // PR2: Timeline オーディオ自動化（BGMダッキング等）
+      audio_automation: settings.audio_automation ? {
+        timeline_bgm: settings.audio_automation.timeline_bgm || undefined,
+      } : undefined,
     },
     global: {
       default_scene_duration_ms: DEFAULT_SCENE_DURATION_MS,
