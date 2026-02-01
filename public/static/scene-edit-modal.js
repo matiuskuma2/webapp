@@ -2372,8 +2372,29 @@
           this.showToast(`BGM「${itemName}」を設定しました`, 'success');
         }
       } catch (error) {
-        console.error('[SceneEditModal] Failed to set BGM:', error);
-        this.showToast('BGM設定に失敗しました', 'error');
+        // Enhanced error logging for debugging
+        const status = error.response?.status || 'network';
+        const errorCode = error.response?.data?.error?.code || '';
+        const errorMessage = error.response?.data?.error?.message || error.message || 'Unknown error';
+        console.error('[SceneEditModal] Failed to set BGM:', {
+          status,
+          errorCode,
+          errorMessage,
+          sceneId: this.currentSceneId,
+          libraryType,
+          itemId,
+          fullError: error
+        });
+        
+        let toastMessage = 'BGM設定に失敗しました';
+        if (status === 401) {
+          toastMessage = 'ログインが必要です。再ログインしてください。';
+        } else if (status === 404) {
+          toastMessage = errorCode === 'NOT_FOUND' ? errorMessage : 'APIが見つかりません';
+        } else if (status === 'network') {
+          toastMessage = 'ネットワークエラーが発生しました';
+        }
+        this.showToast(toastMessage, 'error');
       }
     },
     
@@ -2416,8 +2437,30 @@
           this.showToast('BGMをアップロードしました', 'success');
         }
       } catch (error) {
-        console.error('[SceneEditModal] BGM upload failed:', error);
-        this.showToast('アップロードに失敗しました', 'error');
+        // Enhanced error logging for debugging
+        const status = error.response?.status || 'network';
+        const errorCode = error.response?.data?.error?.code || '';
+        const errorMessage = error.response?.data?.error?.message || error.message || 'Unknown error';
+        console.error('[SceneEditModal] BGM upload failed:', {
+          status,
+          errorCode,
+          errorMessage,
+          sceneId: this.currentSceneId,
+          fileName: file?.name,
+          fullError: error
+        });
+        
+        let toastMessage = 'アップロードに失敗しました';
+        if (status === 401) {
+          toastMessage = 'ログインが必要です。再ログインしてください。';
+        } else if (status === 404) {
+          toastMessage = errorCode === 'NOT_FOUND' ? errorMessage : 'APIが見つかりません';
+        } else if (status === 'network') {
+          toastMessage = 'ネットワークエラーが発生しました';
+        } else if (status === 400) {
+          toastMessage = errorMessage || 'ファイル形式が無効です';
+        }
+        this.showToast(toastMessage, 'error');
       }
       
       event.target.value = '';
