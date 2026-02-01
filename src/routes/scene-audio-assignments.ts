@@ -14,6 +14,7 @@
  * - PUT    /api/scenes/:sceneId/audio-assignments/:id     - 割当更新
  * - DELETE /api/scenes/:sceneId/audio-assignments/:id     - 割当削除
  * - POST   /api/scenes/:sceneId/audio-assignments/direct  - 直接アップロードして割当
+ * - POST   /api/scenes/:sceneId/audio-assignments/upload  - /direct のエイリアス（互換性）
  * 
  * ルール:
  * - BGM: 1シーンに最大1つ（新規追加時は既存をis_active=0に）
@@ -643,6 +644,122 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/direct', async (c) => {
     return c.json(formatted, 201);
   } catch (error) {
     console.error('[SceneAudioAssignments] Direct upload error:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to upload audio' } }, 500);
+  }
+});
+
+// ====================================================================
+// POST /api/scenes/:sceneId/audio-assignments/upload
+// /direct のエイリアス（互換性のため）
+// ====================================================================
+sceneAudioAssignments.post('/:sceneId/audio-assignments/upload', async (c) => {
+  try {
+    const user = await getUserFromSession(c);
+    if (!user) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+    }
+
+    const sceneId = parseInt(c.req.param('sceneId'), 10);
+    if (!Number.isFinite(sceneId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene id' } }, 400);
+    }
+
+    const access = await validateSceneAccess(c, sceneId, user);
+    if (!access.valid) {
+      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+    }
+
+    const formData = await c.req.formData();
+    const file = formData.get('file') as File | null;
+
+    if (!file) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'No file provided' } }, 400);
+    }
+
+    // ファイル形式チェック
+    const allowedExtensions = ['.mp3', '.wav', '.m4a', '.ogg', '.aac'];
+    const fileName = file.name.toLowerCase();
+    const hasValidExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
+    
+    if (!hasValidExtension) {
+      return c.json({ 
+        error: { 
+          code: 'INVALID_FILE_TYPE', 
+          message: `Invalid file type. Allowed: ${allowedExtensions.join(', ')}`
+        } 
+      }, 400);
+    }
+
+    // パラメータ取得
+    const audioType = (formData.get('audio_type') as string) || 'bgm';
+    if (audioType !== 'bgm' && audioType !== 'sfx') {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'audio_type must be bgm or sfx' } }, 400);
+    }
+
+    const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
+
+    // R2にアップロード
+    const timestamp = Date.now();
+    const ext = fileName.split('.').pop() || 'mp3';
+    const r2Key = `audio/scenes/${sceneId}/upload_${timestamp}.${ext}`;
+    
+    const arrayBuffer = await file.arrayBuffer();
+    await c.env.R2.put(r2Key, arrayBuffer, {
+      httpMetadata: {
+        contentType: file.type || 'audio/mpeg',
+      },
+    });
+
+    const r2Url = `/${r2Key}`;
+    const directName = (formData.get('name') as string) || file.name.replace(/\.[^.]+$/, '');
+    const durationMs = formData.get('duration_ms') ? parseInt(formData.get('duration_ms') as string, 10) : null;
+
+    // BGMの場合、既存のactive BGMを無効化
+    if (audioType === 'bgm') {
+      await c.env.DB.prepare(`
+        UPDATE scene_audio_assignments 
+        SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE scene_id = ? AND audio_type = 'bgm' AND is_active = 1
+      `).bind(sceneId).run();
+    }
+
+    // オプショナルパラメータ
+    const startMs = parseInt(formData.get('start_ms') as string || '0', 10);
+    const volumeOverride = formData.get('volume') ? parseFloat(formData.get('volume') as string) : 
+                          formData.get('volume_override') ? parseFloat(formData.get('volume_override') as string) : null;
+    const loopOverride = formData.get('loop') !== undefined 
+      ? (formData.get('loop') === 'true' || formData.get('loop') === '1' ? 1 : 0) 
+      : formData.get('loop_override') !== undefined
+        ? (formData.get('loop_override') === 'true' || formData.get('loop_override') === '1' ? 1 : 0)
+        : null;
+
+    // INSERT
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scene_audio_assignments (
+        scene_id, audio_library_type,
+        direct_r2_key, direct_r2_url, direct_name, direct_duration_ms,
+        audio_type, start_ms, volume_override, loop_override,
+        is_active
+      ) VALUES (?, 'direct', ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    `).bind(
+      sceneId, r2Key, r2Url, directName, durationMs,
+      audioType, startMs, volumeOverride, loopOverride
+    ).run();
+
+    const assignmentId = result.meta.last_row_id;
+
+    // 作成した割当を取得
+    const assignment = await c.env.DB.prepare(`
+      SELECT * FROM scene_audio_assignments WHERE id = ?
+    `).bind(assignmentId).first();
+
+    const formatted = await formatAssignmentWithLibrary(c, assignment, siteUrl);
+
+    console.log(`[SceneAudioAssignments] Upload: scene=${sceneId}, type=${audioType}, id=${assignmentId}, file=${r2Key}`);
+
+    return c.json(formatted, 201);
+  } catch (error) {
+    console.error('[SceneAudioAssignments] Upload error:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to upload audio' } }, 500);
   }
 });
