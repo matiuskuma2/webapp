@@ -548,7 +548,9 @@ window.AudioUI = {
   generateHistoryItemHTML(audio) {
     const statusBadge = this.getStatusBadgeHTML(audio.status);
     const activeBadge = audio.is_active ? '<span class="ml-2 text-xs bg-green-100 text-green-800 px-2 py-1 rounded">採用中</span>' : '';
-    const canDelete = !audio.is_active;
+    // 採用中でも削除可能（確認付き）
+    const canDelete = true;
+    const isActiveDelete = audio.is_active;
     
     return `
       <div class="border-2 ${audio.is_active ? 'border-green-400' : 'border-gray-200'} rounded-lg p-4">
@@ -589,10 +591,11 @@ window.AudioUI = {
           
           ${canDelete ? `
             <button
-              onclick="window.AudioUI.handleDelete(${audio.id}, ${audio.scene_id})"
-              class="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm font-semibold"
+              onclick="window.AudioUI.handleDelete(${audio.id}, ${audio.scene_id}, ${isActiveDelete})"
+              class="px-3 py-2 ${isActiveDelete ? 'bg-orange-600 hover:bg-orange-700' : 'bg-red-600 hover:bg-red-700'} text-white rounded-lg transition-colors text-sm font-semibold"
+              title="${isActiveDelete ? '採用中の音声を削除（シーンから音声が無くなります）' : '音声を削除'}"
             >
-              <i class="fas fa-trash mr-1"></i>削除
+              <i class="fas fa-trash mr-1"></i>${isActiveDelete ? '解除して削除' : '削除'}
             </button>
           ` : ''}
         </div>
@@ -640,24 +643,28 @@ window.AudioUI = {
    * @param {number} audioId 
    * @param {number} sceneId 
    */
-  async handleDelete(audioId, sceneId) {
-    if (!confirm('この音声を削除しますか？')) return;
+  async handleDelete(audioId, sceneId, isActive = false) {
+    const confirmMessage = isActive 
+      ? 'この音声は現在採用中です。削除するとシーンに音声がなくなります。本当に削除しますか？' 
+      : 'この音声を削除しますか？';
+    if (!confirm(confirmMessage)) return;
     
     try {
-      await window.AudioClient.remove(audioId);
+      // force=true でアクティブな音声も削除可能
+      await window.AudioClient.remove(audioId, { force: isActive });
       showToast('音声を削除しました', 'success');
       
       // Reload history
       await this.viewHistory(sceneId);
       
+      // If we deleted the active audio, refresh the scene card too
+      if (isActive && typeof updateSingleSceneCard === 'function') {
+        await updateSingleSceneCard(sceneId);
+      }
+      
     } catch (error) {
       console.error('[AudioUI] Delete error:', error);
-      
-      if (error.response?.data?.error?.code === 'ACTIVE_AUDIO_DELETE') {
-        showToast('採用中の音声は削除できません', 'error');
-      } else {
-        showToast('音声の削除に失敗しました', 'error');
-      }
+      showToast('音声の削除に失敗しました', 'error');
     }
   },
 

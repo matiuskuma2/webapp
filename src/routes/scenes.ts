@@ -622,6 +622,92 @@ scenes.delete('/:id', async (c) => {
   }
 })
 
+// POST /api/scenes - シーン追加（指定位置に挿入可能）
+scenes.post('/', async (c) => {
+  try {
+    const body = await c.req.json<{
+      project_id: number;
+      title?: string;
+      dialogue?: string;
+      insert_after_idx?: number; // 指定したidxの後に挿入（省略時は最後に追加）
+    }>();
+    
+    const { project_id, title, dialogue, insert_after_idx } = body;
+    
+    if (!project_id) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: 'project_id is required' }
+      }, 400);
+    }
+    
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id FROM projects WHERE id = ?
+    `).bind(project_id).first();
+    
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404);
+    }
+    
+    // 現在の最大idxを取得
+    const maxIdxResult = await c.env.DB.prepare(`
+      SELECT MAX(idx) as max_idx FROM scenes WHERE project_id = ?
+    `).bind(project_id).first<{ max_idx: number | null }>();
+    
+    const maxIdx = maxIdxResult?.max_idx ?? 0;
+    
+    let newIdx: number;
+    
+    if (insert_after_idx !== undefined && insert_after_idx >= 1 && insert_after_idx <= maxIdx) {
+      // 指定位置に挿入: 後続シーンのidxを+1
+      await c.env.DB.prepare(`
+        UPDATE scenes 
+        SET idx = idx + 1 
+        WHERE project_id = ? AND idx > ?
+      `).bind(project_id, insert_after_idx).run();
+      
+      newIdx = insert_after_idx + 1;
+    } else {
+      // 最後に追加
+      newIdx = maxIdx + 1;
+    }
+    
+    // 新規シーン作成
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scenes (project_id, idx, role, title, dialogue)
+      VALUES (?, ?, 'content', ?, ?)
+    `).bind(
+      project_id,
+      newIdx,
+      title || `シーン ${newIdx}`,
+      dialogue || ''
+    ).run();
+    
+    const newSceneId = result.meta?.last_row_id;
+    
+    // 作成したシーンを取得して返却
+    const newScene = await c.env.DB.prepare(`
+      SELECT id, project_id, idx, role, title, dialogue, created_at
+      FROM scenes WHERE id = ?
+    `).bind(newSceneId).first();
+    
+    console.log(`[Scenes] Created scene id=${newSceneId}, idx=${newIdx}, project=${project_id}, insert_after=${insert_after_idx ?? 'end'}`);
+    
+    return c.json({
+      success: true,
+      scene: newScene
+    }, 201);
+    
+  } catch (error) {
+    console.error('Error creating scene:', error);
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to create scene' }
+    }, 500);
+  }
+});
+
 // POST /api/projects/:id/scenes/reorder - シーン並び替え
 scenes.post('/:id/scenes/reorder', async (c) => {
   try {

@@ -359,18 +359,21 @@ audioGeneration.post('/audio/:audioId/activate', async (c) => {
 
 /**
  * DELETE /api/audio/:audioId
- * - active は削除不可
+ * - active は通常削除不可
+ * - force=true クエリパラメータで採用中の音声も削除可能
  * - R2も削除
  */
 audioGeneration.delete('/audio/:audioId', async (c) => {
   try {
     const audioId = Number(c.req.param('audioId'));
+    const forceDelete = c.req.query('force') === 'true';
+    
     if (!Number.isFinite(audioId)) {
       return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Invalid audio id'), 400);
     }
 
     const audio = await c.env.DB.prepare(`
-      SELECT id, is_active, r2_key
+      SELECT id, is_active, r2_key, scene_id
       FROM audio_generations
       WHERE id = ?
     `).bind(audioId).first<any>();
@@ -379,10 +382,12 @@ audioGeneration.delete('/audio/:audioId', async (c) => {
       return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Audio not found'), 404);
     }
 
-    if (audio.is_active === 1) {
-      return c.json(createErrorResponse(ERROR_CODES.ACTIVE_AUDIO_DELETE, 'Cannot delete active audio'), 400);
+    // 採用中の音声は通常削除不可、force=trueで許可
+    if (audio.is_active === 1 && !forceDelete) {
+      return c.json(createErrorResponse(ERROR_CODES.ACTIVE_AUDIO_DELETE, 'Cannot delete active audio. Use force=true to override.'), 400);
     }
 
+    // R2ファイル削除
     if (audio.r2_key) {
       try {
         await c.env.R2.delete(audio.r2_key);
@@ -391,7 +396,10 @@ audioGeneration.delete('/audio/:audioId', async (c) => {
       }
     }
 
+    // DB削除
     await c.env.DB.prepare(`DELETE FROM audio_generations WHERE id = ?`).bind(audioId).run();
+    
+    console.log(`[Audio] Deleted audio id=${audioId}, was_active=${audio.is_active}, force=${forceDelete}`);
     return c.json({ success: true });
   } catch (error) {
     console.error('[Audio] delete error:', error);

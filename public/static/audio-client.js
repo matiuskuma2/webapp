@@ -52,13 +52,15 @@ window.AudioClient = {
   },
 
   /**
-   * Delete an audio generation (non-active only)
+   * Delete an audio generation
    * @param {number} audioId 
+   * @param {object} options - { force: boolean } - force=true allows deleting active audio
    * @returns {Promise<object>} { success: true }
    */
-  async remove(audioId) {
+  async remove(audioId, options = {}) {
     try {
-      const response = await axios.delete(`${API_BASE}/audio/${audioId}`);
+      const params = options.force ? '?force=true' : '';
+      const response = await axios.delete(`${API_BASE}/audio/${audioId}${params}`);
       return response.data;
     } catch (error) {
       console.error(`[AudioClient] remove error for audio ${audioId}:`, error);

@@ -1335,6 +1335,14 @@ app.get('/projects/:id', (c) => {
                             <!-- Will be populated by JS -->
                         </div>
                         
+                        <!-- Add Scene Button -->
+                        <button
+                            onclick="openAddSceneModal()"
+                            class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold inline-flex items-center gap-2"
+                        >
+                            <i class="fas fa-plus"></i>
+                            シーン追加
+                        </button>
                     </div>
                 </div>
                 
@@ -2347,6 +2355,92 @@ app.get('/projects/:id', (c) => {
 
                 <!-- Footer removed for cleaner UI -->
 
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Scene Modal -->
+    <div id="addSceneModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+        <!-- Backdrop -->
+        <div class="fixed inset-0 bg-black/50" onclick="closeAddSceneModal()"></div>
+        
+        <!-- Modal Content -->
+        <div class="relative min-h-screen flex items-center justify-center p-4">
+            <div class="relative w-full max-w-lg bg-white rounded-xl shadow-2xl overflow-hidden">
+                <!-- Header -->
+                <div class="bg-gradient-to-r from-green-600 to-teal-600 px-5 py-4 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <i class="fas fa-plus-circle text-white text-lg"></i>
+                        <h3 class="text-white font-bold text-lg">シーン追加</h3>
+                    </div>
+                    <button class="text-white/90 hover:bg-white/15 p-2 rounded-lg transition-colors" onclick="closeAddSceneModal()">
+                        <i class="fas fa-times text-lg"></i>
+                    </button>
+                </div>
+                
+                <!-- Body -->
+                <div class="p-6 space-y-4">
+                    <!-- Insert Position -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-list-ol mr-1 text-green-600"></i>
+                            挿入位置
+                        </label>
+                        <select id="addScenePosition" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
+                            <option value="end">最後に追加</option>
+                            <!-- Options will be populated by JS -->
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            既存シーンの間に挿入する場合は、挿入位置を選択してください
+                        </p>
+                    </div>
+                    
+                    <!-- Title (Optional) -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-heading mr-1 text-blue-600"></i>
+                            タイトル（省略可）
+                        </label>
+                        <input 
+                            type="text" 
+                            id="addSceneTitle" 
+                            placeholder="シーンのタイトル..."
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                    </div>
+                    
+                    <!-- Dialogue (Optional) -->
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-2">
+                            <i class="fas fa-comment mr-1 text-purple-600"></i>
+                            セリフ/ナレーション（省略可）
+                        </label>
+                        <textarea 
+                            id="addSceneDialogue" 
+                            rows="4"
+                            placeholder="セリフやナレーションを入力..."
+                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"
+                        ></textarea>
+                    </div>
+                </div>
+                
+                <!-- Footer -->
+                <div class="px-6 py-4 bg-gray-50 border-t flex justify-end gap-3">
+                    <button 
+                        onclick="closeAddSceneModal()"
+                        class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold"
+                    >
+                        キャンセル
+                    </button>
+                    <button 
+                        onclick="confirmAddScene()"
+                        class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold inline-flex items-center gap-2"
+                    >
+                        <i class="fas fa-plus"></i>
+                        追加
+                    </button>
+                </div>
             </div>
         </div>
     </div>

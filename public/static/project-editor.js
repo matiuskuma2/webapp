@@ -2766,6 +2766,101 @@ async function deleteScene(sceneId) {
   }
 }
 
+// ========================================
+// シーン追加機能
+// ========================================
+
+// 現在のシーンリスト（モーダル用キャッシュ）
+window.cachedSceneList = [];
+
+// シーン追加モーダルを開く
+function openAddSceneModal() {
+  const modal = document.getElementById('addSceneModal');
+  if (!modal) return;
+  
+  // 挿入位置のセレクトを更新
+  updateAddScenePositionOptions();
+  
+  // フォームをリセット
+  document.getElementById('addSceneTitle').value = '';
+  document.getElementById('addSceneDialogue').value = '';
+  
+  modal.classList.remove('hidden');
+}
+
+// シーン追加モーダルを閉じる
+function closeAddSceneModal() {
+  const modal = document.getElementById('addSceneModal');
+  if (modal) modal.classList.add('hidden');
+}
+
+// 挿入位置のオプションを更新
+async function updateAddScenePositionOptions() {
+  const select = document.getElementById('addScenePosition');
+  if (!select) return;
+  
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+    const scenes = response.data.scenes || [];
+    window.cachedSceneList = scenes;
+    
+    // オプションを構築
+    let options = '<option value="end">最後に追加</option>';
+    scenes.forEach((scene, i) => {
+      options += `<option value="${scene.idx}">シーン ${scene.idx} の後に挿入</option>`;
+    });
+    
+    select.innerHTML = options;
+  } catch (error) {
+    console.error('Error loading scenes for position options:', error);
+  }
+}
+
+// シーン追加を確定
+async function confirmAddScene() {
+  const positionSelect = document.getElementById('addScenePosition');
+  const titleInput = document.getElementById('addSceneTitle');
+  const dialogueInput = document.getElementById('addSceneDialogue');
+  
+  const position = positionSelect.value;
+  const title = titleInput.value.trim();
+  const dialogue = dialogueInput.value.trim();
+  
+  try {
+    const payload = {
+      project_id: PROJECT_ID,
+      title: title || undefined,
+      dialogue: dialogue || undefined
+    };
+    
+    // 末尾追加でない場合は挿入位置を指定
+    if (position !== 'end') {
+      payload.insert_after_idx = parseInt(position, 10);
+    }
+    
+    const response = await axios.post(`${API_BASE}/scenes`, payload);
+    
+    if (response.data.success) {
+      showToast('シーンを追加しました', 'success');
+      closeAddSceneModal();
+      
+      // キャッシュクリアしてリロード
+      window.sceneSplitInitialized = false;
+      await initBuilderTab();
+    } else {
+      showToast('シーンの追加に失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Error adding scene:', error);
+    showToast('シーン追加中にエラーが発生しました', 'error');
+  }
+}
+
+// グローバルにエクスポート
+window.openAddSceneModal = openAddSceneModal;
+window.closeAddSceneModal = closeAddSceneModal;
+window.confirmAddScene = confirmAddScene;
+
 // Move scene up
 async function moveSceneUp(sceneId, currentIdx) {
   if (currentIdx <= 1) return; // Already at top
@@ -5115,13 +5210,14 @@ async function generateBulkImages(mode) {
           // シーン一覧を更新して進捗を表示
           const scenesRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=board`);
           const scenes = scenesRes.data.scenes || [];
-          scenes.forEach(scene => {
+          scenes.forEach(async (scene) => {
             const imageStatus = scene.latest_image?.status || 'pending';
             if (imageStatus === 'generating' && !window.generatingSceneWatch?.[scene.id]) {
               startGenerationWatch(scene.id);
             } else if (imageStatus === 'completed' && window.generatingSceneWatch?.[scene.id]) {
               stopGenerationWatch(scene.id);
-              updateSceneCardToCompleted(scene.id, scene.latest_image);
+              // updateSingleSceneCard でカード全体を更新
+              await updateSingleSceneCard(scene.id);
             }
           });
         } catch (e) {
