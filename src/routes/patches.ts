@@ -1620,20 +1620,29 @@ interface TelopSetEnabledSceneAction {
   enabled: boolean;  // true=このシーンのテロップON, false=OFF
 }
 
+// Phase 3-A: scope で適用先を指定
+// - remotion: Remotion字幕のみ（デフォルト、即時反映可能）
+// - comic: 漫画焼き込みのみ（再生成が必要）
+// - both: 両方（再生成が必要）
+type TelopScope = 'remotion' | 'comic' | 'both';
+
 interface TelopSetPositionAction {
   action: 'telop.set_position';
   position_preset: 'bottom' | 'center' | 'top';  // 下 / 中央 / 上
+  scope?: TelopScope;  // Phase 3-A: デフォルト 'remotion'
 }
 
 interface TelopSetSizeAction {
   action: 'telop.set_size';
   size_preset: 'sm' | 'md' | 'lg';  // 小 / 中 / 大
+  scope?: TelopScope;  // Phase 3-A: デフォルト 'remotion'
 }
 
 // Phase 1: テロップスタイルプリセット変更
 interface TelopSetStyleAction {
   action: 'telop.set_style';
   style_preset: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
+  scope?: TelopScope;  // Phase 3-A: デフォルト 'remotion'
 }
 
 // 許可されるアクションのホワイトリスト
@@ -1674,7 +1683,7 @@ const ALLOWED_CHAT_ACTIONS = new Set([
  * 人間参照（scene_idx, balloon_no, cue_no）をDB IDに解決し、
  * ssot_patch_v1 形式の ops に変換する
  */
-// PR-5-3b + Phase 1: テロップ設定はBuild単位の上書き（DBエンティティを更新しない）
+// PR-5-3b + Phase 1 + Phase 3-A: テロップ設定はBuild単位の上書き（DBエンティティを更新しない）
 interface TelopSettingsOverride {
   enabled?: boolean;
   position_preset?: 'bottom' | 'center' | 'top';
@@ -1683,6 +1692,16 @@ interface TelopSettingsOverride {
   style_preset?: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
   // シーン単位のテロップON/OFF（scene_idx -> enabled）
   scene_overrides?: Record<number, boolean>;
+  // Phase 3-A: scope（Remotionのみ即時反映、comic/bothは再生成が必要なので警告）
+  // 注意: scopeは設定保存ではなく、dry-run時の警告生成に使用
+}
+
+// Phase 3-A: 漫画焼き込み操作の確認情報
+interface ComicRegenerationRequired {
+  scope: 'comic' | 'both';
+  action: string;
+  message: string;  // ユーザーへの説明
+  affected_scenes?: number[];  // 影響を受けるシーン（漫画シーンのみ）
 }
 
 // PR2: Timeline BGM ダッキング設定（projects.settings_json.audio_automationに保存）
@@ -1723,6 +1742,8 @@ async function resolveIntentToOps(
   const telopSettingsOverride: TelopSettingsOverride = {};
   // PR2: Timeline BGM設定の収集
   const audioAutomationOverride: AudioAutomationOverride = {};
+  // Phase 3-A: 漫画焼き込み再生成が必要な操作のリスト
+  const comicRegenerationRequired: ComicRegenerationRequired[] = [];
 
   for (let i = 0; i < intent.actions.length; i++) {
     const action = intent.actions[i];
@@ -2442,10 +2463,25 @@ async function resolveIntentToOps(
           errors.push(`${prefix}: Invalid position_preset: ${telopAction.position_preset}. Must be one of: ${validPositions.join(', ')}`);
           continue;
         }
-        telopSettingsOverride.position_preset = telopAction.position_preset;
+        
+        // Phase 3-A: scope 判定（デフォルト: remotion）
+        const scope = telopAction.scope || 'remotion';
+        if (scope === 'comic' || scope === 'both') {
+          comicRegenerationRequired.push({
+            scope,
+            action: action.action,
+            message: `テロップ位置の変更（${scope === 'both' ? 'Remotion字幕＋漫画焼き込み' : '漫画焼き込み'}）には漫画シーンの再生成が必要です`,
+          });
+        }
+        
+        // Remotion字幕への反映（scope が remotion または both の場合）
+        if (scope === 'remotion' || scope === 'both') {
+          telopSettingsOverride.position_preset = telopAction.position_preset;
+        }
+        
         resolutionLog.push({
           action: action.action,
-          resolved: { position_preset: telopAction.position_preset },
+          resolved: { position_preset: telopAction.position_preset, scope },
         });
 
       } else if (action.action === 'telop.set_size') {
@@ -2455,14 +2491,29 @@ async function resolveIntentToOps(
           errors.push(`${prefix}: Invalid size_preset: ${telopAction.size_preset}. Must be one of: ${validSizes.join(', ')}`);
           continue;
         }
-        telopSettingsOverride.size_preset = telopAction.size_preset;
+        
+        // Phase 3-A: scope 判定（デフォルト: remotion）
+        const scope = telopAction.scope || 'remotion';
+        if (scope === 'comic' || scope === 'both') {
+          comicRegenerationRequired.push({
+            scope,
+            action: action.action,
+            message: `テロップサイズの変更（${scope === 'both' ? 'Remotion字幕＋漫画焼き込み' : '漫画焼き込み'}）には漫画シーンの再生成が必要です`,
+          });
+        }
+        
+        // Remotion字幕への反映（scope が remotion または both の場合）
+        if (scope === 'remotion' || scope === 'both') {
+          telopSettingsOverride.size_preset = telopAction.size_preset;
+        }
+        
         resolutionLog.push({
           action: action.action,
-          resolved: { size_preset: telopAction.size_preset },
+          resolved: { size_preset: telopAction.size_preset, scope },
         });
 
       // ====================================================================
-      // Phase 1: telop.set_style - スタイルプリセット変更
+      // Phase 1 + Phase 3-A: telop.set_style - スタイルプリセット変更
       // ====================================================================
       } else if (action.action === 'telop.set_style') {
         const telopAction = action as TelopSetStyleAction;
@@ -2471,10 +2522,25 @@ async function resolveIntentToOps(
           errors.push(`${prefix}: Invalid style_preset: ${telopAction.style_preset}. Must be one of: ${validStyles.join(', ')}`);
           continue;
         }
-        telopSettingsOverride.style_preset = telopAction.style_preset;
+        
+        // Phase 3-A: scope 判定（デフォルト: remotion）
+        const scope = telopAction.scope || 'remotion';
+        if (scope === 'comic' || scope === 'both') {
+          comicRegenerationRequired.push({
+            scope,
+            action: action.action,
+            message: `テロップスタイルの変更（${scope === 'both' ? 'Remotion字幕＋漫画焼き込み' : '漫画焼き込み'}）には漫画シーンの再生成が必要です`,
+          });
+        }
+        
+        // Remotion字幕への反映（scope が remotion または both の場合）
+        if (scope === 'remotion' || scope === 'both') {
+          telopSettingsOverride.style_preset = telopAction.style_preset;
+        }
+        
         resolutionLog.push({
           action: action.action,
-          resolved: { style_preset: telopAction.style_preset },
+          resolved: { style_preset: telopAction.style_preset, scope },
         });
 
       // ====================================================================
@@ -2568,6 +2634,13 @@ async function resolveIntentToOps(
   
   // PR2: AudioAutomation設定が空でない場合のみ含める
   const hasAudioAutomationOverride = Object.keys(audioAutomationOverride).length > 0;
+  
+  // Phase 3-A: 漫画再生成が必要な操作がある場合、警告を追加
+  if (comicRegenerationRequired.length > 0) {
+    for (const item of comicRegenerationRequired) {
+      warnings.push(`[${item.scope.toUpperCase()}] ${item.message}`);
+    }
+  }
 
   return {
     ok: errors.length === 0,
@@ -2577,6 +2650,11 @@ async function resolveIntentToOps(
     resolution_log: resolutionLog,
     ...(hasTelopOverride && { telop_settings_override: telopSettingsOverride }),
     ...(hasAudioAutomationOverride && { audio_automation_override: audioAutomationOverride }),
+    // Phase 3-A: 漫画再生成が必要な情報
+    ...(comicRegenerationRequired.length > 0 && { 
+      comic_regeneration_required: comicRegenerationRequired,
+      requires_confirmation: true,  // フロントエンドで確認ダイアログを表示
+    }),
   };
 }
 
@@ -3355,8 +3433,11 @@ Action schemas:
 - bgm.set_loop: { action, loop: boolean }
 - telop.set_enabled: { action, enabled: boolean } (all scenes)
 - telop.set_enabled_scene: { action, scene_idx, enabled: boolean } (specific scene only)
-- telop.set_position: { action, position_preset: "bottom"|"center"|"top" }
-- telop.set_size: { action, size_preset: "sm"|"md"|"lg" }
+- telop.set_position: { action, position_preset: "bottom"|"center"|"top", scope?: "remotion"|"comic"|"both" }
+- telop.set_size: { action, size_preset: "sm"|"md"|"lg", scope?: "remotion"|"comic"|"both" }
+- telop.set_style: { action, style_preset: "minimal"|"outline"|"band"|"pop"|"cinematic", scope?: "remotion"|"comic"|"both" }
+  * scope defaults to "remotion" (Remotion subtitles only, instant preview)
+  * scope="comic" or "both" requires comic scene regeneration (warn user)
 
 Rules:
 1) Output JSON only.
@@ -3366,6 +3447,11 @@ Rules:
 5) For volume percentages, convert to 0-1 scale (e.g., 20% -> 0.2).
 6) For time ranges in seconds, convert to milliseconds (e.g., "3秒から5秒" -> start_ms: 3000, end_ms: 5000).
 7) **CRITICAL**: If the user's message is a greeting, question, casual chat, or NOT related to video editing (e.g., "よろしくね", "こんにちは", "ありがとう", "どうすればいい?"), return EMPTY actions array: {"schema": "rilarc_intent_v1", "actions": []}
+8) **TELOP SCOPE**: For telop actions, determine scope based on user intent:
+   - "字幕", "テロップ", "文字" (without "漫画"/"焼き込み") -> scope: "remotion" (default, omit in JSON)
+   - "漫画の吹き出し", "焼き込み", "画像の文字" -> scope: "comic" (requires regeneration)
+   - "両方", "全部" -> scope: "both" (requires regeneration for comic)
+   Default to "remotion" if unclear (safest, instant preview)
 `;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
