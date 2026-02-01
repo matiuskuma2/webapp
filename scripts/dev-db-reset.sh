@@ -23,12 +23,14 @@ echo -e "${YELLOW}[2/4]${NC} Applying full schema..."
 npx wrangler d1 execute webapp-production --local --file=migrations/0001_full_schema_from_production.sql >/dev/null 2>&1
 echo -e "${GREEN}✓${NC} Done"
 
-# Step 3: Apply incremental migrations (0043+)
-# 0001_full_schema_from_production.sql は本番スキーマ（~0042相当）
-# 0043以降は増分として適用
-echo -e "${YELLOW}[3/4]${NC} Applying new migrations (0043+)..."
-for f in migrations/00[4-9]*.sql; do
-  [ -f "$f" ] && npx wrangler d1 execute webapp-production --local --file="$f" >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} $(basename $f)"
+# Step 3: Apply incremental migrations (0023+)
+# 0001_full_schema_from_production.sql は本番スキーマ（~0022相当）
+# 0023以降は増分として適用（text_render_mode等の重要なカラム追加含む）
+echo -e "${YELLOW}[3/4]${NC} Applying new migrations (0023+)..."
+for f in migrations/002[3-9]*.sql migrations/003*.sql migrations/004*.sql; do
+  if [ -f "$f" ]; then
+    npx wrangler d1 execute webapp-production --local --file="$f" >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} $(basename $f)" || echo -e "  ${YELLOW}⚠${NC} $(basename $f) (skipped/error)"
+  fi
 done
 echo -e "${GREEN}✓${NC} Done"
 
