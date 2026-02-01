@@ -137,6 +137,20 @@
                   rows="2" 
                   placeholder="例: 30代の日本人男性、黒髪短髪、スーツ姿"></textarea>
               </div>
+              
+              <!-- Style Preset for Reference Image Generation -->
+              <div class="mb-3 p-2 bg-indigo-50 rounded-lg border border-indigo-200">
+                <div class="flex items-center gap-2 mb-1">
+                  <i class="fas fa-palette text-indigo-600 text-sm"></i>
+                  <label class="text-xs font-semibold text-indigo-700">画像スタイル</label>
+                  <span class="text-xs text-gray-500">（任意）</span>
+                </div>
+                <select id="wc-ref-style-preset" 
+                  class="w-full border border-indigo-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                  <option value="">-- プロジェクトのデフォルト --</option>
+                </select>
+              </div>
+              
               <button id="wc-ref-generate-btn" class="px-4 py-2 rounded bg-purple-600 text-white hover:bg-purple-700 transition-colors">
                 <i class="fas fa-wand-magic-sparkles mr-1"></i> 画像を生成
               </button>
@@ -242,31 +256,12 @@
             </div>
           </div>
 
-          <!-- ========== 画像生成用の設定 ========== -->
+          <!-- ========== シーン画像生成用の設定 ========== -->
           <details class="border border-gray-200 rounded-lg" open>
             <summary class="px-4 py-3 cursor-pointer hover:bg-gray-50 font-semibold text-gray-700">
-              <i class="fas fa-image mr-2"></i>画像生成用の設定
+              <i class="fas fa-film mr-2"></i>シーン画像生成用の設定
             </summary>
             <div class="px-4 pb-4 space-y-4">
-              <!-- Style Preset Selection -->
-              <div class="p-3 bg-indigo-50 rounded-lg border-2 border-indigo-300">
-                <div class="flex items-center gap-2 mb-2">
-                  <i class="fas fa-palette text-indigo-600"></i>
-                  <label class="text-sm font-bold text-indigo-700">
-                    画像スタイル
-                  </label>
-                  <span class="text-xs text-gray-500">（任意）</span>
-                </div>
-                <select id="wc-style-preset" 
-                  class="w-full border border-indigo-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
-                  <option value="">-- プロジェクトのデフォルトを使用 --</option>
-                </select>
-                <p class="text-xs text-indigo-600 mt-1">
-                  <i class="fas fa-info-circle mr-1"></i>
-                  このキャラクター専用の画像スタイルを設定できます。未選択の場合はプロジェクトのデフォルトスタイルが適用されます。
-                </p>
-              </div>
-
               <!-- A Layer: Base Appearance -->
               <div class="p-3 bg-gray-50 rounded-lg border-2 border-gray-300">
                 <div class="flex items-center gap-2 mb-2">
@@ -459,11 +454,14 @@
   }
 
   /**
-   * Load style presets into select element
+   * Load style presets into select elements
+   * - wc-ref-style-preset: 参照画像生成時のスタイル（AIで生成タブ内）
+   * - wc-style-preset: キャラクター保存用スタイル（存在しない場合はスキップ）
    */
   async function loadStylePresetsIntoSelect(selectedId = null) {
-    const sel = document.getElementById('wc-style-preset');
-    if (!sel) return;
+    const refSel = document.getElementById('wc-ref-style-preset');
+    
+    if (!refSel) return;
 
     try {
       const res = await fetch(`${API_BASE}/style-presets`);
@@ -471,18 +469,19 @@
       const data = await res.json();
       const presets = data.style_presets || [];
 
-      const opts = ['<option value="">-- プロジェクトのデフォルトを使用 --</option>'];
+      // 参照画像生成用（選択なし状態）
+      const refOpts = ['<option value="">-- プロジェクトのデフォルト --</option>'];
       for (const p of presets) {
         const id = escapeHtml(String(p.id));
         const name = escapeHtml(p.name);
-        const selected = selectedId && String(selectedId) === String(p.id) ? ' selected' : '';
-        opts.push(`<option value="${id}"${selected}>${name}</option>`);
+        refOpts.push(`<option value="${id}">${name}</option>`);
       }
-      sel.innerHTML = opts.join('');
+      refSel.innerHTML = refOpts.join('');
+      
       console.log(`[WorldCharacterModal] Loaded ${presets.length} style presets`);
     } catch (e) {
       console.error('[WorldCharacterModal] Failed to load style presets:', e);
-      sel.innerHTML = '<option value="">(スタイル取得失敗)</option>';
+      refSel.innerHTML = '<option value="">(スタイル取得失敗)</option>';
     }
   }
 
