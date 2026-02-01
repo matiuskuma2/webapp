@@ -1,9 +1,9 @@
 # テロップ (Telop) SSOT 設計書
 
-**Version**: 1.2  
+**Version**: 1.3  
 **Created**: 2026-02-01  
 **Updated**: 2026-02-01  
-**Status**: Phase 1 完了、Phase 3-A 完了
+**Status**: Phase 1 完了、Phase 2-1 完了、Phase 3-A 完了
 
 ---
 
@@ -278,13 +278,52 @@ const TELOP_STYLE_PRESETS = {
 
 **目標**: 漫画生成時のテロップスタイルをプリセットで統一
 
-**2-A: プリセット中心（初期）**
-- 漫画生成時のデフォルトスタイルをプリセットから適用
-- 既存の BUBBLE_STYLES をプリセットと連動
+#### Phase 2-1: 設定保持（✅ 完了）
 
-**2-B: telop_settings の一部を漫画レンダラへ渡す（発展）**
-- font_family, font_size などを共有
-- 既存画像との整合性は再生成で対応
+**目標**: 漫画テロップ設定の保存・表示・警告を安定化（再生成は行わない）
+
+**実装完了内容** (2026-02-01):
+
+1. **✅ SSOT: projects.settings_json.telops_comic に保存**
+   - `style_preset`: minimal | outline | band | pop | cinematic
+   - `size_preset`: sm | md | lg
+   - `position_preset`: bottom | center | top
+   - 保存先は Project レベル（Build / Scene と分離）
+
+2. **✅ API エンドポイント追加**
+   - `PUT /api/projects/:id/comic-telop-settings` - 設定保存
+   - `GET /api/projects/:id` - settings.telops_comic を返す
+
+3. **✅ 出力設定UIに「漫画の文字（焼き込み）設定」セクション追加**
+   - Remotion テロップ設定とは別セクション（ローズ色の枠）
+   - 注意書き: 「この設定は次回の漫画生成から反映されます」
+   - 保存ボタンで即時保存
+
+4. **✅ チャット apply (scope=comic/both) での設定更新**
+   - `telopsComicOverride` を `resolveIntentToOps` 戻り値に追加
+   - `comicRegenerationRequired` に警告を追加
+   - 適用時に `projects.settings_json.telops_comic` を更新
+
+**変更ファイル**:
+- `src/routes/projects.ts` - PUT /comic-telop-settings 追加、GET /:id で telops_comic 返却
+- `src/routes/patches.ts` - telopsComicOverride 追加、scope=comic/both 処理
+- `src/index.tsx` - 漫画の文字設定セクション追加
+- `public/static/project-editor.js` - loadComicTelopSettings / saveComicTelopSettings 追加
+
+**やらなかったこと（Phase 2-2/3 へ移行）**:
+- 漫画画像の再生成による見た目の変更
+- 漫画編集画面（comic-editor-v2.js）への telop preset 適用
+- 既存漫画の焼き込みを後から差し替える処理
+
+#### Phase 2-2: 再生成導線（未実装）
+
+- 「漫画を再生成」ボタンで telops_comic を適用
+- 変更検知と警告UI
+
+#### Phase 2-3: 描画ロジック統合（未実装）
+
+- comic-editor-v2.js でプリセットを参照して描画
+- font_family, font_size などの共有
 
 **注意点**:
 - 漫画焼き込みは画像生成時に決定されるため、後から変更には再生成が必要

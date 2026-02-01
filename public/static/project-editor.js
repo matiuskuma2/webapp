@@ -144,6 +144,9 @@ async function loadProject() {
     // Load output_preset selection
     loadOutputPreset();
     
+    // Phase 2-1: Load comic telop settings
+    loadComicTelopSettings();
+    
     // Safe Chat v1: Refresh Builder Wizard
     refreshBuilderWizard();
   } catch (error) {
@@ -12384,6 +12387,59 @@ async function loadOutputPreset() {
     }
   }
 }
+
+/**
+ * Phase 2-1: Load comic telop settings from project.settings
+ */
+async function loadComicTelopSettings() {
+  try {
+    // currentProject.settings は GET /api/projects/:id から返される
+    const settings = currentProject?.settings || {};
+    const telopComic = settings.telops_comic || {};
+    
+    // UI に反映（デフォルト値を使用）
+    const styleSelect = document.getElementById('vbComicTelopStyle');
+    const sizeSelect = document.getElementById('vbComicTelopSize');
+    const positionSelect = document.getElementById('vbComicTelopPosition');
+    
+    if (styleSelect) styleSelect.value = telopComic.style_preset || 'outline';
+    if (sizeSelect) sizeSelect.value = telopComic.size_preset || 'md';
+    if (positionSelect) positionSelect.value = telopComic.position_preset || 'bottom';
+    
+    console.log('[ComicTelop] Phase2-1: Settings loaded:', telopComic);
+  } catch (error) {
+    console.error('[ComicTelop] Failed to load comic telop settings:', error);
+  }
+}
+window.loadComicTelopSettings = loadComicTelopSettings;
+
+/**
+ * Phase 2-1: Save comic telop settings to project.settings_json
+ */
+async function saveComicTelopSettings() {
+  try {
+    const styleSelect = document.getElementById('vbComicTelopStyle');
+    const sizeSelect = document.getElementById('vbComicTelopSize');
+    const positionSelect = document.getElementById('vbComicTelopPosition');
+    
+    const payload = {
+      style_preset: styleSelect?.value || 'outline',
+      size_preset: sizeSelect?.value || 'md',
+      position_preset: positionSelect?.value || 'bottom',
+    };
+    
+    const response = await axios.put(`${API_BASE}/projects/${PROJECT_ID}/comic-telop-settings`, payload);
+    
+    if (response.data.success) {
+      showToast('漫画の文字設定を保存しました。次回の漫画生成から反映されます。', 'success');
+      console.log('[ComicTelop] Phase2-1: Settings saved:', response.data.telops_comic);
+    }
+  } catch (error) {
+    console.error('[ComicTelop] Failed to save comic telop settings:', error);
+    showToast('漫画の文字設定の保存に失敗しました', 'error');
+  }
+}
+window.saveComicTelopSettings = saveComicTelopSettings;
 
 /**
  * Save output_preset to API

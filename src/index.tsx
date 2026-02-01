@@ -1785,6 +1785,68 @@ app.get('/projects/:id', (c) => {
                             </p>
                         </div>
 
+                        <!-- Phase2-1: 漫画の文字（焼き込み）設定 ※保存のみ、反映は再生成が必要 -->
+                        <div class="p-4 bg-rose-50/50 rounded-lg border border-rose-200">
+                            <div class="flex items-center justify-between mb-3">
+                                <label class="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                                    <i class="fas fa-image text-rose-600"></i>漫画の文字（焼き込み）
+                                    <span class="text-xs font-normal text-gray-500">（画像に焼き込むテキスト）</span>
+                                </label>
+                            </div>
+                            
+                            <!-- 注意書き（常時表示） -->
+                            <div class="mb-3 p-2 bg-amber-100 border border-amber-300 rounded text-xs text-amber-800">
+                                <i class="fas fa-exclamation-triangle mr-1"></i>
+                                <strong>注意:</strong> この設定は「次回の漫画生成」から反映されます。既に作成済みの漫画画像は変わりません（再生成が必要）。
+                            </div>
+                            
+                            <!-- スタイル・サイズ選択 -->
+                            <div class="grid grid-cols-2 gap-3 mb-3">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">スタイル</label>
+                                    <select id="vbComicTelopStyle"
+                                        class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:border-rose-500 focus:ring-1 focus:ring-rose-200">
+                                        <option value="outline" selected>アウトライン（標準）</option>
+                                        <option value="minimal">ミニマル</option>
+                                        <option value="band">帯付き（TV風）</option>
+                                        <option value="pop">ポップ（バラエティ風）</option>
+                                        <option value="cinematic">シネマティック</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">サイズ</label>
+                                    <select id="vbComicTelopSize"
+                                        class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:border-rose-500 focus:ring-1 focus:ring-rose-200">
+                                        <option value="sm">小</option>
+                                        <option value="md" selected>中</option>
+                                        <option value="lg">大</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <label class="block text-xs text-gray-600 mb-1">表示位置</label>
+                                <select id="vbComicTelopPosition"
+                                    class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:border-rose-500 focus:ring-1 focus:ring-rose-200">
+                                    <option value="bottom" selected>下</option>
+                                    <option value="center">中央</option>
+                                    <option value="top">上</option>
+                                </select>
+                            </div>
+                            
+                            <p class="text-xs text-gray-500 mt-2">
+                                <i class="fas fa-info-circle text-rose-500 mr-1"></i>
+                                上記「テロップ」はRemotion動画用。この「漫画の文字」は漫画画像に焼き込むスタイルです。
+                            </p>
+                            
+                            <!-- 保存ボタン -->
+                            <button 
+                                onclick="saveComicTelopSettings()"
+                                class="mt-3 w-full px-3 py-2 bg-rose-600 text-white rounded-lg hover:bg-rose-700 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+                            >
+                                <i class="fas fa-save"></i>設定を保存
+                            </button>
+                        </div>
+
                         <!-- モーション -->
                         <div>
                             <label class="block text-sm font-semibold text-gray-700 mb-2">

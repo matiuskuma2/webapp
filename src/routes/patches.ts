@@ -1704,6 +1704,15 @@ interface ComicRegenerationRequired {
   affected_scenes?: number[];  // 影響を受けるシーン（漫画シーンのみ）
 }
 
+// Phase 2-1: 漫画（焼き込み）テロップ設定（projects.settings_json.telops_comicに保存）
+// SSOT: これは「保存のみ」で、反映には漫画再生成が必要
+interface TelopsComicSettings {
+  style_preset?: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
+  size_preset?: 'sm' | 'md' | 'lg';
+  position_preset?: 'bottom' | 'center' | 'top';
+  // Phase 2-2以降: bg_mode, bg_opacity, text_color, stroke など
+}
+
 // PR2: Timeline BGM ダッキング設定（projects.settings_json.audio_automationに保存）
 interface TimelineBgmDuckEntry {
   id: string;                    // 一意ID（auto_timestamp）
@@ -1733,6 +1742,8 @@ async function resolveIntentToOps(
   telop_settings_override?: TelopSettingsOverride;
   // PR2: Timeline BGM設定の上書き（projects.settings_jsonに保存）
   audio_automation_override?: AudioAutomationOverride;
+  // Phase 2-1: 漫画（焼き込み）テロップ設定の上書き（projects.settings_json.telops_comicに保存）
+  telops_comic_override?: TelopsComicSettings;
 }> {
   const ops: PatchOp[] = [];
   const errors: string[] = [];
@@ -1744,6 +1755,8 @@ async function resolveIntentToOps(
   const audioAutomationOverride: AudioAutomationOverride = {};
   // Phase 3-A: 漫画焼き込み再生成が必要な操作のリスト
   const comicRegenerationRequired: ComicRegenerationRequired[] = [];
+  // Phase 2-1: 漫画（焼き込み）テロップ設定の収集
+  const telopsComicOverride: TelopsComicSettings = {};
 
   for (let i = 0; i < intent.actions.length; i++) {
     const action = intent.actions[i];
@@ -2472,6 +2485,8 @@ async function resolveIntentToOps(
             action: action.action,
             message: `テロップ位置の変更（${scope === 'both' ? 'Remotion字幕＋漫画焼き込み' : '漫画焼き込み'}）には漫画シーンの再生成が必要です`,
           });
+          // Phase 2-1: 漫画（焼き込み）設定を保存（反映は再生成時）
+          telopsComicOverride.position_preset = telopAction.position_preset as 'bottom' | 'center' | 'top';
         }
         
         // Remotion字幕への反映（scope が remotion または both の場合）
@@ -2500,6 +2515,8 @@ async function resolveIntentToOps(
             action: action.action,
             message: `テロップサイズの変更（${scope === 'both' ? 'Remotion字幕＋漫画焼き込み' : '漫画焼き込み'}）には漫画シーンの再生成が必要です`,
           });
+          // Phase 2-1: 漫画（焼き込み）設定を保存（反映は再生成時）
+          telopsComicOverride.size_preset = telopAction.size_preset as 'sm' | 'md' | 'lg';
         }
         
         // Remotion字幕への反映（scope が remotion または both の場合）
@@ -2531,6 +2548,8 @@ async function resolveIntentToOps(
             action: action.action,
             message: `テロップスタイルの変更（${scope === 'both' ? 'Remotion字幕＋漫画焼き込み' : '漫画焼き込み'}）には漫画シーンの再生成が必要です`,
           });
+          // Phase 2-1: 漫画（焼き込み）設定を保存（反映は再生成時）
+          telopsComicOverride.style_preset = telopAction.style_preset as 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
         }
         
         // Remotion字幕への反映（scope が remotion または both の場合）
@@ -2635,6 +2654,9 @@ async function resolveIntentToOps(
   // PR2: AudioAutomation設定が空でない場合のみ含める
   const hasAudioAutomationOverride = Object.keys(audioAutomationOverride).length > 0;
   
+  // Phase 2-1: 漫画（焼き込み）テロップ設定が空でない場合のみ含める
+  const hasTelopsComicOverride = Object.keys(telopsComicOverride).length > 0;
+  
   // Phase 3-A: 漫画再生成が必要な操作がある場合、警告を追加
   if (comicRegenerationRequired.length > 0) {
     for (const item of comicRegenerationRequired) {
@@ -2650,6 +2672,8 @@ async function resolveIntentToOps(
     resolution_log: resolutionLog,
     ...(hasTelopOverride && { telop_settings_override: telopSettingsOverride }),
     ...(hasAudioAutomationOverride && { audio_automation_override: audioAutomationOverride }),
+    // Phase 2-1: 漫画（焼き込み）テロップ設定の上書き
+    ...(hasTelopsComicOverride && { telops_comic_override: telopsComicOverride }),
     // Phase 3-A: 漫画再生成が必要な情報
     ...(comicRegenerationRequired.length > 0 && { 
       comic_regeneration_required: comicRegenerationRequired,
@@ -3097,6 +3121,44 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
       } catch (settingsError) {
         console.error(`[Chat Edit Apply] Failed to update project settings_json:`, settingsError);
         // ビルドには影響しないので続行
+      }
+    }
+
+    // Phase 2-1: 漫画（焼き込み）テロップ設定を projects.settings_json に保存
+    // SSOT: これは「保存のみ」で、反映には漫画再生成が必要
+    const telopsComicOverride = result.telops_comic_override;
+    if (telopsComicOverride && Object.keys(telopsComicOverride).length > 0) {
+      try {
+        // 既存のprojects.settings_jsonを取得
+        const projectSettings = await c.env.DB.prepare(`
+          SELECT settings_json FROM projects WHERE id = ?
+        `).bind(projectId).first<{ settings_json: string | null }>();
+        
+        let projectSettingsJson: Record<string, unknown> = {};
+        if (projectSettings?.settings_json) {
+          try {
+            projectSettingsJson = JSON.parse(projectSettings.settings_json);
+          } catch { /* ignore */ }
+        }
+        
+        // telops_comicをマージ（既存設定を保持しつつ新設定で上書き）
+        const existingTelopsComic = (projectSettingsJson.telops_comic as TelopsComicSettings) || {};
+        projectSettingsJson.telops_comic = {
+          ...existingTelopsComic,
+          ...telopsComicOverride,
+          // 更新日時を記録（再生成判定に使用）
+          updated_at: new Date().toISOString(),
+        };
+        
+        // projects.settings_jsonを更新
+        await c.env.DB.prepare(`
+          UPDATE projects SET settings_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(JSON.stringify(projectSettingsJson), projectId).run();
+        
+        console.log(`[Chat Edit Apply] Project settings_json updated with telops_comic:`, telopsComicOverride);
+      } catch (settingsError) {
+        console.error(`[Chat Edit Apply] Failed to update project settings_json with telops_comic:`, settingsError);
+        // 保存失敗しても続行（次回再試行可能）
       }
     }
 

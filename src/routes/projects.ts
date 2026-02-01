@@ -338,12 +338,30 @@ projects.get('/:id', async (c) => {
         p.output_preset,
         p.split_mode,
         p.target_scene_count,
+        p.settings_json,
         p.created_at,
         p.updated_at,
         p.source_updated_at
       FROM projects p
       WHERE p.id = ?
-    `).bind(projectId).first()
+    `).bind(projectId).first<{
+      id: number;
+      title: string;
+      status: string;
+      source_type: string | null;
+      source_text: string | null;
+      audio_filename: string | null;
+      audio_size_bytes: number | null;
+      audio_duration_seconds: number | null;
+      audio_r2_key: string | null;
+      output_preset: string | null;
+      split_mode: string | null;
+      target_scene_count: number | null;
+      settings_json: string | null;
+      created_at: string;
+      updated_at: string;
+      source_updated_at: string | null;
+    }>()
 
     if (!project) {
       return c.json({
@@ -355,11 +373,23 @@ projects.get('/:id', async (c) => {
     }
 
     // SSOT: split_mode のノーマライズ（preserve → raw、未設定 → null）
+    // Phase 2-1: settings_json をパースして返す（telops_comic などを含む）
+    let settingsParsed: Record<string, unknown> = {};
+    if (project.settings_json) {
+      try {
+        settingsParsed = JSON.parse(project.settings_json);
+      } catch { /* ignore parse errors */ }
+    }
+    
     const normalizedProject = {
       ...project,
       split_mode: project.split_mode === 'preserve' ? 'raw' : (project.split_mode || null),
-      target_scene_count: project.target_scene_count || null
-    }
+      target_scene_count: project.target_scene_count || null,
+      // settings_json を文字列ではなくオブジェクトとして返す
+      settings: settingsParsed,
+    };
+    // 重複を避けるため settings_json 文字列は削除
+    delete (normalizedProject as Record<string, unknown>).settings_json;
 
     return c.json(normalizedProject)
   } catch (error) {
@@ -1838,6 +1868,91 @@ projects.put('/:id/output-preset', async (c) => {
   } catch (error) {
     console.error('[Projects] Failed to update output preset:', error)
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update output preset' } }, 500)
+  }
+})
+
+/**
+ * PUT /api/projects/:id/comic-telop-settings
+ * Phase 2-1: 漫画の文字（焼き込み）設定を保存
+ * 保存のみで反映はしない（次回の漫画生成時に適用）
+ */
+projects.put('/:id/comic-telop-settings', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
+    }
+
+    const body = await c.req.json<{
+      style_preset?: string
+      size_preset?: string
+      position_preset?: string
+    }>()
+
+    // Validate presets
+    const validStyles = ['minimal', 'outline', 'band', 'pop', 'cinematic']
+    const validSizes = ['sm', 'md', 'lg']
+    const validPositions = ['bottom', 'center', 'top']
+
+    if (body.style_preset && !validStyles.includes(body.style_preset)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid style_preset. Valid: ${validStyles.join(', ')}` }
+      }, 400)
+    }
+    if (body.size_preset && !validSizes.includes(body.size_preset)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid size_preset. Valid: ${validSizes.join(', ')}` }
+      }, 400)
+    }
+    if (body.position_preset && !validPositions.includes(body.position_preset)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid position_preset. Valid: ${validPositions.join(', ')}` }
+      }, 400)
+    }
+
+    // Get existing project and settings
+    const project = await c.env.DB.prepare(`
+      SELECT id, settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; settings_json: string | null }>()
+
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
+
+    // Parse existing settings
+    let settingsJson: Record<string, unknown> = {}
+    if (project.settings_json) {
+      try {
+        settingsJson = JSON.parse(project.settings_json)
+      } catch { /* ignore */ }
+    }
+
+    // Update telops_comic (Phase 2-1: 保存のみ、反映は再生成が必要)
+    const currentTelopComic = (settingsJson.telops_comic as Record<string, unknown>) || {}
+    const newTelopComic = {
+      ...currentTelopComic,
+      style_preset: body.style_preset ?? currentTelopComic.style_preset ?? 'outline',
+      size_preset: body.size_preset ?? currentTelopComic.size_preset ?? 'md',
+      position_preset: body.position_preset ?? currentTelopComic.position_preset ?? 'bottom',
+    }
+    settingsJson.telops_comic = newTelopComic
+
+    // Save to DB
+    await c.env.DB.prepare(`
+      UPDATE projects SET settings_json = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(JSON.stringify(settingsJson), projectId).run()
+
+    console.log(`[Projects] Phase2-1: Comic telop settings saved for project ${projectId}:`, newTelopComic)
+
+    return c.json({
+      success: true,
+      telops_comic: newTelopComic,
+      message: '漫画の文字設定を保存しました。次回の漫画生成から反映されます。',
+    })
+  } catch (error) {
+    console.error('[Projects] Failed to update comic telop settings:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update comic telop settings' } }, 500)
   }
 })
 
