@@ -558,9 +558,15 @@ async function generateAndUploadAudio(args: {
       `).bind(sceneId, audioId).run();
     }
 
-    // FIX: duration_ms を概算（日本語: 文字数 * 120〜150ms程度）
-    // 最低2秒を保証
-    const estimatedDurationMs = Math.max(2000, text.length * 130);
+    // FIX: MP3ファイルサイズからdurationを計算（概算より正確）
+    // MP3 128kbps: duration_seconds = file_size_bytes / (128 * 1000 / 8) = file_size_bytes / 16000
+    // MP3 44100Hz 128kbps の場合は bytes / 16000 が秒数
+    // 安全マージンとして少し長めに計算（最低2秒保証）
+    const bytesLength = bytes.length;
+    const bitrate = format === 'wav' ? 176400 : 16000; // WAV 44.1kHz 16bit stereo or MP3 128kbps
+    const calculatedDurationMs = Math.round((bytesLength / bitrate) * 1000);
+    const estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+    console.log(`[Audio] Duration calculation: ${bytesLength} bytes / ${bitrate} = ${calculatedDurationMs}ms (using ${estimatedDurationMs}ms)`);
     
     // completed 定義: r2_url 必須 + 自動でis_active = 1に設定 + duration_ms追加
     await env.DB.prepare(`
