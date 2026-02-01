@@ -2,14 +2,21 @@ import React from 'react';
 import { AbsoluteFill, Img, Audio, Video, Sequence, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
 import type { ProjectScene, VoiceAsset, SfxAsset, SceneBgmAsset } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
-import { Subtitle } from './Subtitle';
+import { Subtitle, TelopStylePreset } from './Subtitle';
 import { MotionWrapper, getMotionPreset } from './MotionWrapper';
 import { BalloonOverlay } from './BalloonOverlay';
 
 interface SceneProps {
   scene: ProjectScene;
   showSubtitle?: boolean;
+  /** @deprecated style より stylePreset/sizePreset/position を使用 */
   subtitleStyle?: 'default' | 'cinematic' | 'news' | 'minimal';
+  /** Phase 1: テロップスタイルプリセット */
+  telopStylePreset?: TelopStylePreset;
+  /** Phase 1: テロップサイズプリセット */
+  telopSizePreset?: 'sm' | 'md' | 'lg';
+  /** Phase 1: テロップ表示位置 */
+  telopPosition?: 'bottom' | 'center' | 'top';
 }
 
 /**
@@ -43,7 +50,10 @@ interface SceneProps {
 export const Scene: React.FC<SceneProps> = ({ 
   scene, 
   showSubtitle = true, 
-  subtitleStyle = 'default' 
+  subtitleStyle = 'default',
+  telopStylePreset = 'outline',
+  telopSizePreset = 'md',
+  telopPosition = 'bottom',
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -237,7 +247,9 @@ export const Scene: React.FC<SceneProps> = ({
             text={subtitleText}
             durationFrames={durationFrames}
             style={subtitleStyle}
-            position="bottom"
+            stylePreset={telopStylePreset}
+            sizePreset={telopSizePreset}
+            position={telopPosition}
           />
         )}
         
@@ -403,7 +415,9 @@ export const Scene: React.FC<SceneProps> = ({
           text={subtitleText}
           durationFrames={durationFrames}
           style={subtitleStyle}
-          position="bottom"
+          stylePreset={telopStylePreset}
+          sizePreset={telopSizePreset}
+          position={telopPosition}
         />
       )}
       

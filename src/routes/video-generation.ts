@@ -2644,12 +2644,14 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         preset: body.motion?.preset ?? outputPresetConfig.motion_default ?? 'none',
         transition: body.motion?.transition || 'crossfade',
       },
-      // PR-5-3a/b: テロップ表示設定（字幕とは別）
+      // PR-5-3a/b + Phase 1: テロップ表示設定
       telops: {
         enabled: body.telops?.enabled ?? true,  // デフォルトON
         // PR-5-3b: 位置・サイズプリセット（Safe Chatで変更可能）
         position_preset: body.telops?.position_preset ?? 'bottom',  // bottom | center | top
         size_preset: body.telops?.size_preset ?? 'md',  // sm | md | lg
+        // Phase 1: スタイルプリセット (minimal/outline/band/pop/cinematic)
+        style_preset: body.telops?.style_preset ?? 'outline',
       },
       // PR-5-1: 表現サマリー（スナップショット）
       expression_summary: {

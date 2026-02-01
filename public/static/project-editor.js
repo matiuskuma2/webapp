@@ -8291,8 +8291,11 @@ function summarizeBuildSettings(build) {
   // PR-5-1: 表現サマリー（expression_summary）
   const expr = settings.expression_summary || null;
   
-  // PR-5-3a: テロップ設定
+  // PR-5-3a + Phase 1: テロップ設定
   const telopsEnabled = settings.telops?.enabled ?? true;  // デフォルトON
+  const telopStylePreset = settings.telops?.style_preset || 'outline';  // Phase 1
+  const telopSizePreset = settings.telops?.size_preset || 'md';
+  const telopPositionPreset = settings.telops?.position_preset || 'bottom';
   
   return { 
     preset, 
@@ -8301,8 +8304,11 @@ function summarizeBuildSettings(build) {
     bgmEnabled, 
     bgmVolPct, 
     motionPreset,
-    // PR-5-3a: テロップ表示設定
+    // PR-5-3a + Phase 1: テロップ表示設定
     telopsEnabled,
+    telopStylePreset,  // Phase 1: スタイルプリセット
+    telopSizePreset,
+    telopPositionPreset,
     // PR-5-1: 表現サマリー（なければnull = 過去ビルド）
     expression: expr ? {
       hasVoice: expr.has_voice ?? false,
@@ -8846,10 +8852,21 @@ async function startVideoBuild() {
     ? (getVal('vbMotionPreset', 'kenburns_soft') || 'kenburns_soft')
     : (getBool('videoBuildMotion', true) ? 'kenburns_soft' : 'none');
   
-  // PR-5-3a: Telops（テロップ - 字幕とは別）
+  // PR-5-3a + Phase 1: Telops（テロップ - 字幕とは別）
   const telopsEnabled = hasNewConfigUI
     ? getBool('vbTelopsToggle', true)  // デフォルトON
     : true;
+  
+  // Phase 1: テロップスタイル設定（UIから取得）
+  const telopStylePreset = hasNewConfigUI
+    ? (getVal('vbTelopStyle', 'outline') || 'outline')
+    : 'outline';
+  const telopSizePreset = hasNewConfigUI
+    ? (getVal('vbTelopSize', 'md') || 'md')
+    : 'md';
+  const telopPositionPreset = hasNewConfigUI
+    ? (getVal('vbTelopPosition', 'bottom') || 'bottom')
+    : 'bottom';
   
   // Build settings for API (SSOT aligned)
   const buildSettings = {
@@ -8865,12 +8882,13 @@ async function startVideoBuild() {
     motion: {
       preset: motionPreset,
     },
-    // PR-5-3a/b: テロップ表示設定
+    // PR-5-3a/b + Phase 1: テロップ表示設定
     telops: {
       enabled: telopsEnabled,
-      // PR-5-3b: 位置・サイズはデフォルト値（Safe Chatで変更可能）
-      position_preset: 'bottom',  // bottom | center | top
-      size_preset: 'md',  // sm | md | lg
+      // Phase 1: スタイルプリセット（UIから取得）
+      style_preset: telopStylePreset,  // minimal | outline | band | pop | cinematic
+      position_preset: telopPositionPreset,  // bottom | center | top
+      size_preset: telopSizePreset,  // sm | md | lg
     },
   };
   

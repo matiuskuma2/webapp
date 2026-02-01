@@ -21,6 +21,7 @@ const BGM_FADE_MS = 120; // フェード時間（ms）
 interface RilarcVideoProps {
   projectJson: ProjectJson;
   showSubtitle?: boolean;
+  /** @deprecated subtitleStyle より build_settings.telops を使用 */
   subtitleStyle?: 'default' | 'cinematic' | 'news' | 'minimal';
 }
 
@@ -36,13 +37,21 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   console.log('[RilarcVideo] projectJson type:', typeof projectJson);
   console.log('[RilarcVideo] projectJson scenes count:', projectJson?.scenes?.length);
   
-  // PR-5-3b: テロップ設定を取得
+  // PR-5-3b + Phase 1: テロップ設定を取得
   const telopsSettings = projectJson?.build_settings?.telops;
   const globalTelopEnabled = telopsSettings?.enabled ?? true;
   const sceneOverrides = telopsSettings?.scene_overrides || {};
   
+  // Phase 1: スタイルプリセットを取得（後方互換: undefinedの場合は 'outline'）
+  const telopStylePreset = (telopsSettings as any)?.style_preset || 'outline';
+  const telopSizePreset = telopsSettings?.size_preset || 'md';
+  const telopPosition = telopsSettings?.position_preset || 'bottom';
+  
   console.log('[RilarcVideo] telops settings:', JSON.stringify(telopsSettings));
   console.log('[RilarcVideo] globalTelopEnabled:', globalTelopEnabled);
+  console.log('[RilarcVideo] telopStylePreset:', telopStylePreset);
+  console.log('[RilarcVideo] telopSizePreset:', telopSizePreset);
+  console.log('[RilarcVideo] telopPosition:', telopPosition);
   console.log('[RilarcVideo] sceneOverrides:', JSON.stringify(sceneOverrides));
   
   // scenes が undefined の場合は空配列を使用
@@ -181,6 +190,9 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
               scene={scene} 
               showSubtitle={sceneShowSubtitle}
               subtitleStyle={subtitleStyle}
+              telopStylePreset={telopStylePreset}
+              telopSizePreset={telopSizePreset}
+              telopPosition={telopPosition}
             />
           </Sequence>
         );

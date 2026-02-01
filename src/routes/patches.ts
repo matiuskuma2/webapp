@@ -1630,6 +1630,12 @@ interface TelopSetSizeAction {
   size_preset: 'sm' | 'md' | 'lg';  // 小 / 中 / 大
 }
 
+// Phase 1: テロップスタイルプリセット変更
+interface TelopSetStyleAction {
+  action: 'telop.set_style';
+  style_preset: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
+}
+
 // 許可されるアクションのホワイトリスト
 const ALLOWED_CHAT_ACTIONS = new Set([
   'balloon.adjust_window',
@@ -1654,11 +1660,12 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'timeline_bgm.set_volume', // 部分区間のBGM音量設定
   'timeline_sfx.move',       // SFXを別の時間に移動
   'timeline_sfx.copy',       // SFXを別の時間にコピー
-  // PR-5-3b: テロップ設定（Build単位の上書き、scene_telopはいじらない）
+  // PR-5-3b + Phase 1: テロップ設定（Build単位の上書き、scene_telopはいじらない）
   'telop.set_enabled',
   'telop.set_enabled_scene',  // シーン単位のテロップON/OFF
   'telop.set_position',
   'telop.set_size',
+  'telop.set_style',  // Phase 1: スタイルプリセット変更
 ]);
 
 /**
@@ -1667,11 +1674,13 @@ const ALLOWED_CHAT_ACTIONS = new Set([
  * 人間参照（scene_idx, balloon_no, cue_no）をDB IDに解決し、
  * ssot_patch_v1 形式の ops に変換する
  */
-// PR-5-3b: テロップ設定はBuild単位の上書き（DBエンティティを更新しない）
+// PR-5-3b + Phase 1: テロップ設定はBuild単位の上書き（DBエンティティを更新しない）
 interface TelopSettingsOverride {
   enabled?: boolean;
   position_preset?: 'bottom' | 'center' | 'top';
   size_preset?: 'sm' | 'md' | 'lg';
+  // Phase 1: スタイルプリセット
+  style_preset?: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
   // シーン単位のテロップON/OFF（scene_idx -> enabled）
   scene_overrides?: Record<number, boolean>;
 }
@@ -2453,6 +2462,22 @@ async function resolveIntentToOps(
         });
 
       // ====================================================================
+      // Phase 1: telop.set_style - スタイルプリセット変更
+      // ====================================================================
+      } else if (action.action === 'telop.set_style') {
+        const telopAction = action as TelopSetStyleAction;
+        const validStyles = ['minimal', 'outline', 'band', 'pop', 'cinematic'];
+        if (!validStyles.includes(telopAction.style_preset)) {
+          errors.push(`${prefix}: Invalid style_preset: ${telopAction.style_preset}. Must be one of: ${validStyles.join(', ')}`);
+          continue;
+        }
+        telopSettingsOverride.style_preset = telopAction.style_preset;
+        resolutionLog.push({
+          action: action.action,
+          resolved: { style_preset: telopAction.style_preset },
+        });
+
+      // ====================================================================
       // PR2: Timeline操作（動画全体タイムライン基準）
       // ====================================================================
       } else if (action.action === 'timeline_bgm.duck' || action.action === 'timeline_bgm.set_volume') {
@@ -2918,7 +2943,7 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
       }
     }
 
-    // PR-5-3b: テロップ設定のオーバーライドを適用
+    // PR-5-3b + Phase 1: テロップ設定のオーバーライドを適用
     if (telopSettingsOverride) {
       const existingTelops = (buildSettings.telops as Record<string, unknown>) || { enabled: true };
       buildSettings.telops = {
@@ -2926,6 +2951,8 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
         ...(telopSettingsOverride.enabled !== undefined && { enabled: telopSettingsOverride.enabled }),
         ...(telopSettingsOverride.position_preset && { position_preset: telopSettingsOverride.position_preset }),
         ...(telopSettingsOverride.size_preset && { size_preset: telopSettingsOverride.size_preset }),
+        // Phase 1: スタイルプリセット
+        ...(telopSettingsOverride.style_preset && { style_preset: telopSettingsOverride.style_preset }),
         // ★ シーン単位のテロップON/OFFを適用
         ...(telopSettingsOverride.scene_overrides && { scene_overrides: telopSettingsOverride.scene_overrides }),
       };

@@ -1636,17 +1636,20 @@ export function buildProjectJson(
         type: 'fade',
         duration_ms: 300,
       },
-      // PR-5-3b: テロップ設定
+      // PR-5-3b + Phase 1: テロップ設定
       telops: settings.telops ? {
         enabled: settings.telops.enabled ?? true,
         position_preset: settings.telops.position_preset ?? 'bottom',
         size_preset: settings.telops.size_preset ?? 'md',
+        // Phase 1: スタイルプリセット (minimal/outline/band/pop/cinematic)
+        style_preset: settings.telops.style_preset ?? 'outline',
         // シーン単位のオーバーライド（scene_idx -> enabled）
         scene_overrides: settings.telops.scene_overrides || undefined,
       } : {
         enabled: true,
         position_preset: 'bottom',
         size_preset: 'md',
+        style_preset: 'outline',
       },
       // PR2: Timeline オーディオ自動化（BGMダッキング等）
       audio_automation: settings.audio_automation ? {

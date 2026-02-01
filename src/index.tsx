@@ -1732,9 +1732,9 @@ app.get('/projects/:id', (c) => {
                             </div>
                         </div>
 
-                        <!-- テロップ（PR-5-3a）※字幕とは別 -->
+                        <!-- テロップ（PR-5-3a + Phase 1）※字幕とは別 -->
                         <div class="p-4 bg-amber-50/50 rounded-lg border border-amber-200">
-                            <div class="flex items-center justify-between">
+                            <div class="flex items-center justify-between mb-3">
                                 <label class="text-sm font-semibold text-gray-700 flex items-center gap-2">
                                     <i class="fas fa-font text-amber-600"></i>テロップ
                                     <span class="text-xs font-normal text-gray-500">（画面上テキスト）</span>
@@ -1744,6 +1744,40 @@ app.get('/projects/:id', (c) => {
                                     <span class="text-sm text-gray-700">表示する</span>
                                 </label>
                             </div>
+                            
+                            <!-- Phase 1: テロップスタイル選択 -->
+                            <div class="grid grid-cols-2 gap-3 mb-3">
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">スタイル</label>
+                                    <select id="vbTelopStyle"
+                                        class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200">
+                                        <option value="outline" selected>アウトライン（標準）</option>
+                                        <option value="minimal">ミニマル</option>
+                                        <option value="band">帯付き（TV風）</option>
+                                        <option value="pop">ポップ（バラエティ風）</option>
+                                        <option value="cinematic">シネマティック</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-xs text-gray-600 mb-1">サイズ</label>
+                                    <select id="vbTelopSize"
+                                        class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200">
+                                        <option value="sm">小</option>
+                                        <option value="md" selected>中</option>
+                                        <option value="lg">大</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <label class="block text-xs text-gray-600 mb-1">表示位置</label>
+                                <select id="vbTelopPosition"
+                                    class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm focus:border-amber-500 focus:ring-1 focus:ring-amber-200">
+                                    <option value="bottom" selected>下</option>
+                                    <option value="center">中央</option>
+                                    <option value="top">上</option>
+                                </select>
+                            </div>
+                            
                             <p class="text-xs text-gray-500 mt-2">
                                 <i class="fas fa-info-circle text-amber-500 mr-1"></i>
                                 テロップ＝シーンごとの任意テキスト表現。<br/>
