@@ -38,6 +38,71 @@
   }
 
   /**
+   * Compress image to fit within maxSize bytes
+   * Uses canvas to resize and reduce quality
+   * @param {File} file - Original image file
+   * @param {number} maxSize - Maximum size in bytes (default 5MB)
+   * @returns {Promise<File>} - Compressed image file
+   */
+  async function compressImage(file, maxSize = 5 * 1024 * 1024) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      img.onload = () => {
+        // Calculate target dimensions (max 2048px on longest side)
+        let { width, height } = img;
+        const maxDimension = 2048;
+        
+        if (width > maxDimension || height > maxDimension) {
+          if (width > height) {
+            height = Math.round(height * maxDimension / width);
+            width = maxDimension;
+          } else {
+            width = Math.round(width * maxDimension / height);
+            height = maxDimension;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Try different quality levels until size is acceptable
+        const tryCompress = (quality) => {
+          canvas.toBlob((blob) => {
+            if (!blob) {
+              reject(new Error('Canvas toBlob failed'));
+              return;
+            }
+            
+            console.log(`[Compress] Quality ${quality}: ${(blob.size / 1024 / 1024).toFixed(2)}MB`);
+            
+            if (blob.size <= maxSize || quality <= 0.1) {
+              // Convert blob to file
+              const compressedFile = new File([blob], file.name.replace(/\.[^.]+$/, '.jpg'), {
+                type: 'image/jpeg',
+                lastModified: Date.now()
+              });
+              resolve(compressedFile);
+            } else {
+              // Try lower quality
+              tryCompress(quality - 0.1);
+            }
+          }, 'image/jpeg', quality);
+        };
+        
+        // Start with 0.9 quality
+        tryCompress(0.9);
+      };
+      
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = URL.createObjectURL(file);
+    });
+  }
+
+  /**
    * Parse aliases from newline-separated text
    * Filter out 2-char or shorter aliases (Phase X-2 requirement)
    */
@@ -181,7 +246,7 @@
                 <button id="wc-ref-upload-btn" class="px-4 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 transition-colors">
                   <i class="fas fa-upload mr-1"></i> ファイルを選択
                 </button>
-                <p class="text-xs text-gray-500 mt-1">PNG/JPEG/WEBP、最大5MB</p>
+                <p class="text-xs text-gray-500 mt-1">PNG/JPEG/WEBP（大きい画像は自動圧縮）</p>
               </div>
             </div>
             
@@ -628,16 +693,28 @@
       }
 
       const maxSize = 5 * 1024 * 1024;
+      let processedFile = file;
+      
+      // 5MBを超える場合は自動圧縮
       if (file.size > maxSize) {
-        toast('ファイルサイズが5MBを超えています', 'warning');
-        return;
+        toast('画像を圧縮中...', 'info');
+        try {
+          processedFile = await compressImage(file, maxSize);
+          const originalMB = (file.size / 1024 / 1024).toFixed(1);
+          const compressedMB = (processedFile.size / 1024 / 1024).toFixed(1);
+          toast(`圧縮完了: ${originalMB}MB → ${compressedMB}MB`, 'success');
+        } catch (compressError) {
+          console.error('[WorldCharacterModal] Compression failed:', compressError);
+          toast('画像の圧縮に失敗しました。より小さい画像をお試しください', 'error');
+          return;
+        }
       }
 
       if (state.pendingPreviewUrl) {
         URL.revokeObjectURL(state.pendingPreviewUrl);
       }
-      state.pendingPreviewUrl = URL.createObjectURL(file);
-      state.pendingImage = { file };
+      state.pendingPreviewUrl = URL.createObjectURL(processedFile);
+      state.pendingImage = { file: processedFile };
 
       const refPreview = document.getElementById('wc-ref-preview');
       const refPreviewContainer = document.getElementById('wc-ref-preview-container');
