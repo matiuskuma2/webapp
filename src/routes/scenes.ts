@@ -601,20 +601,32 @@ scenes.delete('/:id', async (c) => {
 
     const projectId = scene.project_id
 
-    // ソフトデリート: is_hidden = 1 に設定
+    // ソフトデリート: is_hidden = 1、idx を -(scene_id) に設定（UNIQUE制約回避）
+    // シーンIDの負の値を使うことで、同一プロジェクト内の複数の非表示シーンでも衝突しない
     await c.env.DB.prepare(`
       UPDATE scenes 
-      SET is_hidden = 1, updated_at = CURRENT_TIMESTAMP 
+      SET is_hidden = 1, idx = -id, updated_at = CURRENT_TIMESTAMP 
       WHERE id = ?
     `).bind(sceneId).run()
 
     // 可視シーンのidxを再採番（非表示シーンは除外）
+    // UNIQUE制約回避のため、2段階で更新:
+    // 1. 全可視シーンを一時的に大きな値（10000+）に設定
+    // 2. 正しい連番（1,2,3...）に再設定
     const { results: visibleScenes } = await c.env.DB.prepare(`
       SELECT id FROM scenes
       WHERE project_id = ? AND is_hidden = 0
       ORDER BY idx ASC
-    `).bind(projectId).all()
+    `).bind(projectId).all<{ id: number }>()
 
+    // Step 1: 一時的な大きな値を割り当て（衝突回避）
+    for (let i = 0; i < visibleScenes.length; i++) {
+      await c.env.DB.prepare(`
+        UPDATE scenes SET idx = ? WHERE id = ?
+      `).bind(10000 + i, visibleScenes[i].id).run()
+    }
+
+    // Step 2: 正しい連番に再設定
     for (let i = 0; i < visibleScenes.length; i++) {
       await c.env.DB.prepare(`
         UPDATE scenes SET idx = ? WHERE id = ?
@@ -913,7 +925,15 @@ scenes.post('/:id/scenes/reorder', async (c) => {
       }, 400)
     }
 
-    // idx再採番（トランザクション的に実行）
+    // idx再採番（2段階更新でUNIQUE制約回避）
+    // Step 1: 一時的な大きな値を割り当て（衝突回避）
+    for (let i = 0; i < scene_ids.length; i++) {
+      await c.env.DB.prepare(`
+        UPDATE scenes SET idx = ? WHERE id = ?
+      `).bind(10000 + i, scene_ids[i]).run()
+    }
+
+    // Step 2: 正しい連番に再設定
     for (let i = 0; i < scene_ids.length; i++) {
       await c.env.DB.prepare(`
         UPDATE scenes SET idx = ? WHERE id = ?
