@@ -11329,6 +11329,42 @@ async function sendChatEditMessage() {
     const actionCount = modeDecision.normalizedIntent?.actions?.length || 0;
     const summary = suggestionSummary || `${actionCount}件の編集`;
     
+    // Phase 3-A: telop アクションから scope を検出
+    const telopActions = (modeDecision.normalizedIntent?.actions || []).filter(a => 
+      a.action?.startsWith('telop.')
+    );
+    let scopeHtml = '';
+    if (telopActions.length > 0) {
+      const hasComic = telopActions.some(a => a.scope === 'comic');
+      const hasBoth = telopActions.some(a => a.scope === 'both');
+      
+      if (hasBoth) {
+        scopeHtml = `
+          <div class="bg-amber-100 text-amber-800 border border-amber-300 rounded-lg p-2 mb-3 text-xs font-medium flex items-center gap-2">
+            <i class="fas fa-crosshairs"></i>
+            適用先：両方（Remotion字幕＋漫画焼き込み）
+            <span class="text-amber-600">※漫画は再生成が必要</span>
+          </div>
+        `;
+      } else if (hasComic) {
+        scopeHtml = `
+          <div class="bg-orange-100 text-orange-800 border border-orange-300 rounded-lg p-2 mb-3 text-xs font-medium flex items-center gap-2">
+            <i class="fas fa-crosshairs"></i>
+            適用先：漫画焼き込み
+            <span class="text-orange-600">※再生成が必要</span>
+          </div>
+        `;
+      } else {
+        // デフォルト: remotion
+        scopeHtml = `
+          <div class="bg-blue-100 text-blue-800 border border-blue-300 rounded-lg p-2 mb-3 text-xs font-medium flex items-center gap-2">
+            <i class="fas fa-crosshairs"></i>
+            適用先：Remotion字幕（即時反映）
+          </div>
+        `;
+      }
+    }
+    
     history.innerHTML += `
       <div id="${suggestionId}" class="bg-gradient-to-r from-amber-50 to-yellow-50 rounded-lg p-4 border border-amber-200 mb-2 shadow-sm">
         <div class="flex items-center gap-2 mb-3">
@@ -11343,6 +11379,7 @@ async function sendChatEditMessage() {
         <div class="bg-white rounded-md p-3 mb-3 border border-amber-100">
           <p class="text-sm text-gray-700 font-medium">${escapeHtml(summary)}</p>
         </div>
+        ${scopeHtml}
         <p class="text-xs text-gray-500 mb-3">
           <i class="fas fa-shield-alt mr-1 text-green-500"></i>
           「確認する」を押すと変更内容を確認できます（まだ適用されません）
@@ -11593,12 +11630,23 @@ function showDryRunResult(result) {
   
   if (!dryBox || !changesEl) return;
   
+  // Phase 3-A: 漫画再生成が必要かどうかを判定
+  const hasComicRegeneration = result.comic_regeneration_required?.length > 0;
+  const requiresConfirmation = result.requires_confirmation === true;
+  
   // Update status badge
   if (result.ok) {
     badge.textContent = `${result.resolved_ops || 0}件の変更`;
     badge.className = 'text-xs px-2 py-1 rounded-full bg-green-100 text-green-700 font-medium';
     applyBtn.disabled = false;
-    applyBtn.innerHTML = '<i class="fas fa-magic mr-1"></i>この変更を適用する';
+    
+    // Phase 3-A: 漫画再生成が必要な場合はボタン文言を変更
+    if (hasComicRegeneration) {
+      applyBtn.innerHTML = '<i class="fas fa-sync mr-1"></i>確認して適用（漫画は再生成）';
+      applyBtn.className = applyBtn.className.replace('bg-green-500', 'bg-amber-500').replace('hover:bg-green-600', 'hover:bg-amber-600');
+    } else {
+      applyBtn.innerHTML = '<i class="fas fa-magic mr-1"></i>この変更を適用する';
+    }
   } else {
     badge.textContent = '適用できません';
     badge.className = 'text-xs px-2 py-1 rounded-full bg-red-100 text-red-700';
@@ -11629,6 +11677,40 @@ function showDryRunResult(result) {
     errorsEl.classList.remove('hidden');
   } else {
     errorsEl.classList.add('hidden');
+  }
+  
+  // Phase 3-A: 適用先の表示（telopアクションの場合）
+  if (result.telop_settings_override || hasComicRegeneration) {
+    let scopeLabel = '';
+    let scopeClass = '';
+    
+    if (hasComicRegeneration) {
+      // 漫画再生成が必要な場合
+      const comicItems = result.comic_regeneration_required;
+      const hasComic = comicItems.some(i => i.scope === 'comic');
+      const hasBoth = comicItems.some(i => i.scope === 'both');
+      
+      if (hasBoth) {
+        scopeLabel = '適用先：両方（Remotion字幕＋漫画焼き込み）';
+        scopeClass = 'bg-amber-100 text-amber-800 border-amber-300';
+      } else if (hasComic) {
+        scopeLabel = '適用先：漫画焼き込み（再生成が必要）';
+        scopeClass = 'bg-orange-100 text-orange-800 border-orange-300';
+      }
+    } else if (result.telop_settings_override) {
+      // Remotion字幕のみ
+      scopeLabel = '適用先：Remotion字幕（即時反映）';
+      scopeClass = 'bg-blue-100 text-blue-800 border-blue-300';
+    }
+    
+    if (scopeLabel) {
+      changesEl.innerHTML += `
+        <div class="p-2 ${scopeClass} rounded-lg border text-xs font-medium flex items-center gap-2">
+          <i class="fas fa-crosshairs"></i>
+          ${scopeLabel}
+        </div>
+      `;
+    }
   }
   
   // Show warnings if any
