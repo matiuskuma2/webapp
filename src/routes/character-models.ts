@@ -63,12 +63,15 @@ app.get('/projects/:projectId/characters', async (c) => {
     
     const characters = await c.env.DB.prepare(`
       SELECT 
-        id, project_id, character_key, character_name, description,
-        appearance_description, reference_image_r2_key, reference_image_r2_url,
-        voice_preset_id, aliases_json, created_at, updated_at
-      FROM project_character_models
-      WHERE project_id = ?
-      ORDER BY created_at ASC
+        pcm.id, pcm.project_id, pcm.character_key, pcm.character_name, pcm.description,
+        pcm.appearance_description, pcm.reference_image_r2_key, pcm.reference_image_r2_url,
+        pcm.voice_preset_id, pcm.aliases_json, pcm.style_preset_id,
+        pcm.created_at, pcm.updated_at,
+        sp.name as style_preset_name
+      FROM project_character_models pcm
+      LEFT JOIN style_presets sp ON pcm.style_preset_id = sp.id
+      WHERE pcm.project_id = ?
+      ORDER BY pcm.created_at ASC
     `).bind(projectId).all();
 
     return c.json({
@@ -133,7 +136,8 @@ app.post('/projects/:projectId/characters', async (c) => {
       reference_image_r2_key,
       reference_image_r2_url,
       voice_preset_id,
-      aliases
+      aliases,
+      style_preset_id
     } = body;
 
     if (!character_key || !character_name) {
@@ -170,8 +174,8 @@ app.post('/projects/:projectId/characters', async (c) => {
     const result = await c.env.DB.prepare(`
       INSERT INTO project_character_models
         (project_id, character_key, character_name, description, appearance_description,
-         reference_image_r2_key, reference_image_r2_url, voice_preset_id, aliases_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         reference_image_r2_key, reference_image_r2_url, voice_preset_id, aliases_json, style_preset_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       projectId,
       character_key,
@@ -181,7 +185,8 @@ app.post('/projects/:projectId/characters', async (c) => {
       reference_image_r2_key || null,
       reference_image_r2_url || null,
       voice_preset_id || null,
-      aliasesJson
+      aliasesJson,
+      style_preset_id || null
     ).run();
 
     const character = await c.env.DB.prepare(`
@@ -217,7 +222,8 @@ app.put('/projects/:projectId/characters/:characterKey', async (c) => {
       reference_image_r2_key,
       reference_image_r2_url,
       voice_preset_id,
-      aliases
+      aliases,
+      style_preset_id
     } = body;
 
     const existing = await c.env.DB.prepare(`
@@ -246,7 +252,7 @@ app.put('/projects/:projectId/characters/:characterKey', async (c) => {
       UPDATE project_character_models
       SET character_name = ?, description = ?, appearance_description = ?,
           reference_image_r2_key = ?, reference_image_r2_url = ?,
-          voice_preset_id = ?, aliases_json = ?, updated_at = CURRENT_TIMESTAMP
+          voice_preset_id = ?, aliases_json = ?, style_preset_id = ?, updated_at = CURRENT_TIMESTAMP
       WHERE project_id = ? AND character_key = ?
     `).bind(
       character_name,
@@ -256,6 +262,7 @@ app.put('/projects/:projectId/characters/:characterKey', async (c) => {
       reference_image_r2_url || null,
       voice_preset_id || null,
       aliasesJson,
+      style_preset_id || null,
       projectId,
       characterKey
     ).run();

@@ -248,6 +248,25 @@
               <i class="fas fa-image mr-2"></i>画像生成用の設定
             </summary>
             <div class="px-4 pb-4 space-y-4">
+              <!-- Style Preset Selection -->
+              <div class="p-3 bg-indigo-50 rounded-lg border-2 border-indigo-300">
+                <div class="flex items-center gap-2 mb-2">
+                  <i class="fas fa-palette text-indigo-600"></i>
+                  <label class="text-sm font-bold text-indigo-700">
+                    画像スタイル
+                  </label>
+                  <span class="text-xs text-gray-500">（任意）</span>
+                </div>
+                <select id="wc-style-preset" 
+                  class="w-full border border-indigo-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-indigo-400 bg-white">
+                  <option value="">-- プロジェクトのデフォルトを使用 --</option>
+                </select>
+                <p class="text-xs text-indigo-600 mt-1">
+                  <i class="fas fa-info-circle mr-1"></i>
+                  このキャラクター専用の画像スタイルを設定できます。未選択の場合はプロジェクトのデフォルトスタイルが適用されます。
+                </p>
+              </div>
+
               <!-- A Layer: Base Appearance -->
               <div class="p-3 bg-gray-50 rounded-lg border-2 border-gray-300">
                 <div class="flex items-center gap-2 mb-2">
@@ -436,6 +455,34 @@
     } catch (e) {
       console.error('[WorldCharacterModal] Failed to load voice presets:', e);
       sel.innerHTML = '<option value="">(プリセット取得失敗)</option>';
+    }
+  }
+
+  /**
+   * Load style presets into select element
+   */
+  async function loadStylePresetsIntoSelect(selectedId = null) {
+    const sel = document.getElementById('wc-style-preset');
+    if (!sel) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/style-presets`);
+      if (!res.ok) throw new Error('Failed to fetch style presets');
+      const data = await res.json();
+      const presets = data.style_presets || [];
+
+      const opts = ['<option value="">-- プロジェクトのデフォルトを使用 --</option>'];
+      for (const p of presets) {
+        const id = escapeHtml(String(p.id));
+        const name = escapeHtml(p.name);
+        const selected = selectedId && String(selectedId) === String(p.id) ? ' selected' : '';
+        opts.push(`<option value="${id}"${selected}>${name}</option>`);
+      }
+      sel.innerHTML = opts.join('');
+      console.log(`[WorldCharacterModal] Loaded ${presets.length} style presets`);
+    } catch (e) {
+      console.error('[WorldCharacterModal] Failed to load style presets:', e);
+      sel.innerHTML = '<option value="">(スタイル取得失敗)</option>';
     }
   }
 
@@ -904,6 +951,9 @@
         updateVoiceStatus();
       }
     });
+    
+    // Load style presets and set current value
+    loadStylePresetsIntoSelect(character?.style_preset_id || null);
 
     // Real-time warnings
     nameEl.onblur = () => {
@@ -1005,6 +1055,10 @@
     // Aliases validation (optional)
     const { valid } = parseAliases(aliasesText);
 
+    // Get style preset
+    const stylePresetSelect = document.getElementById('wc-style-preset');
+    const stylePresetId = stylePresetSelect?.value || null;
+
     const payload = {
       character_key: key,
       character_name: name,
@@ -1012,6 +1066,7 @@
       appearance_description: appearance || null,
       story_traits: storyTraits || null,
       voice_preset_id: voice,
+      style_preset_id: stylePresetId ? parseInt(stylePresetId, 10) : null,
     };
 
     console.log('[WorldCharacterModal] Validated payload:', payload);

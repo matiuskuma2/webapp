@@ -24,8 +24,10 @@ npx wrangler d1 execute webapp-production --local --file=migrations/0001_full_sc
 echo -e "${GREEN}✓${NC} Done"
 
 # Step 3: Apply incremental migrations (0043+)
-echo -e "${YELLOW}[3/4]${NC} Applying new migrations (0043-0045)..."
-for f in migrations/0043*.sql migrations/0044*.sql migrations/0045*.sql; do
+# 0001_full_schema_from_production.sql は本番スキーマ（~0042相当）
+# 0043以降は増分として適用
+echo -e "${YELLOW}[3/4]${NC} Applying new migrations (0043+)..."
+for f in migrations/00[4-9]*.sql; do
   [ -f "$f" ] && npx wrangler d1 execute webapp-production --local --file="$f" >/dev/null 2>&1 && echo -e "  ${GREEN}✓${NC} $(basename $f)"
 done
 echo -e "${GREEN}✓${NC} Done"
