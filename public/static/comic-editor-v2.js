@@ -49,6 +49,12 @@
       { value: 'horizontal', name: '横書き', icon: 'fa-align-left' },
       { value: 'vertical', name: '縦書き', icon: 'fa-align-justify fa-rotate-90' }
     ],
+    // PR-ComicEditor-Layout: テキスト揃え追加（デフォルト center で既存互換）
+    textAlign: [
+      { value: 'left', name: '左', icon: 'fa-align-left' },
+      { value: 'center', name: '中央', icon: 'fa-align-center' },
+      { value: 'right', name: '右', icon: 'fa-align-right' }
+    ],
     fontFamily: [
       { value: 'gothic', name: 'ゴシック', css: '"Noto Sans JP", sans-serif' },
       { value: 'mincho', name: '明朝', css: '"Noto Serif JP", serif' },
@@ -69,10 +75,16 @@
 
   const DEFAULT_TEXT_STYLE = {
     writingMode: 'horizontal',
+    textAlign: 'center',  // PR-ComicEditor-Layout: デフォルト中央（既存互換）
     fontFamily: 'gothic',
     fontWeight: 'normal',
     fontScale: 1.0
   };
+
+  // PR-ComicEditor-Layout: 行数制限設定
+  // 以前は 6行で強制切り捨てだったが、警告表示に変更
+  const MAX_LINES_SOFT_LIMIT = 8;  // 警告を出す閾値
+  const MAX_LINES_HARD_LIMIT = 20; // 絶対上限（パフォーマンス保護）
 
   // スタイル定義
   const BUBBLE_STYLES = {
@@ -250,18 +262,26 @@
     return getBubbleSizePx(bubble.type, naturalW, bubble.size, bubble.sizeRect);
   }
 
+  // PR-ComicEditor-Layout: 配置制限緩和
+  // 以前: margin 2px で厳密に制限
+  // 変更後: 吹き出しが最低 20% は画面内に見えていればOK（より自由な配置）
   function clampPosition(pos, type, naturalW, naturalH, sizePreset = 'M', sizeRect = null) {
     const size = getBubbleSizePx(type, naturalW, sizePreset, sizeRect);
-    const marginPx = 2;
-    
-    const mx = marginPx / naturalW;
-    const my = marginPx / naturalH;
     const bw = size.w / naturalW;
     const bh = size.h / naturalH;
     
+    // 吹き出しが最低 20% は画面内に見える制限
+    // 左端: 吹き出しの右端が画面の 20% 以上見える
+    // 右端: 吹き出しの左端が画面の 80% より左にある
+    const minVisibleRatio = 0.2;
+    const minX = -bw + bw * minVisibleRatio;  // 左端制限（吹き出しの右 20% が見える）
+    const maxX = 1 - bw * minVisibleRatio;    // 右端制限（吹き出しの左 20% が見える）
+    const minY = -bh + bh * minVisibleRatio;  // 上端制限
+    const maxY = 1 - bh * minVisibleRatio;    // 下端制限
+    
     return {
-      x: Math.min(Math.max(pos.x, mx), 1 - bw - mx),
-      y: Math.min(Math.max(pos.y, my), 1 - bh - my)
+      x: Math.min(Math.max(pos.x, minX), maxX),
+      y: Math.min(Math.max(pos.y, minY), maxY)
     };
   }
 
@@ -320,8 +340,9 @@
     ctx.closePath();
   }
 
+  // PR-ComicEditor-Layout: 行数制限撤廃（警告のみ）
   function wrapText(ctx, text, maxW) {
-    if (!text) return [''];
+    if (!text) return { lines: [''], overflow: false };
     const lines = [];
     let line = '';
     for (const ch of text) {
@@ -339,12 +360,16 @@
       }
     }
     if (line) lines.push(line);
-    return lines.slice(0, 6);
+    
+    // 行数制限: 入力は止めないが、上限を超えたら切り捨て + 警告フラグ
+    const overflow = lines.length > MAX_LINES_HARD_LIMIT;
+    const resultLines = lines.slice(0, MAX_LINES_HARD_LIMIT);
+    return { lines: resultLines, overflow, totalLines: lines.length };
   }
 
-  // 縦書きテキストのラップ（1文字ずつ縦に）
+  // PR-ComicEditor-Layout: 縦書きテキストのラップ（行数制限撤廃）
   function wrapTextVertical(ctx, text, maxH, lineH) {
-    if (!text) return [['']];
+    if (!text) return { columns: [['']], overflow: false };
     const columns = [];
     let column = [];
     let currentH = 0;
@@ -365,33 +390,41 @@
       currentH += lineH;
     }
     if (column.length > 0) columns.push(column);
-    return columns.slice(0, 6);
+    
+    // 列数制限: 入力は止めないが、上限を超えたら切り捨て + 警告フラグ
+    const overflow = columns.length > MAX_LINES_HARD_LIMIT;
+    const resultColumns = columns.slice(0, MAX_LINES_HARD_LIMIT);
+    return { columns: resultColumns, overflow, totalColumns: columns.length };
   }
 
+  // PR-ComicEditor-Layout: fitText を更新（行数制限警告対応）
   function fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isBold) {
     const minFont = 12;
     for (let font = baseFontPx; font >= minFont; font -= 1) {
       ctx.font = `${isBold ? '700' : '400'} ${font}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
       const lineH = Math.round(baseLineH * (font / baseFontPx));
-      const lines = wrapText(ctx, text, innerW);
+      const wrapResult = wrapText(ctx, text, innerW);
+      const lines = wrapResult.lines;
       const neededH = lines.length * lineH;
       if (neededH <= innerH) {
-        return { ok: true, fontPx: font, lineH, lines };
+        return { ok: true, fontPx: font, lineH, lines, overflow: wrapResult.overflow, totalLines: wrapResult.totalLines };
       }
     }
     return { ok: false };
   }
 
+  // PR-ComicEditor-Layout: fitTextVertical を更新（列数制限警告対応）
   function fitTextVertical(ctx, text, innerW, innerH, baseFontPx, baseLineH) {
     const minFont = 12;
     for (let font = baseFontPx; font >= minFont; font -= 1) {
       ctx.font = `700 ${font}px "Hiragino Kaku Gothic ProN", "Hiragino Sans", sans-serif`;
       const lineH = font * 1.2;
       const colW = font * 1.4;
-      const columns = wrapTextVertical(ctx, text, innerH, lineH);
+      const wrapResult = wrapTextVertical(ctx, text, innerH, lineH);
+      const columns = wrapResult.columns;
       const neededW = columns.length * colW;
       if (neededW <= innerW) {
-        return { ok: true, fontPx: font, lineH, colW, columns };
+        return { ok: true, fontPx: font, lineH, colW, columns, overflow: wrapResult.overflow, totalColumns: wrapResult.totalColumns };
       }
     }
     return { ok: false };
@@ -583,6 +616,9 @@
     const isVertical = textStyle?.writingMode === 'vertical' || 
                        (!textStyle && BUBBLE_TYPES[type]?.writingMode === 'vertical');
     
+    // PR-ComicEditor-Layout: textAlign を取得（デフォルト center で既存互換）
+    const textAlign = textStyle?.textAlign || 'center';
+    
     // Phase 3: fontScale を適用
     const fontScale = textStyle?.fontScale || 1.0;
     const baseFontPx = style.fontSize * scale * fontScale;
@@ -595,9 +631,9 @@
     const fontWeight = textStyle?.fontWeight === 'bold' ? '700' : '400';
     
     if (isVertical) {
-      // 縦書き
+      // 縦書き（縦書きは常に中央揃え - textAlign は横書き専用）
       const fit = fitTextVertical(ctx, text, innerW, innerH, baseFontPx, baseLineH);
-      if (!fit.ok) return { ok: false };
+      if (!fit.ok) return { ok: false, overflow: false };
       
       // Phase 3: textStyle のフォント設定を適用
       ctx.font = `${fontWeight} ${fit.fontPx}px ${fontFamilyCSS}`;
@@ -620,23 +656,34 @@
         }
       }
       
-      return { ok: true };
+      return { ok: true, overflow: fit.overflow };
     }
     
     // 横書き
     const fit = fitText(ctx, text, innerW, innerH, baseFontPx, baseLineH, isNarration);
-    if (!fit.ok) return { ok: false };
+    if (!fit.ok) return { ok: false, overflow: false };
     
     // Phase 3: textStyle のフォント設定を適用（ナレーションは常に太字）
     const effectiveWeight = isNarration ? '700' : fontWeight;
     ctx.font = `${effectiveWeight} ${fit.fontPx}px ${fontFamilyCSS}`;
-    ctx.textAlign = 'center';
+    
+    // PR-ComicEditor-Layout: textAlign を適用
+    ctx.textAlign = textAlign;
     ctx.textBaseline = 'middle';
     
     const startY = padding + (innerH - fit.lines.length * fit.lineH) / 2 + fit.lineH / 2;
     
+    // PR-ComicEditor-Layout: textAlign に応じて X 座標を計算
+    let lx;
+    if (textAlign === 'left') {
+      lx = padding;
+    } else if (textAlign === 'right') {
+      lx = w - padding;
+    } else {
+      lx = w / 2; // center（デフォルト）
+    }
+    
     for (let i = 0; i < fit.lines.length; i++) {
-      const lx = w / 2;
       const ly = startY + i * fit.lineH;
       
       if (type === 'caption' || type === 'telop_bar') {
@@ -652,7 +699,8 @@
       }
     }
     
-    return { ok: true };
+    // PR-ComicEditor-Layout: overflow 警告を返す
+    return { ok: true, overflow: fit.overflow };
   }
 
   function drawOneBubble(ctx, bubble, text, scale, options = {}) {
@@ -788,11 +836,13 @@
   }
 
   // ============== バリデーション ==============
+  // PR-ComicEditor-Layout: errors と warnings を分離
 
   function validateDraft() {
     const errors = [];
+    const warnings = [];  // PR-ComicEditor-Layout: 警告は公開を止めない
     const rect = getContainRect();
-    if (!rect || !state.draft) return { ok: true, errors: [] };
+    if (!rect || !state.draft) return { ok: true, errors: [], warnings: [] };
     
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
@@ -802,10 +852,10 @@
       const ut = state.draft.utterances.find(u => u.id === bubble.utterance_id);
       const text = (ut?.text || '').trim();
       
-      // 画面外チェック（カスタムサイズ対応）
+      // PR-ComicEditor-Layout: 配置制限緩和により、OUT_OF_BOUNDS は警告に変更
       const clamped = clampPosition(bubble.position, bubble.type, rect.naturalWidth, rect.naturalHeight, bubble.size, bubble.sizeRect);
       if (Math.abs(clamped.x - bubble.position.x) > 0.001 || Math.abs(clamped.y - bubble.position.y) > 0.001) {
-        errors.push({ type: 'OUT_OF_BOUNDS', bubbleId: bubble.id, message: '吹き出しが画面外です' });
+        warnings.push({ type: 'NEAR_EDGE', bubbleId: bubble.id, message: '吹き出しが画面端です（一部見えない可能性）' });
       }
       
       // 文字溢れチェック（カスタムサイズ対応）
@@ -838,10 +888,20 @@
         if (!fit.ok) {
           errors.push({ type: 'TEXT_OVERFLOW', bubbleId: bubble.id, message: 'テキストが収まりません' });
         }
+        
+        // PR-ComicEditor-Layout: 行数オーバーフロー警告（公開は止めない）
+        if (fit.overflow) {
+          const totalCount = isVertical ? fit.totalColumns : fit.totalLines;
+          warnings.push({ 
+            type: 'LINE_OVERFLOW', 
+            bubbleId: bubble.id, 
+            message: `テキストが長すぎます（${totalCount}行 → ${MAX_LINES_HARD_LIMIT}行に切り詰め）` 
+          });
+        }
       }
     }
     
-    return { ok: errors.length === 0, errors };
+    return { ok: errors.length === 0, errors, warnings };
   }
 
   // ============== プレビュー描画 ==============
@@ -1225,20 +1285,52 @@
     
     if (!errorsDiv || !publishBtn) return;
     
-    if (validation.errors.length > 0) {
-      errorsDiv.innerHTML = `
-        <div class="bg-red-50 border border-red-200 rounded-lg p-3">
-          <p class="text-red-700 text-sm font-semibold mb-1">
-            <i class="fas fa-exclamation-triangle mr-1"></i>公開できません
-          </p>
-          <ul class="text-red-600 text-xs space-y-1">
-            ${validation.errors.map(e => `<li>・${escapeHtml(e.message)}</li>`).join('')}
-          </ul>
-        </div>
-      `;
+    // PR-ComicEditor-Layout: errors と warnings を分けて表示
+    const hasErrors = validation.errors.length > 0;
+    const hasWarnings = (validation.warnings || []).length > 0;
+    
+    if (hasErrors || hasWarnings) {
+      let html = '';
+      
+      // エラー（公開を止める）
+      if (hasErrors) {
+        html += `
+          <div class="bg-red-50 border border-red-200 rounded-lg p-3 mb-2">
+            <p class="text-red-700 text-sm font-semibold mb-1">
+              <i class="fas fa-exclamation-triangle mr-1"></i>公開できません
+            </p>
+            <ul class="text-red-600 text-xs space-y-1">
+              ${validation.errors.map(e => `<li>・${escapeHtml(e.message)}</li>`).join('')}
+            </ul>
+          </div>
+        `;
+      }
+      
+      // 警告（公開は可能）
+      if (hasWarnings) {
+        html += `
+          <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+            <p class="text-yellow-700 text-sm font-semibold mb-1">
+              <i class="fas fa-info-circle mr-1"></i>確認事項
+            </p>
+            <ul class="text-yellow-600 text-xs space-y-1">
+              ${validation.warnings.map(w => `<li>・${escapeHtml(w.message)}</li>`).join('')}
+            </ul>
+          </div>
+        `;
+      }
+      
+      errorsDiv.innerHTML = html;
       errorsDiv.classList.remove('hidden');
-      publishBtn.disabled = true;
-      publishBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      
+      if (hasErrors) {
+        publishBtn.disabled = true;
+        publishBtn.classList.add('opacity-50', 'cursor-not-allowed');
+      } else {
+        // 警告のみの場合は公開可能
+        publishBtn.disabled = false;
+        publishBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+      }
     } else {
       errorsDiv.classList.add('hidden');
       errorsDiv.innerHTML = '';
@@ -1549,10 +1641,14 @@
         sizeOptions += `<option value="custom" selected>カスタム</option>`;
       }
       
-      // Phase 3: textStyle 設定
+      // Phase 3 + PR-ComicEditor-Layout: textStyle 設定
       const ts = bubble.textStyle || DEFAULT_TEXT_STYLE;
       const writingModeOptions = TEXT_STYLE_OPTIONS.writingMode.map(opt =>
         `<option value="${opt.value}" ${ts.writingMode === opt.value ? 'selected' : ''}>${opt.name}</option>`
+      ).join('');
+      // PR-ComicEditor-Layout: textAlign セレクター追加
+      const textAlignOptions = TEXT_STYLE_OPTIONS.textAlign.map(opt =>
+        `<option value="${opt.value}" ${(ts.textAlign || 'center') === opt.value ? 'selected' : ''}>${opt.name}</option>`
       ).join('');
       const fontFamilyOptions = TEXT_STYLE_OPTIONS.fontFamily.map(opt =>
         `<option value="${opt.value}" ${ts.fontFamily === opt.value ? 'selected' : ''}>${opt.name}</option>`
@@ -1561,6 +1657,7 @@
         `<option value="${opt.value}" ${ts.fontScale === opt.value ? 'selected' : ''}>${opt.name}</option>`
       ).join('');
       const isBold = ts.fontWeight === 'bold';
+      const isVerticalMode = (ts.writingMode || 'horizontal') === 'vertical';
       
       return `
       <div class="rounded-lg p-2 border text-xs ${colorClass}" data-bubble-id="${bubble.id}">
@@ -1600,14 +1697,22 @@
           </button>
           ` : ''}
         </div>
-        <!-- Phase 3: テキストスタイル設定 -->
-        <div class="flex gap-1 items-center border-t border-gray-200 pt-1">
+        <!-- Phase 3 + PR-ComicEditor-Layout: テキストスタイル設定 -->
+        <div class="flex gap-1 items-center flex-wrap border-t border-gray-200 pt-1">
           <select 
             class="w-12 px-1 py-0.5 text-[10px] border border-gray-200 rounded bg-gray-50"
             onchange="window.ComicEditorV2.updateBubbleTextStyle('${bubble.id}', 'writingMode', this.value)"
             title="書字方向"
           >
             ${writingModeOptions}
+          </select>
+          <!-- PR-ComicEditor-Layout: textAlign セレクター（縦書き時は非表示） -->
+          <select 
+            class="w-10 px-1 py-0.5 text-[10px] border border-blue-200 rounded bg-blue-50 ${isVerticalMode ? 'hidden' : ''}"
+            onchange="window.ComicEditorV2.updateBubbleTextStyle('${bubble.id}', 'textAlign', this.value)"
+            title="文字揃え（左/中央/右）"
+          >
+            ${textAlignOptions}
           </select>
           <select 
             class="w-14 px-1 py-0.5 text-[10px] border border-gray-200 rounded bg-gray-50"
@@ -2148,6 +2253,6 @@
     window.ComicEditorV2.open(sceneId);
   };
 
-  console.log('[ComicEditorV2] Phase1.7 SSOT v2 loaded - 6 bubble types with tail drag');
+  console.log('[ComicEditorV2] Phase1.7 + PR-ComicEditor-Layout loaded - 6 bubble types with tail drag, text_align, relaxed constraints');
 
 })();
