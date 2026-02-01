@@ -123,7 +123,19 @@ async function loadProject() {
     // Also update tab states for Export button
     updateTabStates(currentProject.status);
     
-    // Update progress bar
+    // 改善: preflightを取得して正確な進捗表示
+    // formatted以降のステータスではシーン準備状況も考慮
+    if (['formatted', 'generating_images', 'completed'].includes(currentProject.status)) {
+      try {
+        const preflightResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/video-builds/preflight`);
+        window.videoBuildPreflightCache = preflightResponse.data;
+        console.log('[LoadProject] Preflight loaded:', preflightResponse.data);
+      } catch (preflightError) {
+        console.warn('[LoadProject] Preflight fetch failed:', preflightError.message);
+      }
+    }
+    
+    // Update progress bar (now uses preflight cache if available)
     updateProgressBar(currentProject.status);
     
     // R3-A: Load BGM status
@@ -3219,6 +3231,18 @@ window.initBuilderTab = async function initBuilderTab() {
     // Update tab states based on current project status
     const projectResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}`);
     updateTabStates(projectResponse.data.status);
+    
+    // 改善: Builderタブ表示時にpreflight取得して進捗バーを更新
+    // これにより上部の制作進捗と下部の準備状況が整合する
+    try {
+      const preflightResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/video-builds/preflight`);
+      window.videoBuildPreflightCache = preflightResponse.data;
+      // 進捗バーを実際のシーン準備状況で更新
+      updateProgressBar(projectResponse.data.status);
+      console.log('[Builder] Updated progress bar with preflight data');
+    } catch (preflightError) {
+      console.warn('[Builder] Preflight fetch failed, using cached data:', preflightError.message);
+    }
   } catch (error) {
     console.error('Load builder scenes error:', error);
     showToast('シーンの読み込みに失敗しました', 'error');
@@ -6567,8 +6591,13 @@ function updateTabStates(projectStatus) {
 
 // ========== Progress Bar ==========
 /**
- * Update the progress bar based on project status
+ * Update the progress bar based on project status AND actual scene readiness
  * Shows clear progress percentage and next action guidance
+ * 
+ * 改善: プロジェクトstatusだけでなく、実際のシーン準備状況も考慮
+ * - formatted + 全シーン素材準備完了 → Video Buildへ案内
+ * - formatted + 素材未準備あり → Builderで画像/動画生成を案内
+ * 
  * @param {string} status - Current project status
  */
 function updateProgressBar(status) {
@@ -6577,6 +6606,33 @@ function updateProgressBar(status) {
   const progressMessage = document.getElementById('progressMessage');
   
   if (!progressBarFill || !progressPercent || !progressMessage) return;
+  
+  // 実際のシーン準備状況を取得（preflight結果があれば使用）
+  const preflight = window.videoBuildPreflightCache || {};
+  const scenes = window.lastLoadedScenes || [];
+  
+  // シーンの素材準備状況を計算
+  let allScenesReady = false;
+  let readyCount = 0;
+  let totalCount = 0;
+  
+  if (preflight.total_count !== undefined) {
+    // Preflight結果がある場合はそれを使用（最も正確）
+    allScenesReady = preflight.is_ready === true;
+    readyCount = preflight.ready_count || 0;
+    totalCount = preflight.total_count || 0;
+  } else if (scenes.length > 0) {
+    // Preflightがない場合はローカルのシーンデータで判定
+    totalCount = scenes.filter(s => !s.is_hidden).length;
+    readyCount = scenes.filter(s => {
+      if (s.is_hidden) return false;
+      const displayType = s.display_asset_type || 'image';
+      if (displayType === 'comic') return s.active_comic?.r2_url;
+      if (displayType === 'video') return s.active_video?.status === 'completed' && s.active_video?.r2_url;
+      return s.active_image?.r2_url;
+    }).length;
+    allScenesReady = totalCount > 0 && readyCount === totalCount;
+  }
   
   // Define progress stages - NO buttons, just clear status messages
   // step: 1=入力, 2=分割, 3=画像, 4=動画, 5=完了
@@ -6635,7 +6691,30 @@ function updateProgressBar(status) {
     }
   };
   
-  const stage = stages[status] || { percent: 0, step: 0, message: '状態を確認中...', nextAction: null };
+  let stage = stages[status] || { percent: 0, step: 0, message: '状態を確認中...', nextAction: null };
+  
+  // 改善: formatted状態でも実際のシーン準備状況に応じて表示を変更
+  if (status === 'formatted' && totalCount > 0) {
+    if (allScenesReady) {
+      // 全シーン準備完了 → Video Buildへ案内
+      stage = {
+        percent: 90,
+        step: 4,
+        message: `✅ 素材準備完了（${readyCount}/${totalCount}シーン） → 🎬 ステップ4/4: Video Buildで動画を生成`,
+        nextTab: 'videoBuild'
+      };
+    } else if (readyCount > 0) {
+      // 一部準備完了 → 進捗を表示
+      const progressPct = Math.round(50 + (readyCount / totalCount) * 40); // 50-90%
+      stage = {
+        percent: progressPct,
+        step: 3,
+        message: `🖼️ 素材準備中（${readyCount}/${totalCount}シーン完了） → Builderで残りの素材を設定`,
+        nextTab: 'builder'
+      };
+    }
+    // readyCount === 0 の場合はデフォルトの formatted 表示を維持
+  }
   
   // Update progress bar
   progressBarFill.style.width = stage.percent + '%';
