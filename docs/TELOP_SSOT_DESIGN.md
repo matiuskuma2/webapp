@@ -1,9 +1,9 @@
 # テロップ (Telop) SSOT 設計書
 
-**Version**: 1.1  
+**Version**: 1.2  
 **Created**: 2026-02-01  
 **Updated**: 2026-02-01  
-**Status**: Phase 1 実装完了
+**Status**: Phase 1 完了、Phase 3-A 完了
 
 ---
 
@@ -290,31 +290,46 @@ const TELOP_STYLE_PRESETS = {
 - 漫画焼き込みは画像生成時に決定されるため、後から変更には再生成が必要
 - Remotion字幕との二重表示を防ぐため、`text_render_mode` の自動判定を維持
 
-### Phase 3: チャット修正のRemotionスコープ対応
+### Phase 3-A: チャット修正のRemotionスコープ対応（✅ 完了）
 
 **目標**: チャット修正時のテロップ変更を Remotion 字幕に限定
 
-**実装内容**:
-1. **scope パラメータの追加**
+**実装完了内容** (2026-02-01):
+
+1. **✅ scope パラメータの追加**
    - `telop.set_style { scope: 'remotion' | 'comic' | 'both' }`
-   - デフォルトは `remotion`（Remotion字幕のみ）
+   - `telop.set_position { scope?: ... }`
+   - `telop.set_size { scope?: ... }`
+   - デフォルトは `remotion`（Remotion字幕のみ、即時プレビュー可能）
 
-2. **normalizeIntent での scope 補完**
-   - コンテキストに応じて scope を自動判定
-   - `display_asset_type === 'comic'` の場合は警告表示
+2. **✅ resolveIntentToOps での scope 判定**
+   - scope 未指定 → `remotion` として処理
+   - scope が `comic` / `both` → `comicRegenerationRequired` に追加
+   - 警告メッセージを warnings に含める
+   - `requires_confirmation: true` を返す
 
-3. **新規アクションの追加**
+3. **✅ LLM プロンプトの更新**
+   - 「字幕」「テロップ」→ scope: remotion（デフォルト、省略可）
+   - 「漫画の吹き出し」「焼き込み」→ scope: comic
+   - 「両方」「全部」→ scope: both
+
+4. **✅ データ構造**
    ```typescript
-   interface TelopSetStyleAction {
-     action: 'telop.set_style';
-     style_preset: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
-     scope?: 'remotion' | 'comic' | 'both';
+   type TelopScope = 'remotion' | 'comic' | 'both';
+   
+   interface ComicRegenerationRequired {
+     scope: 'comic' | 'both';
+     action: string;
+     message: string;
+     affected_scenes?: number[];
    }
    ```
 
-**影響範囲**:
-- `src/routes/patches.ts` - 新規アクション追加
-- `public/static/project-editor.js` - パースロジック追加
+**変更ファイル**:
+- `src/routes/patches.ts` - scope 判定、警告生成、LLMプロンプト更新
+
+**残タスク**:
+- UI: 提案カードに「適用先：Remotion字幕 / 漫画焼き込み（再生成必要）」表示
 
 ---
 
@@ -370,3 +385,4 @@ const TELOP_STYLE_PRESETS = {
 |------|----------|
 | 2026-02-01 | 初版作成（現状分析・SSOT設計） |
 | 2026-02-01 | Phase 1 実装完了（Remotion字幕スタイル5プリセット、UI、チャットアクション） |
+| 2026-02-01 | Phase 3-A 実装完了（チャット telop scope SSOT固定、LLMプロンプト更新） |
