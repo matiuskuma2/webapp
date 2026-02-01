@@ -2,6 +2,13 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
 import { logAudit } from '../utils/audit-logger'
+import { 
+  hideSceneIdx, 
+  renumberVisibleScenes, 
+  restoreSceneIdx, 
+  reorderScenes,
+  getInsertPosition
+} from '../utils/scene-idx-manager'
 
 const scenes = new Hono<{ Bindings: Bindings }>()
 
@@ -601,39 +608,17 @@ scenes.delete('/:id', async (c) => {
 
     const projectId = scene.project_id
 
-    // ソフトデリート: is_hidden = 1、idx を -(scene_id) に設定（UNIQUE制約回避）
-    // シーンIDの負の値を使うことで、同一プロジェクト内の複数の非表示シーンでも衝突しない
-    await c.env.DB.prepare(`
-      UPDATE scenes 
-      SET is_hidden = 1, idx = -id, updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `).bind(sceneId).run()
-
-    // 可視シーンのidxを再採番（非表示シーンは除外）
-    // UNIQUE制約回避のため、2段階で更新:
-    // 1. 全可視シーンを一時的に大きな値（10000+）に設定
-    // 2. 正しい連番（1,2,3...）に再設定
-    const { results: visibleScenes } = await c.env.DB.prepare(`
-      SELECT id FROM scenes
-      WHERE project_id = ? AND is_hidden = 0
-      ORDER BY idx ASC
-    `).bind(projectId).all<{ id: number }>()
-
-    // Step 1: 一時的な大きな値を割り当て（衝突回避）
-    for (let i = 0; i < visibleScenes.length; i++) {
-      await c.env.DB.prepare(`
-        UPDATE scenes SET idx = ? WHERE id = ?
-      `).bind(10000 + i, visibleScenes[i].id).run()
+    // SSOT: シーン非表示処理（idx = -scene_id に設定）
+    const hideResult = await hideSceneIdx(c.env.DB, parseInt(sceneId))
+    if (!hideResult.success) {
+      throw new Error(hideResult.error)
     }
 
-    // Step 2: 正しい連番に再設定
-    for (let i = 0; i < visibleScenes.length; i++) {
-      await c.env.DB.prepare(`
-        UPDATE scenes SET idx = ? WHERE id = ?
-      `).bind(i + 1, visibleScenes[i].id).run()
+    // SSOT: 可視シーンのidx再採番
+    const renumberResult = await renumberVisibleScenes(c.env.DB, projectId)
+    if (!renumberResult.success) {
+      throw new Error(renumberResult.error)
     }
-
-    console.log(`[Scenes] Scene ${sceneId} hidden (soft delete), project ${projectId}`)
 
     // 監査ログ記録
     const sessionId = getCookie(c, 'session');
@@ -656,14 +641,14 @@ scenes.delete('/:id', async (c) => {
       entityId: parseInt(sceneId),
       projectId,
       action: 'hide',
-      details: { visible_scenes_count: visibleScenes.length }
+      details: { visible_scenes_count: renumberResult.count }
     });
 
     return c.json({
       success: true,
       message: 'Scene hidden successfully (soft delete)',
       hidden_scene_id: parseInt(sceneId),
-      visible_scenes_count: visibleScenes.length
+      visible_scenes_count: renumberResult.count
     })
   } catch (error) {
     console.error('Error hiding scene:', error)
@@ -706,22 +691,12 @@ scenes.post('/:id/restore', async (c) => {
 
     const projectId = scene.project_id
 
-    // 現在の最大idxを取得
-    const maxIdxResult = await c.env.DB.prepare(`
-      SELECT MAX(idx) as max_idx FROM scenes 
-      WHERE project_id = ? AND is_hidden = 0
-    `).bind(projectId).first<{ max_idx: number | null }>()
-
-    const newIdx = (maxIdxResult?.max_idx ?? 0) + 1
-
-    // 復元: is_hidden = 0、末尾に追加
-    await c.env.DB.prepare(`
-      UPDATE scenes 
-      SET is_hidden = 0, idx = ?, updated_at = CURRENT_TIMESTAMP 
-      WHERE id = ?
-    `).bind(newIdx, sceneId).run()
-
-    console.log(`[Scenes] Scene ${sceneId} restored, new idx=${newIdx}`)
+    // SSOT: シーン復元処理（末尾に追加）
+    const restoreResult = await restoreSceneIdx(c.env.DB, parseInt(sceneId), projectId)
+    if (!restoreResult.success) {
+      throw new Error(restoreResult.error)
+    }
+    const newIdx = restoreResult.newIdx
 
     // 監査ログ記録
     const sessionId = getCookie(c, 'session');
@@ -800,29 +775,9 @@ scenes.post('/', async (c) => {
       }, 404);
     }
     
-    // 可視シーンのみで最大idxを取得（非表示シーンは除外）
-    const maxIdxResult = await c.env.DB.prepare(`
-      SELECT MAX(idx) as max_idx FROM scenes 
-      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
-    `).bind(project_id).first<{ max_idx: number | null }>();
-    
-    const maxIdx = maxIdxResult?.max_idx ?? 0;
-    
-    let newIdx: number;
-    
-    if (insert_after_idx !== undefined && insert_after_idx >= 1 && insert_after_idx <= maxIdx) {
-      // 指定位置に挿入: 後続の可視シーンのidxを+1
-      await c.env.DB.prepare(`
-        UPDATE scenes 
-        SET idx = idx + 1 
-        WHERE project_id = ? AND idx > ? AND (is_hidden = 0 OR is_hidden IS NULL)
-      `).bind(project_id, insert_after_idx).run();
-      
-      newIdx = insert_after_idx + 1;
-    } else {
-      // 最後に追加
-      newIdx = maxIdx + 1;
-    }
+    // SSOT: 挿入位置を計算
+    const insertPos = await getInsertPosition(c.env.DB, project_id, insert_after_idx);
+    const newIdx = insertPos.newIdx;
     
     // 新規シーン作成（bullets, image_prompt は NOT NULL なので空文字列を設定）
     const result = await c.env.DB.prepare(`
@@ -839,6 +794,11 @@ scenes.post('/', async (c) => {
     const newSceneId = result.meta?.last_row_id;
     
     console.log(`[Scenes] Created scene id=${newSceneId}, idx=${newIdx}, project=${project_id}, role=${sceneRole}`);
+    
+    // 挿入位置に挿入した場合は再採番が必要
+    if (insertPos.needsRenumber) {
+      await renumberVisibleScenes(c.env.DB, project_id);
+    }
     
     // 作成したシーンを取得して返却
     const newScene = await c.env.DB.prepare(`
@@ -925,19 +885,10 @@ scenes.post('/:id/scenes/reorder', async (c) => {
       }, 400)
     }
 
-    // idx再採番（2段階更新でUNIQUE制約回避）
-    // Step 1: 一時的な大きな値を割り当て（衝突回避）
-    for (let i = 0; i < scene_ids.length; i++) {
-      await c.env.DB.prepare(`
-        UPDATE scenes SET idx = ? WHERE id = ?
-      `).bind(10000 + i, scene_ids[i]).run()
-    }
-
-    // Step 2: 正しい連番に再設定
-    for (let i = 0; i < scene_ids.length; i++) {
-      await c.env.DB.prepare(`
-        UPDATE scenes SET idx = ? WHERE id = ?
-      `).bind(i + 1, scene_ids[i]).run()
+    // SSOT: シーン順序変更
+    const reorderResult = await reorderScenes(c.env.DB, scene_ids)
+    if (!reorderResult.success) {
+      throw new Error(reorderResult.error)
     }
 
     // 更新後のシーン一覧取得

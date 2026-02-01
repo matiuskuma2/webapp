@@ -1,6 +1,9 @@
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
 import { validateRILARCScenario, type RILARCScenarioV1 } from '../utils/rilarc-validator'
+import { logAudit } from '../utils/audit-logger'
+import { normalizeSplitMode, checkRawIntegrity, normalizeWhitespaceForRaw, splitIntoParagraphsRaw } from '../utils/split-mode-ssot'
 
 const formatting = new Hono<{ Bindings: Bindings }>()
 
@@ -1036,10 +1039,43 @@ async function processPreserveMode(
   // Batch実行
   await c.env.DB.batch(insertStatements)
   
-  // 5. status更新
+  // 5. status更新 + split_mode保存（SSOT）
   await c.env.DB.prepare(`
-    UPDATE projects SET status = 'formatted', updated_at = CURRENT_TIMESTAMP WHERE id = ?
-  `).bind(projectId).run()
+    UPDATE projects 
+    SET status = 'formatted', 
+        split_mode = 'raw',
+        target_scene_count = ?,
+        updated_at = CURRENT_TIMESTAMP 
+    WHERE id = ?
+  `).bind(paragraphs.length, projectId).run()
+  
+  // 監査ログ: split.rebuild イベント
+  const sessionId = getCookie(c, 'session');
+  let userId: number | null = null;
+  let userRole: string | null = null;
+  if (sessionId) {
+    const session = await c.env.DB.prepare(`
+      SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = ?
+    `).bind(sessionId).first<{ id: number; role: string }>();
+    if (session) {
+      userId = session.id;
+      userRole = session.role;
+    }
+  }
+  await logAudit({
+    db: c.env.DB,
+    userId,
+    userRole,
+    entityType: 'project',
+    entityId: parseInt(projectId),
+    projectId: parseInt(projectId),
+    action: 'split.rebuild',
+    details: { 
+      mode: 'raw', 
+      scene_count: paragraphs.length,
+      original_chars: originalContentLength
+    }
+  });
   
   // 6. Auto-assign characters AND generate utterances (non-blocking)
   try {
@@ -1074,9 +1110,14 @@ async function processPreserveMode(
   return c.json({
     project_id: parseInt(projectId),
     status: 'formatted',
-    split_mode: 'preserve',
+    split_mode: 'raw',  // SSOT: 新しい命名
     total_scenes: paragraphs.length,
-    message: `原文維持モードで ${paragraphs.length} シーンを生成しました`
+    message: `原文維持モードで ${paragraphs.length} シーンを生成しました`,
+    integrity_check: {
+      original_chars: originalContentLength,
+      preserved_chars: afterContentLength,
+      status: 'passed'
+    }
   }, 200)
 }
 

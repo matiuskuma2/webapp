@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
+import { logAudit } from '../utils/audit-logger'
 
 const projects = new Hono<{ Bindings: Bindings }>()
 
@@ -421,6 +423,35 @@ projects.post('/:id/source/text', async (c) => {
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `).bind(text.trim(), projectId).run()
+
+    // 監査ログ: source_text.replace イベント（Split由来削除が発生した場合）
+    if (existingScenes && existingScenes.count > 0) {
+      const sessionId = getCookie(c, 'session');
+      let userId: number | null = null;
+      let userRole: string | null = null;
+      if (sessionId) {
+        const session = await c.env.DB.prepare(`
+          SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = ?
+        `).bind(sessionId).first<{ id: number; role: string }>();
+        if (session) {
+          userId = session.id;
+          userRole = session.role;
+        }
+      }
+      await logAudit({
+        db: c.env.DB,
+        userId,
+        userRole,
+        entityType: 'project',
+        entityId: parseInt(projectId),
+        projectId: parseInt(projectId),
+        action: 'source_text.replace',
+        details: { 
+          deleted_scenes_count: existingScenes.count,
+          note: 'Split-based scenes deleted (chunk_id IS NOT NULL), manual scenes preserved'
+        }
+      });
+    }
 
     // 更新後のプロジェクト取得
     const updatedProject = await c.env.DB.prepare(`
