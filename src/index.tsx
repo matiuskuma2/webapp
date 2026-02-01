@@ -1335,17 +1335,6 @@ app.get('/projects/:id', (c) => {
                             <!-- Will be populated by JS -->
                         </div>
                         
-                        <!-- Export Navigation -->
-                        <div class="flex items-center gap-3">
-                            <span class="text-sm text-gray-600">書き出しは →</span>
-                            <button 
-                                onclick="switchTab('export')"
-                                class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold touch-manipulation flex items-center gap-2"
-                            >
-                                <i class="fas fa-download"></i>
-                                Exportタブへ
-                            </button>
-                        </div>
                     </div>
                 </div>
                 
