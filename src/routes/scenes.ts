@@ -1,5 +1,7 @@
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
+import { logAudit } from '../utils/audit-logger'
 
 const scenes = new Hono<{ Bindings: Bindings }>()
 
@@ -621,6 +623,30 @@ scenes.delete('/:id', async (c) => {
 
     console.log(`[Scenes] Scene ${sceneId} hidden (soft delete), project ${projectId}`)
 
+    // 監査ログ記録
+    const sessionId = getCookie(c, 'session');
+    let userId: number | null = null;
+    let userRole: string | null = null;
+    if (sessionId) {
+      const session = await c.env.DB.prepare(`
+        SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = ?
+      `).bind(sessionId).first<{ id: number; role: string }>();
+      if (session) {
+        userId = session.id;
+        userRole = session.role;
+      }
+    }
+    await logAudit({
+      db: c.env.DB,
+      userId,
+      userRole,
+      entityType: 'scene',
+      entityId: parseInt(sceneId),
+      projectId,
+      action: 'hide',
+      details: { visible_scenes_count: visibleScenes.length }
+    });
+
     return c.json({
       success: true,
       message: 'Scene hidden successfully (soft delete)',
@@ -684,6 +710,30 @@ scenes.post('/:id/restore', async (c) => {
     `).bind(newIdx, sceneId).run()
 
     console.log(`[Scenes] Scene ${sceneId} restored, new idx=${newIdx}`)
+
+    // 監査ログ記録
+    const sessionId = getCookie(c, 'session');
+    let userId: number | null = null;
+    let userRole: string | null = null;
+    if (sessionId) {
+      const session = await c.env.DB.prepare(`
+        SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = ?
+      `).bind(sessionId).first<{ id: number; role: string }>();
+      if (session) {
+        userId = session.id;
+        userRole = session.role;
+      }
+    }
+    await logAudit({
+      db: c.env.DB,
+      userId,
+      userRole,
+      entityType: 'scene',
+      entityId: parseInt(sceneId),
+      projectId,
+      action: 'restore',
+      details: { new_idx: newIdx }
+    });
 
     return c.json({
       success: true,

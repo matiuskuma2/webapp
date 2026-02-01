@@ -471,12 +471,13 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
     `).bind(projectId).run()
 
     // 4. pending の scenes を取得（最大1件: Gemini APIが遅いため）
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const BATCH_SIZE = 1
     const { results: pendingScenes } = await c.env.DB.prepare(`
       SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
       FROM scenes s
       LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
-      WHERE s.project_id = ? AND ig.id IS NULL
+      WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
       ORDER BY s.idx ASC
       LIMIT ?
     `).bind(projectId, BATCH_SIZE).all()
@@ -765,11 +766,12 @@ async function getImageGenerationStats(db: any, projectId: string) {
   const totalScenes = scenesCount[0]?.total || 0
 
   // Image generation stats
+  // ⚠️ is_hidden = 0 で非表示シーンを除外（統計の整合性維持）
   const { results: imageStats } = await db.prepare(`
     SELECT ig.status, COUNT(*) as count
     FROM image_generations ig
     JOIN scenes s ON ig.scene_id = s.id
-    WHERE s.project_id = ? AND ig.is_active = 1
+    WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.is_active = 1
     GROUP BY ig.status
   `).bind(projectId).all()
 

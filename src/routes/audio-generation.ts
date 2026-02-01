@@ -1,11 +1,13 @@
 // src/routes/audio-generation.ts
 import { Hono } from 'hono';
+import { getCookie } from 'hono/cookie';
 import type { Bindings } from '../types/bindings';
 import { GENERATION_STATUS, ERROR_CODES } from '../constants';
 import { createErrorResponse } from '../utils/error-response';
 import { base64ToUint8Array, generateR2Key, getR2PublicUrl } from '../utils/r2-helper';
 import { generateFishTTS } from '../utils/fish-audio'; // Phase X-1: Fish Audio integration
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, getElevenLabsVoiceList, ELEVENLABS_MODELS } from '../utils/elevenlabs'; // ElevenLabs TTS
+import { logAudit } from '../utils/audit-logger';
 
 const audioGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -360,7 +362,7 @@ audioGeneration.post('/audio/:audioId/activate', async (c) => {
 /**
  * DELETE /api/audio/:audioId
  * - active は通常削除不可
- * - force=true クエリパラメータで採用中の音声も削除可能
+ * - force=true クエリパラメータで採用中の音声も削除可能（superadminのみ）
  * - R2も削除
  */
 audioGeneration.delete('/audio/:audioId', async (c) => {
@@ -370,6 +372,25 @@ audioGeneration.delete('/audio/:audioId', async (c) => {
     
     if (!Number.isFinite(audioId)) {
       return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'Invalid audio id'), 400);
+    }
+
+    // force=true の場合は superadmin 権限チェック
+    if (forceDelete) {
+      const sessionId = getCookie(c, 'session');
+      if (!sessionId) {
+        return c.json(createErrorResponse(ERROR_CODES.UNAUTHORIZED, 'Authentication required for force delete'), 401);
+      }
+      
+      const session = await c.env.DB.prepare(`
+        SELECT u.id, u.role
+        FROM sessions s
+        JOIN users u ON s.user_id = u.id
+        WHERE s.id = ? AND s.expires_at > datetime('now')
+      `).bind(sessionId).first<{ id: number; role: string }>();
+      
+      if (!session || session.role !== 'superadmin') {
+        return c.json(createErrorResponse(ERROR_CODES.FORBIDDEN, 'Superadmin access required for force delete'), 403);
+      }
     }
 
     const audio = await c.env.DB.prepare(`
@@ -382,9 +403,9 @@ audioGeneration.delete('/audio/:audioId', async (c) => {
       return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Audio not found'), 404);
     }
 
-    // 採用中の音声は通常削除不可、force=trueで許可
+    // 採用中の音声は通常削除不可、force=trueで許可（superadminのみ）
     if (audio.is_active === 1 && !forceDelete) {
-      return c.json(createErrorResponse(ERROR_CODES.ACTIVE_AUDIO_DELETE, 'Cannot delete active audio. Use force=true to override.'), 400);
+      return c.json(createErrorResponse(ERROR_CODES.ACTIVE_AUDIO_DELETE, 'Cannot delete active audio. Superadmin can use force=true to override.'), 400);
     }
 
     // R2ファイル削除
@@ -400,6 +421,38 @@ audioGeneration.delete('/audio/:audioId', async (c) => {
     await c.env.DB.prepare(`DELETE FROM audio_generations WHERE id = ?`).bind(audioId).run();
     
     console.log(`[Audio] Deleted audio id=${audioId}, was_active=${audio.is_active}, force=${forceDelete}`);
+
+    // force削除の場合は監査ログ記録
+    if (forceDelete && audio.is_active === 1) {
+      const sessionId = getCookie(c, 'session');
+      let userId: number | null = null;
+      let userRole: string | null = null;
+      if (sessionId) {
+        const session = await c.env.DB.prepare(`
+          SELECT u.id, u.role FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = ?
+        `).bind(sessionId).first<{ id: number; role: string }>();
+        if (session) {
+          userId = session.id;
+          userRole = session.role;
+        }
+      }
+      // scene_id から project_id を取得
+      const sceneInfo = await c.env.DB.prepare(`
+        SELECT project_id FROM scenes WHERE id = ?
+      `).bind(audio.scene_id).first<{ project_id: number }>();
+      
+      await logAudit({
+        db: c.env.DB,
+        userId,
+        userRole,
+        entityType: 'audio',
+        entityId: audioId,
+        projectId: sceneInfo?.project_id ?? null,
+        action: 'force_delete',
+        details: { scene_id: audio.scene_id, was_active: true }
+      });
+    }
+
     return c.json({ success: true });
   } catch (error) {
     console.error('[Audio] delete error:', error);

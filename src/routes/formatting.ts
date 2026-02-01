@@ -508,9 +508,10 @@ async function processTextChunks(
       }
     }
     
-    // ✅ 既存シーンを削除（UNIQUE制約エラー防止）
+    // ✅ Split由来シーンのみ削除（手動追加シーン chunk_id=NULL は保護）
+    // ⚠️ 手動追加シーンはユーザー資産なので巻き込まない
     await c.env.DB.prepare(`
-      DELETE FROM scenes WHERE project_id = ?
+      DELETE FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL
     `).bind(projectId).run()
     
     await c.env.DB.prepare(`

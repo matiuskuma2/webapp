@@ -255,10 +255,12 @@ projects.post('/:id/upload', async (c) => {
     `).bind(projectId).first<{ count: number }>()
     
     if (existingScenes && existingScenes.count > 0) {
-      console.log(`[UploadAudio] Deleting ${existingScenes.count} old scenes for project ${projectId} BEFORE status update`)
-      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
-      await c.env.DB.prepare(`DELETE FROM utterances WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
-      await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
+      // Split由来シーンのみ削除（手動追加シーン chunk_id=NULL は保護）
+      // ⚠️ 手動追加シーンはユーザー資産なので巻き込まない
+      console.log(`[UploadAudio] Deleting split-based scenes for project ${projectId} BEFORE status update`)
+      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM utterances WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL`).bind(projectId).run()
     }
 
     // DB更新 (CRITICAL: source_type='audio' must be set for proper flow detection)
@@ -400,11 +402,13 @@ projects.post('/:id/source/text', async (c) => {
     `).bind(projectId).first<{ count: number }>()
     
     if (existingScenes && existingScenes.count > 0) {
-      console.log(`[SaveSourceText] Deleting ${existingScenes.count} old scenes for project ${projectId} BEFORE status update`)
+      // Split由来シーンのみ削除（手動追加シーン chunk_id=NULL は保護）
+      // ⚠️ 手動追加シーンはユーザー資産なので巻き込まない
+      console.log(`[SaveSourceText] Deleting split-based scenes for project ${projectId} BEFORE status update`)
       // 関連データも削除（外部キー制約がないため手動で）
-      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
-      await c.env.DB.prepare(`DELETE FROM utterances WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)`).bind(projectId).run()
-      await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM image_generations WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM utterances WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL)`).bind(projectId).run()
+      await c.env.DB.prepare(`DELETE FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL`).bind(projectId).run()
     }
 
     // テキスト保存（uploadedステータスに変更）

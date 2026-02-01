@@ -34,6 +34,21 @@ type Bindings = {
 const patches = new Hono<{ Bindings: Bindings }>();
 
 // ============================================================
+// ヘルパー関数: scene_idx → scene_id 解決（可視シーンのみ）
+// ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
+// ============================================================
+async function resolveVisibleSceneId(
+  db: D1Database,
+  projectId: number,
+  sceneIdx: number
+): Promise<{ id: number } | null> {
+  return db.prepare(`
+    SELECT id FROM scenes 
+    WHERE project_id = ? AND idx = ? AND (is_hidden = 0 OR is_hidden IS NULL)
+  `).bind(projectId, sceneIdx).first<{ id: number }>();
+}
+
+// ============================================================
 // 型定義
 // ============================================================
 
@@ -1715,10 +1730,8 @@ async function resolveIntentToOps(
       if (action.action === 'balloon.adjust_window' || action.action === 'balloon.adjust_position') {
         const balloonAction = action as BalloonAdjustWindowAction | BalloonAdjustPositionAction;
         
-        // scene_idx → scene_id 解決
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, balloonAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, balloonAction.scene_idx);
         
         if (!scene) {
           errors.push(`${prefix}: Scene not found: scene_idx=${balloonAction.scene_idx}`);
@@ -1799,10 +1812,8 @@ async function resolveIntentToOps(
         // ★ display_policy 変更アクション
         const policyAction = action as BalloonSetPolicyAction;
         
-        // scene_idx → scene_id 解決
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, policyAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, policyAction.scene_idx);
         
         if (!scene) {
           errors.push(`${prefix}: Scene not found: scene_idx=${policyAction.scene_idx}`);
@@ -1871,13 +1882,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'sfx.set_volume' || action.action === 'sfx.set_timing' || action.action === 'sfx.remove') {
         const sfxAction = action as SfxSetVolumeAction | SfxSetTimingAction | SfxRemoveAction;
         
-        // scene_idx → scene_id 解決
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, sfxAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, sfxAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${sfxAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${sfxAction.scene_idx}`);
           continue;
         }
 
@@ -1952,13 +1961,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'sfx.add_from_library') {
         const addAction = action as SfxAddFromLibraryAction;
         
-        // scene_idx → scene_id 解決
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, addAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, addAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${addAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${addAction.scene_idx}`);
           continue;
         }
 
@@ -2038,13 +2045,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'scene_bgm.set_volume') {
         const bgmAction = action as SceneBgmSetVolumeAction;
         
-        // scene_idx → scene_id 解決
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, bgmAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${bgmAction.scene_idx}`);
           continue;
         }
 
@@ -2084,12 +2089,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'scene_bgm.set_timing') {
         const bgmAction = action as SceneBgmSetTimingAction;
         
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, bgmAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${bgmAction.scene_idx}`);
           continue;
         }
 
@@ -2135,12 +2139,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'scene_bgm.remove') {
         const bgmAction = action as SceneBgmRemoveAction;
         
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, bgmAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${bgmAction.scene_idx}`);
           continue;
         }
 
@@ -2175,12 +2178,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'scene_bgm.assign') {
         const bgmAction = action as SceneBgmAssignAction;
         
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, bgmAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, bgmAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${bgmAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${bgmAction.scene_idx}`);
           continue;
         }
 
@@ -2209,12 +2211,10 @@ async function resolveIntentToOps(
           sourceAudioId = bgmAction.user_audio_id;
           audioLibraryType = 'user';
         } else if (bgmAction.source_type === 'copy_from_scene' && bgmAction.copy_from_scene_idx !== undefined) {
-          // 別シーンからコピー
-          const sourceScene = await db.prepare(`
-            SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-          `).bind(projectId, bgmAction.copy_from_scene_idx).first<{ id: number }>();
+          // 別シーンからコピー（可視シーンのみ）
+          const sourceScene = await resolveVisibleSceneId(db, projectId, bgmAction.copy_from_scene_idx);
           if (!sourceScene) {
-            errors.push(`${prefix}: Source scene not found: scene_idx=${bgmAction.copy_from_scene_idx}`);
+            errors.push(`${prefix}: Source scene not found (or hidden): scene_idx=${bgmAction.copy_from_scene_idx}`);
             continue;
           }
           const sourceAssignment = await db.prepare(`
@@ -2299,12 +2299,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'scene_sfx.set_volume') {
         const sfxAction = action as SceneSfxSetVolumeAction;
         
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, sfxAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, sfxAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${sfxAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${sfxAction.scene_idx}`);
           continue;
         }
 
@@ -2346,12 +2345,11 @@ async function resolveIntentToOps(
       } else if (action.action === 'scene_sfx.set_timing') {
         const sfxAction = action as SceneSfxSetTimingAction;
         
-        const scene = await db.prepare(`
-          SELECT id FROM scenes WHERE project_id = ? AND idx = ?
-        `).bind(projectId, sfxAction.scene_idx).first<{ id: number }>();
+        // scene_idx → scene_id 解決（可視シーンのみ）
+        const scene = await resolveVisibleSceneId(db, projectId, sfxAction.scene_idx);
         
         if (!scene) {
-          errors.push(`${prefix}: Scene not found: scene_idx=${sfxAction.scene_idx}`);
+          errors.push(`${prefix}: Scene not found (or hidden): scene_idx=${sfxAction.scene_idx}`);
           continue;
         }
 
