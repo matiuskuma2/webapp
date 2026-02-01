@@ -2765,6 +2765,10 @@ async function hideScene(sceneId) {
       // キャッシュクリア（非表示を反映）
       window.sceneSplitInitialized = false;
       await loadScenes(); // Reload scenes (idx will be re-numbered)
+      // カウント更新（非表示タブのカウント同期）
+      if (typeof window.updateSceneCountsAfterHide === 'function') {
+        await window.updateSceneCountsAfterHide();
+      }
     } else {
       showToast('シーンの非表示に失敗しました', 'error');
     }
@@ -12804,3 +12808,245 @@ async function showAudioConfirmDialog(missingCount) {
 
 // グローバルに公開
 window.showAudioConfirmDialog = showAudioConfirmDialog;
+
+// ==========================================
+// Scene Hide/Restore Management (PR-SceneSplit-HiddenManager)
+// ==========================================
+
+// 現在選択中のタブ
+let currentSceneTab = 'visible';
+// 非表示シーンのキャッシュ
+let hiddenScenesCache = [];
+// 復元待ちのシーンID
+let pendingRestoreSceneId = null;
+let pendingRestoreSceneData = null;
+
+/**
+ * シーンタブの切り替え
+ * @param {string} tab - 'visible' または 'hidden'
+ */
+window.switchSceneTab = async function(tab) {
+  currentSceneTab = tab;
+  
+  const visibleTab = document.getElementById('visibleScenesTab');
+  const hiddenTab = document.getElementById('hiddenScenesTab');
+  const visibleContent = document.getElementById('visibleScenesContent');
+  const hiddenContent = document.getElementById('hiddenScenesContent');
+  
+  // タブのスタイル更新
+  if (tab === 'visible') {
+    visibleTab.className = 'px-4 py-2 rounded-md font-semibold transition-all text-sm bg-white shadow text-gray-800';
+    hiddenTab.className = 'px-4 py-2 rounded-md font-semibold transition-all text-sm text-gray-500 hover:text-gray-700';
+    visibleContent.classList.remove('hidden');
+    hiddenContent.classList.add('hidden');
+    // シーン追加ボタン表示
+    document.getElementById('addSceneBtn').classList.remove('hidden');
+  } else {
+    visibleTab.className = 'px-4 py-2 rounded-md font-semibold transition-all text-sm text-gray-500 hover:text-gray-700';
+    hiddenTab.className = 'px-4 py-2 rounded-md font-semibold transition-all text-sm bg-white shadow text-gray-800';
+    visibleContent.classList.add('hidden');
+    hiddenContent.classList.remove('hidden');
+    // 非表示タブではシーン追加ボタン非表示
+    document.getElementById('addSceneBtn').classList.add('hidden');
+    // 非表示シーンを読み込み
+    await loadHiddenScenes();
+  }
+};
+
+/**
+ * 非表示シーン一覧を読み込み
+ */
+async function loadHiddenScenes() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes/hidden`);
+    const hiddenScenes = response.data.hidden_scenes || [];
+    hiddenScenesCache = hiddenScenes;
+    
+    // カウント更新
+    document.getElementById('hiddenScenesCount').textContent = hiddenScenes.length;
+    
+    // レンダリング
+    renderHiddenScenes(hiddenScenes);
+  } catch (error) {
+    console.error('Load hidden scenes error:', error);
+    showToast('非表示シーンの読み込みに失敗しました', 'error');
+  }
+}
+window.loadHiddenScenes = loadHiddenScenes;
+
+/**
+ * 非表示シーン一覧のレンダリング
+ * @param {Array} scenes - 非表示シーンの配列
+ */
+function renderHiddenScenes(scenes) {
+  const container = document.getElementById('hiddenScenesList');
+  const emptyState = document.getElementById('hiddenScenesEmpty');
+  
+  if (scenes.length === 0) {
+    container.classList.add('hidden');
+    emptyState.classList.remove('hidden');
+    return;
+  }
+  
+  container.classList.remove('hidden');
+  emptyState.classList.add('hidden');
+  
+  container.innerHTML = scenes.map(scene => {
+    const hiddenDate = scene.hidden_at ? new Date(scene.hidden_at).toLocaleString('ja-JP') : '不明';
+    const isManual = scene.is_manual;
+    
+    return `
+      <div class="bg-white rounded-lg border border-gray-200 p-4 hover:border-blue-300 transition-colors" id="hidden-scene-${scene.id}">
+        <div class="flex items-start justify-between">
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold text-gray-400">#(${Math.abs(scene.idx)})</span>
+              <span class="font-semibold text-gray-800">${escapeHtml(scene.title || '無題')}</span>
+              ${isManual ? `
+                <span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">手動追加</span>
+              ` : `
+                <span class="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded-full">原文由来</span>
+              `}
+            </div>
+            <p class="text-sm text-gray-600 mb-2 line-clamp-2">
+              ${scene.dialogue ? escapeHtml(scene.dialogue) : '<span class="text-gray-400 italic">セリフなし</span>'}
+            </p>
+            <div class="flex items-center gap-4 text-xs text-gray-500">
+              <span><i class="fas fa-clock mr-1"></i>非表示日時: ${hiddenDate}</span>
+              <span><i class="fas fa-image mr-1"></i>画像: ${scene.stats?.image_count || 0}枚</span>
+              <span><i class="fas fa-comment mr-1"></i>発話: ${scene.stats?.utterance_count || 0}件</span>
+            </div>
+          </div>
+          <button 
+            onclick="showRestoreSceneModal(${scene.id})"
+            class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold text-sm"
+          >
+            <i class="fas fa-undo mr-1"></i>復元
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * シーン復元確認モーダルを表示（2段階確認）
+ * @param {number} sceneId - 復元対象のシーンID
+ */
+window.showRestoreSceneModal = function(sceneId) {
+  const scene = hiddenScenesCache.find(s => s.id === sceneId);
+  if (!scene) {
+    showToast('シーン情報が見つかりません', 'error');
+    return;
+  }
+  
+  pendingRestoreSceneId = sceneId;
+  pendingRestoreSceneData = scene;
+  
+  // モーダル内容を更新
+  document.getElementById('restoreSceneTitle').innerHTML = `
+    <i class="fas fa-file-alt mr-1"></i>
+    ${escapeHtml(scene.title || '無題')}
+    <span class="ml-2 text-xs text-blue-600 font-normal">${scene.is_manual ? '（手動追加）' : '（原文由来）'}</span>
+  `;
+  
+  document.getElementById('restoreSceneStats').innerHTML = `
+    <div class="flex gap-4">
+      <span class="px-2 py-1 bg-gray-100 rounded">
+        <i class="fas fa-image mr-1 text-blue-500"></i>画像: ${scene.stats?.image_count || 0}枚
+      </span>
+      <span class="px-2 py-1 bg-gray-100 rounded">
+        <i class="fas fa-comment mr-1 text-green-500"></i>発話: ${scene.stats?.utterance_count || 0}件
+      </span>
+    </div>
+  `;
+  
+  // モーダル表示
+  document.getElementById('restoreSceneModal').classList.remove('hidden');
+};
+
+/**
+ * シーン復元確認モーダルを閉じる
+ */
+window.closeRestoreSceneModal = function() {
+  document.getElementById('restoreSceneModal').classList.add('hidden');
+  pendingRestoreSceneId = null;
+  pendingRestoreSceneData = null;
+};
+
+/**
+ * シーン復元を実行（確認後）
+ */
+window.confirmRestoreScene = async function() {
+  if (!pendingRestoreSceneId) {
+    showToast('復元対象が選択されていません', 'error');
+    return;
+  }
+  
+  const sceneId = pendingRestoreSceneId;
+  const btn = document.getElementById('restoreSceneConfirmBtn');
+  const originalText = btn.innerHTML;
+  
+  try {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>復元中...';
+    
+    const response = await axios.post(`${API_BASE}/scenes/${sceneId}/restore`);
+    
+    if (response.data.success) {
+      showToast(`シーンを復元しました（idx: ${response.data.new_idx}）`, 'success');
+      closeRestoreSceneModal();
+      
+      // 非表示シーン一覧を再読み込み
+      await loadHiddenScenes();
+      
+      // カウントを更新
+      await updateSceneCounts();
+    } else {
+      throw new Error(response.data.error?.message || '復元に失敗しました');
+    }
+  } catch (error) {
+    console.error('Restore scene error:', error);
+    const errorMessage = error.response?.data?.error?.message || error.message || '復元に失敗しました';
+    showToast(errorMessage, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = originalText;
+  }
+};
+
+/**
+ * シーン数を更新（表示中・非表示両方）
+ */
+async function updateSceneCounts() {
+  try {
+    // 表示中シーン数
+    const visibleRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes?view=edit`);
+    const visibleCount = visibleRes.data.total_scenes || 0;
+    document.getElementById('scenesCount').textContent = visibleCount;
+    
+    // 非表示シーン数
+    const hiddenRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes/hidden`);
+    const hiddenCount = hiddenRes.data.total_hidden || 0;
+    document.getElementById('hiddenScenesCount').textContent = hiddenCount;
+  } catch (error) {
+    console.error('Update scene counts error:', error);
+  }
+}
+
+/**
+ * シーン非表示後のカウント更新
+ * hideScene完了後に呼び出される
+ */
+window.updateSceneCountsAfterHide = async function() {
+  await updateSceneCounts();
+};
+
+// ページ読み込み時にタブ初期化
+document.addEventListener('DOMContentLoaded', () => {
+  // デフォルトで表示中タブを選択状態にする
+  const visibleTab = document.getElementById('visibleScenesTab');
+  if (visibleTab) {
+    visibleTab.className = 'px-4 py-2 rounded-md font-semibold transition-all text-sm bg-white shadow text-gray-800';
+  }
+});

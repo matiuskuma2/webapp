@@ -1028,12 +1028,28 @@ app.get('/projects/:id', (c) => {
                     </div>
                 </div>
                 
-                <!-- Scenes Table -->
+                <!-- Scenes Section with Visible/Hidden Tabs -->
                 <div id="scenesSection" class="hidden">
+                    <!-- Tab Navigation -->
                     <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-lg font-semibold text-gray-800">
-                            シーン一覧（<span id="scenesCount">0</span>件）
-                        </h3>
+                        <div class="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
+                            <button 
+                                id="visibleScenesTab"
+                                onclick="switchSceneTab('visible')"
+                                class="px-4 py-2 rounded-md font-semibold transition-all text-sm"
+                            >
+                                <i class="fas fa-eye mr-1"></i>
+                                表示中（<span id="scenesCount">0</span>）
+                            </button>
+                            <button 
+                                id="hiddenScenesTab"
+                                onclick="switchSceneTab('hidden')"
+                                class="px-4 py-2 rounded-md font-semibold transition-all text-sm"
+                            >
+                                <i class="fas fa-eye-slash mr-1"></i>
+                                非表示（<span id="hiddenScenesCount">0</span>）
+                            </button>
+                        </div>
                         <div class="flex gap-2">
                             <button 
                                 id="addSceneBtn"
@@ -1061,8 +1077,28 @@ app.get('/projects/:id', (c) => {
                         </div>
                     </div>
                     
-                    <div id="scenesList" class="space-y-4">
-                        <!-- Scenes will be rendered here -->
+                    <!-- Visible Scenes List -->
+                    <div id="visibleScenesContent">
+                        <div id="scenesList" class="space-y-4">
+                            <!-- Scenes will be rendered here -->
+                        </div>
+                    </div>
+                    
+                    <!-- Hidden Scenes List -->
+                    <div id="hiddenScenesContent" class="hidden">
+                        <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                            <p class="text-sm text-amber-800">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                非表示シーンは動画に含まれません。「復元」で再度表示できます。
+                            </p>
+                        </div>
+                        <div id="hiddenScenesList" class="space-y-3">
+                            <!-- Hidden scenes will be rendered here -->
+                        </div>
+                        <div id="hiddenScenesEmpty" class="hidden text-center py-8">
+                            <i class="fas fa-check-circle text-4xl text-green-400 mb-3"></i>
+                            <p class="text-gray-500">非表示のシーンはありません</p>
+                        </div>
                     </div>
                 </div>
                 
@@ -1119,6 +1155,51 @@ app.get('/projects/:id', (c) => {
                                 </button>
                                 <button onclick="confirmAddScene()" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold inline-flex items-center gap-2">
                                     <i class="fas fa-plus"></i>追加
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Restore Scene Confirmation Modal (2段階確認) -->
+                <div id="restoreSceneModal" class="hidden fixed inset-0 z-50 overflow-y-auto">
+                    <div class="fixed inset-0 bg-black/50" onclick="closeRestoreSceneModal()"></div>
+                    <div class="relative min-h-screen flex items-center justify-center p-4">
+                        <div class="relative w-full max-w-md bg-white rounded-xl shadow-2xl overflow-hidden">
+                            <div class="bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-4 flex items-center justify-between">
+                                <div class="flex items-center gap-3">
+                                    <i class="fas fa-undo text-white text-lg"></i>
+                                    <h3 class="text-white font-bold text-lg">シーンを復元</h3>
+                                </div>
+                                <button class="text-white/90 hover:bg-white/15 p-2 rounded-lg transition-colors" onclick="closeRestoreSceneModal()">
+                                    <i class="fas fa-times text-lg"></i>
+                                </button>
+                            </div>
+                            <div class="p-6">
+                                <div class="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                                    <p class="text-sm text-blue-800 font-semibold" id="restoreSceneTitle">
+                                        <!-- Scene title will be shown here -->
+                                    </p>
+                                </div>
+                                <p class="text-gray-700 mb-4">
+                                    このシーンを復元しますか？復元後、シーン一覧の末尾に追加されます。
+                                </p>
+                                <div id="restoreSceneStats" class="text-sm text-gray-600 mb-4">
+                                    <!-- Stats will be shown here -->
+                                </div>
+                                <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+                                    <p class="text-xs text-amber-700">
+                                        <i class="fas fa-exclamation-triangle mr-1"></i>
+                                        復元後の idx は末尾に配置されます。必要に応じて並び替えてください。
+                                    </p>
+                                </div>
+                            </div>
+                            <div class="px-6 py-4 bg-gray-50 border-t flex justify-end gap-3">
+                                <button onclick="closeRestoreSceneModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold">
+                                    キャンセル
+                                </button>
+                                <button onclick="confirmRestoreScene()" id="restoreSceneConfirmBtn" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-semibold inline-flex items-center gap-2">
+                                    <i class="fas fa-undo"></i>復元する
                                 </button>
                             </div>
                         </div>

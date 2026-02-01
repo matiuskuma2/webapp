@@ -972,6 +972,99 @@ projects.get('/:id/scenes', async (c) => {
   }
 })
 
+// GET /api/projects/:id/scenes/hidden - 非表示シーン一覧取得（復元UI用）
+// is_hidden = 1 のシーンのみ返す（ソフトデリート済み）
+projects.get('/:id/scenes/hidden', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, title
+      FROM projects
+      WHERE id = ?
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Project not found'
+        }
+      }, 404)
+    }
+
+    // 非表示シーン一覧取得（idx は -scene_id なので id 降順で並べる = 最近非表示にしたものが先頭）
+    const { results: hiddenScenes } = await c.env.DB.prepare(`
+      SELECT 
+        id, idx, role, title, dialogue, chunk_id, created_at, updated_at
+      FROM scenes
+      WHERE project_id = ? AND is_hidden = 1
+      ORDER BY updated_at DESC
+    `).bind(projectId).all()
+
+    // 各シーンの関連データ数を取得（復元時に復元される内容の参考）
+    const scenesWithStats = await Promise.all(
+      hiddenScenes.map(async (scene: any) => {
+        // 画像数（テーブルが存在しない場合は0を返す）
+        let imageCount = 0
+        try {
+          const result = await c.env.DB.prepare(`
+            SELECT COUNT(*) as count FROM image_generations WHERE scene_id = ?
+          `).bind(scene.id).first<{ count: number }>()
+          imageCount = result?.count || 0
+        } catch (e) {
+          // テーブルが存在しない場合など
+          console.warn('image_generations table not found or error:', e)
+        }
+
+        // 発話数（テーブルが存在しない場合は0を返す）
+        let utteranceCount = 0
+        try {
+          const result = await c.env.DB.prepare(`
+            SELECT COUNT(*) as count FROM scene_utterances WHERE scene_id = ?
+          `).bind(scene.id).first<{ count: number }>()
+          utteranceCount = result?.count || 0
+        } catch (e) {
+          // テーブルが存在しない場合など
+          console.warn('scene_utterances table not found or error:', e)
+        }
+
+        return {
+          id: scene.id,
+          idx: scene.idx,
+          role: scene.role,
+          title: scene.title,
+          dialogue: scene.dialogue ? (scene.dialogue.length > 100 ? scene.dialogue.substring(0, 100) + '...' : scene.dialogue) : '',
+          chunk_id: scene.chunk_id,
+          is_manual: scene.chunk_id === null, // 手動追加シーンかどうか
+          hidden_at: scene.updated_at,
+          created_at: scene.created_at,
+          stats: {
+            image_count: imageCount,
+            utterance_count: utteranceCount
+          }
+        }
+      })
+    )
+
+    return c.json({
+      project_id: parseInt(projectId),
+      total_hidden: hiddenScenes.length,
+      hidden_scenes: scenesWithStats
+    })
+  } catch (error: any) {
+    console.error('Error fetching hidden scenes:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to fetch hidden scenes',
+        details: error?.message || 'Unknown error'
+      }
+    }, 500)
+  }
+})
+
 // DELETE /api/projects/:id - プロジェクト削除（堅牢版：明示的な子テーブル削除）
 projects.delete('/:id', async (c) => {
   try {
