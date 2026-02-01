@@ -464,6 +464,7 @@ projects.get('/:id/scenes', async (c) => {
     // Phase1.7: display_asset_type, comic_data を追加
     // Phase X-3: speech_type を追加
     // R3: duration_override_ms を追加
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT 
         s.id, s.idx, s.role, s.title, s.dialogue, s.speech_type, s.bullets, s.image_prompt, 
@@ -471,7 +472,7 @@ projects.get('/:id/scenes', async (c) => {
         sss.style_preset_id
       FROM scenes s
       LEFT JOIN scene_style_settings sss ON s.id = sss.scene_id
-      WHERE s.project_id = ?
+      WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
       ORDER BY s.idx ASC
     `).bind(projectId).all()
 

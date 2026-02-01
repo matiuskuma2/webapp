@@ -566,15 +566,17 @@ scenes.patch('/:id', async (c) => {
   }
 })
 
-// DELETE /api/scenes/:id - シーン削除（idx自動再採番）
+// DELETE /api/scenes/:id - シーン非表示（ソフトデリート）
+// ⚠️ 実際にはデータを削除せず、is_hidden=1 に設定
+// 関連データ（画像、音声、動画、吹き出し等）はすべて保持される
 scenes.delete('/:id', async (c) => {
   try {
     const sceneId = c.req.param('id')
 
     // シーン存在確認＋project_id取得
     const scene = await c.env.DB.prepare(`
-      SELECT id, project_id FROM scenes WHERE id = ?
-    `).bind(sceneId).first()
+      SELECT id, project_id, is_hidden FROM scenes WHERE id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number; is_hidden: number }>()
 
     if (!scene) {
       return c.json({
@@ -585,60 +587,145 @@ scenes.delete('/:id', async (c) => {
       }, 404)
     }
 
+    // 既に非表示の場合は警告
+    if (scene.is_hidden === 1) {
+      return c.json({
+        error: {
+          code: 'ALREADY_HIDDEN',
+          message: 'Scene is already hidden'
+        }
+      }, 400)
+    }
+
     const projectId = scene.project_id
 
-    // シーン削除
+    // ソフトデリート: is_hidden = 1 に設定
     await c.env.DB.prepare(`
-      DELETE FROM scenes WHERE id = ?
+      UPDATE scenes 
+      SET is_hidden = 1, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
     `).bind(sceneId).run()
 
-    // idx自動再採番（残ったシーンを1から連番に）
-    const { results: remainingScenes } = await c.env.DB.prepare(`
+    // 可視シーンのidxを再採番（非表示シーンは除外）
+    const { results: visibleScenes } = await c.env.DB.prepare(`
       SELECT id FROM scenes
-      WHERE project_id = ?
+      WHERE project_id = ? AND is_hidden = 0
       ORDER BY idx ASC
     `).bind(projectId).all()
 
-    for (let i = 0; i < remainingScenes.length; i++) {
+    for (let i = 0; i < visibleScenes.length; i++) {
       await c.env.DB.prepare(`
         UPDATE scenes SET idx = ? WHERE id = ?
-      `).bind(i + 1, remainingScenes[i].id).run()
+      `).bind(i + 1, visibleScenes[i].id).run()
     }
+
+    console.log(`[Scenes] Scene ${sceneId} hidden (soft delete), project ${projectId}`)
 
     return c.json({
       success: true,
-      message: 'Scene deleted successfully',
-      deleted_scene_id: parseInt(sceneId),
-      remaining_scenes_count: remainingScenes.length
+      message: 'Scene hidden successfully (soft delete)',
+      hidden_scene_id: parseInt(sceneId),
+      visible_scenes_count: visibleScenes.length
     })
   } catch (error) {
-    console.error('Error deleting scene:', error)
+    console.error('Error hiding scene:', error)
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
-        message: 'Failed to delete scene'
+        message: 'Failed to hide scene'
+      }
+    }, 500)
+  }
+})
+
+// POST /api/scenes/:id/restore - シーンを再表示（ソフトデリートの復元）
+scenes.post('/:id/restore', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id, is_hidden FROM scenes WHERE id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number; is_hidden: number }>()
+
+    if (!scene) {
+      return c.json({
+        error: {
+          code: 'NOT_FOUND',
+          message: 'Scene not found'
+        }
+      }, 404)
+    }
+
+    if (scene.is_hidden === 0) {
+      return c.json({
+        error: {
+          code: 'NOT_HIDDEN',
+          message: 'Scene is not hidden'
+        }
+      }, 400)
+    }
+
+    const projectId = scene.project_id
+
+    // 現在の最大idxを取得
+    const maxIdxResult = await c.env.DB.prepare(`
+      SELECT MAX(idx) as max_idx FROM scenes 
+      WHERE project_id = ? AND is_hidden = 0
+    `).bind(projectId).first<{ max_idx: number | null }>()
+
+    const newIdx = (maxIdxResult?.max_idx ?? 0) + 1
+
+    // 復元: is_hidden = 0、末尾に追加
+    await c.env.DB.prepare(`
+      UPDATE scenes 
+      SET is_hidden = 0, idx = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `).bind(newIdx, sceneId).run()
+
+    console.log(`[Scenes] Scene ${sceneId} restored, new idx=${newIdx}`)
+
+    return c.json({
+      success: true,
+      message: 'Scene restored successfully',
+      restored_scene_id: parseInt(sceneId),
+      new_idx: newIdx
+    })
+  } catch (error) {
+    console.error('Error restoring scene:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to restore scene'
       }
     }, 500)
   }
 })
 
 // POST /api/scenes - シーン追加（指定位置に挿入可能）
+// ⚠️ Scene Split タブからの使用を想定
+// Builder からの直接追加は整合性の観点から非推奨
 scenes.post('/', async (c) => {
   try {
     const body = await c.req.json<{
       project_id: number;
       title?: string;
       dialogue?: string;
+      role?: string; // 省略時は 'main_point'
       insert_after_idx?: number; // 指定したidxの後に挿入（省略時は最後に追加）
     }>();
     
-    const { project_id, title, dialogue, insert_after_idx } = body;
+    const { project_id, title, dialogue, role, insert_after_idx } = body;
     
     if (!project_id) {
       return c.json({
         error: { code: 'INVALID_REQUEST', message: 'project_id is required' }
       }, 400);
     }
+    
+    // role のバリデーション
+    const validRoles = ['hook', 'context', 'main_point', 'evidence', 'timeline', 'analysis', 'summary', 'cta'];
+    const sceneRole = role && validRoles.includes(role) ? role : 'main_point';
     
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
@@ -651,9 +738,10 @@ scenes.post('/', async (c) => {
       }, 404);
     }
     
-    // 現在の最大idxを取得
+    // 可視シーンのみで最大idxを取得（非表示シーンは除外）
     const maxIdxResult = await c.env.DB.prepare(`
-      SELECT MAX(idx) as max_idx FROM scenes WHERE project_id = ?
+      SELECT MAX(idx) as max_idx FROM scenes 
+      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
     `).bind(project_id).first<{ max_idx: number | null }>();
     
     const maxIdx = maxIdxResult?.max_idx ?? 0;
@@ -661,11 +749,11 @@ scenes.post('/', async (c) => {
     let newIdx: number;
     
     if (insert_after_idx !== undefined && insert_after_idx >= 1 && insert_after_idx <= maxIdx) {
-      // 指定位置に挿入: 後続シーンのidxを+1
+      // 指定位置に挿入: 後続の可視シーンのidxを+1
       await c.env.DB.prepare(`
         UPDATE scenes 
         SET idx = idx + 1 
-        WHERE project_id = ? AND idx > ?
+        WHERE project_id = ? AND idx > ? AND (is_hidden = 0 OR is_hidden IS NULL)
       `).bind(project_id, insert_after_idx).run();
       
       newIdx = insert_after_idx + 1;
@@ -674,18 +762,21 @@ scenes.post('/', async (c) => {
       newIdx = maxIdx + 1;
     }
     
-    // 新規シーン作成
+    // 新規シーン作成（bullets, image_prompt は NOT NULL なので空文字列を設定）
     const result = await c.env.DB.prepare(`
-      INSERT INTO scenes (project_id, idx, role, title, dialogue)
-      VALUES (?, ?, 'content', ?, ?)
+      INSERT INTO scenes (project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden)
+      VALUES (?, ?, ?, ?, ?, '[]', '', 0)
     `).bind(
       project_id,
       newIdx,
+      sceneRole,
       title || `シーン ${newIdx}`,
       dialogue || ''
     ).run();
     
     const newSceneId = result.meta?.last_row_id;
+    
+    console.log(`[Scenes] Created scene id=${newSceneId}, idx=${newIdx}, project=${project_id}, role=${sceneRole}`);
     
     // 作成したシーンを取得して返却
     const newScene = await c.env.DB.prepare(`

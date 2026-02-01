@@ -2596,11 +2596,12 @@ function renderScenes(scenes) {
             <i class="fas fa-save mr-1"></i>保存
           </button>
           <button 
-            id="deleteBtn-${scene.id}"
-            onclick="deleteScene(${scene.id})"
-            class="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors touch-manipulation"
+            id="hideBtn-${scene.id}"
+            onclick="hideScene(${scene.id})"
+            class="px-4 py-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 transition-colors touch-manipulation"
+            title="シーンを非表示にします。関連データ（画像・音声等）は保持され、後から復元できます。"
           >
-            <i class="fas fa-trash mr-1"></i>削除
+            <i class="fas fa-eye-slash mr-1"></i>非表示
           </button>
         </div>
       </div>
@@ -2731,9 +2732,18 @@ async function saveScene(sceneId) {
   }
 }
 
-// Delete scene (行単位ロック)
-async function deleteScene(sceneId) {
-  if (!confirm('このシーンを削除してもよろしいですか？')) {
+// Hide scene (ソフトデリート - 行単位ロック)
+// ⚠️ シーンは完全削除されず、非表示になるだけ
+// 関連データ（画像、音声、動画等）はすべて保持される
+async function hideScene(sceneId) {
+  const confirmed = confirm(
+    'このシーンを非表示にしますか？\n\n' +
+    '・シーンは動画ビルドや一覧から除外されます\n' +
+    '・画像・音声・動画などの関連データは保持されます\n' +
+    '・後から復元することができます'
+  );
+  
+  if (!confirmed) {
     return;
   }
   
@@ -2744,57 +2754,63 @@ async function deleteScene(sceneId) {
   }
   
   window.sceneProcessing[sceneId] = true;
-  setButtonLoading(`deleteBtn-${sceneId}`, true);
+  setButtonLoading(`hideBtn-${sceneId}`, true);
   
   try {
+    // DELETE エンドポイントがソフトデリート（非表示）に変更済み
     const response = await axios.delete(`${API_BASE}/scenes/${sceneId}`);
     
     if (response.data.success) {
-      showToast('シーンを削除しました', 'success');
-      // キャッシュクリア（削除を反映）
+      showToast('シーンを非表示にしました', 'success');
+      // キャッシュクリア（非表示を反映）
       window.sceneSplitInitialized = false;
       await loadScenes(); // Reload scenes (idx will be re-numbered)
     } else {
-      showToast('シーンの削除に失敗しました', 'error');
+      showToast('シーンの非表示に失敗しました', 'error');
     }
   } catch (error) {
-    console.error('Delete scene error:', error);
-    showToast('シーン削除中にエラーが発生しました', 'error');
+    console.error('Hide scene error:', error);
+    const errorMsg = error.response?.data?.error?.message || 'シーン非表示中にエラーが発生しました';
+    showToast(errorMsg, 'error');
   } finally {
     window.sceneProcessing[sceneId] = false;
-    setButtonLoading(`deleteBtn-${sceneId}`, false);
+    setButtonLoading(`hideBtn-${sceneId}`, false);
   }
 }
 
+// 後方互換性のため deleteScene も維持（hideScene を呼ぶ）
+async function deleteScene(sceneId) {
+  return hideScene(sceneId);
+}
+
 // ========================================
-// シーン追加機能
+// シーン追加機能（Scene Split用）
 // ========================================
 
-// 現在のシーンリスト（モーダル用キャッシュ）
-window.cachedSceneList = [];
-
-// シーン追加モーダルを開く
-function openAddSceneModal() {
-  const modal = document.getElementById('addSceneModal');
+// シーン追加モーダルを表示
+function showAddSceneModal() {
+  const modal = document.getElementById('addSceneModalSplit');
   if (!modal) return;
   
-  // 挿入位置のセレクトを更新
+  // 挿入位置オプションを更新
   updateAddScenePositionOptions();
   
-  // フォームをリセット
-  document.getElementById('addSceneTitle').value = '';
-  document.getElementById('addSceneDialogue').value = '';
+  // フォームリセット
+  const titleInput = document.getElementById('addSceneTitle');
+  const dialogueInput = document.getElementById('addSceneDialogue');
+  if (titleInput) titleInput.value = '';
+  if (dialogueInput) dialogueInput.value = '';
   
   modal.classList.remove('hidden');
 }
 
 // シーン追加モーダルを閉じる
 function closeAddSceneModal() {
-  const modal = document.getElementById('addSceneModal');
+  const modal = document.getElementById('addSceneModalSplit');
   if (modal) modal.classList.add('hidden');
 }
 
-// 挿入位置のオプションを更新
+// 挿入位置オプションを更新
 async function updateAddScenePositionOptions() {
   const select = document.getElementById('addScenePosition');
   if (!select) return;
@@ -2802,12 +2818,10 @@ async function updateAddScenePositionOptions() {
   try {
     const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
     const scenes = response.data.scenes || [];
-    window.cachedSceneList = scenes;
     
-    // オプションを構築
     let options = '<option value="end">最後に追加</option>';
-    scenes.forEach((scene, i) => {
-      options += `<option value="${scene.idx}">シーン ${scene.idx} の後に挿入</option>`;
+    scenes.forEach((scene) => {
+      options += `<option value="${scene.idx}">シーン ${scene.idx}「${escapeHtml(scene.title.substring(0, 20))}」の後</option>`;
     });
     
     select.innerHTML = options;
@@ -2816,15 +2830,15 @@ async function updateAddScenePositionOptions() {
   }
 }
 
-// シーン追加を確定
+// シーン追加を実行
 async function confirmAddScene() {
   const positionSelect = document.getElementById('addScenePosition');
   const titleInput = document.getElementById('addSceneTitle');
   const dialogueInput = document.getElementById('addSceneDialogue');
   
-  const position = positionSelect.value;
-  const title = titleInput.value.trim();
-  const dialogue = dialogueInput.value.trim();
+  const position = positionSelect?.value;
+  const title = titleInput?.value?.trim() || '';
+  const dialogue = dialogueInput?.value?.trim() || '';
   
   try {
     const payload = {
@@ -2834,7 +2848,7 @@ async function confirmAddScene() {
     };
     
     // 末尾追加でない場合は挿入位置を指定
-    if (position !== 'end') {
+    if (position && position !== 'end') {
       payload.insert_after_idx = parseInt(position, 10);
     }
     
@@ -2844,22 +2858,25 @@ async function confirmAddScene() {
       showToast('シーンを追加しました', 'success');
       closeAddSceneModal();
       
-      // キャッシュクリアしてリロード
+      // シーンリストを再読込
       window.sceneSplitInitialized = false;
-      await initBuilderTab();
+      await loadScenes();
     } else {
       showToast('シーンの追加に失敗しました', 'error');
     }
   } catch (error) {
     console.error('Error adding scene:', error);
-    showToast('シーン追加中にエラーが発生しました', 'error');
+    const errorMsg = error.response?.data?.error?.message || 'シーン追加中にエラーが発生しました';
+    showToast(errorMsg, 'error');
   }
 }
 
 // グローバルにエクスポート
-window.openAddSceneModal = openAddSceneModal;
+window.showAddSceneModal = showAddSceneModal;
 window.closeAddSceneModal = closeAddSceneModal;
 window.confirmAddScene = confirmAddScene;
+window.hideScene = hideScene;
+window.deleteScene = deleteScene; // 後方互換性
 
 // Move scene up
 async function moveSceneUp(sceneId, currentIdx) {
