@@ -1,8 +1,9 @@
 # テロップ (Telop) SSOT 設計書
 
-**Version**: 1.0  
+**Version**: 1.1  
 **Created**: 2026-02-01  
-**Status**: 設計中（Phase 1 実装準備）
+**Updated**: 2026-02-01  
+**Status**: Phase 1 実装完了
 
 ---
 
@@ -236,32 +237,42 @@ const TELOP_STYLE_PRESETS = {
 
 ## 4. 実装フェーズ
 
-### Phase 1: Remotion字幕のスタイル強化（最優先）
+### Phase 1: Remotion字幕のスタイル強化（✅ 完了）
 
 **目標**: Remotion側の字幕スタイルを設定から制御可能にする
 
-**実装内容**:
-1. **UIに字幕スタイルプリセット選択を追加**
-   - Video Build設定画面に「テロップスタイル」セレクタを追加
+**実装完了内容** (2026-02-01):
+
+1. **✅ UIに字幕スタイルプリセット選択を追加**
+   - Video Build設定画面に「テロップスタイル」セレクタを追加済み
    - 5種プリセット（minimal, outline, band, pop, cinematic）
 
-2. **buildProjectJson へ telop_settings を含める**
-   - `build_settings.telops` に `style_preset` を追加
+2. **✅ buildProjectJson へ telop_settings を含める**
+   - `build_settings.telops` に `style_preset` を追加済み
    - 既存の `enabled`, `position_preset`, `size_preset` は維持（後方互換）
 
-3. **Remotion側で反映**
-   - `video-build-remotion/src/components/` でスタイル適用
-   - プリセットに応じたCSS/スタイル変更
+3. **✅ Remotion側で反映**
+   - `video-build-remotion/src/components/Subtitle.tsx` でスタイル適用
+   - 各プリセットに応じたフォント・色・縁取り・背景を反映
+   - `Scene.tsx` で subtitleStyle prop を受け取り
+   - `RilarcVideo.tsx` で build_settings.telops からスタイル読み取り
 
-4. **プレビュー確認**
-   - サンドボックスでの動作確認
-   - 本番デプロイ・検証
+4. **✅ チャット修正アクションの追加**
+   - `telop.set_style` アクションを追加（`patches.ts`）
+   - scope パラメータをサポート（デフォルト: remotion）
 
-**影響範囲**:
+5. **✅ 本番デプロイ完了**
+   - https://webapp-c7n.pages.dev にデプロイ済み
+
+**変更ファイル**:
+- `src/index.tsx` - UIにスタイル選択セレクタ追加
 - `src/routes/video-generation.ts` - build_settings.telops にスタイル追加
+- `src/routes/patches.ts` - telop.set_style アクション追加
 - `src/utils/video-build-helpers.ts` - buildProjectJson でスタイル伝播
-- `public/static/project-editor.js` - UI追加
-- `video-build-remotion/src/` - Remotionコンポーネント修正
+- `public/static/project-editor.js` - フロントエンドで style_preset 送信
+- `video-build-remotion/src/components/Subtitle.tsx` - 5プリセットスタイル実装
+- `video-build-remotion/src/components/Scene.tsx` - subtitleStyle prop受取り
+- `video-build-remotion/src/RilarcVideo.tsx` - テロップ設定をSceneへ伝播
 
 ### Phase 2: 漫画焼き込みプリセット対応
 
@@ -327,20 +338,21 @@ const TELOP_STYLE_PRESETS = {
 ## 6. テストケース
 
 ### 6.1 基本機能
-- [ ] プリセット変更 → Remotion字幕に反映
-- [ ] 位置変更（top/center/bottom）→ 正しい位置に表示
-- [ ] サイズ変更（sm/md/lg）→ 正しいサイズで表示
-- [ ] シーン単位のON/OFF → 指定シーンのみ切り替わる
+- [x] プリセット変更 → Remotion字幕に反映（Phase 1 完了）
+- [x] 位置変更（top/center/bottom）→ 正しい位置に表示
+- [x] サイズ変更（sm/md/lg）→ 正しいサイズで表示
+- [x] シーン単位のON/OFF → 指定シーンのみ切り替わる
+- [x] telop.set_style チャットアクション追加
 
 ### 6.2 互換性
-- [ ] 既存ビルド設定での動画生成が正常に動作
-- [ ] telops キーがない古いビルドでも動作
-- [ ] style_preset がない場合はデフォルト（outline）適用
+- [x] 既存ビルド設定での動画生成が正常に動作
+- [x] telops キーがない古いビルドでも動作
+- [x] style_preset がない場合はデフォルト（outline）適用
 
 ### 6.3 二重表示防止
-- [ ] comic シーンで text_render_mode=baked → Remotion字幕OFF
-- [ ] comic シーンで telops.enabled=true でも焼き込みのみ表示
-- [ ] 警告メッセージの表示確認
+- [x] comic シーンで text_render_mode=baked → Remotion字幕OFF
+- [x] comic シーンで telops.enabled=true でも焼き込みのみ表示
+- [ ] 警告メッセージの表示確認（Phase 2 予定）
 
 ---
 
@@ -357,3 +369,4 @@ const TELOP_STYLE_PRESETS = {
 | 日付 | 変更内容 |
 |------|----------|
 | 2026-02-01 | 初版作成（現状分析・SSOT設計） |
+| 2026-02-01 | Phase 1 実装完了（Remotion字幕スタイル5プリセット、UI、チャットアクション） |
