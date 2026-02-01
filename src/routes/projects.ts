@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
 import { logAudit } from '../utils/audit-logger'
+import { getUserFromSession, validateProjectAccess } from '../utils/auth-helper'
 
 const projects = new Hono<{ Bindings: Bindings }>()
 
@@ -973,88 +974,109 @@ projects.get('/:id/scenes', async (c) => {
 })
 
 // GET /api/projects/:id/scenes/hidden - 非表示シーン一覧取得（復元UI用）
-// is_hidden = 1 のシーンのみ返す（ソフトデリート済み）
+// SSOT: ログイン必須 + project access 必須（owner or superadmin）
+// SSOT: N+1排除（JOIN集計で返す）
 projects.get('/:id/scenes/hidden', async (c) => {
   try {
-    const projectId = c.req.param('id')
-
-    // プロジェクト存在確認
-    const project = await c.env.DB.prepare(`
-      SELECT id, title
-      FROM projects
-      WHERE id = ?
-    `).bind(projectId).first()
-
-    if (!project) {
-      return c.json({
-        error: {
-          code: 'NOT_FOUND',
-          message: 'Project not found'
-        }
-      }, 404)
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (!Number.isFinite(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
     }
 
-    // 非表示シーン一覧取得（idx は -scene_id なので id 降順で並べる = 最近非表示にしたものが先頭）
-    const { results: hiddenScenes } = await c.env.DB.prepare(`
-      SELECT 
-        id, idx, role, title, dialogue, chunk_id, created_at, updated_at
-      FROM scenes
-      WHERE project_id = ? AND is_hidden = 1
-      ORDER BY updated_at DESC
-    `).bind(projectId).all()
+    // ===== Auth SSOT: ログイン必須 =====
+    const user = await getUserFromSession(c)
+    if (!user) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+    }
 
-    // 各シーンの関連データ数を取得（復元時に復元される内容の参考）
-    const scenesWithStats = await Promise.all(
-      hiddenScenes.map(async (scene: any) => {
-        // 画像数（テーブルが存在しない場合は0を返す）
-        let imageCount = 0
-        try {
-          const result = await c.env.DB.prepare(`
-            SELECT COUNT(*) as count FROM image_generations WHERE scene_id = ?
-          `).bind(scene.id).first<{ count: number }>()
-          imageCount = result?.count || 0
-        } catch (e) {
-          // テーブルが存在しない場合など
-          console.warn('image_generations table not found or error:', e)
-        }
+    // ===== Auth SSOT: プロジェクトアクセス権検証（owner or superadmin） =====
+    const access = await validateProjectAccess(c, projectId, user)
+    if (!access.valid) {
+      // SSOT: 存在隠し（他人のプロジェクトは404で返す）
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
 
-        // 発話数（テーブルが存在しない場合は0を返す）
-        let utteranceCount = 0
-        try {
-          const result = await c.env.DB.prepare(`
-            SELECT COUNT(*) as count FROM scene_utterances WHERE scene_id = ?
-          `).bind(scene.id).first<{ count: number }>()
-          utteranceCount = result?.count || 0
-        } catch (e) {
-          // テーブルが存在しない場合など
-          console.warn('scene_utterances table not found or error:', e)
+    // ===== Data: N+1排除（JOIN集計で1クエリ） =====
+    // Note: scene_utterances が存在しない環境でも動くよう LEFT JOIN を使用
+    // Note: D1 では一部のSQLite関数が使えない場合があるため、シンプルな構文を使用
+    let hiddenScenes: any[] = []
+    
+    try {
+      // まず JOIN を使った最適なクエリを試す
+      const { results } = await c.env.DB.prepare(`
+        SELECT
+          s.id,
+          s.idx,
+          s.role,
+          s.title,
+          s.dialogue,
+          s.chunk_id,
+          s.created_at,
+          s.updated_at AS hidden_at,
+          COUNT(DISTINCT ig.id) AS image_count,
+          COUNT(DISTINCT su.id) AS utterance_count
+        FROM scenes s
+        LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+        LEFT JOIN scene_utterances su ON su.scene_id = s.id
+        WHERE s.project_id = ? AND s.is_hidden = 1
+        GROUP BY s.id
+        ORDER BY s.updated_at DESC
+      `).bind(projectId).all<any>()
+      
+      hiddenScenes = (results || []).map((r: any) => ({
+        id: r.id,
+        idx: r.idx,
+        role: r.role,
+        title: r.title,
+        dialogue: r.dialogue 
+          ? (r.dialogue.length > 100 ? r.dialogue.slice(0, 100) + '...' : r.dialogue) 
+          : '',
+        chunk_id: r.chunk_id,
+        is_manual: r.chunk_id === null,
+        hidden_at: r.hidden_at,
+        created_at: r.created_at,
+        stats: {
+          image_count: Number(r.image_count || 0),
+          utterance_count: Number(r.utterance_count || 0),
         }
-
-        return {
-          id: scene.id,
-          idx: scene.idx,
-          role: scene.role,
-          title: scene.title,
-          dialogue: scene.dialogue ? (scene.dialogue.length > 100 ? scene.dialogue.substring(0, 100) + '...' : scene.dialogue) : '',
-          chunk_id: scene.chunk_id,
-          is_manual: scene.chunk_id === null, // 手動追加シーンかどうか
-          hidden_at: scene.updated_at,
-          created_at: scene.created_at,
-          stats: {
-            image_count: imageCount,
-            utterance_count: utteranceCount
-          }
+      }))
+    } catch (joinError) {
+      // JOIN が失敗した場合（テーブルが存在しない等）、シンプルなクエリにフォールバック
+      console.warn('[hidden-scenes] JOIN query failed, falling back to simple query:', joinError)
+      
+      const { results } = await c.env.DB.prepare(`
+        SELECT id, idx, role, title, dialogue, chunk_id, created_at, updated_at AS hidden_at
+        FROM scenes
+        WHERE project_id = ? AND is_hidden = 1
+        ORDER BY updated_at DESC
+      `).bind(projectId).all<any>()
+      
+      hiddenScenes = (results || []).map((r: any) => ({
+        id: r.id,
+        idx: r.idx,
+        role: r.role,
+        title: r.title,
+        dialogue: r.dialogue 
+          ? (r.dialogue.length > 100 ? r.dialogue.slice(0, 100) + '...' : r.dialogue) 
+          : '',
+        chunk_id: r.chunk_id,
+        is_manual: r.chunk_id === null,
+        hidden_at: r.hidden_at,
+        created_at: r.created_at,
+        stats: {
+          image_count: 0,
+          utterance_count: 0,
         }
-      })
-    )
+      }))
+    }
 
     return c.json({
-      project_id: parseInt(projectId),
+      project_id: projectId,
       total_hidden: hiddenScenes.length,
-      hidden_scenes: scenesWithStats
+      hidden_scenes: hiddenScenes,
     })
   } catch (error: any) {
-    console.error('Error fetching hidden scenes:', error)
+    console.error('[hidden-scenes] Error:', error)
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
