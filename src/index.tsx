@@ -916,31 +916,46 @@ app.get('/projects/:id', (c) => {
                 <div id="formatSection" class="mb-6 p-4 bg-purple-50 rounded-lg border-l-4 border-purple-600 hidden">
                     <h3 class="font-semibold text-gray-800 mb-3"><i class="fas fa-cut mr-2"></i>シーン分割設定</h3>
                     
-                    <!-- Split Mode Selection -->
+                    <!-- Current Mode Display (SSOT) -->
+                    <div id="savedSplitModeContainer" class="mb-3 p-2 bg-white rounded border border-purple-200 hidden">
+                        <span class="text-xs text-gray-500">前回の分割モード: </span>
+                        <span id="savedSplitModeDisplay" class="text-sm font-semibold text-purple-700">-</span>
+                    </div>
+                    
+                    <!-- Split Mode Selection (SSOT: raw / optimized) -->
                     <div class="mb-4">
-                        <label class="text-sm font-medium text-gray-700 mb-2 block">分割モード</label>
+                        <label class="text-sm font-medium text-gray-700 mb-2 block">
+                            分割モード <span class="text-red-500">*</span>
+                            <span class="text-xs text-gray-500 ml-2">（必須選択）</span>
+                        </label>
                         <div class="space-y-2">
-                            <label class="flex items-start gap-3 p-3 bg-white rounded-lg border border-gray-200 cursor-pointer hover:border-purple-400 transition-colors">
-                                <input type="radio" name="splitMode" value="preserve" class="mt-1" checked>
-                                <div>
-                                    <div class="font-medium text-gray-800">原文維持（台本モード）</div>
-                                    <div class="text-xs text-gray-500">
-                                        原文を一切改変しません。空行（段落）で分割し、各段落をそのまま1シーンにします。<br>
-                                        <span class="text-purple-600">画像プロンプトのみAI生成</span>
+                            <label id="splitModeRawLabel" class="flex items-start gap-3 p-3 bg-white rounded-lg border-2 border-gray-200 cursor-pointer hover:border-green-400 transition-colors">
+                                <input type="radio" name="splitMode" value="raw" class="mt-1" onchange="onSplitModeChange('raw')">
+                                <div class="flex-1">
+                                    <div class="flex items-center gap-2">
+                                        <span class="font-medium text-gray-800">原文そのまま（Raw）</span>
+                                        <span class="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">推奨</span>
+                                    </div>
+                                    <div class="text-xs text-gray-500 mt-1">
+                                        <i class="fas fa-check text-green-600 mr-1"></i>原文を一切削りません。空行（段落）で分割し、各段落をそのまま1シーンにします。<br>
+                                        <span class="text-purple-600"><i class="fas fa-magic mr-1"></i>画像プロンプトのみAI生成</span>
                                     </div>
                                 </div>
                             </label>
-                            <label class="flex items-start gap-3 p-3 bg-white rounded-lg border border-gray-200 cursor-pointer hover:border-purple-400 transition-colors">
-                                <input type="radio" name="splitMode" value="ai" class="mt-1">
-                                <div>
-                                    <div class="font-medium text-gray-800">AI整理モード</div>
-                                    <div class="text-xs text-gray-500">
+                            <label id="splitModeOptimizedLabel" class="flex items-start gap-3 p-3 bg-white rounded-lg border-2 border-gray-200 cursor-pointer hover:border-amber-400 transition-colors">
+                                <input type="radio" name="splitMode" value="optimized" class="mt-1" onchange="onSplitModeChange('optimized')">
+                                <div class="flex-1">
+                                    <div class="font-medium text-gray-800">AIで整形（Optimized）</div>
+                                    <div class="text-xs text-gray-500 mt-1">
                                         AIが意図を読み取り、適切に分割・整理します。<br>
-                                        <span class="text-amber-600">⚠️ 文章が要約・再構成される場合があります</span>
+                                        <span class="text-amber-600"><i class="fas fa-exclamation-triangle mr-1"></i>文章が要約・再構成される場合があります</span>
                                     </div>
                                 </div>
                             </label>
                         </div>
+                        <p id="splitModeNotSelectedWarning" class="text-xs text-red-600 mt-2 hidden">
+                            <i class="fas fa-exclamation-circle mr-1"></i>分割モードを選択してください
+                        </p>
                     </div>
                     
                     <!-- Target Scene Count (conditionally shown) -->

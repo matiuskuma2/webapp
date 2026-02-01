@@ -114,6 +114,9 @@ async function loadProject() {
       updateParagraphCount(currentProject.source_text);
     }
     
+    // SSOT: split_mode を読み込んでUIに反映
+    initializeSplitModeUI();
+    
     // Enable/disable tabs based on status
     updateTabsAvailability();
     
@@ -950,9 +953,103 @@ async function saveSourceText() {
 
 // ========== Scene Split Functions ==========
 
-// Global split settings
-let currentSplitMode = 'ai'; // 'preserve' or 'ai'
+// Global split settings (SSOT: raw / optimized)
+let currentSplitMode = null; // null = 未選択, 'raw' = 原文そのまま, 'optimized' = AI整形
 let currentTargetSceneCount = 5; // Default target scene count
+let savedSplitMode = null; // プロジェクトに保存されているモード（変更検知用）
+
+/**
+ * SSOT: split_mode のノーマライズ
+ * preserve → raw, ai → optimized, その他 → null
+ */
+function normalizeSplitMode(mode) {
+  if (mode === 'preserve' || mode === 'raw') return 'raw';
+  if (mode === 'ai' || mode === 'optimized') return 'optimized';
+  return null;
+}
+
+/**
+ * モード表示名を取得
+ */
+function getSplitModeDisplayName(mode) {
+  if (mode === 'raw') return '原文そのまま（Raw）';
+  if (mode === 'optimized') return 'AIで整形（Optimized）';
+  return '未選択';
+}
+
+/**
+ * SSOT: プロジェクト読み込み時にsplit_modeをUIに反映
+ * - currentProject.split_mode から初期値を設定
+ * - savedSplitMode に保存して変更検知用に使用
+ * - UIのラジオボタンと表示を更新
+ */
+function initializeSplitModeUI() {
+  if (!currentProject) {
+    console.log('[SplitMode] No project loaded, skipping initialization');
+    return;
+  }
+  
+  // プロジェクトからsplit_modeを取得してノーマライズ
+  const projectMode = normalizeSplitMode(currentProject.split_mode);
+  
+  console.log('[SplitMode] Initializing with project mode:', currentProject.split_mode, '→', projectMode);
+  
+  // 保存モードとして記録（変更検知用）
+  savedSplitMode = projectMode;
+  currentSplitMode = projectMode; // 現在選択中のモードも初期化
+  
+  // UI更新: ラジオボタンの選択状態
+  const rawRadio = document.querySelector('input[name="splitMode"][value="raw"]');
+  const optimizedRadio = document.querySelector('input[name="splitMode"][value="optimized"]');
+  
+  if (rawRadio) rawRadio.checked = (projectMode === 'raw');
+  if (optimizedRadio) optimizedRadio.checked = (projectMode === 'optimized');
+  
+  // UI更新: ラベルのハイライト
+  const rawLabel = document.getElementById('splitModeRawLabel');
+  const optimizedLabel = document.getElementById('splitModeOptimizedLabel');
+  
+  if (rawLabel && optimizedLabel) {
+    // リセット
+    rawLabel.classList.remove('border-green-500', 'bg-green-50');
+    rawLabel.classList.add('border-gray-200');
+    optimizedLabel.classList.remove('border-amber-500', 'bg-amber-50');
+    optimizedLabel.classList.add('border-gray-200');
+    
+    // 選択中のモードをハイライト
+    if (projectMode === 'raw') {
+      rawLabel.classList.remove('border-gray-200');
+      rawLabel.classList.add('border-green-500', 'bg-green-50');
+    } else if (projectMode === 'optimized') {
+      optimizedLabel.classList.remove('border-gray-200');
+      optimizedLabel.classList.add('border-amber-500', 'bg-amber-50');
+    }
+  }
+  
+  // UI更新: 前回の分割モード表示
+  const savedModeDisplay = document.getElementById('savedSplitModeDisplay');
+  const savedModeContainer = document.getElementById('savedSplitModeContainer');
+  if (savedModeDisplay && savedModeContainer) {
+    if (projectMode) {
+      savedModeDisplay.textContent = getSplitModeDisplayName(projectMode);
+      savedModeContainer.classList.remove('hidden');
+    } else {
+      savedModeContainer.classList.add('hidden');
+    }
+  }
+  
+  // UI更新: target_scene_count
+  if (currentProject.target_scene_count) {
+    const targetInput = document.getElementById('targetSceneCount');
+    if (targetInput) {
+      targetInput.value = currentProject.target_scene_count;
+      currentTargetSceneCount = currentProject.target_scene_count;
+    }
+  }
+  
+  // 説明文を更新
+  updateSplitModeDescription();
+}
 
 /**
  * Render format section UI with mode selection
@@ -1057,10 +1154,50 @@ function updateTargetSceneCount(value) {
 
 /**
  * Update split mode and description
+ * @deprecated Use onSplitModeChange instead
  */
 function updateSplitMode(mode) {
-  currentSplitMode = mode;
+  onSplitModeChange(normalizeSplitMode(mode));
+}
+
+/**
+ * SSOT: Split mode change handler
+ * - モード変更時にUIを更新
+ * - savedSplitModeとの差分を検知
+ */
+window.onSplitModeChange = function(mode) {
+  const normalizedMode = normalizeSplitMode(mode);
+  currentSplitMode = normalizedMode;
+  
+  // UI更新: 選択状態のハイライト
+  const rawLabel = document.getElementById('splitModeRawLabel');
+  const optimizedLabel = document.getElementById('splitModeOptimizedLabel');
+  
+  if (rawLabel && optimizedLabel) {
+    if (normalizedMode === 'raw') {
+      rawLabel.classList.remove('border-gray-200');
+      rawLabel.classList.add('border-green-500', 'bg-green-50');
+      optimizedLabel.classList.remove('border-amber-500', 'bg-amber-50');
+      optimizedLabel.classList.add('border-gray-200');
+    } else if (normalizedMode === 'optimized') {
+      optimizedLabel.classList.remove('border-gray-200');
+      optimizedLabel.classList.add('border-amber-500', 'bg-amber-50');
+      rawLabel.classList.remove('border-green-500', 'bg-green-50');
+      rawLabel.classList.add('border-gray-200');
+    }
+  }
+  
+  // 警告非表示
+  const warningEl = document.getElementById('splitModeNotSelectedWarning');
+  if (warningEl) warningEl.classList.add('hidden');
+  
+  // モード変更の検知（保存モードと異なる場合）
+  if (savedSplitMode && savedSplitMode !== normalizedMode) {
+    console.log('[SplitMode] Mode changed from', savedSplitMode, 'to', normalizedMode);
+  }
+  
   updateSplitModeDescription();
+  updateSplitModeHint(normalizedMode);
 }
 
 /**
@@ -1111,25 +1248,50 @@ function updateSplitModeDescription() {
 
 /**
  * Confirm and execute format split (with reset warning)
+ * SSOT: モード未選択の場合は実行不可
+ * SSOT: モード変更の場合は2段階確認
  */
 async function confirmAndFormatSplit() {
+  // SSOT: モード未選択チェック
+  if (!currentSplitMode) {
+    const warningEl = document.getElementById('splitModeNotSelectedWarning');
+    if (warningEl) warningEl.classList.remove('hidden');
+    showToast('分割モードを選択してください', 'warning');
+    return;
+  }
+  
   // Get target scene count from input
   const targetInput = document.getElementById('targetSceneCount');
   if (targetInput) {
     currentTargetSceneCount = parseInt(targetInput.value) || 5;
   }
   
-  // Confirm dialog
-  const modeText = currentSplitMode === 'preserve' ? '原文維持' : 'AI整理';
+  const modeText = getSplitModeDisplayName(currentSplitMode);
+  const isModeChanged = savedSplitMode && savedSplitMode !== currentSplitMode;
+  
+  // SSOT: モード変更の場合は2段階確認
+  if (isModeChanged) {
+    const confirmChange = confirm(
+      `⚠️ 分割モードを変更して再分割しますか？\n\n` +
+      `変更前: ${getSplitModeDisplayName(savedSplitMode)}\n` +
+      `変更後: ${modeText}\n\n` +
+      `この操作は取り消せません。\n` +
+      `続行するには「OK」を押してください。`
+    );
+    if (!confirmChange) return;
+  }
+  
+  // 最終確認
   const confirmed = confirm(
     `シーン分割を実行しますか？\n\n` +
     `分割モード: ${modeText}\n` +
     `目標シーン数: ${currentTargetSceneCount}\n\n` +
-    `⚠️ 全リセット対象（制作物）:\n` +
-    `  ・シーン・画像・音声・吹き出し\n` +
-    `  ・SFX・テロップ・モーション\n` +
-    `  ・キャラ割当・キャラ特徴変化\n\n` +
-    `✅ 保持される設定:\n` +
+    `⚠️ リセットされる制作物:\n` +
+    `  ・原文由来シーン（chunk_id≠NULL）\n` +
+    `  ・上記シーンの画像・音声・吹き出し\n` +
+    `  ・SFX・テロップ・モーション・キャラ割当\n\n` +
+    `✅ 保持されるもの:\n` +
+    `  ・手動追加シーン（chunk_id=NULL）\n` +
     `  ・BGM設定・キャラクター定義\n` +
     `  ・ビルド履歴（監査用）`
   );
@@ -1181,17 +1343,25 @@ const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 
 // Format and split scenes with progress monitoring
 // Note: Called from confirmAndFormatSplit() which handles the confirmation dialog
+// SSOT: split_mode は raw/optimized → preserve/ai に変換してAPIへ送信
 async function formatAndSplit() {
   if (isProcessing) {
     showToast('処理中です。しばらくお待ちください', 'warning');
     return;
   }
   
+  // SSOT: モード未選択チェック
+  if (!currentSplitMode) {
+    showToast('分割モードを選択してください', 'error');
+    return;
+  }
+  
   // Get split mode and target scene count from global state (set by confirmAndFormatSplit)
-  const splitMode = currentSplitMode || 'ai';
+  // SSOT: raw → preserve, optimized → ai に変換（バックエンド互換）
+  const apiSplitMode = currentSplitMode === 'raw' ? 'preserve' : 'ai';
   const targetSceneCount = currentTargetSceneCount || 5;
   
-  console.log('[Format] Split mode:', splitMode, 'Target scene count:', targetSceneCount);
+  console.log('[Format] Split mode:', currentSplitMode, '(API:', apiSplitMode, ') Target scene count:', targetSceneCount);
   
   isProcessing = true;
   setButtonLoading('formatBtn', true);
@@ -1290,8 +1460,9 @@ async function formatAndSplit() {
     }
     
     // Initial format call with split mode parameters
+    // SSOT: apiSplitMode を使用（raw → preserve, optimized → ai）
     const formatPayload = {
-      split_mode: splitMode,
+      split_mode: apiSplitMode,
       target_scene_count: targetSceneCount,
       reset: true  // Always full reset (Phase S-1)
     };
@@ -1312,11 +1483,26 @@ async function formatAndSplit() {
       return;
     }
     
-    // Check if preserve mode completed immediately
-    if (response.data.status === 'formatted' && response.data.split_mode === 'preserve') {
+    // Check if preserve mode completed immediately (raw mode)
+    if (response.data.status === 'formatted' && (response.data.split_mode === 'preserve' || response.data.split_mode === 'raw')) {
       // Preserve mode completed immediately - no polling needed
-      console.log('[Format] Preserve mode completed:', response.data);
-      showToast(`原文維持モードで ${response.data.total_scenes} シーンを生成しました`, 'success');
+      console.log('[Format] Raw mode completed:', response.data);
+      
+      // SSOT: integrity_check の結果を表示
+      const integrityCheck = response.data.integrity_check;
+      if (integrityCheck) {
+        if (integrityCheck.status === 'passed') {
+          showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました（整合性OK: ${integrityCheck.preserved_chars}文字保持）`, 'success');
+        } else {
+          // integrity_check failed は通常 400/422 で返るが念のため
+          showToast(`警告: 原文の整合性チェックに問題が発生しました`, 'warning');
+        }
+      } else {
+        showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました`, 'success');
+      }
+      
+      // 保存モードを更新（次回の変更検知用）
+      savedSplitMode = 'raw';
       
       // Hide progress UI
       document.getElementById('formatProgressUI')?.classList.add('hidden');
@@ -1361,6 +1547,13 @@ async function formatAndSplit() {
         error.response?.data?.error?.code === 'INVALID_STATUS' &&
         error.response?.data?.error?.details?.current_status === 'failed') {
       showFailedProjectRecoveryUI();
+    } else if (error.response?.data?.error?.code === 'PRESERVE_INTEGRITY_ERROR') {
+      // SSOT: 原文保持の整合性エラー（重大事故）
+      const details = error.response?.data?.error?.details || {};
+      const originalChars = details.original_chars || '?';
+      const afterChars = details.after_chars || '?';
+      showToast(`原文保持エラー: 原文が改変されました（${originalChars}文字 → ${afterChars}文字）。再実行してください。`, 'error');
+      console.error('[SSOT] PRESERVE_INTEGRITY_ERROR:', details);
     } else {
       // Show detailed error message
       const errorMsg = error.response?.data?.error?.message || error.message || 'シーン分割中にエラーが発生しました';

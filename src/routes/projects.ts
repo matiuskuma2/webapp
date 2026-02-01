@@ -319,6 +319,7 @@ projects.get('/', async (c) => {
 })
 
 // GET /api/projects/:id - プロジェクト詳細
+// SSOT: split_mode / target_scene_count を含める（Scene Split UI用）
 projects.get('/:id', async (c) => {
   try {
     const projectId = c.req.param('id')
@@ -335,6 +336,8 @@ projects.get('/:id', async (c) => {
         p.audio_duration_seconds,
         p.audio_r2_key,
         p.output_preset,
+        p.split_mode,
+        p.target_scene_count,
         p.created_at,
         p.updated_at,
         p.source_updated_at
@@ -351,7 +354,14 @@ projects.get('/:id', async (c) => {
       }, 404)
     }
 
-    return c.json(project)
+    // SSOT: split_mode のノーマライズ（preserve → raw、未設定 → null）
+    const normalizedProject = {
+      ...project,
+      split_mode: project.split_mode === 'preserve' ? 'raw' : (project.split_mode || null),
+      target_scene_count: project.target_scene_count || null
+    }
+
+    return c.json(normalizedProject)
   } catch (error) {
     console.error('Error fetching project:', error)
     return c.json({
