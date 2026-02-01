@@ -757,9 +757,9 @@ imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
 
 // 画像生成統計を取得
 async function getImageGenerationStats(db: any, projectId: string) {
-  // Total scenes count
+  // Total scenes count (⚠️ is_hidden = 0 で非表示シーンを除外)
   const { results: scenesCount } = await db.prepare(`
-    SELECT COUNT(*) as total FROM scenes WHERE project_id = ?
+    SELECT COUNT(*) as total FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
   `).bind(projectId).all()
 
   const totalScenes = scenesCount[0]?.total || 0
@@ -1142,11 +1142,12 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     // 4. 対象シーン取得（is_prompt_customizedも取得）
     let targetScenes: any[] = []
     
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     if (mode === 'all') {
       // 全シーン
       const { results } = await c.env.DB.prepare(`
         SELECT id, idx, image_prompt, is_prompt_customized FROM scenes
-        WHERE project_id = ?
+        WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
         ORDER BY idx ASC
       `).bind(projectId).all()
       targetScenes = results
@@ -1156,7 +1157,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
         SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
         FROM scenes s
         LEFT JOIN image_generations ig ON s.id = ig.scene_id AND ig.is_active = 1
-        WHERE s.project_id = ? AND ig.id IS NULL
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
         ORDER BY s.idx ASC
       `).bind(projectId).all()
       targetScenes = results
@@ -1171,7 +1172,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           GROUP BY scene_id
         ) latest ON s.id = latest.scene_id
         INNER JOIN image_generations ig ON ig.id = latest.max_id
-        WHERE s.project_id = ? AND ig.status = 'failed'
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.status = 'failed'
         ORDER BY s.idx ASC
       `).bind(projectId).all()
       targetScenes = results

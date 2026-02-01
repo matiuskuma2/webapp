@@ -1285,10 +1285,11 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     
     // シーンデータ取得
     // R2: display_asset_type, text_render_mode を取得
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const { results: rawScenes } = await c.env.DB.prepare(`
       SELECT id, idx, role, title, dialogue, comic_data, display_asset_type, text_render_mode
       FROM scenes
-      WHERE project_id = ?
+      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
       ORDER BY idx ASC
     `).bind(projectId).all();
     
@@ -1673,11 +1674,12 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
     }
     
     // Get scenes (optionally filtered)
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     let scenesQuery = `
       SELECT s.id, s.idx, s.role, s.title, s.dialogue, s.display_asset_type, s.text_render_mode,
              s.duration_override_ms
       FROM scenes s
-      WHERE s.project_id = ?
+      WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
     `;
     const queryParams: any[] = [projectId];
     
@@ -1966,10 +1968,11 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     }
     
     // 3. シーンデータ取得（display_asset_type + R2 text_render_mode + 素材情報）
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const { results: rawScenes } = await c.env.DB.prepare(`
       SELECT id, idx, role, title, dialogue, display_asset_type, comic_data, text_render_mode
       FROM scenes
-      WHERE project_id = ?
+      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
       ORDER BY idx ASC
     `).bind(projectId).all();
     

@@ -38,10 +38,11 @@ downloads.get('/:id/download/images', async (c) => {
     }
 
     // 3. シーンと画像を取得（Phase1.7: display_asset_type に応じて画像を選択）
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT id, idx, display_asset_type
       FROM scenes
-      WHERE project_id = ?
+      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
       ORDER BY idx ASC
     `).bind(projectId).all()
 
@@ -157,10 +158,11 @@ downloads.get('/:id/download/csv', async (c) => {
     }
 
     // 3. シーン取得（idx順）
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT idx, role, title, dialogue, bullets
       FROM scenes
-      WHERE project_id = ?
+      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
       ORDER BY idx ASC
     `).bind(projectId).all()
 
@@ -254,10 +256,11 @@ downloads.get('/:id/download/all', async (c) => {
     }
 
     // 3. シーン取得（Phase1.7: display_asset_type を追加）
+    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     const { results: scenes } = await c.env.DB.prepare(`
       SELECT id, idx, role, title, dialogue, bullets, display_asset_type
       FROM scenes
-      WHERE project_id = ?
+      WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
       ORDER BY idx ASC
     `).bind(projectId).all()
 
