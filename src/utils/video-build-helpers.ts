@@ -1637,6 +1637,8 @@ export function buildProjectJson(
         duration_ms: 300,
       },
       // PR-5-3b + Phase 1: テロップ設定
+      // SSOT Validation: Log telops settings being included in projectJson
+      ...(console.log('[SSOT-TELOP] buildProjectJson telops input:', JSON.stringify(settings.telops)), {}),
       telops: settings.telops ? {
         enabled: settings.telops.enabled ?? true,
         position_preset: settings.telops.position_preset ?? 'bottom',

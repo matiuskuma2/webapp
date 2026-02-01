@@ -2673,6 +2673,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       },
     };
     
+    // SSOT Validation Log: telops settings propagation check
+    console.log('[SSOT-TELOP] buildSettings.telops:', JSON.stringify(buildSettings.telops));
+    
     // 6. project.json生成
     // Output preset から aspect_ratio / resolution / fps を取得（body で上書き可能）
     // CRITICAL: Pass siteUrl for absolute URL conversion (Remotion Lambda requires absolute URLs)
