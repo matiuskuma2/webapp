@@ -360,10 +360,12 @@ comic.post('/:id/comic/regenerate', async (c) => {
       position_preset: 'bottom'
     }
 
-    // 連打防止: 直近30秒以内に同一シーンで regenerate.requested があれば 409
+    // 連打防止: 直近30秒以内に同一シーンで rebake.requested があれば 409
+    // Note: 旧 comic.regenerate.requested も互換性のためチェック
     const recentRequest = await c.env.DB.prepare(`
       SELECT created_at FROM audit_logs
-      WHERE entity_type = 'scene' AND entity_id = ? AND action = 'comic.regenerate.requested'
+      WHERE entity_type = 'scene' AND entity_id = ? 
+        AND action IN ('comic.rebake.requested', 'comic.regenerate.requested')
       ORDER BY created_at DESC LIMIT 1
     `).bind(sceneId).first<{ created_at: string }>()
 
@@ -376,21 +378,22 @@ comic.post('/:id/comic/regenerate', async (c) => {
         return c.json({
           error: { 
             code: 'CONFLICT', 
-            message: `再生成のクールダウン中です。${remainingSec}秒後にお試しください。` 
+            message: `再焼き込みのクールダウン中です。${remainingSec}秒後にお試しください。` 
           }
         }, 409)
       }
     }
 
-    // 監査ログ: comic.regenerate.requested
+    // 監査ログ: comic.rebake.requested（旧: comic.regenerate.requested）
+    // "rebake" = ベース画像は固定、文字焼き込みレイヤーのみ再作成
     const auditDetails = {
       reason,
       telops_comic: telopsComic,
-      note: 'existing comics are kept; regeneration creates a new comic generation'
+      note: 'AI画像は固定。文字焼き込み（吹き出し/テロップ）のみ再作成。'
     }
     await c.env.DB.prepare(`
       INSERT INTO audit_logs (user_id, user_role, entity_type, entity_id, project_id, action, details, created_at)
-      VALUES (?, ?, 'scene', ?, ?, 'comic.regenerate.requested', ?, CURRENT_TIMESTAMP)
+      VALUES (?, ?, 'scene', ?, ?, 'comic.rebake.requested', ?, CURRENT_TIMESTAMP)
     `).bind(
       scene.user_id || null,
       scene.user_id ? 'owner' : 'anonymous',

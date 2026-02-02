@@ -2006,11 +2006,11 @@
             ${statusBadge}
           </div>
           <div class="flex items-center gap-2">
-            <!-- Phase 2-2: 設定反映ボタン -->
+            <!-- Phase 2-3: 再焼き込みボタン（AI画像は固定） -->
             <button onclick="window.ComicEditorV2.openRegenModal()" 
               class="px-3 py-1.5 text-sm text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors"
-              title="プロジェクトの漫画文字設定を次回公開に反映">
-              <i class="fas fa-cog mr-1"></i>設定反映
+              title="プロジェクトの漫画文字設定を次回公開に反映（AI画像は変わりません）">
+              <i class="fas fa-paint-brush mr-1"></i>文字設定を反映
             </button>
             <button onclick="window.ComicEditorV2.close()" class="text-gray-400 hover:text-gray-600 text-2xl">
               <i class="fas fa-times"></i>
@@ -2154,7 +2154,7 @@
     return badges.join('');
   }
   
-  // ============== Phase 2-2: 再生成モーダル ==============
+  // ============== Phase 2-3: 再焼き込みモーダル（AI画像は固定） ==============
   
   function openRegenerateModal() {
     const existingModal = document.getElementById('comicRegenModal');
@@ -2194,6 +2194,10 @@
           <p class="text-gray-600 mb-4">
             プロジェクトの漫画文字設定をこのシーンに適用します。<br/>
             <strong class="text-blue-700">次回「公開」時に反映されます。</strong>
+          </p>
+          <p class="text-sm mb-4 px-3 py-2 bg-green-50 border border-green-200 rounded-lg text-green-700">
+            <i class="fas fa-check-circle mr-1"></i>
+            <strong>AI画像は変わりません</strong>（文字の見た目だけ変わります）
           </p>
           <p class="text-gray-500 text-sm mb-6">
             今の漫画は残ります。よろしいですか？
@@ -2236,11 +2240,16 @@
             </div>
           </div>
           
-          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 text-xs text-blue-800">
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-4 text-xs text-blue-800">
             <i class="fas fa-info-circle mr-1"></i>
             <strong>仕組み:</strong> この設定を「適用予約」します。<br/>
-            漫画を編集して「公開」すると、この設定で焼き込まれます。<br/>
+            漫画を編集して「公開」すると、この設定で文字が再焼き込みされます。<br/>
             <span class="text-gray-500">（今すぐ見た目は変わりません）</span>
+          </div>
+          <div class="bg-green-50 border border-green-200 rounded-lg p-3 mb-6 text-xs text-green-700">
+            <i class="fas fa-image mr-1"></i>
+            <strong>AI画像は固定:</strong> 元のキャラや背景は変わりません。<br/>
+            文字（吹き出し・テロップ）の見た目だけが新しい設定で描画されます。
           </div>
           
           <div class="flex justify-end gap-3">
