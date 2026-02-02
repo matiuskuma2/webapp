@@ -11988,6 +11988,34 @@ async function applyChatEdit() {
     });
     
     if (response.data.ok) {
+      // PR-Chat-Telop-Scope-AutoRebake: 自動rebake結果を表示
+      let autoRebakeHtml = '';
+      const autoRebake = response.data.auto_rebake;
+      if (autoRebake) {
+        if (autoRebake.requested) {
+          autoRebakeHtml = `
+            <p class="text-sm text-green-600 mt-1">
+              <i class="fas fa-sync mr-1"></i>
+              ${autoRebake.message}
+            </p>
+          `;
+        } else if (autoRebake.cooldown_remaining_sec) {
+          autoRebakeHtml = `
+            <p class="text-sm text-amber-600 mt-1">
+              <i class="fas fa-clock mr-1"></i>
+              ${autoRebake.message}
+            </p>
+          `;
+        } else if (autoRebake.error) {
+          autoRebakeHtml = `
+            <p class="text-sm text-red-600 mt-1">
+              <i class="fas fa-exclamation-triangle mr-1"></i>
+              ${autoRebake.message}
+            </p>
+          `;
+        }
+      }
+      
       // Success - show message and close panel
       history.innerHTML += `
         <div class="bg-green-50 rounded-lg p-3 border border-green-200">
@@ -12001,10 +12029,16 @@ async function applyChatEdit() {
               新しいビルド #${response.data.new_video_build_id} を作成しました
             </p>
           ` : ''}
+          ${autoRebakeHtml}
         </div>
       `;
       
       showToast(response.data.next_action || '修正を適用しました', 'success');
+      
+      // PR-Chat-Telop-Scope-AutoRebake: rebake予約があった場合、キャッシュを無効化
+      if (response.data.auto_rebake?.requested) {
+        invalidateRebakeStatusCache();
+      }
       
       // PR-4-2: 新ビルドIDを待ち受けスクロール用に設定
       if (response.data.new_video_build_id) {

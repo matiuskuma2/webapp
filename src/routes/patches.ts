@@ -1760,6 +1760,15 @@ async function resolveIntentToOps(
   audio_automation_override?: AudioAutomationOverride;
   // Phase 2-1: 漫画（焼き込み）テロップ設定の上書き（projects.settings_json.telops_comicに保存）
   telops_comic_override?: TelopsComicSettings;
+  // PR-Chat-Telop-Scope-AutoRebake: 自動rebake結果
+  auto_rebake?: {
+    requested: boolean;
+    affected_scenes?: number;
+    affected_scene_ids?: number[];
+    cooldown_remaining_sec?: number;
+    error?: boolean;
+    message: string;
+  };
 }> {
   const ops: PatchOp[] = [];
   const errors: string[] = [];
@@ -3223,6 +3232,117 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
         `).bind(JSON.stringify(projectSettingsJson), projectId).run();
         
         console.log(`[Chat Edit Apply] Project settings_json updated with telops_comic:`, telopsComicOverride);
+        
+        // PR-Chat-Telop-Scope-AutoRebake: 自動で全シーン再焼き込み予約を実行
+        // scope が comic または both の場合、telops_comic 保存後に自動rebake
+        const comicRegen = result.comic_regeneration_required || [];
+        const hasComicScope = comicRegen.some(r => r.scope === 'comic' || r.scope === 'both');
+        
+        if (hasComicScope) {
+          try {
+            // クールダウンチェック（60秒）
+            const recentRequest = await c.env.DB.prepare(`
+              SELECT created_at FROM audit_logs
+              WHERE entity_type = 'project' AND entity_id = ? 
+                AND action IN ('comic.rebake.project_requested', 'comic.regenerate.project_requested')
+              ORDER BY created_at DESC LIMIT 1
+            `).bind(projectId).first<{ created_at: string }>();
+            
+            let cooldownRemaining = 0;
+            if (recentRequest) {
+              const lastRequestTime = new Date(recentRequest.created_at).getTime();
+              const now = Date.now();
+              const cooldownMs = 60 * 1000;
+              if (now - lastRequestTime < cooldownMs) {
+                cooldownRemaining = Math.ceil((cooldownMs - (now - lastRequestTime)) / 1000);
+              }
+            }
+            
+            if (cooldownRemaining > 0) {
+              // クールダウン中 - warningとして記録（エラーにはしない）
+              console.log(`[Chat Edit Apply] Auto rebake skipped - cooldown ${cooldownRemaining}s remaining`);
+              result.auto_rebake = {
+                requested: false,
+                cooldown_remaining_sec: cooldownRemaining,
+                message: `自動再焼き込み予約はクールダウン中です。${cooldownRemaining}秒後に再試行してください。`,
+              };
+            } else {
+              // 対象シーンを取得（漫画シーンのみ）
+              const targetScenes = await c.env.DB.prepare(`
+                SELECT id, comic_data, display_asset_type, text_render_mode
+                FROM scenes
+                WHERE project_id = ?
+                  AND (display_asset_type = 'comic' OR text_render_mode = 'baked')
+              `).bind(projectId).all<{
+                id: number;
+                comic_data: string | null;
+                display_asset_type: string | null;
+                text_render_mode: string | null;
+              }>();
+              
+              const scenes = targetScenes.results || [];
+              
+              if (scenes.length === 0) {
+                result.auto_rebake = {
+                  requested: false,
+                  affected_scenes: 0,
+                  message: '対象の漫画シーンがありません。',
+                };
+              } else {
+                // 各シーンに pending_regeneration をセット
+                const rebakeNow = new Date().toISOString();
+                const rebakeTelopsComic = {
+                  ...telopsComicOverride,
+                  updated_at: rebakeNow,
+                };
+                
+                for (const scene of scenes) {
+                  const existingComicData = scene.comic_data ? JSON.parse(scene.comic_data) : {};
+                  const newComicData = {
+                    ...existingComicData,
+                    pending_regeneration: {
+                      requested_at: rebakeNow,
+                      telops_comic: rebakeTelopsComic,
+                      reason: 'chat_auto_apply_telops_comic',
+                    },
+                  };
+                  
+                  await c.env.DB.prepare(`
+                    UPDATE scenes SET comic_data = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                  `).bind(JSON.stringify(newComicData), scene.id).run();
+                }
+                
+                // 監査ログ
+                await c.env.DB.prepare(`
+                  INSERT INTO audit_logs (entity_type, entity_id, action, details, created_at)
+                  VALUES ('project', ?, 'comic.rebake.project_requested', ?, datetime('now'))
+                `).bind(projectId, JSON.stringify({
+                  telops_comic: rebakeTelopsComic,
+                  affected_scene_count: scenes.length,
+                  affected_scene_ids: scenes.map(s => s.id),
+                  source: 'chat_auto',
+                  note: 'チャット修正から自動で全シーンの文字焼き込みを予約',
+                })).run();
+                
+                console.log(`[Chat Edit Apply] Auto rebake requested for ${scenes.length} comic scenes`);
+                
+                result.auto_rebake = {
+                  requested: true,
+                  affected_scenes: scenes.length,
+                  affected_scene_ids: scenes.map(s => s.id),
+                  message: `${scenes.length}シーンに自動で再焼き込み予約しました。公開時に新設定で焼き込まれます。`,
+                };
+              }
+            }
+          } catch (rebakeError) {
+            console.error(`[Chat Edit Apply] Auto rebake failed:`, rebakeError);
+            result.auto_rebake = {
+              requested: false,
+              error: true,
+              message: '自動再焼き込み予約に失敗しました。手動で実行してください。',
+            };
+          }
+        }
       } catch (settingsError) {
         console.error(`[Chat Edit Apply] Failed to update project settings_json with telops_comic:`, settingsError);
         // 保存失敗しても続行（次回再試行可能）
@@ -3343,6 +3463,8 @@ patches.post('/projects/:projectId/chat-edits/apply', async (c) => {
     status: applyStatus,
     new_video_build_id: newVideoBuildId,
     build_generation_error: buildError,
+    // PR-Chat-Telop-Scope-AutoRebake: 自動rebake結果を含める
+    auto_rebake: result.auto_rebake,
     next_action: newVideoBuildId 
       ? `新ビルド #${newVideoBuildId} を作成しました。レンダリング進捗を確認してください。`
       : buildError 
