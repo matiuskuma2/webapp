@@ -1122,4 +1122,383 @@ scenes.delete('/:id/motion', async (c) => {
   }
 })
 
+// =============================================================================
+// シーン別BGM/SFX API (scene_audio_assignments)
+// =============================================================================
+
+/**
+ * GET /api/scenes/:id/audio-assignments
+ * シーンに割り当てられたBGM/SFXを取得
+ */
+scenes.get('/:id/audio-assignments', async (c) => {
+  try {
+    const sceneId = parseInt(c.req.param('id'), 10)
+    if (isNaN(sceneId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene ID' } }, 400)
+    }
+
+    // クエリパラメータでフィルタ
+    const audioTypeFilter = c.req.query('audio_type')
+
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id FROM scenes WHERE id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number }>()
+
+    if (!scene) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404)
+    }
+
+    // BGM/SFX割り当て取得（フィルタ適用）
+    const whereClause = audioTypeFilter 
+      ? `WHERE saa.scene_id = ? AND saa.audio_type = ?`
+      : `WHERE saa.scene_id = ?`
+    
+    const bindParams = audioTypeFilter 
+      ? [sceneId, audioTypeFilter]
+      : [sceneId]
+
+    const stmt = c.env.DB.prepare(`
+      SELECT 
+        saa.id,
+        saa.audio_type,
+        saa.audio_library_type,
+        saa.system_audio_id,
+        saa.user_audio_id,
+        saa.direct_r2_key,
+        saa.direct_r2_url,
+        saa.direct_name,
+        saa.direct_duration_ms,
+        saa.volume_override,
+        saa.loop_override,
+        saa.start_ms,
+        saa.end_ms,
+        saa.is_active,
+        saa.created_at,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN sal.name
+          WHEN saa.audio_library_type = 'user' THEN ual.name
+          ELSE saa.direct_name
+        END as name,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN sal.r2_url
+          WHEN saa.audio_library_type = 'user' THEN ual.r2_url
+          ELSE saa.direct_r2_url
+        END as r2_url,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN sal.duration_ms
+          WHEN saa.audio_library_type = 'user' THEN ual.duration_ms
+          ELSE saa.direct_duration_ms
+        END as duration_ms
+      FROM scene_audio_assignments saa
+      LEFT JOIN system_audio_library sal ON saa.system_audio_id = sal.id
+      LEFT JOIN user_audio_library ual ON saa.user_audio_id = ual.id
+      ${whereClause}
+      ORDER BY saa.audio_type, saa.start_ms
+    `)
+    
+    // bindパラメータを適用
+    const assignments = audioTypeFilter
+      ? await stmt.bind(sceneId, audioTypeFilter).all()
+      : await stmt.bind(sceneId).all()
+
+    // audio_typeフィルタがある場合、そのタイプだけ返す
+    if (audioTypeFilter) {
+      return c.json({
+        scene_id: sceneId,
+        [audioTypeFilter]: assignments.results || [],
+      })
+    }
+
+    const bgm = (assignments.results || []).filter((a: any) => a.audio_type === 'bgm')
+    const sfx = (assignments.results || []).filter((a: any) => a.audio_type === 'sfx')
+
+    return c.json({
+      scene_id: sceneId,
+      bgm,
+      sfx,
+    })
+  } catch (error) {
+    console.error(`[GET /api/scenes/:id/audio-assignments] Error:`, error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get audio assignments' } }, 500)
+  }
+})
+
+/**
+ * POST /api/scenes/:id/audio-assignments
+ * シーンにBGM/SFXを割り当て
+ */
+scenes.post('/:id/audio-assignments', async (c) => {
+  try {
+    const sceneId = parseInt(c.req.param('id'), 10)
+    if (isNaN(sceneId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene ID' } }, 400)
+    }
+
+    const body = await c.req.json<{
+      audio_type: 'bgm' | 'sfx'
+      audio_library_type: 'system' | 'user' | 'direct'
+      system_audio_id?: number
+      user_audio_id?: number
+      direct_r2_url?: string
+      volume_override?: number
+      loop_override?: boolean
+      start_ms?: number
+      end_ms?: number
+    }>()
+
+    // バリデーション
+    if (!body.audio_type || !['bgm', 'sfx'].includes(body.audio_type)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'audio_type must be "bgm" or "sfx"' } }, 400)
+    }
+    if (!body.audio_library_type || !['system', 'user', 'direct'].includes(body.audio_library_type)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'audio_library_type must be "system", "user", or "direct"' } }, 400)
+    }
+
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id FROM scenes WHERE id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number }>()
+
+    if (!scene) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404)
+    }
+
+    // BGMは1シーンに1つだけ（既存を削除）
+    if (body.audio_type === 'bgm') {
+      await c.env.DB.prepare(`
+        DELETE FROM scene_audio_assignments WHERE scene_id = ? AND audio_type = 'bgm'
+      `).bind(sceneId).run()
+    }
+
+    // 新しい割り当てを作成
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scene_audio_assignments (
+        scene_id, audio_type, audio_library_type, 
+        system_audio_id, user_audio_id, direct_r2_url,
+        volume_override, loop_override, start_ms, end_ms,
+        created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).bind(
+      sceneId,
+      body.audio_type,
+      body.audio_library_type,
+      body.system_audio_id || null,
+      body.user_audio_id || null,
+      body.direct_r2_url || null,
+      body.volume_override ?? 1.0,
+      body.loop_override ? 1 : 0,
+      body.start_ms ?? 0,
+      body.end_ms || null
+    ).run()
+
+    const assignmentId = result.meta.last_row_id
+
+    console.log(`[POST /api/scenes/:id/audio-assignments] Created assignment ${assignmentId} for scene ${sceneId}`)
+
+    return c.json({
+      success: true,
+      assignment_id: assignmentId,
+      scene_id: sceneId,
+      audio_type: body.audio_type,
+    })
+  } catch (error) {
+    console.error(`[POST /api/scenes/:id/audio-assignments] Error:`, error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create audio assignment' } }, 500)
+  }
+})
+
+/**
+ * DELETE /api/scenes/:id/audio-assignments/:assignmentId
+ * シーンのBGM/SFX割り当てを削除
+ */
+scenes.delete('/:id/audio-assignments/:assignmentId', async (c) => {
+  try {
+    const sceneId = parseInt(c.req.param('id'), 10)
+    const assignmentId = parseInt(c.req.param('assignmentId'), 10)
+
+    if (isNaN(sceneId) || isNaN(assignmentId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid IDs' } }, 400)
+    }
+
+    // 存在確認
+    const assignment = await c.env.DB.prepare(`
+      SELECT id FROM scene_audio_assignments WHERE id = ? AND scene_id = ?
+    `).bind(assignmentId, sceneId).first()
+
+    if (!assignment) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Assignment not found' } }, 404)
+    }
+
+    await c.env.DB.prepare(`
+      DELETE FROM scene_audio_assignments WHERE id = ?
+    `).bind(assignmentId).run()
+
+    return c.json({
+      success: true,
+      deleted_assignment_id: assignmentId,
+    })
+  } catch (error) {
+    console.error(`[DELETE /api/scenes/:id/audio-assignments] Error:`, error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to delete audio assignment' } }, 500)
+  }
+})
+
+/**
+ * PUT /api/scenes/:id/audio-assignments/:assignmentId
+ * シーンのBGM/SFX割り当てを更新
+ */
+scenes.put('/:id/audio-assignments/:assignmentId', async (c) => {
+  try {
+    const sceneId = parseInt(c.req.param('id'), 10)
+    const assignmentId = parseInt(c.req.param('assignmentId'), 10)
+
+    if (isNaN(sceneId) || isNaN(assignmentId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid IDs' } }, 400)
+    }
+
+    const body = await c.req.json<{
+      volume_override?: number
+      loop_override?: boolean
+      start_ms?: number
+      end_ms?: number
+      is_active?: boolean
+    }>()
+
+    // 存在確認
+    const assignment = await c.env.DB.prepare(`
+      SELECT id, audio_type FROM scene_audio_assignments WHERE id = ? AND scene_id = ?
+    `).bind(assignmentId, sceneId).first<{ id: number; audio_type: string }>()
+
+    if (!assignment) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Assignment not found' } }, 404)
+    }
+
+    // 更新フィールドを構築
+    const updates: string[] = []
+    const values: any[] = []
+
+    if (body.volume_override !== undefined) {
+      updates.push('volume_override = ?')
+      values.push(Math.max(0, Math.min(1, body.volume_override)))
+    }
+    if (body.loop_override !== undefined) {
+      updates.push('loop_override = ?')
+      values.push(body.loop_override ? 1 : 0)
+    }
+    if (body.start_ms !== undefined) {
+      updates.push('start_ms = ?')
+      values.push(body.start_ms)
+    }
+    if (body.end_ms !== undefined) {
+      updates.push('end_ms = ?')
+      values.push(body.end_ms)
+    }
+    if (body.is_active !== undefined) {
+      updates.push('is_active = ?')
+      values.push(body.is_active ? 1 : 0)
+    }
+
+    if (updates.length === 0) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'No fields to update' } }, 400)
+    }
+
+    updates.push('updated_at = datetime("now")')
+    values.push(assignmentId)
+
+    await c.env.DB.prepare(`
+      UPDATE scene_audio_assignments 
+      SET ${updates.join(', ')}
+      WHERE id = ?
+    `).bind(...values).run()
+
+    console.log(`[PUT /api/scenes/:id/audio-assignments] Updated assignment ${assignmentId}`)
+
+    return c.json({
+      success: true,
+      assignment_id: assignmentId,
+      updated_fields: Object.keys(body),
+    })
+  } catch (error) {
+    console.error(`[PUT /api/scenes/:id/audio-assignments] Error:`, error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update audio assignment' } }, 500)
+  }
+})
+
+/**
+ * POST /api/scenes/:id/audio-assignments/upload
+ * シーン用の音声ファイルを直接アップロード
+ */
+scenes.post('/:id/audio-assignments/upload', async (c) => {
+  try {
+    const sceneId = parseInt(c.req.param('id'), 10)
+    if (isNaN(sceneId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid scene ID' } }, 400)
+    }
+
+    // シーン存在確認
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id FROM scenes WHERE id = ?
+    `).bind(sceneId).first<{ id: number; project_id: number }>()
+
+    if (!scene) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404)
+    }
+
+    // FormDataを取得
+    const formData = await c.req.formData()
+    const file = formData.get('file') as File | null
+    const audioType = formData.get('audio_type') as string || 'bgm'
+
+    if (!file) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'No file provided' } }, 400)
+    }
+
+    // ファイルサイズ制限（25MB）
+    if (file.size > 25 * 1024 * 1024) {
+      return c.json({ error: { code: 'FILE_TOO_LARGE', message: 'File must be less than 25MB' } }, 400)
+    }
+
+    // R2にアップロード
+    const timestamp = Date.now()
+    const ext = file.name.split('.').pop() || 'mp3'
+    const r2Key = `audio/scenes/${scene.project_id}/${sceneId}/${audioType}_${timestamp}.${ext}`
+
+    const arrayBuffer = await file.arrayBuffer()
+    await c.env.R2.put(r2Key, arrayBuffer, {
+      httpMetadata: { contentType: file.type },
+    })
+
+    const r2Url = `/${r2Key}`
+
+    // BGMは1シーンに1つだけ（既存を削除）
+    if (audioType === 'bgm') {
+      await c.env.DB.prepare(`
+        DELETE FROM scene_audio_assignments WHERE scene_id = ? AND audio_type = 'bgm'
+      `).bind(sceneId).run()
+    }
+
+    // 割り当てを作成（direct_name, direct_r2_key も保存）
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scene_audio_assignments (
+        scene_id, audio_type, audio_library_type, 
+        direct_r2_key, direct_r2_url, direct_name,
+        volume_override, loop_override, is_active, created_at, updated_at
+      ) VALUES (?, ?, 'direct', ?, ?, ?, 1.0, 0, 1, datetime('now'), datetime('now'))
+    `).bind(sceneId, audioType, r2Key, r2Url, file.name).run()
+
+    console.log(`[POST /api/scenes/:id/audio-assignments/upload] Uploaded ${audioType} for scene ${sceneId}: ${r2Key}`)
+
+    return c.json({
+      success: true,
+      assignment_id: result.meta.last_row_id,
+      r2_url: r2Url,
+      audio_type: audioType,
+    })
+  } catch (error) {
+    console.error(`[POST /api/scenes/:id/audio-assignments/upload] Error:`, error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to upload audio' } }, 500)
+  }
+})
+
 export default scenes
