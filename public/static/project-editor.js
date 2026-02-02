@@ -13822,7 +13822,8 @@ async function generateAllMissingAudio(skipConfirm = false) {
         for (const utt of pendingUtterances) {
           try {
             // キャラクターのvoice_preset_idを取得
-            let voicePresetId = 'google-ja-JP-Standard-A'; // デフォルト
+            // Google TTS形式: ja-JP-Standard-A（google-プレフィックスなし）
+            let voicePresetId = 'ja-JP-Standard-A'; // デフォルト
             let provider = 'google';
             
             if (utt.character_key) {
@@ -13924,14 +13925,14 @@ window.generateAllMissingAudio = generateAllMissingAudio;
 /**
  * PR-Audio-UI: 音声生成完了を待機（ポーリング）
  * @param {number[]} sceneIds - 音声生成対象のシーンID配列
- * @param {number} maxWaitMs - 最大待機時間（デフォルト: 60秒）
+ * @param {number} maxWaitMs - 最大待機時間（デフォルト: 30秒）
  * @param {number} intervalMs - ポーリング間隔（デフォルト: 3秒）
  */
-async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 60000, intervalMs = 3000) {
+async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 30000, intervalMs = 3000) {
   const btn = document.getElementById('btnBulkAudioGenerate');
   const startTime = Date.now();
   let pollCount = 0;
-  const maxPolls = Math.ceil(maxWaitMs / intervalMs);
+  const maxPolls = 10; // 最大10回（30秒）でタイムアウト
   
   while (pollCount < maxPolls) {
     pollCount++;
@@ -13950,11 +13951,13 @@ async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 60000, inter
           if (!u.text || u.text.trim().length === 0) continue;
           totalWithText++;
           
-          // 完了判定: audio_url があるか、audio_status が completed
-          const isCompleted = u.audio_url || u.audio_status === 'completed';
-          // 生成中判定: audio_generation_id があり、まだ完了していない
-          const isPending = u.audio_generation_id && !isCompleted && 
-            ['generating', 'pending', 'queued', null, undefined].includes(u.audio_status);
+          // 完了判定: audio_url がある（実際に音声ファイルが存在）
+          const isCompleted = !!u.audio_url;
+          
+          // 生成中判定: audio_generation_id があるが audio_url がない
+          // ※ failed の場合も audio_url は null なので、ここでは区別しない
+          // 最大ポーリング回数で打ち切る
+          const isPending = u.audio_generation_id && !u.audio_url;
           
           if (isCompleted) {
             totalCompleted++;
