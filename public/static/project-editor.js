@@ -12446,6 +12446,186 @@ async function saveComicTelopSettings() {
 }
 window.saveComicTelopSettings = saveComicTelopSettings;
 
+// =============================================================================
+// PR-Comic-Rebake-All: 全シーン一括「再焼き込み」予約
+// =============================================================================
+
+/**
+ * 一括再焼き込みモーダルを開く（Step1: 確認画面）
+ */
+async function openBulkRebakeModal() {
+  const btn = document.getElementById('btnBulkRebakeComic');
+  if (btn) btn.disabled = true;
+  
+  try {
+    // ステータスを取得
+    const statusRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/comic/rebake-status`);
+    const { project_telops_comic, scenes, summary } = statusRes.data;
+    
+    if (summary.total === 0) {
+      showToast('対象の漫画シーンがありません。', 'warning');
+      if (btn) btn.disabled = false;
+      return;
+    }
+    
+    // 既存のモーダルがあれば削除
+    const existingModal = document.getElementById('bulkRebakeModal');
+    if (existingModal) existingModal.remove();
+    
+    // モーダル作成
+    const modal = document.createElement('div');
+    modal.id = 'bulkRebakeModal';
+    modal.className = 'fixed inset-0 bg-black/60 flex items-center justify-center z-[9999]';
+    
+    // ステータスバッジのHTML
+    const statusBadges = `
+      <div class="grid grid-cols-4 gap-2 text-center text-sm">
+        <div class="p-2 bg-yellow-100 rounded">
+          <div class="font-bold text-yellow-700">${summary.pending}</div>
+          <div class="text-xs text-yellow-600">予約中 🟡</div>
+        </div>
+        <div class="p-2 bg-orange-100 rounded">
+          <div class="font-bold text-orange-700">${summary.outdated}</div>
+          <div class="text-xs text-orange-600">未反映 🟠</div>
+        </div>
+        <div class="p-2 bg-green-100 rounded">
+          <div class="font-bold text-green-700">${summary.current}</div>
+          <div class="text-xs text-green-600">最新 ✅</div>
+        </div>
+        <div class="p-2 bg-gray-100 rounded">
+          <div class="font-bold text-gray-700">${summary.no_publish}</div>
+          <div class="text-xs text-gray-600">未公開</div>
+        </div>
+      </div>
+    `;
+    
+    // 現在の設定
+    const currentStyle = project_telops_comic?.style_preset || 'outline';
+    const currentSize = project_telops_comic?.size_preset || 'md';
+    const currentPosition = project_telops_comic?.position_preset || 'bottom';
+    const styleLabels = { outline: 'アウトライン', minimal: 'ミニマル', band: '帯付き', pop: 'ポップ', cinematic: 'シネマティック' };
+    const sizeLabels = { sm: '小', md: '中', lg: '大' };
+    const positionLabels = { bottom: '下', center: '中央', top: '上' };
+    
+    modal.innerHTML = `
+      <div class="bg-white rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+        <!-- ヘッダー -->
+        <div class="bg-amber-600 text-white px-6 py-4">
+          <h3 class="text-lg font-bold flex items-center gap-2">
+            <i class="fas fa-sync-alt"></i>全シーンに文字設定を反映予約
+          </h3>
+          <p class="text-amber-100 text-sm mt-1">漫画シーン ${summary.total}件が対象です</p>
+        </div>
+        
+        <!-- ボディ -->
+        <div class="p-6 space-y-4">
+          <!-- 現在の設定 -->
+          <div class="p-3 bg-gray-50 rounded-lg">
+            <div class="text-sm font-semibold text-gray-700 mb-2">適用する設定:</div>
+            <div class="flex gap-4 text-sm text-gray-600">
+              <span><i class="fas fa-palette text-rose-500 mr-1"></i>${styleLabels[currentStyle] || currentStyle}</span>
+              <span><i class="fas fa-text-height text-rose-500 mr-1"></i>${sizeLabels[currentSize] || currentSize}</span>
+              <span><i class="fas fa-arrows-alt-v text-rose-500 mr-1"></i>${positionLabels[currentPosition] || currentPosition}</span>
+            </div>
+          </div>
+          
+          <!-- シーンステータス -->
+          <div>
+            <div class="text-sm font-semibold text-gray-700 mb-2">現在の状態:</div>
+            ${statusBadges}
+          </div>
+          
+          <!-- 注意書き -->
+          <div class="p-3 bg-green-50 border border-green-200 rounded-lg">
+            <div class="flex items-start gap-2">
+              <i class="fas fa-shield-alt text-green-600 mt-0.5"></i>
+              <div class="text-sm text-green-800">
+                <strong>AI画像は変わりません</strong><br/>
+                文字の見た目（スタイル・サイズ・位置）のみが変更されます。<br/>
+                各シーンで「公開」すると新しい設定で再焼き込みされます。
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- フッター -->
+        <div class="bg-gray-50 px-6 py-4 flex gap-3 justify-end">
+          <button onclick="closeBulkRebakeModal()" 
+            class="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100 transition-colors">
+            キャンセル
+          </button>
+          <button onclick="executeBulkRebake()" id="btnExecuteBulkRebake"
+            class="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors font-medium flex items-center gap-2">
+            <i class="fas fa-check"></i>${summary.total}シーンに反映予約
+          </button>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // 背景クリックで閉じる
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeBulkRebakeModal();
+    });
+    
+  } catch (error) {
+    console.error('[BulkRebake] Failed to open modal:', error);
+    showToast('ステータスの取得に失敗しました', 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+window.openBulkRebakeModal = openBulkRebakeModal;
+
+/**
+ * 一括再焼き込みモーダルを閉じる
+ */
+function closeBulkRebakeModal() {
+  const modal = document.getElementById('bulkRebakeModal');
+  if (modal) modal.remove();
+}
+window.closeBulkRebakeModal = closeBulkRebakeModal;
+
+/**
+ * 一括再焼き込みを実行
+ */
+async function executeBulkRebake() {
+  const execBtn = document.getElementById('btnExecuteBulkRebake');
+  if (execBtn) {
+    execBtn.disabled = true;
+    execBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>処理中...';
+  }
+  
+  try {
+    const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/comic/rebake`);
+    
+    if (response.data.success) {
+      const count = response.data.affected_scenes;
+      showToast(`${count}シーンに設定を反映予約しました`, 'success');
+      console.log('[BulkRebake] Success:', response.data);
+      closeBulkRebakeModal();
+      
+      // シーンデータをリロード（バッジ更新のため）
+      if (typeof fetchAndRenderScenes === 'function') {
+        await fetchAndRenderScenes();
+      }
+    } else {
+      throw new Error(response.data.error?.message || 'Unknown error');
+    }
+  } catch (error) {
+    console.error('[BulkRebake] Failed:', error);
+    const errorMsg = error.response?.data?.error?.message || error.message || '一括反映予約に失敗しました';
+    showToast(errorMsg, 'error');
+    
+    if (execBtn) {
+      execBtn.disabled = false;
+      execBtn.innerHTML = '<i class="fas fa-check"></i>再試行';
+    }
+  }
+}
+window.executeBulkRebake = executeBulkRebake;
+
 /**
  * Save output_preset to API
  */

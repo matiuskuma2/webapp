@@ -1944,6 +1944,22 @@ app.get('/projects/:id', (c) => {
                             >
                                 <i class="fas fa-save"></i>設定を保存
                             </button>
+                            
+                            <!-- PR-Comic-Rebake-All: 全シーン一括反映予約ボタン -->
+                            <div class="mt-3 pt-3 border-t border-rose-200">
+                                <button 
+                                    id="btnBulkRebakeComic"
+                                    onclick="openBulkRebakeModal()"
+                                    class="w-full px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 transition-colors text-sm font-medium flex items-center justify-center gap-2"
+                                    title="保存済みの設定を全ての漫画シーンに適用予約します"
+                                >
+                                    <i class="fas fa-sync-alt"></i>この設定を全シーンに反映予約
+                                </button>
+                                <p class="text-xs text-gray-500 mt-1 text-center">
+                                    <i class="fas fa-info-circle text-amber-500 mr-1"></i>
+                                    AI画像は変わりません。各シーンの「公開」時に新設定で再焼き込みされます。
+                                </p>
+                            </div>
                         </div>
 
                         <!-- モーション -->

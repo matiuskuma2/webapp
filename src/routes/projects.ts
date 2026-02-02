@@ -1970,4 +1970,255 @@ projects.get('/output-presets', async (c) => {
   }
 })
 
+// =============================================================================
+// PR-Comic-Rebake-All: 全シーン一括「再焼き込み」予約
+// =============================================================================
+
+/**
+ * POST /api/projects/:id/comic/rebake
+ * プロジェクト内の全漫画シーンに telops_comic 設定を一括で反映予約
+ * 
+ * SSOT:
+ * - 大元のAI画像は再生成しない（ベース画像固定）
+ * - 各sceneの pending_regeneration に telops_comic をセット
+ * - 実際の再焼き込みはユーザーが「公開」したときに行われる
+ * 
+ * 対象シーン判定:
+ * - display_asset_type = 'comic' または
+ * - text_render_mode = 'baked'
+ */
+projects.post('/:id/comic/rebake', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'))
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project ID' } }, 400)
+    }
+
+    // プロジェクト取得
+    const project = await c.env.DB.prepare(`
+      SELECT id, user_id, settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{
+      id: number
+      user_id: number | null
+      settings_json: string | null
+    }>()
+
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
+
+    // telops_comic 設定を取得（なければデフォルト）
+    let settingsJson: Record<string, unknown> = {}
+    if (project.settings_json) {
+      try {
+        settingsJson = JSON.parse(project.settings_json)
+      } catch { /* ignore */ }
+    }
+    const telopsComic = (settingsJson.telops_comic as Record<string, unknown>) || {
+      style_preset: 'outline',
+      size_preset: 'md',
+      position_preset: 'bottom'
+    }
+
+    // クールダウンチェック（プロジェクト単位で60秒）
+    const recentRequest = await c.env.DB.prepare(`
+      SELECT created_at FROM audit_logs
+      WHERE entity_type = 'project' AND entity_id = ? 
+        AND action IN ('comic.rebake.project_requested', 'comic.regenerate.project_requested')
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(projectId).first<{ created_at: string }>()
+
+    if (recentRequest) {
+      const lastRequestTime = new Date(recentRequest.created_at).getTime()
+      const now = Date.now()
+      const cooldownMs = 60 * 1000 // 60秒
+      if (now - lastRequestTime < cooldownMs) {
+        const remainingSec = Math.ceil((cooldownMs - (now - lastRequestTime)) / 1000)
+        return c.json({
+          error: { 
+            code: 'CONFLICT', 
+            message: `一括反映予約のクールダウン中です。${remainingSec}秒後にお試しください。` 
+          }
+        }, 409)
+      }
+    }
+
+    // 対象シーンを取得（漫画シーンのみ）
+    // 判定: display_asset_type='comic' OR text_render_mode='baked'
+    const targetScenes = await c.env.DB.prepare(`
+      SELECT id, comic_data, display_asset_type, text_render_mode
+      FROM scenes
+      WHERE project_id = ?
+        AND (display_asset_type = 'comic' OR text_render_mode = 'baked')
+    `).bind(projectId).all<{
+      id: number
+      comic_data: string | null
+      display_asset_type: string | null
+      text_render_mode: string | null
+    }>()
+
+    const scenes = targetScenes.results || []
+    
+    if (scenes.length === 0) {
+      return c.json({
+        success: true,
+        affected_scenes: 0,
+        message: '対象の漫画シーンがありません。',
+      })
+    }
+
+    // 各シーンに pending_regeneration をセット
+    const now = new Date().toISOString()
+    let updatedCount = 0
+
+    for (const scene of scenes) {
+      const existingComicData = scene.comic_data ? JSON.parse(scene.comic_data) : {}
+      
+      const newComicData = {
+        ...existingComicData,
+        pending_regeneration: {
+          requested_at: now,
+          telops_comic: telopsComic,
+          reason: 'bulk_apply_telops_comic'
+        }
+      }
+
+      await c.env.DB.prepare(`
+        UPDATE scenes 
+        SET comic_data = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(JSON.stringify(newComicData), scene.id).run()
+
+      updatedCount++
+    }
+
+    // 監査ログ
+    const auditDetails = {
+      telops_comic: telopsComic,
+      affected_scene_count: updatedCount,
+      affected_scene_ids: scenes.map(s => s.id),
+      note: 'AI画像は固定。全シーンの文字焼き込みを一括で反映予約。'
+    }
+    await c.env.DB.prepare(`
+      INSERT INTO audit_logs (user_id, user_role, entity_type, entity_id, project_id, action, details, created_at)
+      VALUES (?, ?, 'project', ?, ?, 'comic.rebake.project_requested', ?, CURRENT_TIMESTAMP)
+    `).bind(
+      project.user_id || null,
+      project.user_id ? 'owner' : 'anonymous',
+      projectId,
+      projectId,
+      JSON.stringify(auditDetails)
+    ).run()
+
+    console.log(`[Projects] PR-Comic-Rebake-All: Bulk rebake requested for project ${projectId}, ${updatedCount} scenes affected`)
+
+    return c.json({
+      success: true,
+      affected_scenes: updatedCount,
+      affected_scene_ids: scenes.map(s => s.id),
+      telops_comic_applied: telopsComic,
+      message: `${updatedCount}シーンに設定を反映予約しました。各シーンで「公開」すると新しい設定で焼き込まれます。`
+    })
+
+  } catch (error) {
+    console.error('[Projects] Bulk rebake error:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to request bulk rebake' }
+    }, 500)
+  }
+})
+
+/**
+ * GET /api/projects/:id/comic/rebake-status
+ * プロジェクト内の漫画シーンの再焼き込みステータスを取得
+ */
+projects.get('/:id/comic/rebake-status', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'))
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project ID' } }, 400)
+    }
+
+    // プロジェクトの telops_comic 設定を取得
+    const project = await c.env.DB.prepare(`
+      SELECT settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{ settings_json: string | null }>()
+
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
+
+    let settingsJson: Record<string, unknown> = {}
+    if (project.settings_json) {
+      try {
+        settingsJson = JSON.parse(project.settings_json)
+      } catch { /* ignore */ }
+    }
+    const projectTelopComic = settingsJson.telops_comic || null
+
+    // 漫画シーンのステータスを取得
+    const scenes = await c.env.DB.prepare(`
+      SELECT id, comic_data, display_asset_type, text_render_mode
+      FROM scenes
+      WHERE project_id = ?
+        AND (display_asset_type = 'comic' OR text_render_mode = 'baked')
+    `).bind(projectId).all<{
+      id: number
+      comic_data: string | null
+      display_asset_type: string | null
+      text_render_mode: string | null
+    }>()
+
+    const sceneStatuses = (scenes.results || []).map(scene => {
+      const comicData = scene.comic_data ? JSON.parse(scene.comic_data) : {}
+      const pendingRegen = comicData.pending_regeneration
+      const appliedTelop = comicData.published?.applied_telops_comic
+
+      // ステータス判定
+      let status: 'pending' | 'outdated' | 'current' | 'no_publish'
+      if (pendingRegen) {
+        status = 'pending' // 反映予約中
+      } else if (!comicData.published) {
+        status = 'no_publish' // 未公開
+      } else if (!appliedTelop) {
+        status = 'outdated' // 旧形式（applied_telops_comic なし）
+      } else if (projectTelopComic && 
+        (appliedTelop.style_preset !== (projectTelopComic as any).style_preset ||
+         appliedTelop.size_preset !== (projectTelopComic as any).size_preset ||
+         appliedTelop.position_preset !== (projectTelopComic as any).position_preset)) {
+        status = 'outdated' // 設定が最新と異なる
+      } else {
+        status = 'current' // 最新
+      }
+
+      return {
+        scene_id: scene.id,
+        status,
+        pending_regeneration: pendingRegen || null,
+        applied_telops_comic: appliedTelop || null
+      }
+    })
+
+    const summary = {
+      total: sceneStatuses.length,
+      pending: sceneStatuses.filter(s => s.status === 'pending').length,
+      outdated: sceneStatuses.filter(s => s.status === 'outdated').length,
+      current: sceneStatuses.filter(s => s.status === 'current').length,
+      no_publish: sceneStatuses.filter(s => s.status === 'no_publish').length,
+    }
+
+    return c.json({
+      project_telops_comic: projectTelopComic,
+      scenes: sceneStatuses,
+      summary
+    })
+
+  } catch (error) {
+    console.error('[Projects] Rebake status error:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to get rebake status' }
+    }, 500)
+  }
+})
+
 export default projects
