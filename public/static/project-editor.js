@@ -8115,6 +8115,9 @@ function updateVideoBuildButtonState() {
   const btn = document.getElementById('btnStartVideoBuild');
   if (!btn) return;
   
+  // PR-Audio-UI: 音声生成中は非活性化
+  const isGeneratingAudio = window.isGeneratingAudio === true;
+  
   // Use preflight cache (SSOT-based validation)
   const preflight = window.videoBuildPreflightCache || {};
   const hasScenes = (preflight.total_count || 0) > 0;
@@ -8130,9 +8133,16 @@ function updateVideoBuildButtonState() {
   const SCENE_LIMIT_THRESHOLD = 100;
   const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
   
-  // R1.6: canStart は can_generate を使用
-  const canStart = canGenerate && !isAtLimit && !hasConcurrent && !exceedsSceneLimit;
+  // R1.6: canStart は can_generate を使用（+ 音声生成中は不可）
+  const canStart = canGenerate && !isAtLimit && !hasConcurrent && !exceedsSceneLimit && !isGeneratingAudio;
   btn.disabled = !canStart;
+  
+  // PR-Audio-UI: 音声生成中は表示変更
+  if (isGeneratingAudio) {
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>音声生成中...';
+  } else {
+    btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成';
+  }
   
   console.log('[VideoBuild] Button state:', { 
     canStart, 
@@ -8931,8 +8941,8 @@ async function startVideoBuild() {
     }
     if (result === 'generate') {
       window.videoBuildStartInFlight = false;
-      // 音声生成を実行し、完了後に再度ビルドを開始
-      await generateAllMissingAudio();
+      // 音声生成を実行（確認ダイアログはスキップ - 既にダイアログで確認済み）
+      await generateAllMissingAudio(true);
       return; // 音声生成完了後にユーザーが再度ビルドを開始
     }
     // result === 'skip' の場合はそのまま続行（無音動画）
@@ -13749,8 +13759,9 @@ window.generateSceneAudio = generateSceneAudio;
  * - Preflight画面の「音声を一括生成」ボタンから呼び出し
  * - window.missingAudioSceneIdsにキャッシュされたシーンIDを使用
  * - 各シーンのutterancesを取得し、未生成分を順次生成
+ * @param {boolean} skipConfirm - trueの場合、確認ダイアログをスキップ
  */
-async function generateAllMissingAudio() {
+async function generateAllMissingAudio(skipConfirm = false) {
   const btn = document.getElementById('btnBulkAudioGenerate');
   const originalContent = btn?.innerHTML || '';
   
@@ -13761,9 +13772,15 @@ async function generateAllMissingAudio() {
     return;
   }
   
-  // 確認ダイアログ
-  const confirmed = confirm(`${sceneIds.length}シーンの音声を一括生成します。\n\nTTS APIの利用料金が発生します。続行しますか？`);
-  if (!confirmed) return;
+  // 確認ダイアログ（skipConfirmがtrueの場合はスキップ）
+  if (!skipConfirm) {
+    const confirmed = confirm(`${sceneIds.length}シーンの音声を一括生成します。\n\n続行しますか？`);
+    if (!confirmed) return;
+  }
+  
+  // PR-Audio-UI: 音声生成中フラグを立てる（動画ビルドボタン非活性化用）
+  window.isGeneratingAudio = true;
+  updateVideoBuildButtonState();
   
   // ボタン無効化
   if (btn) {
@@ -13861,14 +13878,21 @@ async function generateAllMissingAudio() {
       showToast(`${totalGenerated}件成功 / ${totalErrors}件失敗`, 'warning');
     }
     
-    // Preflightを再チェック
+    // Preflightを再チェック（3秒後に再取得）
     setTimeout(async () => {
       await updateVideoBuildStatus();
     }, 3000);
     
+    // PR-Audio-UI: 音声生成完了 - フラグを下ろす
+    window.isGeneratingAudio = false;
+    updateVideoBuildButtonState();
+    
   } catch (error) {
     console.error('[generateAllMissingAudio] Error:', error);
     showToast(error.response?.data?.error?.message || '一括音声生成に失敗しました', 'error');
+    // PR-Audio-UI: エラー時もフラグをリセット
+    window.isGeneratingAudio = false;
+    updateVideoBuildButtonState();
   } finally {
     // ボタンを再有効化（ただし完了メッセージに変更）
     if (btn) {
@@ -13911,12 +13935,7 @@ async function showAudioConfirmDialog(missingCount) {
               <strong>${missingCount}シーン</strong>で音声が生成されていません。<br>
               このまま動画を作成すると、該当シーンは無音になります。
             </p>
-            <div class="bg-gray-100 rounded-lg p-3 mb-4 text-sm">
-              <p class="text-gray-600">
-                <i class="fas fa-info-circle mr-1 text-blue-500"></i>
-                音声生成にはTTS APIの利用料金が発生します
-              </p>
-            </div>
+
             <div class="flex flex-col gap-2">
               <button 
                 id="audioConfirmGenerate" 
