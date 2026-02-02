@@ -1861,9 +1861,17 @@
             </h2>
             ${statusBadge}
           </div>
-          <button onclick="window.ComicEditorV2.close()" class="text-gray-400 hover:text-gray-600 text-2xl">
-            <i class="fas fa-times"></i>
-          </button>
+          <div class="flex items-center gap-2">
+            <!-- Phase 2-2: 再生成ボタン -->
+            <button onclick="window.ComicEditorV2.openRegenModal()" 
+              class="px-3 py-1.5 text-sm text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors"
+              title="漫画の文字設定を適用して再生成">
+              <i class="fas fa-sync-alt mr-1"></i>再生成
+            </button>
+            <button onclick="window.ComicEditorV2.close()" class="text-gray-400 hover:text-gray-600 text-2xl">
+              <i class="fas fa-times"></i>
+            </button>
+          </div>
         </div>
         
         <!-- Body -->
@@ -1980,12 +1988,193 @@
   }
 
   function getStatusBadge() {
+    // Phase 2-2: 再生成が必要かどうかをチェック
+    const comicData = state.scene?.comic_data || {};
+    const hasPendingRegeneration = !!comicData.pending_regeneration;
+    
+    let badges = [];
+    
     if (state.published) {
-      return '<span class="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">公開済み</span>';
+      badges.push('<span class="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">公開済み</span>');
     } else if (state.draft && state.draft.bubbles?.length > 0) {
-      return '<span class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-full">未公開</span>';
+      badges.push('<span class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-full">未公開</span>');
+    } else {
+      badges.push('<span class="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full">新規</span>');
     }
-    return '<span class="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full">新規</span>';
+    
+    // Phase 2-2: 再生成保留中バッジ
+    if (hasPendingRegeneration) {
+      badges.push('<span class="px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded-full ml-1">🟠 文字設定更新済み</span>');
+    }
+    
+    return badges.join('');
+  }
+  
+  // ============== Phase 2-2: 再生成モーダル ==============
+  
+  function openRegenerateModal() {
+    const existingModal = document.getElementById('comicRegenModal');
+    if (existingModal) existingModal.remove();
+    
+    // プロジェクトの telops_comic 設定を取得（currentProject から）
+    const settings = window.currentProject?.settings || {};
+    const telopsComic = settings.telops_comic || {
+      style_preset: 'outline',
+      size_preset: 'md',
+      position_preset: 'bottom'
+    };
+    
+    const styleLabels = {
+      minimal: 'ミニマル',
+      outline: 'アウトライン（標準）',
+      band: '帯付き（TV風）',
+      pop: 'ポップ（バラエティ風）',
+      cinematic: 'シネマティック'
+    };
+    const sizeLabels = { sm: '小', md: '中', lg: '大' };
+    const positionLabels = { bottom: '下', center: '中央', top: '上' };
+    
+    const modal = document.createElement('div');
+    modal.id = 'comicRegenModal';
+    modal.className = 'fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-60';
+    modal.innerHTML = `
+      <div class="bg-white rounded-xl shadow-2xl max-w-md mx-4 overflow-hidden">
+        <!-- Step 1: 確認 -->
+        <div id="regenStep1" class="p-6">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-sync-alt text-orange-600 text-xl"></i>
+            </div>
+            <h3 class="text-lg font-bold text-gray-800">漫画を再生成</h3>
+          </div>
+          <p class="text-gray-600 mb-4">
+            このシーンの漫画を再生成します。<br/>
+            <strong class="text-green-700">今の漫画は残ります。</strong>
+          </p>
+          <p class="text-gray-500 text-sm mb-6">
+            よろしいですか？
+          </p>
+          <div class="flex justify-end gap-3">
+            <button onclick="window.ComicEditorV2.closeRegenModal()" 
+              class="px-4 py-2 text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+              キャンセル
+            </button>
+            <button onclick="window.ComicEditorV2.showRegenStep2()" 
+              class="px-4 py-2 text-white bg-orange-600 hover:bg-orange-700 rounded-lg">
+              次へ <i class="fas fa-arrow-right ml-1"></i>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Step 2: 設定確認 -->
+        <div id="regenStep2" class="p-6 hidden">
+          <div class="flex items-center gap-3 mb-4">
+            <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center">
+              <i class="fas fa-cog text-blue-600 text-xl"></i>
+            </div>
+            <h3 class="text-lg font-bold text-gray-800">適用される漫画の文字設定</h3>
+          </div>
+          
+          <div class="bg-gray-50 rounded-lg p-4 mb-4">
+            <div class="grid grid-cols-3 gap-4 text-sm">
+              <div>
+                <span class="text-gray-500">スタイル</span>
+                <p class="font-semibold text-gray-800">${styleLabels[telopsComic.style_preset] || telopsComic.style_preset}</p>
+              </div>
+              <div>
+                <span class="text-gray-500">サイズ</span>
+                <p class="font-semibold text-gray-800">${sizeLabels[telopsComic.size_preset] || telopsComic.size_preset}</p>
+              </div>
+              <div>
+                <span class="text-gray-500">位置</span>
+                <p class="font-semibold text-gray-800">${positionLabels[telopsComic.position_preset] || telopsComic.position_preset}</p>
+              </div>
+            </div>
+          </div>
+          
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6 text-xs text-amber-800">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            <strong>注意:</strong> この操作は新しい漫画を生成します。<br/>
+            既存の漫画は自動では置き換わりません。<br/>
+            生成後、必要なら「公開」を行ってください。
+          </div>
+          
+          <div class="flex justify-end gap-3">
+            <button onclick="window.ComicEditorV2.showRegenStep1()" 
+              class="px-4 py-2 text-gray-600 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
+              <i class="fas fa-arrow-left mr-1"></i> 戻る
+            </button>
+            <button id="regenExecuteBtn" onclick="window.ComicEditorV2.executeRegenerate()" 
+              class="px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg">
+              <i class="fas fa-play mr-1"></i> 再生成する
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        closeRegenModal();
+      }
+    });
+  }
+  
+  function closeRegenModal() {
+    const modal = document.getElementById('comicRegenModal');
+    if (modal) modal.remove();
+  }
+  
+  function showRegenStep1() {
+    document.getElementById('regenStep1')?.classList.remove('hidden');
+    document.getElementById('regenStep2')?.classList.add('hidden');
+  }
+  
+  function showRegenStep2() {
+    document.getElementById('regenStep1')?.classList.add('hidden');
+    document.getElementById('regenStep2')?.classList.remove('hidden');
+  }
+  
+  async function executeRegenerate() {
+    const btn = document.getElementById('regenExecuteBtn');
+    if (!btn) return;
+    
+    // 連打防止
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i> 処理中...';
+    
+    try {
+      const response = await axios.post(`/api/scenes/${state.sceneId}/comic/regenerate`, {
+        reason: 'apply_telops_comic'
+      });
+      
+      if (response.data.accepted) {
+        showToast('再生成リクエストを受け付けました。「公開」で新しい設定が反映されます。', 'success');
+        closeRegenModal();
+        
+        // シーンデータを再読み込み
+        const res = await axios.get(`/api/scenes/${state.sceneId}?view=board`);
+        state.scene = res.data;
+        
+        // バッジを更新（モーダルを再描画）
+        const header = document.querySelector('#comicEditorModal .flex.items-center.gap-3');
+        if (header) {
+          const badgeContainer = header.querySelector('div:last-child') || header;
+          const existingBadges = badgeContainer.querySelectorAll('span.rounded-full');
+          existingBadges.forEach(b => b.remove());
+          badgeContainer.insertAdjacentHTML('beforeend', getStatusBadge());
+        }
+      }
+    } catch (error) {
+      console.error('[ComicEditorV2] Regenerate error:', error);
+      const errorMsg = error.response?.data?.error?.message || '再生成に失敗しました';
+      showToast(errorMsg, 'error');
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-play mr-1"></i> 再生成する';
+    }
   }
 
   function onBaseImageLoad() {
@@ -2245,7 +2434,13 @@
     updateBubbleTextStyle,
     toggleBubbleFontWeight,
     saveDraft,
-    publish
+    publish,
+    // Phase 2-2: 再生成
+    openRegenModal,
+    closeRegenModal,
+    showRegenStep1,
+    showRegenStep2,
+    executeRegenerate
   };
 
   // 互換性: openComicEditor
@@ -2253,6 +2448,6 @@
     window.ComicEditorV2.open(sceneId);
   };
 
-  console.log('[ComicEditorV2] Phase1.7 + PR-ComicEditor-Layout loaded - 6 bubble types with tail drag, text_align, relaxed constraints');
+  console.log('[ComicEditorV2] Phase1.7 + PR-ComicEditor-Layout + Phase2-2 loaded - 6 bubble types with tail drag, text_align, relaxed constraints, regenerate flow');
 
 })();

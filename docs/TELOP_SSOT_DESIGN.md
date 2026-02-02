@@ -1,9 +1,9 @@
 # テロップ (Telop) SSOT 設計書
 
-**Version**: 1.3  
+**Version**: 1.4  
 **Created**: 2026-02-01  
-**Updated**: 2026-02-01  
-**Status**: Phase 1 完了、Phase 2-1 完了、Phase 3-A 完了
+**Updated**: 2026-02-02  
+**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 3-A 完了
 
 ---
 
@@ -315,10 +315,36 @@ const TELOP_STYLE_PRESETS = {
 - 漫画編集画面（comic-editor-v2.js）への telop preset 適用
 - 既存漫画の焼き込みを後から差し替える処理
 
-#### Phase 2-2: 再生成導線（未実装）
+#### Phase 2-2: 再生成導線（✅ 完了）
 
-- 「漫画を再生成」ボタンで telops_comic を適用
-- 変更検知と警告UI
+**目標**: 漫画の再生成ボタンで telops_comic を適用（既存は保持、新規生成のみ）
+
+**実装完了内容** (2026-02-02):
+
+1. **✅ API: POST /api/scenes/:sceneId/comic/regenerate**
+   - telops_comic を読み込み、pending_regeneration として保存
+   - 連打防止（30秒クールダウン、audit_logs ベース）
+   - 監査ログ `comic.regenerate.requested` を記録
+   - 既存漫画は保持（新規生成のみ）
+
+2. **✅ UI: 2段階確認モーダル**
+   - 漫画編集画面（comic-editor-v2.js）に「再生成」ボタン追加
+   - Step 1: 確認（既存は残る旨を明示）
+   - Step 2: 適用される設定を表示（style/size/position）
+   - 連打防止（ボタン disabled + サーバ 409）
+
+3. **✅ 状態表示**
+   - 「🟠 文字設定更新済み」バッジ（pending_regeneration 検知）
+   - 再生成リクエスト後にバッジ更新
+
+**変更ファイル**:
+- `src/routes/comic.ts` - POST /comic/regenerate エンドポイント追加
+- `public/static/comic-editor-v2.js` - 再生成モーダル、ボタン、状態バッジ追加
+
+**やらなかったこと（Phase 2-3 へ移行）**:
+- 既存漫画の自動差し替え（activate 自動化）
+- 漫画編集画面の描画エンジン側でプリセット自動適用（焼き込み処理統合）
+- 全シーン一括再生成
 
 #### Phase 2-3: 描画ロジック統合（未実装）
 

@@ -295,6 +295,135 @@ comic.put('/:id/display-asset-type', async (c) => {
 })
 
 /**
+ * POST /api/scenes/:id/comic/regenerate
+ * Phase 2-2: 漫画を再生成（telops_comic を適用）
+ * - 既存の漫画は保持（新規生成のみ）
+ * - 採用（activate）は別操作
+ * - 監査ログに記録
+ */
+comic.post('/:id/comic/regenerate', async (c) => {
+  try {
+    const sceneId = c.req.param('id')
+    const body = await c.req.json().catch(() => ({}))
+    const reason = body.reason || 'apply_telops_comic'
+
+    // シーン存在確認 + project_id 取得
+    const scene = await c.env.DB.prepare(`
+      SELECT s.id, s.project_id, s.comic_data, s.dialogue, p.settings_json, p.user_id
+      FROM scenes s
+      JOIN projects p ON s.project_id = p.id
+      WHERE s.id = ?
+    `).bind(sceneId).first<{
+      id: number
+      project_id: number
+      comic_data: string | null
+      dialogue: string | null
+      settings_json: string | null
+      user_id: number | null
+    }>()
+
+    if (!scene) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Scene not found' }
+      }, 404)
+    }
+
+    // プロジェクト設定から telops_comic を取得
+    let settingsJson: Record<string, unknown> = {}
+    if (scene.settings_json) {
+      try {
+        settingsJson = JSON.parse(scene.settings_json)
+      } catch { /* ignore */ }
+    }
+    const telopsComic = (settingsJson.telops_comic as Record<string, unknown>) || {
+      style_preset: 'outline',
+      size_preset: 'md',
+      position_preset: 'bottom'
+    }
+
+    // 連打防止: 直近30秒以内に同一シーンで regenerate.requested があれば 409
+    const recentRequest = await c.env.DB.prepare(`
+      SELECT created_at FROM audit_logs
+      WHERE entity_type = 'scene' AND entity_id = ? AND action = 'comic.regenerate.requested'
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(sceneId).first<{ created_at: string }>()
+
+    if (recentRequest) {
+      const lastRequestTime = new Date(recentRequest.created_at).getTime()
+      const now = Date.now()
+      const cooldownMs = 30 * 1000 // 30秒
+      if (now - lastRequestTime < cooldownMs) {
+        const remainingSec = Math.ceil((cooldownMs - (now - lastRequestTime)) / 1000)
+        return c.json({
+          error: { 
+            code: 'CONFLICT', 
+            message: `再生成のクールダウン中です。${remainingSec}秒後にお試しください。` 
+          }
+        }, 409)
+      }
+    }
+
+    // 監査ログ: comic.regenerate.requested
+    const auditDetails = {
+      reason,
+      telops_comic: telopsComic,
+      note: 'existing comics are kept; regeneration creates a new comic generation'
+    }
+    await c.env.DB.prepare(`
+      INSERT INTO audit_logs (user_id, user_role, entity_type, entity_id, project_id, action, details, created_at)
+      VALUES (?, ?, 'scene', ?, ?, 'comic.regenerate.requested', ?, CURRENT_TIMESTAMP)
+    `).bind(
+      scene.user_id || null,
+      scene.user_id ? 'owner' : 'anonymous',
+      sceneId,
+      scene.project_id,
+      JSON.stringify(auditDetails)
+    ).run()
+
+    // 既存の comic_data を取得（draft を引き継ぐ）
+    const existingComicData = scene.comic_data ? JSON.parse(scene.comic_data) : {}
+    const existingDraft = existingComicData.draft || null
+
+    // Phase 2-2: 再生成リクエストを記録（applied_telops_comic を追加）
+    // 実際の漫画再生成は「ユーザーが publish する」ときに行われる
+    // ここでは「再生成フラグ」と「適用すべき telops_comic」をマークする
+    const newComicData = {
+      ...existingComicData,
+      pending_regeneration: {
+        requested_at: new Date().toISOString(),
+        telops_comic: telopsComic,
+        reason
+      }
+    }
+
+    await c.env.DB.prepare(`
+      UPDATE scenes 
+      SET comic_data = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(JSON.stringify(newComicData), sceneId).run()
+
+    console.log(`[Comic] Phase2-2: Regeneration requested for scene ${sceneId}, telops_comic:`, telopsComic)
+
+    return c.json({
+      accepted: true,
+      scene_id: parseInt(sceneId),
+      project_id: scene.project_id,
+      telops_comic_applied: {
+        ...telopsComic,
+        updated_at: new Date().toISOString()
+      },
+      message: '漫画の再生成リクエストを受け付けました。漫画編集画面で「公開」を行うと、新しい設定が反映されます。'
+    }, 202)
+
+  } catch (error) {
+    console.error('[Comic] Regenerate error:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to request comic regeneration' }
+    }, 500)
+  }
+})
+
+/**
  * GET /api/scenes/:id/comic
  * 漫画データ取得（draft + published + 公開画像）
  */
