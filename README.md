@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-01-30（BGM/SFX API認証修正、Remotion framesPerLambda自動計算で60分超動画対応）
+- **最終更新**: 2026-02-02（テロップ改善シリーズ完了 - Vrew級調整・永続化・自動rebake）
 
 ---
 
@@ -78,6 +78,38 @@ Body: {
 - シーン単位でスタイルを個別上書き可能
 - 画像生成時に `prefix + prompt + suffix` の形式で適用
 - デフォルトプリセット: 日本アニメ風、インフォマーシャル風、シネマ調
+
+### 4. テロップ機能（2系統）
+
+#### 4.1 Remotion テロップ（動画字幕）
+動画生成時に動的に描画される字幕/テロップ。後から自由に調整可能。
+
+| 設定カテゴリ | 項目 |
+|------------|------|
+| **プリセット** | minimal / outline / band / pop / cinematic |
+| **サイズ** | sm / md / lg |
+| **位置** | bottom / center / top |
+| **カスタム** | 文字色、縁取り色/太さ、背景色/透過、フォント、太さ |
+| **Typography** | 最大行数(1-5)、行間(100-200%)、文字間(-2~6px) |
+
+- **永続化**: `PUT /api/projects/:id/telop-settings` でプロジェクト既定として保存可能
+- **SSOT**: `projects.settings_json.telops_remotion`
+
+#### 4.2 漫画焼き込みテロップ
+画像(PNG)に焼き込まれる吹き出し/テロップ。再焼き込みが必要。
+
+| 設定 | 項目 |
+|-----|------|
+| **プリセット** | minimal / outline / band / pop / cinematic |
+| **サイズ** | sm / md / lg |
+| **位置** | bottom / center / top |
+
+- **保存**: `PUT /api/projects/:id/comic-telop-settings`
+- **一括予約**: `POST /api/projects/:id/comic/rebake`
+- **ステータス**: 🟡予約中 / 🟠未反映 / ✅最新 / ⚪未公開
+- **SSOT**: `projects.settings_json.telops_comic`
+
+> 詳細は [`docs/TELOP_COMPLETE_REFERENCE.md`](docs/TELOP_COMPLETE_REFERENCE.md) を参照
 
 ---
 
