@@ -1956,6 +1956,168 @@ projects.put('/:id/comic-telop-settings', async (c) => {
   }
 })
 
+// =============================================================================
+// PR-Remotion-Telop-DefaultSave: Remotionテロップ設定の永続化
+// =============================================================================
+
+/**
+ * PUT /api/projects/:id/telop-settings
+ * Remotionテロップ設定をプロジェクト既定として保存
+ * 次回のVideo Build時に自動で復元される
+ */
+projects.put('/:id/telop-settings', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    if (isNaN(projectId)) {
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project id' } }, 400)
+    }
+
+    const body = await c.req.json<{
+      enabled?: boolean
+      style_preset?: string
+      size_preset?: string
+      position_preset?: string
+      custom_style?: {
+        text_color?: string
+        stroke_color?: string
+        stroke_width?: number
+        bg_color?: string
+        bg_opacity?: number
+        font_family?: string
+        font_weight?: string
+      } | null
+      typography?: {
+        max_lines?: number
+        line_height?: number
+        letter_spacing?: number
+      } | null
+    }>()
+
+    // Validate presets
+    const validStyles = ['minimal', 'outline', 'band', 'pop', 'cinematic']
+    const validSizes = ['sm', 'md', 'lg']
+    const validPositions = ['bottom', 'center', 'top']
+    const validFonts = ['noto-sans', 'noto-serif', 'rounded', 'zen-maru']
+    const validWeights = ['400', '500', '600', '700', '800']
+
+    if (body.style_preset && !validStyles.includes(body.style_preset)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid style_preset. Valid: ${validStyles.join(', ')}` }
+      }, 400)
+    }
+    if (body.size_preset && !validSizes.includes(body.size_preset)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid size_preset. Valid: ${validSizes.join(', ')}` }
+      }, 400)
+    }
+    if (body.position_preset && !validPositions.includes(body.position_preset)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid position_preset. Valid: ${validPositions.join(', ')}` }
+      }, 400)
+    }
+
+    // Validate custom_style
+    if (body.custom_style) {
+      const cs = body.custom_style
+      if (cs.stroke_width !== undefined && (cs.stroke_width < 0 || cs.stroke_width > 6)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'stroke_width must be 0-6' } }, 400)
+      }
+      if (cs.bg_opacity !== undefined && (cs.bg_opacity < 0 || cs.bg_opacity > 1)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'bg_opacity must be 0-1' } }, 400)
+      }
+      if (cs.font_family && !validFonts.includes(cs.font_family)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: `Invalid font_family. Valid: ${validFonts.join(', ')}` } }, 400)
+      }
+      if (cs.font_weight && !validWeights.includes(cs.font_weight)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: `Invalid font_weight. Valid: ${validWeights.join(', ')}` } }, 400)
+      }
+    }
+
+    // Validate typography
+    if (body.typography) {
+      const tp = body.typography
+      if (tp.max_lines !== undefined && (tp.max_lines < 1 || tp.max_lines > 5)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'max_lines must be 1-5' } }, 400)
+      }
+      if (tp.line_height !== undefined && (tp.line_height < 100 || tp.line_height > 200)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'line_height must be 100-200' } }, 400)
+      }
+      if (tp.letter_spacing !== undefined && (tp.letter_spacing < -2 || tp.letter_spacing > 6)) {
+        return c.json({ error: { code: 'INVALID_REQUEST', message: 'letter_spacing must be -2 to 6' } }, 400)
+      }
+    }
+
+    // Get existing project and settings
+    const project = await c.env.DB.prepare(`
+      SELECT id, settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; settings_json: string | null }>()
+
+    if (!project) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+    }
+
+    // Parse existing settings
+    let settingsJson: Record<string, unknown> = {}
+    if (project.settings_json) {
+      try {
+        settingsJson = JSON.parse(project.settings_json)
+      } catch { /* ignore */ }
+    }
+
+    // Build telops_remotion (SSOT for Remotion subtitle defaults)
+    const currentTelopsRemotion = (settingsJson.telops_remotion as Record<string, unknown>) || {}
+    const newTelopsRemotion: Record<string, unknown> = {
+      enabled: body.enabled ?? currentTelopsRemotion.enabled ?? true,
+      style_preset: body.style_preset ?? currentTelopsRemotion.style_preset ?? 'outline',
+      size_preset: body.size_preset ?? currentTelopsRemotion.size_preset ?? 'md',
+      position_preset: body.position_preset ?? currentTelopsRemotion.position_preset ?? 'bottom',
+      updated_at: new Date().toISOString(),
+    }
+
+    // custom_style: null means "use preset defaults", undefined means "keep existing"
+    if (body.custom_style !== undefined) {
+      newTelopsRemotion.custom_style = body.custom_style
+    } else if (currentTelopsRemotion.custom_style !== undefined) {
+      newTelopsRemotion.custom_style = currentTelopsRemotion.custom_style
+    }
+
+    // typography: null means "use defaults", undefined means "keep existing"
+    if (body.typography !== undefined) {
+      newTelopsRemotion.typography = body.typography
+    } else if (currentTelopsRemotion.typography !== undefined) {
+      newTelopsRemotion.typography = currentTelopsRemotion.typography
+    }
+
+    settingsJson.telops_remotion = newTelopsRemotion
+
+    // Save to DB
+    await c.env.DB.prepare(`
+      UPDATE projects SET settings_json = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(JSON.stringify(settingsJson), projectId).run()
+
+    // Audit log
+    await c.env.DB.prepare(`
+      INSERT INTO audit_logs (entity_type, entity_id, action, details, created_at)
+      VALUES ('project', ?, 'telop.remotion.defaults_updated', ?, datetime('now'))
+    `).bind(projectId, JSON.stringify({
+      telops_remotion: newTelopsRemotion,
+      note: 'Remotionテロップ設定をプロジェクト既定として保存',
+    })).run()
+
+    console.log(`[Projects] PR-Telop-DefaultSave: Saved telops_remotion for project ${projectId}:`, newTelopsRemotion)
+
+    return c.json({
+      success: true,
+      telops_remotion: newTelopsRemotion,
+      message: 'テロップ設定を保存しました。次回のVideo Buildから自動で適用されます。',
+    })
+  } catch (error) {
+    console.error('[Projects] Failed to update telop settings:', error)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to update telop settings' } }, 500)
+  }
+})
+
 /**
  * GET /api/output-presets
  * List all available output presets (no auth required)

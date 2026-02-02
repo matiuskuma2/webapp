@@ -1923,6 +1923,19 @@ app.get('/projects/:id', (c) => {
                                 </div>
                             </details>
                             
+                            <!-- PR-Remotion-Telop-DefaultSave: 保存トグル -->
+                            <div class="mt-3 pt-3 border-t border-amber-200">
+                                <label class="flex items-center gap-2 cursor-pointer">
+                                    <input type="checkbox" id="vbTelopSaveDefault" checked
+                                        class="w-4 h-4 text-amber-600 bg-gray-100 border-gray-300 rounded focus:ring-amber-500" />
+                                    <span class="text-sm text-gray-700">この設定を今後のデフォルトとして保存</span>
+                                </label>
+                                <p class="text-xs text-gray-500 mt-1 ml-6">
+                                    <i class="fas fa-save text-amber-500 mr-1"></i>
+                                    ONにすると、次回のVideo Buildで自動的にこの設定が適用されます
+                                </p>
+                            </div>
+                            
                             <p class="text-xs text-gray-500 mt-2">
                                 <i class="fas fa-info-circle text-amber-500 mr-1"></i>
                                 テロップ＝シーンごとの任意テキスト表現。<br/>

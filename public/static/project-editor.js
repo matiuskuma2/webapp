@@ -147,6 +147,9 @@ async function loadProject() {
     // Phase 2-1: Load comic telop settings
     loadComicTelopSettings();
     
+    // PR-Remotion-Telop-DefaultSave: Load Remotion telop settings
+    loadRemotionTelopSettings();
+    
     // Safe Chat v1: Refresh Builder Wizard
     refreshBuilderWizard();
   } catch (error) {
@@ -8952,6 +8955,20 @@ async function startVideoBuild() {
     if (response.data.success) {
       showToast('動画生成を開始しました', 'success');
       
+      // PR-Remotion-Telop-DefaultSave: Save telop settings if checkbox is ON
+      const saveDefaultCheckbox = document.getElementById('vbTelopSaveDefault');
+      if (saveDefaultCheckbox?.checked) {
+        try {
+          const saved = await saveRemotionTelopSettings();
+          if (saved) {
+            console.log('[VideoBuild] Telop settings saved as project default');
+          }
+        } catch (saveError) {
+          console.warn('[VideoBuild] Failed to save telop defaults (non-blocking):', saveError);
+          // Don't show error toast - build already started successfully
+        }
+      }
+      
       // PR-4-2: 新ビルドIDを待ち受けスクロール用に設定
       const newId = response.data.video_build_id || response.data.build_id || response.data.id || response.data.new_video_build_id;
       if (newId) {
@@ -12456,6 +12473,143 @@ async function saveComicTelopSettings() {
   }
 }
 window.saveComicTelopSettings = saveComicTelopSettings;
+
+// =============================================================================
+// PR-Remotion-Telop-DefaultSave: Remotionテロップ設定の永続化
+// =============================================================================
+
+/**
+ * Load Remotion telop settings from project.settings and apply to UI
+ * Called from loadProject() when page loads
+ */
+async function loadRemotionTelopSettings() {
+  try {
+    const settings = currentProject?.settings || {};
+    const telopsRemotion = settings.telops_remotion || {};
+    
+    console.log('[RemotionTelop] Loading saved settings:', telopsRemotion);
+    
+    // Apply preset settings
+    const styleSelect = document.getElementById('vbTelopStylePreset');
+    const sizeSelect = document.getElementById('vbTelopSizePreset');
+    const positionSelect = document.getElementById('vbTelopPositionPreset');
+    const enabledCheckbox = document.getElementById('vbTelopEnabled');
+    
+    if (styleSelect && telopsRemotion.style_preset) styleSelect.value = telopsRemotion.style_preset;
+    if (sizeSelect && telopsRemotion.size_preset) sizeSelect.value = telopsRemotion.size_preset;
+    if (positionSelect && telopsRemotion.position_preset) positionSelect.value = telopsRemotion.position_preset;
+    if (enabledCheckbox && telopsRemotion.enabled !== undefined) enabledCheckbox.checked = telopsRemotion.enabled;
+    
+    // Apply custom_style (Vrew風カスタム)
+    const customStyle = telopsRemotion.custom_style;
+    if (customStyle) {
+      const textColorPicker = document.getElementById('vbTelopTextColor');
+      const textColorHex = document.getElementById('vbTelopTextColorHex');
+      const strokeColorPicker = document.getElementById('vbTelopStrokeColor');
+      const strokeColorHex = document.getElementById('vbTelopStrokeColorHex');
+      const strokeWidthSlider = document.getElementById('vbTelopStrokeWidth');
+      const strokeWidthValue = document.getElementById('vbTelopStrokeWidthValue');
+      const bgColorPicker = document.getElementById('vbTelopBgColor');
+      const bgColorHex = document.getElementById('vbTelopBgColorHex');
+      const bgOpacitySlider = document.getElementById('vbTelopBgOpacity');
+      const bgOpacityValue = document.getElementById('vbTelopBgOpacityValue');
+      const fontSelect = document.getElementById('vbTelopFontFamily');
+      const weightSelect = document.getElementById('vbTelopFontWeight');
+      
+      if (customStyle.text_color) {
+        if (textColorPicker) textColorPicker.value = customStyle.text_color;
+        if (textColorHex) textColorHex.value = customStyle.text_color;
+      }
+      if (customStyle.stroke_color) {
+        if (strokeColorPicker) strokeColorPicker.value = customStyle.stroke_color;
+        if (strokeColorHex) strokeColorHex.value = customStyle.stroke_color;
+      }
+      if (customStyle.stroke_width !== undefined) {
+        if (strokeWidthSlider) strokeWidthSlider.value = customStyle.stroke_width;
+        if (strokeWidthValue) strokeWidthValue.textContent = customStyle.stroke_width;
+      }
+      if (customStyle.bg_color) {
+        if (bgColorPicker) bgColorPicker.value = customStyle.bg_color;
+        if (bgColorHex) bgColorHex.value = customStyle.bg_color;
+      }
+      if (customStyle.bg_opacity !== undefined) {
+        // bg_opacity is stored as 0-1, display as 0-100%
+        const opacityPercent = Math.round(customStyle.bg_opacity * 100);
+        if (bgOpacitySlider) bgOpacitySlider.value = opacityPercent;
+        if (bgOpacityValue) bgOpacityValue.textContent = opacityPercent;
+      }
+      if (customStyle.font_family) {
+        if (fontSelect) fontSelect.value = customStyle.font_family;
+      }
+      if (customStyle.font_weight) {
+        if (weightSelect) weightSelect.value = customStyle.font_weight;
+      }
+    }
+    
+    // Apply typography settings
+    const typography = telopsRemotion.typography;
+    if (typography) {
+      const maxLinesSelect = document.getElementById('vbTelopMaxLines');
+      const lineHeightSlider = document.getElementById('vbTelopLineHeight');
+      const lineHeightValue = document.getElementById('vbTelopLineHeightValue');
+      const letterSpacingSlider = document.getElementById('vbTelopLetterSpacing');
+      const letterSpacingValue = document.getElementById('vbTelopLetterSpacingValue');
+      
+      if (typography.max_lines !== undefined && maxLinesSelect) {
+        maxLinesSelect.value = typography.max_lines;
+      }
+      if (typography.line_height !== undefined) {
+        if (lineHeightSlider) lineHeightSlider.value = typography.line_height;
+        if (lineHeightValue) lineHeightValue.textContent = typography.line_height;
+      }
+      if (typography.letter_spacing !== undefined) {
+        if (letterSpacingSlider) letterSpacingSlider.value = typography.letter_spacing;
+        if (letterSpacingValue) letterSpacingValue.textContent = typography.letter_spacing;
+      }
+    }
+    
+    console.log('[RemotionTelop] Settings applied to UI');
+  } catch (error) {
+    console.error('[RemotionTelop] Failed to load settings:', error);
+  }
+}
+window.loadRemotionTelopSettings = loadRemotionTelopSettings;
+
+/**
+ * Save Remotion telop settings to project.settings_json.telops_remotion
+ * Called when "Save default" checkbox is ON and video build starts
+ */
+async function saveRemotionTelopSettings() {
+  try {
+    // Gather current UI values
+    const styleSelect = document.getElementById('vbTelopStylePreset');
+    const sizeSelect = document.getElementById('vbTelopSizePreset');
+    const positionSelect = document.getElementById('vbTelopPositionPreset');
+    const enabledCheckbox = document.getElementById('vbTelopEnabled');
+    
+    const payload = {
+      enabled: enabledCheckbox?.checked ?? true,
+      style_preset: styleSelect?.value || 'outline',
+      size_preset: sizeSelect?.value || 'md',
+      position_preset: positionSelect?.value || 'bottom',
+      custom_style: getTelopCustomStyle(),  // null if default
+      typography: getTelopTypography(),      // null if default
+    };
+    
+    const response = await axios.put(`${API_BASE}/projects/${PROJECT_ID}/telop-settings`, payload);
+    
+    if (response.data.success) {
+      console.log('[RemotionTelop] DefaultSave: Settings saved:', response.data.telops_remotion);
+      return true;
+    }
+    return false;
+  } catch (error) {
+    console.error('[RemotionTelop] Failed to save settings:', error);
+    // Don't show toast here - let caller decide
+    return false;
+  }
+}
+window.saveRemotionTelopSettings = saveRemotionTelopSettings;
 
 // =============================================================================
 // PR-Comic-Rebake-All: 全シーン一括「再焼き込み」予約
