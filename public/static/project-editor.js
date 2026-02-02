@@ -13873,19 +13873,25 @@ async function generateAllMissingAudio(skipConfirm = false) {
     
     // 結果通知
     if (totalErrors === 0) {
-      showToast(`${totalGenerated}件の音声生成を開始しました`, 'success');
+      showToast(`${totalGenerated}件の音声生成を開始しました。完了までお待ちください...`, 'success');
     } else {
       showToast(`${totalGenerated}件成功 / ${totalErrors}件失敗`, 'warning');
     }
     
-    // Preflightを再チェック（3秒後に再取得）
-    setTimeout(async () => {
-      await updateVideoBuildStatus();
-    }, 3000);
+    // PR-Audio-UI: 音声生成完了を待機（ポーリング）
+    if (totalGenerated > 0) {
+      await waitForAudioGenerationComplete(sceneIds);
+    }
+    
+    // Preflightを再チェック
+    await updateVideoBuildStatus();
     
     // PR-Audio-UI: 音声生成完了 - フラグを下ろす
     window.isGeneratingAudio = false;
     updateVideoBuildButtonState();
+    
+    // 完了通知
+    showToast('音声生成が完了しました', 'success');
     
   } catch (error) {
     console.error('[generateAllMissingAudio] Error:', error);
@@ -13894,10 +13900,10 @@ async function generateAllMissingAudio(skipConfirm = false) {
     window.isGeneratingAudio = false;
     updateVideoBuildButtonState();
   } finally {
-    // ボタンを再有効化（ただし完了メッセージに変更）
+    // ボタンを完了状態に更新
     if (btn) {
       if (totalGenerated > 0) {
-        btn.innerHTML = `<i class="fas fa-check mr-1"></i>生成開始済み（${totalGenerated}件）`;
+        btn.innerHTML = `<i class="fas fa-check mr-1"></i>音声生成完了`;
         btn.className = 'ml-3 px-3 py-1 text-xs bg-green-500 text-white rounded-lg whitespace-nowrap';
         btn.disabled = true;
       } else {
@@ -13906,11 +13912,71 @@ async function generateAllMissingAudio(skipConfirm = false) {
         btn.disabled = false;
       }
     }
+    
+    // missingAudioSceneIds をクリア（既に生成済み）
+    window.missingAudioSceneIds = [];
   }
 }
 
 // グローバルに公開
 window.generateAllMissingAudio = generateAllMissingAudio;
+
+/**
+ * PR-Audio-UI: 音声生成完了を待機（ポーリング）
+ * @param {number[]} sceneIds - 音声生成対象のシーンID配列
+ * @param {number} maxWaitMs - 最大待機時間（デフォルト: 120秒）
+ * @param {number} intervalMs - ポーリング間隔（デフォルト: 3秒）
+ */
+async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 120000, intervalMs = 3000) {
+  const btn = document.getElementById('btnBulkAudioGenerate');
+  const startTime = Date.now();
+  let lastCompletedCount = 0;
+  
+  while (Date.now() - startTime < maxWaitMs) {
+    // 各シーンの音声ステータスをチェック
+    let totalPending = 0;
+    let totalCompleted = 0;
+    
+    for (const sceneId of sceneIds) {
+      try {
+        const response = await axios.get(`${API_BASE}/scenes/${sceneId}/utterances`);
+        const utterances = response.data.utterances || [];
+        
+        for (const u of utterances) {
+          if (!u.text || u.text.trim().length === 0) continue;
+          
+          if (u.audio_generation_id && u.audio_status === 'completed') {
+            totalCompleted++;
+          } else if (u.audio_generation_id && ['generating', 'pending', 'queued'].includes(u.audio_status)) {
+            totalPending++;
+          }
+        }
+      } catch (err) {
+        console.warn(`[waitForAudio] Failed to check scene ${sceneId}:`, err);
+      }
+    }
+    
+    // ボタン表示を更新
+    if (btn) {
+      btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${totalCompleted}件完了 / 生成中...`;
+    }
+    
+    console.log(`[waitForAudio] Completed: ${totalCompleted}, Pending: ${totalPending}`);
+    
+    // 全て完了（pending がなくなった）
+    if (totalPending === 0 && totalCompleted > lastCompletedCount) {
+      console.log('[waitForAudio] All audio generation completed');
+      return;
+    }
+    
+    lastCompletedCount = totalCompleted;
+    
+    // 待機
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  
+  console.warn('[waitForAudio] Timeout reached, some audio may still be generating');
+}
 
 /**
  * PR-Audio-Bulk: 未生成音声確認ダイアログ
