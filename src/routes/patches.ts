@@ -1237,7 +1237,10 @@ async function fetchScenesWithAssets(
     `).bind(sceneId).first<{ motion_preset_id: string; motion_type: string; custom_params: string }>();
 
     // P5: シーン別BGM（scene_audio_assignments SSOT）
-    // ⚠️ 重要: system_audio_library は file_url、user_audio_library は r2_url を使用
+    // ⚠️ 重要: 
+    //   - system_audio_library: file_url のみ（default_volume等のカラムなし）
+    //   - user_audio_library: r2_url + default_* カラムあり
+    //   - デフォルト値は固定値を使用
     const sceneBgmRow = await db.prepare(`
       SELECT 
         saa.id,
@@ -1269,22 +1272,18 @@ async function fetchScenesWithAssets(
           ELSE saa.direct_duration_ms
         END as duration_ms,
         CASE 
-          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_volume, 0.25)
           WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_volume, 0.25)
-          ELSE 0.5
+          ELSE 0.25
         END as default_volume,
         CASE 
-          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_loop, 0)
           WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_loop, 0)
           ELSE 0
         END as default_loop,
         CASE 
-          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_fade_in_ms, 0)
           WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_fade_in_ms, 0)
           ELSE 0
         END as default_fade_in_ms,
         CASE 
-          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_fade_out_ms, 0)
           WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_fade_out_ms, 0)
           ELSE 0
         END as default_fade_out_ms
