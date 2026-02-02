@@ -1,9 +1,9 @@
 # テロップ (Telop) SSOT 設計書
 
-**Version**: 1.4  
+**Version**: 1.5  
 **Created**: 2026-02-01  
 **Updated**: 2026-02-02  
-**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 3-A 完了
+**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了
 
 ---
 
@@ -346,10 +346,40 @@ const TELOP_STYLE_PRESETS = {
 - 漫画編集画面の描画エンジン側でプリセット自動適用（焼き込み処理統合）
 - 全シーン一括再生成
 
-#### Phase 2-3: 描画ロジック統合（未実装）
+#### Phase 2-3: 描画ロジック統合（✅ 完了）
 
-- comic-editor-v2.js でプリセットを参照して描画
-- font_family, font_size などの共有
+**目標**: 漫画エディタで telops_comic プリセットを実際に描画に反映
+
+**実装完了内容** (2026-02-02):
+
+1. **✅ TELOP_STYLE_PRESETS 定義**
+   - comic-editor-v2.js に5種プリセット（minimal, outline, band, pop, cinematic）追加
+   - 各プリセットで caption / telop_bar 用の描画パラメータを定義
+   - fontSize, textColor, textStroke, textStrokeWidth, fill などを設定
+
+2. **✅ TELOP_SIZE_PRESETS 定義**
+   - sm (fontScale: 0.8), md (1.0), lg (1.25) の3サイズ
+
+3. **✅ getTelopStyleForType() 関数**
+   - bubbleType が caption/telop_bar の場合、currentTelopsComic から適切なスタイルを返す
+   - sizePreset の fontScale を乗算してサイズ反映
+
+4. **✅ loadTelopsComicFromProject() 関数**
+   - pending_regeneration があればそちらを優先
+   - なければ window.currentProject.settings.telops_comic を使用
+   - エディタ起動時に自動呼び出し
+
+5. **✅ 描画関数の更新**
+   - drawBubbleText(): getTelopStyleForType() でスタイル取得
+   - drawTelopBarBubble(): getTelopStyleForType() で背景スタイル取得
+
+6. **✅ サーバー側 publish で pending_regeneration クリア**
+   - publish 時に applied_telops_comic を記録
+   - pending_regeneration はクリアされ、新たなリクエストを受け付け可能に
+
+**変更ファイル**:
+- `public/static/comic-editor-v2.js` - TELOP_STYLE_PRESETS, getTelopStyleForType, loadTelopsComicFromProject 追加、描画関数更新
+- `src/routes/comic.ts` - publish 時に pending_regeneration 消費、applied_telops_comic 記録
 
 **注意点**:
 - 漫画焼き込みは画像生成時に決定されるため、後から変更には再生成が必要

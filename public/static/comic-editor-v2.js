@@ -151,6 +151,148 @@
     }
   };
 
+  // ===== Phase2-3: telops_comic プリセット定義 =====
+  // SSOT: docs/TELOP_SSOT_DESIGN.md
+  // これは projects.settings_json.telops_comic.style_preset に対応
+  const TELOP_STYLE_PRESETS = {
+    minimal: {
+      name: 'ミニマル',
+      caption: {
+        fontSize: 22,
+        textColor: '#FFFFFF',
+        textStroke: '#000000',
+        textStrokeWidth: 1.5
+      },
+      telop_bar: {
+        fill: 'transparent',
+        textColor: '#FFFFFF',
+        textStroke: '#000000',
+        textStrokeWidth: 2.0
+      }
+    },
+    outline: {
+      name: 'アウトライン（標準）',
+      caption: {
+        fontSize: 24,
+        textColor: '#FFFFFF',
+        textStroke: '#000000',
+        textStrokeWidth: 4.0
+      },
+      telop_bar: {
+        fill: 'rgba(0,0,0,0.50)',
+        textColor: '#FFFFFF',
+        textStroke: 'rgba(0,0,0,0.4)',
+        textStrokeWidth: 2.0
+      }
+    },
+    band: {
+      name: '帯付き（TV風）',
+      caption: {
+        fontSize: 26,
+        textColor: '#FFFFFF',
+        textStroke: 'transparent',
+        textStrokeWidth: 0
+      },
+      telop_bar: {
+        fill: 'rgba(0,0,0,0.70)',
+        textColor: '#FFFFFF',
+        textStroke: 'transparent',
+        textStrokeWidth: 0
+      }
+    },
+    pop: {
+      name: 'ポップ（バラエティ風）',
+      caption: {
+        fontSize: 28,
+        textColor: '#FF0000',
+        textStroke: '#FFFFFF',
+        textStrokeWidth: 5.0
+      },
+      telop_bar: {
+        fill: 'rgba(255,255,0,0.90)',
+        textColor: '#FF0000',
+        textStroke: '#FFFFFF',
+        textStrokeWidth: 3.0
+      }
+    },
+    cinematic: {
+      name: 'シネマティック',
+      caption: {
+        fontSize: 20,
+        textColor: '#FFFFFF',
+        textStroke: '#000000',
+        textStrokeWidth: 0.5
+      },
+      telop_bar: {
+        fill: 'transparent',
+        textColor: '#FFFFFF',
+        textStroke: '#000000',
+        textStrokeWidth: 0.5
+      }
+    }
+  };
+
+  // サイズプリセット（telops_comic.size_preset に対応）
+  const TELOP_SIZE_PRESETS = {
+    sm: { fontScale: 0.8, name: '小' },
+    md: { fontScale: 1.0, name: '中' },
+    lg: { fontScale: 1.25, name: '大' }
+  };
+
+  // 現在の telops_comic 設定をグローバルに保持
+  let currentTelopsComic = {
+    style_preset: 'outline',
+    size_preset: 'md',
+    position_preset: 'bottom'
+  };
+
+  // telops_comic からスタイルを取得する関数
+  function getTelopStyleForType(bubbleType) {
+    const preset = TELOP_STYLE_PRESETS[currentTelopsComic.style_preset] || TELOP_STYLE_PRESETS.outline;
+    const sizePreset = TELOP_SIZE_PRESETS[currentTelopsComic.size_preset] || TELOP_SIZE_PRESETS.md;
+    
+    if (bubbleType === 'caption' || bubbleType === 'telop_bar') {
+      const baseStyle = BUBBLE_STYLES[bubbleType];
+      const presetStyle = preset[bubbleType] || {};
+      
+      return {
+        ...baseStyle,
+        ...presetStyle,
+        fontSize: (presetStyle.fontSize || baseStyle.fontSize) * sizePreset.fontScale,
+        lineHeight: (presetStyle.lineHeight || baseStyle.lineHeight || baseStyle.fontSize * 1.4) * sizePreset.fontScale
+      };
+    }
+    
+    // caption/telop_bar 以外は通常のスタイルを返す
+    return BUBBLE_STYLES[bubbleType] || BUBBLE_STYLES.speech_round;
+  }
+
+  // telops_comic を設定から読み込む
+  function loadTelopsComicFromProject() {
+    const settings = window.currentProject?.settings || {};
+    const telopsComic = settings.telops_comic || {};
+    
+    // pending_regeneration があればそちらを優先
+    const comicData = state.scene?.comic_data || {};
+    const pendingRegen = comicData.pending_regeneration;
+    
+    if (pendingRegen?.telops_comic) {
+      currentTelopsComic = {
+        style_preset: pendingRegen.telops_comic.style_preset || 'outline',
+        size_preset: pendingRegen.telops_comic.size_preset || 'md',
+        position_preset: pendingRegen.telops_comic.position_preset || 'bottom'
+      };
+      console.log('[ComicEditorV2] Phase2-3: Using pending_regeneration telops_comic:', currentTelopsComic);
+    } else {
+      currentTelopsComic = {
+        style_preset: telopsComic.style_preset || 'outline',
+        size_preset: telopsComic.size_preset || 'md',
+        position_preset: telopsComic.position_preset || 'bottom'
+      };
+      console.log('[ComicEditorV2] Phase2-3: Using project telops_comic:', currentTelopsComic);
+    }
+  }
+
   // ============== 状態管理 ==============
   const state = {
     sceneId: null,
@@ -590,8 +732,9 @@
   }
 
   function drawTelopBarBubble(ctx, w, h, scale) {
-    const style = BUBBLE_STYLES.telop_bar;
-    const r = style.radius * scale;
+    // Phase2-3: telops_comic プリセットを反映
+    const style = getTelopStyleForType('telop_bar');
+    const r = (style.radius || 12) * scale;
     
     ctx.save();
     ctx.shadowColor = style.shadow.color;
@@ -605,7 +748,8 @@
   }
 
   function drawBubbleText(ctx, text, type, w, h, scale, textStyle = null) {
-    const style = BUBBLE_STYLES[type] || BUBBLE_STYLES.speech_round;
+    // Phase2-3: telops_comic プリセットを反映（caption/telop_bar のみ）
+    const style = getTelopStyleForType(type);
     const padding = style.padding * scale;
     const innerW = w - padding * 2;
     const innerH = h - padding * 2;
@@ -1862,11 +2006,11 @@
             ${statusBadge}
           </div>
           <div class="flex items-center gap-2">
-            <!-- Phase 2-2: 再生成ボタン -->
+            <!-- Phase 2-2: 設定反映ボタン -->
             <button onclick="window.ComicEditorV2.openRegenModal()" 
               class="px-3 py-1.5 text-sm text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors"
-              title="漫画の文字設定を適用して再生成">
-              <i class="fas fa-sync-alt mr-1"></i>再生成
+              title="プロジェクトの漫画文字設定を次回公開に反映">
+              <i class="fas fa-cog mr-1"></i>設定反映
             </button>
             <button onclick="window.ComicEditorV2.close()" class="text-gray-400 hover:text-gray-600 text-2xl">
               <i class="fas fa-times"></i>
@@ -2043,16 +2187,16 @@
         <div id="regenStep1" class="p-6">
           <div class="flex items-center gap-3 mb-4">
             <div class="w-12 h-12 bg-orange-100 rounded-full flex items-center justify-center">
-              <i class="fas fa-sync-alt text-orange-600 text-xl"></i>
+              <i class="fas fa-cog text-orange-600 text-xl"></i>
             </div>
-            <h3 class="text-lg font-bold text-gray-800">漫画を再生成</h3>
+            <h3 class="text-lg font-bold text-gray-800">漫画の文字設定を反映</h3>
           </div>
           <p class="text-gray-600 mb-4">
-            このシーンの漫画を再生成します。<br/>
-            <strong class="text-green-700">今の漫画は残ります。</strong>
+            プロジェクトの漫画文字設定をこのシーンに適用します。<br/>
+            <strong class="text-blue-700">次回「公開」時に反映されます。</strong>
           </p>
           <p class="text-gray-500 text-sm mb-6">
-            よろしいですか？
+            今の漫画は残ります。よろしいですか？
           </p>
           <div class="flex justify-end gap-3">
             <button onclick="window.ComicEditorV2.closeRegenModal()" 
@@ -2092,11 +2236,11 @@
             </div>
           </div>
           
-          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-6 text-xs text-amber-800">
-            <i class="fas fa-exclamation-triangle mr-1"></i>
-            <strong>注意:</strong> この操作は新しい漫画を生成します。<br/>
-            既存の漫画は自動では置き換わりません。<br/>
-            生成後、必要なら「公開」を行ってください。
+          <div class="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-6 text-xs text-blue-800">
+            <i class="fas fa-info-circle mr-1"></i>
+            <strong>仕組み:</strong> この設定を「適用予約」します。<br/>
+            漫画を編集して「公開」すると、この設定で焼き込まれます。<br/>
+            <span class="text-gray-500">（今すぐ見た目は変わりません）</span>
           </div>
           
           <div class="flex justify-end gap-3">
@@ -2106,7 +2250,7 @@
             </button>
             <button id="regenExecuteBtn" onclick="window.ComicEditorV2.executeRegenerate()" 
               class="px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg">
-              <i class="fas fa-play mr-1"></i> 再生成する
+              <i class="fas fa-check mr-1"></i> 適用予約する
             </button>
           </div>
         </div>
@@ -2151,7 +2295,7 @@
       });
       
       if (response.data.accepted) {
-        showToast('再生成リクエストを受け付けました。「公開」で新しい設定が反映されます。', 'success');
+        showToast('設定の適用を予約しました。「公開」で新しい設定が反映されます。', 'success');
         closeRegenModal();
         
         // シーンデータを再読み込み
@@ -2169,11 +2313,11 @@
       }
     } catch (error) {
       console.error('[ComicEditorV2] Regenerate error:', error);
-      const errorMsg = error.response?.data?.error?.message || '再生成に失敗しました';
+      const errorMsg = error.response?.data?.error?.message || '設定の適用予約に失敗しました';
       showToast(errorMsg, 'error');
     } finally {
       btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-play mr-1"></i> 再生成する';
+      btn.innerHTML = '<i class="fas fa-check mr-1"></i> 適用予約する';
     }
   }
 
@@ -2327,6 +2471,9 @@
   }
 
   function initComicData() {
+    // Phase2-3: telops_comic プリセットを読み込む
+    loadTelopsComicFromProject();
+    
     const comicData = state.scene?.comic_data || {};
     
     state.published = comicData.published || null;

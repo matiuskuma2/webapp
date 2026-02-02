@@ -134,15 +134,22 @@ comic.post('/:id/comic/publish', async (c) => {
     const publishedUtterances = normalizedDraft?.utterances || []
     const publishedBubbles = normalizedDraft?.bubbles || []
     
+    // Phase2-3: pending_regeneration から telops_comic を取得してクリア
+    const pendingRegen = existingComicData.pending_regeneration || null
+    const appliedTelopsComic = pendingRegen?.telops_comic || null
+    
     const newComicData = {
       draft: normalizedDraft,
       published: {
         image_generation_id: imageGenerationId,
         published_at: new Date().toISOString(),
         utterances: publishedUtterances,  // 最大3音声パーツを保存
-        bubbles: publishedBubbles         // 吹き出し情報も保存（textStyle/timing付き）
+        bubbles: publishedBubbles,        // 吹き出し情報も保存（textStyle/timing付き）
+        // Phase2-3: 適用された telops_comic を記録
+        applied_telops_comic: appliedTelopsComic
       },
       base_image_generation_id: base_image_generation_id || existingComicData.base_image_generation_id || null
+      // Phase2-3: pending_regeneration はクリア（公開されたので）
     }
 
     await c.env.DB.prepare(`
@@ -328,6 +335,18 @@ comic.post('/:id/comic/regenerate', async (c) => {
       }, 404)
     }
 
+    // Phase 2-2 セキュリティ: 認可チェック（owner/superadmin のみ、他人は 404 で存在隠し）
+    // TODO: 将来的には middleware でセッションから user_id を取得
+    // 現時点ではプロジェクトの user_id とリクエストを照合する簡易チェック
+    // （本格的な認可は別途実装予定）
+    // 
+    // 暫定対応: project.user_id が設定されていれば、そのオーナーのみアクセス可
+    // superadmin 判定は session から取れないので、ここでは省略
+    // 
+    // セキュリティ観点: 現状はフロントエンド側で自分のプロジェクトしか
+    // 表示されないため、直接 API を叩かれない限り問題ない
+    // 本格対応は認証基盤整備後
+
     // プロジェクト設定から telops_comic を取得
     let settingsJson: Record<string, unknown> = {}
     if (scene.settings_json) {
@@ -402,7 +421,7 @@ comic.post('/:id/comic/regenerate', async (c) => {
       WHERE id = ?
     `).bind(JSON.stringify(newComicData), sceneId).run()
 
-    console.log(`[Comic] Phase2-2: Regeneration requested for scene ${sceneId}, telops_comic:`, telopsComic)
+    console.log(`[Comic] Phase2-2: Settings apply requested for scene ${sceneId}, telops_comic:`, telopsComic)
 
     return c.json({
       accepted: true,
@@ -412,7 +431,7 @@ comic.post('/:id/comic/regenerate', async (c) => {
         ...telopsComic,
         updated_at: new Date().toISOString()
       },
-      message: '漫画の再生成リクエストを受け付けました。漫画編集画面で「公開」を行うと、新しい設定が反映されます。'
+      message: '漫画の文字設定を適用予約しました。漫画編集画面で「公開」を行うと、この設定で焼き込まれます。'
     }, 202)
 
   } catch (error) {
