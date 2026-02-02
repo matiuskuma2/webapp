@@ -558,7 +558,7 @@ utterances.put('/scenes/:sceneId/utterances/reorder', async (c) => {
 
 // =============================================================================
 // POST /api/utterances/:utteranceId/generate-audio
-// Generate audio for a specific utterance
+// Generate audio for a specific utterance (utterance-level conflict check)
 // =============================================================================
 
 utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
@@ -582,8 +582,39 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
       return c.json(createErrorResponse('NOT_FOUND', 'Utterance not found'), 404);
     }
 
+    // Check if utterance has text
+    const text = (utterance.text ?? '').trim();
+    if (!text) {
+      return c.json(createErrorResponse('NO_DIALOGUE', 'Utterance has no text'), 400);
+    }
+
+    // Check if this utterance already has a completed audio
+    if (utterance.audio_generation_id) {
+      const existingAudio = await c.env.DB.prepare(`
+        SELECT id, status, r2_url FROM audio_generations WHERE id = ?
+      `).bind(utterance.audio_generation_id).first<any>();
+      
+      // If audio is completed, skip generation (reuse existing)
+      if (existingAudio && existingAudio.status === 'completed' && existingAudio.r2_url) {
+        console.log(`[Utterance ${utteranceId}] Audio already completed (id=${existingAudio.id}), skipping generation`);
+        return c.json({
+          success: true,
+          utterance_id: utteranceId,
+          audio_generation_id: existingAudio.id,
+          status: 'completed',
+          message: 'Audio already generated for this utterance',
+          skipped: true
+        }, 200);
+      }
+      
+      // If audio is still generating, return 409
+      if (existingAudio && existingAudio.status === 'generating') {
+        console.log(`[Utterance ${utteranceId}] Audio still generating (id=${existingAudio.id})`);
+        return c.json(createErrorResponse('AUDIO_GENERATING', 'Audio generation already in progress for this utterance'), 409);
+      }
+    }
+
     // Determine voice settings
-    let voicePresetId: string | null = null;
     let provider = 'google';
     let voiceId = 'ja-JP-Neural2-B'; // Default narrator voice
 
@@ -595,73 +626,72 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
       `).bind(utterance.project_id, utterance.character_key).first<{ voice_preset_id: string | null }>();
 
       if (character?.voice_preset_id) {
-        voicePresetId = character.voice_preset_id;
-        voiceId = voicePresetId;
+        voiceId = character.voice_preset_id;
         
         // Detect provider from voice_preset_id
-        if (voicePresetId.startsWith('elevenlabs:') || voicePresetId.startsWith('el-')) {
+        if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
           provider = 'elevenlabs';
-        } else if (voicePresetId.startsWith('fish:') || voicePresetId.startsWith('fish-')) {
+        } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
           provider = 'fish';
         }
       }
-    } else if (utterance.role === 'narration') {
-      // Use project narrator voice or default
-      // TODO: Get project-level narrator settings
-      // For now, use Google TTS default
     }
 
     // Allow override from request body
     if (body.voice_id) voiceId = body.voice_id;
     if (body.provider) provider = body.provider;
+    const format = body.format || 'mp3';
+    const sampleRate = provider === 'fish' ? 44100 : 24000;
 
-    // Forward to existing audio generation endpoint
-    // This creates the audio_generation record and generates the audio
-    const audioGenResponse = await fetch(
-      `${new URL(c.req.url).origin}/api/scenes/${utterance.scene_id}/generate-audio`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          // Forward auth headers if present
-          ...(c.req.header('Authorization') ? { 'Authorization': c.req.header('Authorization')! } : {}),
-          ...(c.req.header('Cookie') ? { 'Cookie': c.req.header('Cookie')! } : {})
-        },
-        body: JSON.stringify({
-          voice_id: voiceId,
-          provider: provider,
-          text_override: utterance.text, // Use utterance text
-          format: body.format || 'mp3'
-        })
-      }
+    // Create audio_generation record with 'generating' status
+    const insert = await c.env.DB.prepare(`
+      INSERT INTO audio_generations
+        (scene_id, provider, voice_id, model, format, sample_rate, text, status, is_active)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, 'generating', 0)
+    `).bind(
+      utterance.scene_id,
+      provider,
+      voiceId,
+      null,
+      format,
+      sampleRate,
+      text
+    ).run();
+
+    const audioId = insert.meta.last_row_id as number;
+
+    // Link utterance to this audio_generation
+    await c.env.DB.prepare(`
+      UPDATE scene_utterances
+      SET audio_generation_id = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(audioId, utteranceId).run();
+
+    console.log(`[Utterance ${utteranceId}] Created audio_generation id=${audioId} for text: "${text.substring(0, 50)}..."`);
+
+    // Generate audio asynchronously using waitUntil
+    // Import the generate function from audio-generation route
+    c.executionCtx.waitUntil(
+      generateUtteranceAudio({
+        env: c.env,
+        audioId,
+        utteranceId,
+        projectId: utterance.project_id,
+        sceneIdx: utterance.scene_idx,
+        text,
+        provider,
+        voiceId,
+        format,
+        sampleRate,
+      })
     );
-
-    const audioGenResult = await audioGenResponse.json() as any;
-
-    if (!audioGenResponse.ok) {
-      return c.json(audioGenResult, audioGenResponse.status as any);
-    }
-
-    // Update utterance with audio_generation_id
-    const audioGenerationId = audioGenResult.audio_generation_id;
-    if (audioGenerationId) {
-      // Get duration from audio_generations
-      const audioGen = await c.env.DB.prepare(`
-        SELECT duration_ms FROM audio_generations WHERE id = ?
-      `).bind(audioGenerationId).first<{ duration_ms: number | null }>();
-
-      await c.env.DB.prepare(`
-        UPDATE scene_utterances
-        SET audio_generation_id = ?, duration_ms = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(audioGenerationId, audioGen?.duration_ms || null, utteranceId).run();
-    }
 
     return c.json({
       success: true,
       utterance_id: utteranceId,
-      audio_generation_id: audioGenerationId,
-      status: audioGenResult.status,
+      audio_generation_id: audioId,
+      status: 'generating',
       message: 'Audio generation started for utterance'
     }, 202);
 
@@ -670,5 +700,128 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
     return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to generate audio for utterance'), 500);
   }
 });
+
+// =============================================================================
+// Helper: Generate audio for utterance (runs in waitUntil)
+// =============================================================================
+
+async function generateUtteranceAudio(args: {
+  env: Bindings;
+  audioId: number;
+  utteranceId: number;
+  projectId: number;
+  sceneIdx: number;
+  text: string;
+  provider: string;
+  voiceId: string;
+  format: string;
+  sampleRate: number;
+}) {
+  const { env, audioId, utteranceId, projectId, sceneIdx, text, provider, voiceId, format, sampleRate } = args;
+
+  try {
+    let bytes: Uint8Array;
+
+    if (provider === 'google') {
+      // Google TTS
+      const googleTtsKey = env.GOOGLE_TTS_API_KEY || env.GEMINI_API_KEY;
+      if (!googleTtsKey) {
+        throw new Error('GOOGLE_TTS_API_KEY is not set');
+      }
+
+      const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleTtsKey,
+        },
+        body: JSON.stringify({
+          input: { text },
+          voice: {
+            languageCode: 'ja-JP',
+            name: voiceId,
+          },
+          audioConfig: {
+            audioEncoding: format === 'wav' ? 'LINEAR16' : 'MP3',
+            sampleRateHertz: sampleRate,
+          },
+        }),
+      });
+
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        throw new Error(`TTS API error: ${res.status} ${errorText}`);
+      }
+
+      const data: any = await res.json();
+      const audioContent = data?.audioContent;
+      if (!audioContent) {
+        throw new Error('TTS API returned empty audioContent');
+      }
+
+      // Decode base64
+      const binaryString = atob(audioContent);
+      bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+    } else if (provider === 'fish') {
+      // TODO: Fish Audio implementation
+      throw new Error('Fish Audio not implemented in utterance endpoint');
+    } else if (provider === 'elevenlabs') {
+      // TODO: ElevenLabs implementation
+      throw new Error('ElevenLabs not implemented in utterance endpoint');
+    } else {
+      throw new Error(`Unknown provider: ${provider}`);
+    }
+
+    // Upload to R2
+    const timestamp = Date.now();
+    const ext = format === 'wav' ? 'wav' : 'mp3';
+    const r2Key = `audio/${projectId}/scene_${sceneIdx}/utt_${utteranceId}_${audioId}_${timestamp}.${ext}`;
+
+    await env.R2.put(r2Key, bytes, {
+      httpMetadata: {
+        contentType: format === 'wav' ? 'audio/wav' : 'audio/mpeg',
+      },
+    });
+
+    const r2Url = (env as any).R2_PUBLIC_URL 
+      ? `${(env as any).R2_PUBLIC_URL}/${r2Key}`
+      : `https://r2.marumuviai.com/${r2Key}`;
+
+    // Calculate duration from file size
+    const bytesLength = bytes.length;
+    const bitrate = format === 'wav' ? 176400 : 16000;
+    const calculatedDurationMs = Math.round((bytesLength / bitrate) * 1000);
+    const estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+
+    // Update audio_generation to completed
+    await env.DB.prepare(`
+      UPDATE audio_generations
+      SET status = 'completed', r2_key = ?, r2_url = ?, duration_ms = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(r2Key, r2Url, estimatedDurationMs, audioId).run();
+
+    // Update utterance with duration
+    await env.DB.prepare(`
+      UPDATE scene_utterances
+      SET duration_ms = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(estimatedDurationMs, utteranceId).run();
+
+    console.log(`[Utterance ${utteranceId}] Audio generation completed: ${r2Url} (${estimatedDurationMs}ms)`);
+
+  } catch (error) {
+    console.error(`[Utterance ${utteranceId}] Audio generation failed:`, error);
+    
+    // Mark as failed
+    await env.DB.prepare(`
+      UPDATE audio_generations
+      SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(error instanceof Error ? error.message : String(error), audioId).run();
+  }
+}
 
 export default utterances;
