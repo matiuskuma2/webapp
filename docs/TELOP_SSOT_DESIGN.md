@@ -1,9 +1,9 @@
 # テロップ (Telop) SSOT 設計書
 
-**Version**: 1.8  
+**Version**: 1.9  
 **Created**: 2026-02-01  
 **Updated**: 2026-02-02  
-**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了、PR-Comic-Rebake-All 完了、PR-Comic-Rebake-DiffBadge 完了、PR-Remotion-Subtitle-Typography 完了、PR-Remotion-Telop-DefaultSave 完了
+**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了、PR-Comic-Rebake-All 完了、PR-Comic-Rebake-DiffBadge 完了、PR-Remotion-Subtitle-Typography 完了、PR-Remotion-Telop-DefaultSave 完了、PR-Chat-Telop-Scope-AutoRebake 完了
 
 ---
 
