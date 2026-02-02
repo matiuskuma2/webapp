@@ -13873,26 +13873,21 @@ async function generateAllMissingAudio(skipConfirm = false) {
     }
     
     // 結果通知
-    if (totalErrors === 0) {
-      showToast(`${totalGenerated}件の音声生成を開始しました。完了までお待ちください...`, 'success');
+    if (totalErrors === 0 && totalGenerated > 0) {
+      showToast(`${totalGenerated}件の音声生成を開始しました`, 'success');
+    } else if (totalGenerated > 0) {
+      showToast(`${totalGenerated}件開始 / ${totalErrors}件失敗`, 'warning');
     } else {
-      showToast(`${totalGenerated}件成功 / ${totalErrors}件失敗`, 'warning');
+      showToast('音声生成に失敗しました', 'error');
     }
     
-    // PR-Audio-UI: 音声生成完了を待機（ポーリング）
-    if (totalGenerated > 0) {
-      await waitForAudioGenerationComplete(sceneIds);
-    }
-    
-    // Preflightを再チェック
+    // 少し待ってからPreflightを再チェック（非同期生成の反映待ち）
+    await new Promise(resolve => setTimeout(resolve, 2000));
     await updateVideoBuildStatus();
     
     // PR-Audio-UI: 音声生成完了 - フラグを下ろす
     window.isGeneratingAudio = false;
     updateVideoBuildButtonState();
-    
-    // 完了通知
-    showToast('音声生成が完了しました', 'success');
     
   } catch (error) {
     console.error('[generateAllMissingAudio] Error:', error);
@@ -13921,76 +13916,6 @@ async function generateAllMissingAudio(skipConfirm = false) {
 
 // グローバルに公開
 window.generateAllMissingAudio = generateAllMissingAudio;
-
-/**
- * PR-Audio-UI: 音声生成完了を待機（ポーリング）
- * @param {number[]} sceneIds - 音声生成対象のシーンID配列
- * @param {number} maxWaitMs - 最大待機時間（デフォルト: 30秒）
- * @param {number} intervalMs - ポーリング間隔（デフォルト: 3秒）
- */
-async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 30000, intervalMs = 3000) {
-  const btn = document.getElementById('btnBulkAudioGenerate');
-  const startTime = Date.now();
-  let pollCount = 0;
-  const maxPolls = 10; // 最大10回（30秒）でタイムアウト
-  
-  while (pollCount < maxPolls) {
-    pollCount++;
-    
-    // 各シーンの音声ステータスをチェック
-    let totalPending = 0;
-    let totalCompleted = 0;
-    let totalWithText = 0;
-    
-    for (const sceneId of sceneIds) {
-      try {
-        const response = await axios.get(`${API_BASE}/scenes/${sceneId}/utterances`);
-        const utterances = response.data.utterances || [];
-        
-        for (const u of utterances) {
-          if (!u.text || u.text.trim().length === 0) continue;
-          totalWithText++;
-          
-          // 完了判定: audio_url がある（実際に音声ファイルが存在）
-          const isCompleted = !!u.audio_url;
-          
-          // 生成中判定: audio_generation_id があるが audio_url がない
-          // ※ failed の場合も audio_url は null なので、ここでは区別しない
-          // 最大ポーリング回数で打ち切る
-          const isPending = u.audio_generation_id && !u.audio_url;
-          
-          if (isCompleted) {
-            totalCompleted++;
-          } else if (isPending) {
-            totalPending++;
-          }
-        }
-      } catch (err) {
-        console.warn(`[waitForAudio] Failed to check scene ${sceneId}:`, err);
-      }
-    }
-    
-    // ボタン表示を更新
-    if (btn) {
-      btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${totalCompleted}/${totalWithText}件完了`;
-    }
-    
-    console.log(`[waitForAudio] Poll ${pollCount}: Completed=${totalCompleted}, Pending=${totalPending}, Total=${totalWithText}`);
-    
-    // 終了条件: 
-    // 1. 全て完了（pending がなく、全テキストに音声がある）
-    // 2. または pending がなくなった（生成が一段落）
-    if (totalPending === 0) {
-      console.log('[waitForAudio] No more pending, exiting poll');
-      return;
-    }
-    
-    // 待機
-    await new Promise(resolve => setTimeout(resolve, intervalMs));
-  }
-  
-  console.warn('[waitForAudio] Timeout reached after', pollCount, 'polls');
-}
 
 /**
  * PR-Audio-Bulk: 未生成音声確認ダイアログ
