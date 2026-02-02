@@ -1236,6 +1236,87 @@ async function fetchScenesWithAssets(
       WHERE sm.scene_id = ?
     `).bind(sceneId).first<{ motion_preset_id: string; motion_type: string; custom_params: string }>();
 
+    // P5: シーン別BGM（scene_audio_assignments SSOT）
+    // ⚠️ 重要: system_audio_library は file_url、user_audio_library は r2_url を使用
+    const sceneBgmRow = await db.prepare(`
+      SELECT 
+        saa.id,
+        saa.audio_library_type,
+        saa.system_audio_id,
+        saa.user_audio_id,
+        saa.direct_r2_url,
+        saa.direct_name,
+        saa.direct_duration_ms,
+        saa.volume_override,
+        saa.loop_override,
+        saa.start_ms,
+        saa.end_ms,
+        saa.fade_in_ms_override,
+        saa.fade_out_ms_override,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN sal.name
+          WHEN saa.audio_library_type = 'user' THEN ual.name
+          ELSE saa.direct_name
+        END as name,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN sal.file_url
+          WHEN saa.audio_library_type = 'user' THEN ual.r2_url
+          ELSE saa.direct_r2_url
+        END as r2_url,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN sal.duration_ms
+          WHEN saa.audio_library_type = 'user' THEN ual.duration_ms
+          ELSE saa.direct_duration_ms
+        END as duration_ms,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_volume, 0.25)
+          WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_volume, 0.25)
+          ELSE 0.5
+        END as default_volume,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_loop, 0)
+          WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_loop, 0)
+          ELSE 0
+        END as default_loop,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_fade_in_ms, 0)
+          WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_fade_in_ms, 0)
+          ELSE 0
+        END as default_fade_in_ms,
+        CASE 
+          WHEN saa.audio_library_type = 'system' THEN COALESCE(sal.default_fade_out_ms, 0)
+          WHEN saa.audio_library_type = 'user' THEN COALESCE(ual.default_fade_out_ms, 0)
+          ELSE 0
+        END as default_fade_out_ms
+      FROM scene_audio_assignments saa
+      LEFT JOIN system_audio_library sal ON saa.audio_library_type = 'system' AND saa.system_audio_id = sal.id
+      LEFT JOIN user_audio_library ual ON saa.audio_library_type = 'user' AND saa.user_audio_id = ual.id
+      WHERE saa.scene_id = ? AND saa.audio_type = 'bgm' AND saa.is_active = 1
+      ORDER BY saa.created_at DESC
+      LIMIT 1
+    `).bind(sceneId).first<{
+      id: number;
+      audio_library_type: string;
+      system_audio_id: number | null;
+      user_audio_id: number | null;
+      direct_r2_url: string | null;
+      direct_name: string | null;
+      direct_duration_ms: number | null;
+      volume_override: number | null;
+      loop_override: number | null;
+      start_ms: number;
+      end_ms: number | null;
+      fade_in_ms_override: number | null;
+      fade_out_ms_override: number | null;
+      name: string | null;
+      r2_url: string | null;
+      duration_ms: number | null;
+      default_volume: number;
+      default_loop: number;
+      default_fade_in_ms: number;
+      default_fade_out_ms: number;
+    }>();
+
     // display_asset_type と text_render_mode
     const displayAssetType = (scene.display_asset_type as string) || 'image';
     const textRenderMode = (scene.text_render_mode as string) || 
@@ -1340,6 +1421,32 @@ async function fetchScenesWithAssets(
         preset_id: motionRow.motion_preset_id,
         motion_type: motionRow.motion_type || 'none',
         params,
+      };
+    }
+
+    // P5: シーン別BGM（scene_audio_assignments SSOT）
+    // Remotion側で使用するフォーマットに合わせる
+    if (sceneBgmRow && sceneBgmRow.r2_url) {
+      // 実効値を計算（override > library default）
+      const effectiveVolume = sceneBgmRow.volume_override ?? sceneBgmRow.default_volume ?? 0.25;
+      const effectiveLoop = sceneBgmRow.loop_override !== null 
+        ? sceneBgmRow.loop_override === 1 
+        : sceneBgmRow.default_loop === 1;
+      const effectiveFadeIn = sceneBgmRow.fade_in_ms_override ?? sceneBgmRow.default_fade_in_ms ?? 0;
+      const effectiveFadeOut = sceneBgmRow.fade_out_ms_override ?? sceneBgmRow.default_fade_out_ms ?? 0;
+
+      sceneData.bgm = {
+        id: sceneBgmRow.id,
+        name: sceneBgmRow.name || 'BGM',
+        url: toAbsoluteUrl(sceneBgmRow.r2_url, siteUrl),
+        duration_ms: sceneBgmRow.duration_ms || null,
+        volume: effectiveVolume,
+        loop: effectiveLoop,
+        fade_in_ms: effectiveFadeIn,
+        fade_out_ms: effectiveFadeOut,
+        start_ms: sceneBgmRow.start_ms || 0,
+        end_ms: sceneBgmRow.end_ms || null,
+        source_type: sceneBgmRow.audio_library_type, // 'system' | 'user' | 'direct'
       };
     }
 
