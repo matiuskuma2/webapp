@@ -3,7 +3,7 @@
 **Version**: 1.6  
 **Created**: 2026-02-01  
 **Updated**: 2026-02-02  
-**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了
+**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了、PR-Comic-Rebake-All 完了
 
 ---
 
@@ -41,7 +41,8 @@
 
 | アクション | 意味 |
 |------------|------|
-| `comic.rebake.requested` | 再焼き込み予約（AI画像は固定） |
+| `comic.rebake.requested` | 単一シーンの再焼き込み予約（AI画像は固定） |
+| `comic.rebake.project_requested` | 全シーン一括再焼き込み予約（PR-Comic-Rebake-All） |
 | `comic.rebake.completed` | 再焼き込み完了 |
 | `image.regenerate.requested` | AI画像の再生成（別フロー） |
 
@@ -521,3 +522,5 @@ const TELOP_STYLE_PRESETS = {
 | 2026-02-01 | 初版作成（現状分析・SSOT設計） |
 | 2026-02-01 | Phase 1 実装完了（Remotion字幕スタイル5プリセット、UI、チャットアクション） |
 | 2026-02-01 | Phase 3-A 実装完了（チャット telop scope SSOT固定、LLMプロンプト更新） |
+| 2026-02-02 | PR-Comic-Rebake-All 実装完了（全シーン一括再焼き込み予約API、UI、ステータス取得） |
+| 2026-02-02 | Vrew風カスタム字幕スタイリング機能追加（文字色/縁取り/背景色/フォント/太さ） |
