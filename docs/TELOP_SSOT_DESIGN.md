@@ -3,7 +3,7 @@
 **Version**: 1.6  
 **Created**: 2026-02-01  
 **Updated**: 2026-02-02  
-**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了、PR-Comic-Rebake-All 完了
+**Status**: Phase 1 完了、Phase 2-1 完了、Phase 2-2 完了、Phase 2-3 完了、Phase 3-A 完了、PR-Comic-Rebake-All 完了、PR-Comic-Rebake-DiffBadge 完了
 
 ---
 
@@ -524,3 +524,4 @@ const TELOP_STYLE_PRESETS = {
 | 2026-02-01 | Phase 3-A 実装完了（チャット telop scope SSOT固定、LLMプロンプト更新） |
 | 2026-02-02 | PR-Comic-Rebake-All 実装完了（全シーン一括再焼き込み予約API、UI、ステータス取得） |
 | 2026-02-02 | Vrew風カスタム字幕スタイリング機能追加（文字色/縁取り/背景色/フォント/太さ） |
+| 2026-02-02 | PR-Comic-Rebake-DiffBadge 実装完了（差分検知バッジUI統一、4状態表示、キャッシュ付きSSOT） |
