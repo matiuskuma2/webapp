@@ -8133,14 +8133,19 @@ function updateVideoBuildButtonState() {
   const SCENE_LIMIT_THRESHOLD = 100;
   const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
   
-  // R1.6: canStart は can_generate を使用（+ 音声生成中は不可）
+  // R1.6: canStart は can_generate を使用（+ 音声生成中は不可 + 生成中は不可）
   const canStart = canGenerate && !isAtLimit && !hasConcurrent && !exceedsSceneLimit && !isGeneratingAudio;
   btn.disabled = !canStart;
   
-  // PR-Audio-UI: 音声生成中は表示変更
-  if (isGeneratingAudio) {
+  // ボタン表示を状態に応じて変更
+  if (hasConcurrent) {
+    // 動画生成中
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>動画生成中...';
+  } else if (isGeneratingAudio) {
+    // 音声生成中
     btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>音声生成中...';
   } else {
+    // 通常状態
     btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成';
   }
   
@@ -9043,8 +9048,8 @@ async function startVideoBuild() {
   } finally {
     // PR-4-4-3: 必ずフラグを戻す
     window.videoBuildStartInFlight = false;
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成';
+    // ボタン状態は updateVideoBuildButtonState() に任せる
+    // concurrent_builds がある場合は無効化されるべき
     updateVideoBuildButtonState();
   }
 }
