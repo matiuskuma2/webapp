@@ -1861,6 +1861,52 @@ app.get('/projects/:id', (c) => {
                                         </div>
                                     </div>
                                     
+                                    <!-- PR-Remotion-Typography: 文字組み設定 -->
+                                    <div class="pt-3 mt-3 border-t border-amber-200">
+                                        <div class="flex items-center gap-2 mb-3">
+                                            <i class="fas fa-paragraph text-amber-600"></i>
+                                            <span class="text-sm font-semibold text-gray-700">文字組み（Typography）</span>
+                                        </div>
+                                        
+                                        <!-- 最大行数・行間 -->
+                                        <div class="grid grid-cols-2 gap-3 mb-3">
+                                            <div>
+                                                <label class="block text-xs text-gray-600 mb-1">最大行数</label>
+                                                <select id="vbTelopMaxLines" 
+                                                    class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                                    <option value="1">1行</option>
+                                                    <option value="2" selected>2行</option>
+                                                    <option value="3">3行</option>
+                                                    <option value="4">4行</option>
+                                                    <option value="5">5行</option>
+                                                    <option value="6">6行</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs text-gray-600 mb-1">行間: <span id="vbTelopLineHeightValue">140</span>%</label>
+                                                <input type="range" id="vbTelopLineHeight" min="100" max="200" step="10" value="140" 
+                                                    class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500" />
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- 文字間・超過時 -->
+                                        <div class="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label class="block text-xs text-gray-600 mb-1">文字間: <span id="vbTelopLetterSpacingValue">0</span>px</label>
+                                                <input type="range" id="vbTelopLetterSpacing" min="-2" max="6" step="0.5" value="0" 
+                                                    class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500" />
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs text-gray-600 mb-1">超過時</label>
+                                                <select id="vbTelopOverflowMode" 
+                                                    class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                                    <option value="truncate" selected>省略（...）</option>
+                                                    <option value="shrink">縮小</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
                                     <!-- プリセットに戻すボタン -->
                                     <div class="pt-2 border-t border-gray-200">
                                         <button type="button" id="vbTelopResetCustom" 

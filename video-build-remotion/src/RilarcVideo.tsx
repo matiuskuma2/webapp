@@ -48,6 +48,8 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   const telopPosition = telopsSettings?.position_preset || 'bottom';
   // Vrew風カスタムスタイル
   const telopCustomStyle = (telopsSettings as any)?.custom_style || null;
+  // PR-Remotion-Typography: 文字組み設定
+  const telopTypography = (telopsSettings as any)?.typography || null;
   
   console.log('[RilarcVideo] telops settings:', JSON.stringify(telopsSettings));
   console.log('[RilarcVideo] globalTelopEnabled:', globalTelopEnabled);
@@ -55,6 +57,7 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   console.log('[RilarcVideo] telopSizePreset:', telopSizePreset);
   console.log('[RilarcVideo] telopPosition:', telopPosition);
   console.log('[RilarcVideo] telopCustomStyle:', JSON.stringify(telopCustomStyle));
+  console.log('[RilarcVideo] telopTypography:', JSON.stringify(telopTypography));
   console.log('[RilarcVideo] sceneOverrides:', JSON.stringify(sceneOverrides));
   
   // scenes が undefined の場合は空配列を使用
@@ -197,6 +200,7 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
               telopSizePreset={telopSizePreset}
               telopPosition={telopPosition}
               telopCustomStyle={telopCustomStyle}
+              telopTypography={telopTypography}
             />
           </Sequence>
         );

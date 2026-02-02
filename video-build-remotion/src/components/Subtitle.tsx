@@ -37,6 +37,16 @@ export interface CustomTelopStyle {
   font_weight?: string;     // 太さ (400-800)
 }
 
+/**
+ * PR-Remotion-Typography: 文字組み設定
+ */
+export interface TelopTypography {
+  max_lines?: number;           // 最大行数 (1-6, デフォルト: 2)
+  line_height?: number;         // 行間 (倍率, 例: 1.4 = 140%)
+  letter_spacing?: number;      // 文字間 (px, 例: 0, 1, 2)
+  overflow_mode?: 'truncate' | 'shrink';  // 超過時の挙動
+}
+
 interface SubtitleProps {
   text: string;
   durationFrames: number;
@@ -51,6 +61,8 @@ interface SubtitleProps {
   fontSize?: number;
   /** Vrew風カスタムスタイル（設定されていればプリセットより優先） */
   customStyle?: CustomTelopStyle | null;
+  /** PR-Remotion-Typography: 文字組み設定 */
+  typography?: TelopTypography | null;
 }
 
 // サイズプリセットから基本フォントサイズへのマッピング
@@ -77,6 +89,7 @@ export const Subtitle: React.FC<SubtitleProps> = ({
   sizePreset = 'md',
   fontSize,
   customStyle,
+  typography,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -95,6 +108,12 @@ export const Subtitle: React.FC<SubtitleProps> = ({
 
   // フォントサイズ解決: fontSize > sizePreset
   const baseFontSize = fontSize || SIZE_PRESET_MAP[sizePreset] || 38;
+  
+  // PR-Remotion-Typography: Typography設定のデフォルト値
+  const maxLines = typography?.max_lines ?? 2;
+  const lineHeight = typography?.line_height ?? 1.4;
+  const letterSpacing = typography?.letter_spacing ?? 0;
+  const overflowMode = typography?.overflow_mode ?? 'truncate';
 
   // フェードイン・アウト
   const fadeInFrames = 10;
@@ -286,15 +305,37 @@ export const Subtitle: React.FC<SubtitleProps> = ({
   };
 
   /**
+   * PR-Remotion-Typography: typography のみ適用（customStyle がない場合）
+   */
+  const applyTypographyToBaseStyle = (baseStyle: React.CSSProperties): React.CSSProperties => {
+    const result = { ...baseStyle };
+    
+    // Typography設定を適用
+    result.lineHeight = lineHeight;
+    result.letterSpacing = `${letterSpacing}px`;
+    
+    // 最大行数（line-clamp）
+    if (maxLines > 0 && overflowMode === 'truncate') {
+      result.display = '-webkit-box';
+      (result as any).WebkitLineClamp = maxLines;
+      (result as any).WebkitBoxOrient = 'vertical';
+      result.overflow = 'hidden';
+      result.textOverflow = 'ellipsis';
+    }
+    
+    return result;
+  };
+
+  /**
    * カスタムスタイルを適用してテキストスタイルを生成
    * customStyle が指定されていればプリセットを上書き
    */
   const getCustomizedTextStyle = (): React.CSSProperties => {
     const baseStyle = getTextStyle();
     
-    // カスタムスタイルがなければプリセットをそのまま使用
+    // カスタムスタイルがなければプリセット + typography を適用
     if (!customStyle) {
-      return baseStyle;
+      return applyTypographyToBaseStyle(baseStyle);
     }
     
     // カスタムスタイルを適用
@@ -355,6 +396,19 @@ export const Subtitle: React.FC<SubtitleProps> = ({
       customized.backgroundColor = undefined;
       customized.padding = undefined;
       customized.borderRadius = undefined;
+    }
+    
+    // PR-Remotion-Typography: Typography設定を適用
+    customized.lineHeight = lineHeight;
+    customized.letterSpacing = `${letterSpacing}px`;
+    
+    // 最大行数（line-clamp）
+    if (maxLines > 0 && overflowMode === 'truncate') {
+      customized.display = '-webkit-box';
+      (customized as any).WebkitLineClamp = maxLines;
+      (customized as any).WebkitBoxOrient = 'vertical';
+      customized.overflow = 'hidden';
+      customized.textOverflow = 'ellipsis';
     }
     
     return customized;

@@ -1645,6 +1645,15 @@ interface TelopSetStyleAction {
   scope?: TelopScope;  // Phase 3-A: デフォルト 'remotion'
 }
 
+// PR-Remotion-Subtitle-Typography: 文字組み設定変更
+interface TelopSetTypographyAction {
+  action: 'telop.set_typography';
+  max_lines?: number;          // 最大行数 (1-5)
+  line_height?: number;        // 行間 (100-200, %)
+  letter_spacing?: number;     // 文字間 (-2 to 6, px)
+  scope?: TelopScope;          // デフォルト 'remotion'
+}
+
 // 許可されるアクションのホワイトリスト
 const ALLOWED_CHAT_ACTIONS = new Set([
   'balloon.adjust_window',
@@ -1675,6 +1684,7 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'telop.set_position',
   'telop.set_size',
   'telop.set_style',  // Phase 1: スタイルプリセット変更
+  'telop.set_typography',  // PR-Remotion-Typography: 文字組み設定
 ]);
 
 /**
@@ -1692,6 +1702,12 @@ interface TelopSettingsOverride {
   style_preset?: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
   // シーン単位のテロップON/OFF（scene_idx -> enabled）
   scene_overrides?: Record<number, boolean>;
+  // PR-Remotion-Typography: 文字組み設定
+  typography?: {
+    max_lines?: number;
+    line_height?: number;
+    letter_spacing?: number;
+  };
   // Phase 3-A: scope（Remotionのみ即時反映、comic/bothは再生成が必要なので警告）
   // 注意: scopeは設定保存ではなく、dry-run時の警告生成に使用
 }
@@ -2560,6 +2576,57 @@ async function resolveIntentToOps(
         resolutionLog.push({
           action: action.action,
           resolved: { style_preset: telopAction.style_preset, scope },
+        });
+
+      // ====================================================================
+      // PR-Remotion-Typography: telop.set_typography - 文字組み設定変更
+      // ====================================================================
+      } else if (action.action === 'telop.set_typography') {
+        const telopAction = action as TelopSetTypographyAction;
+        const typography: TelopSettingsOverride['typography'] = {};
+        
+        // バリデーション: max_lines (1-5)
+        if (telopAction.max_lines !== undefined) {
+          if (telopAction.max_lines < 1 || telopAction.max_lines > 5) {
+            errors.push(`${prefix}: max_lines must be between 1 and 5`);
+            continue;
+          }
+          typography.max_lines = telopAction.max_lines;
+        }
+        
+        // バリデーション: line_height (100-200, %)
+        if (telopAction.line_height !== undefined) {
+          if (telopAction.line_height < 100 || telopAction.line_height > 200) {
+            errors.push(`${prefix}: line_height must be between 100 and 200`);
+            continue;
+          }
+          typography.line_height = telopAction.line_height;
+        }
+        
+        // バリデーション: letter_spacing (-2 to 6, px)
+        if (telopAction.letter_spacing !== undefined) {
+          if (telopAction.letter_spacing < -2 || telopAction.letter_spacing > 6) {
+            errors.push(`${prefix}: letter_spacing must be between -2 and 6`);
+            continue;
+          }
+          typography.letter_spacing = telopAction.letter_spacing;
+        }
+        
+        // scope は remotion のみ（typography は Remotion 専用）
+        const scope = telopAction.scope || 'remotion';
+        if (scope !== 'remotion') {
+          warnings.push(`${prefix}: typography settings only apply to Remotion subtitles (scope forced to 'remotion')`);
+        }
+        
+        // 既存の typography 設定とマージ
+        telopSettingsOverride.typography = {
+          ...telopSettingsOverride.typography,
+          ...typography,
+        };
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: { typography, scope: 'remotion' },
         });
 
       // ====================================================================
@@ -3500,6 +3567,9 @@ Action schemas:
 - telop.set_style: { action, style_preset: "minimal"|"outline"|"band"|"pop"|"cinematic", scope?: "remotion"|"comic"|"both" }
   * scope defaults to "remotion" (Remotion subtitles only, instant preview)
   * scope="comic" or "both" requires comic scene regeneration (warn user)
+- telop.set_typography: { action, max_lines?: 1-5, line_height?: 100-200, letter_spacing?: -2 to 6 }
+  * typography is Remotion-only (scope always "remotion")
+  * max_lines: 最大行数 (1-5), line_height: 行間 (100-200%), letter_spacing: 文字間 (-2 to 6px)
 
 Rules:
 1) Output JSON only.

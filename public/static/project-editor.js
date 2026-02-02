@@ -8880,6 +8880,9 @@ async function startVideoBuild() {
   // Vrew風カスタムスタイル設定（UIから取得）
   const customStyle = hasNewConfigUI ? getTelopCustomStyle() : null;
   
+  // PR-Remotion-Typography: Typography設定（UIから取得）
+  const typography = hasNewConfigUI ? getTelopTypography() : null;
+  
   // Build settings for API (SSOT aligned)
   const buildSettings = {
     output_preset: preset,
@@ -8903,6 +8906,8 @@ async function startVideoBuild() {
       size_preset: telopSizePreset,  // sm | md | lg
       // Vrew風カスタムスタイル（設定されていれば上書き）
       custom_style: customStyle,
+      // PR-Remotion-Typography: 文字組み設定（設定されていれば追加）
+      typography: typography,
     },
   };
   
@@ -13264,6 +13269,37 @@ function getTelopCustomStyle() {
 }
 
 /**
+ * PR-Remotion-Typography: Typography設定を取得
+ * @returns {object|null} Typography設定（デフォルト値なら null）
+ */
+function getTelopTypography() {
+  const maxLines = parseInt(document.getElementById('vbTelopMaxLines')?.value || '2', 10);
+  const lineHeight = parseInt(document.getElementById('vbTelopLineHeight')?.value || '140', 10) / 100;
+  const letterSpacing = parseFloat(document.getElementById('vbTelopLetterSpacing')?.value || '0');
+  const overflowMode = document.getElementById('vbTelopOverflowMode')?.value || 'truncate';
+  
+  // デフォルト値と比較して、変更がなければnullを返す
+  const isDefault = (
+    maxLines === 2 &&
+    lineHeight === 1.4 &&
+    letterSpacing === 0 &&
+    overflowMode === 'truncate'
+  );
+  
+  if (isDefault) {
+    return null; // デフォルト設定を使用
+  }
+  
+  return {
+    max_lines: maxLines,
+    line_height: lineHeight,
+    letter_spacing: letterSpacing,
+    overflow_mode: overflowMode,
+  };
+}
+window.getTelopTypography = getTelopTypography;
+
+/**
  * カスタムスタイルUIの初期化
  * - カラーピッカーとテキスト入力の同期
  * - スライダーの値表示
@@ -13317,7 +13353,25 @@ function initTelopCustomStyleUI() {
     resetBtn.addEventListener('click', resetTelopCustomStyle);
   }
   
-  console.log('[Project] Telop custom style UI initialized');
+  // PR-Remotion-Typography: 行間スライダー
+  const lineHeightSlider = document.getElementById('vbTelopLineHeight');
+  const lineHeightValue = document.getElementById('vbTelopLineHeightValue');
+  if (lineHeightSlider && lineHeightValue) {
+    lineHeightSlider.addEventListener('input', () => {
+      lineHeightValue.textContent = lineHeightSlider.value;
+    });
+  }
+  
+  // PR-Remotion-Typography: 文字間スライダー
+  const letterSpacingSlider = document.getElementById('vbTelopLetterSpacing');
+  const letterSpacingValue = document.getElementById('vbTelopLetterSpacingValue');
+  if (letterSpacingSlider && letterSpacingValue) {
+    letterSpacingSlider.addEventListener('input', () => {
+      letterSpacingValue.textContent = letterSpacingSlider.value;
+    });
+  }
+  
+  console.log('[Project] Telop custom style UI initialized (with Typography)');
 }
 
 /**
@@ -13361,6 +13415,23 @@ function resetTelopCustomStyle() {
   // 太さ
   const fontWeightSelect = document.getElementById('vbTelopFontWeight');
   if (fontWeightSelect) fontWeightSelect.value = '600';
+  
+  // PR-Remotion-Typography: Typography設定リセット
+  const maxLinesSelect = document.getElementById('vbTelopMaxLines');
+  if (maxLinesSelect) maxLinesSelect.value = '2';
+  
+  const lineHeightSlider = document.getElementById('vbTelopLineHeight');
+  const lineHeightValue = document.getElementById('vbTelopLineHeightValue');
+  if (lineHeightSlider) lineHeightSlider.value = '140';
+  if (lineHeightValue) lineHeightValue.textContent = '140';
+  
+  const letterSpacingSlider = document.getElementById('vbTelopLetterSpacing');
+  const letterSpacingValue = document.getElementById('vbTelopLetterSpacingValue');
+  if (letterSpacingSlider) letterSpacingSlider.value = '0';
+  if (letterSpacingValue) letterSpacingValue.textContent = '0';
+  
+  const overflowModeSelect = document.getElementById('vbTelopOverflowMode');
+  if (overflowModeSelect) overflowModeSelect.value = 'truncate';
   
   showToast('カスタム設定をリセットしました', 'success');
 }

@@ -1215,7 +1215,26 @@ export interface RemotionProjectJson_R1 {
       enabled?: boolean;
       position_preset?: 'bottom' | 'center' | 'top';
       size_preset?: 'sm' | 'md' | 'lg';
+      // Phase 1: スタイルプリセット
+      style_preset?: 'minimal' | 'outline' | 'band' | 'pop' | 'cinematic';
       scene_overrides?: Record<number, boolean>;
+      // Vrew風カスタムスタイル
+      custom_style?: {
+        text_color?: string;
+        stroke_color?: string;
+        stroke_width?: number;
+        bg_color?: string;
+        bg_opacity?: number;
+        font_family?: string;
+        font_weight?: string;
+      };
+      // PR-Remotion-Typography: 文字組み設定
+      typography?: {
+        max_lines?: number;
+        line_height?: number;
+        letter_spacing?: number;
+        overflow_mode?: 'truncate' | 'shrink';
+      };
     };
     // PR2: Timeline オーディオ自動化（BGMダッキング等）
     audio_automation?: {
@@ -1647,6 +1666,10 @@ export function buildProjectJson(
         style_preset: settings.telops.style_preset ?? 'outline',
         // シーン単位のオーバーライド（scene_idx -> enabled）
         scene_overrides: settings.telops.scene_overrides || undefined,
+        // Vrew風カスタムスタイル（設定されていれば追加）
+        custom_style: settings.telops.custom_style || undefined,
+        // PR-Remotion-Typography: 文字組み設定（設定されていれば追加）
+        typography: settings.telops.typography || undefined,
       } : {
         enabled: true,
         position_preset: 'bottom',
