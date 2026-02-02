@@ -13924,18 +13924,22 @@ window.generateAllMissingAudio = generateAllMissingAudio;
 /**
  * PR-Audio-UI: 音声生成完了を待機（ポーリング）
  * @param {number[]} sceneIds - 音声生成対象のシーンID配列
- * @param {number} maxWaitMs - 最大待機時間（デフォルト: 120秒）
+ * @param {number} maxWaitMs - 最大待機時間（デフォルト: 60秒）
  * @param {number} intervalMs - ポーリング間隔（デフォルト: 3秒）
  */
-async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 120000, intervalMs = 3000) {
+async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 60000, intervalMs = 3000) {
   const btn = document.getElementById('btnBulkAudioGenerate');
   const startTime = Date.now();
-  let lastCompletedCount = 0;
+  let pollCount = 0;
+  const maxPolls = Math.ceil(maxWaitMs / intervalMs);
   
-  while (Date.now() - startTime < maxWaitMs) {
+  while (pollCount < maxPolls) {
+    pollCount++;
+    
     // 各シーンの音声ステータスをチェック
     let totalPending = 0;
     let totalCompleted = 0;
+    let totalWithText = 0;
     
     for (const sceneId of sceneIds) {
       try {
@@ -13944,10 +13948,17 @@ async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 120000, inte
         
         for (const u of utterances) {
           if (!u.text || u.text.trim().length === 0) continue;
+          totalWithText++;
           
-          if (u.audio_generation_id && u.audio_status === 'completed') {
+          // 完了判定: audio_url があるか、audio_status が completed
+          const isCompleted = u.audio_url || u.audio_status === 'completed';
+          // 生成中判定: audio_generation_id があり、まだ完了していない
+          const isPending = u.audio_generation_id && !isCompleted && 
+            ['generating', 'pending', 'queued', null, undefined].includes(u.audio_status);
+          
+          if (isCompleted) {
             totalCompleted++;
-          } else if (u.audio_generation_id && ['generating', 'pending', 'queued'].includes(u.audio_status)) {
+          } else if (isPending) {
             totalPending++;
           }
         }
@@ -13958,24 +13969,24 @@ async function waitForAudioGenerationComplete(sceneIds, maxWaitMs = 120000, inte
     
     // ボタン表示を更新
     if (btn) {
-      btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${totalCompleted}件完了 / 生成中...`;
+      btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${totalCompleted}/${totalWithText}件完了`;
     }
     
-    console.log(`[waitForAudio] Completed: ${totalCompleted}, Pending: ${totalPending}`);
+    console.log(`[waitForAudio] Poll ${pollCount}: Completed=${totalCompleted}, Pending=${totalPending}, Total=${totalWithText}`);
     
-    // 全て完了（pending がなくなった）
-    if (totalPending === 0 && totalCompleted > lastCompletedCount) {
-      console.log('[waitForAudio] All audio generation completed');
+    // 終了条件: 
+    // 1. 全て完了（pending がなく、全テキストに音声がある）
+    // 2. または pending がなくなった（生成が一段落）
+    if (totalPending === 0) {
+      console.log('[waitForAudio] No more pending, exiting poll');
       return;
     }
-    
-    lastCompletedCount = totalCompleted;
     
     // 待機
     await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
   
-  console.warn('[waitForAudio] Timeout reached, some audio may still be generating');
+  console.warn('[waitForAudio] Timeout reached after', pollCount, 'polls');
 }
 
 /**
