@@ -13883,7 +13883,7 @@ async function generateAllMissingAudio(skipConfirm = false) {
     
     // 少し待ってからPreflightを再チェック（非同期生成の反映待ち）
     await new Promise(resolve => setTimeout(resolve, 2000));
-    await updateVideoBuildStatus();
+    await updateVideoBuildRequirements();
     
     // PR-Audio-UI: 音声生成完了 - フラグを下ろす
     window.isGeneratingAudio = false;
