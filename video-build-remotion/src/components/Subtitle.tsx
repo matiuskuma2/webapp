@@ -24,6 +24,19 @@ const STYLE_COMPAT_MAP: Record<string, TelopStylePreset> = {
   'news': 'band',
 };
 
+/**
+ * Vrew風カスタムスタイル設定
+ */
+export interface CustomTelopStyle {
+  text_color?: string;      // 文字色 (例: "#FFFFFF")
+  stroke_color?: string;    // 縁取り色 (例: "#000000")
+  stroke_width?: number;    // 縁取り太さ (0-6px)
+  bg_color?: string;        // 背景色 (例: "#000000")
+  bg_opacity?: number;      // 背景透過度 (0-1)
+  font_family?: string;     // フォント (noto-sans, noto-serif, rounded, zen-maru)
+  font_weight?: string;     // 太さ (400-800)
+}
+
 interface SubtitleProps {
   text: string;
   durationFrames: number;
@@ -36,6 +49,8 @@ interface SubtitleProps {
   sizePreset?: 'sm' | 'md' | 'lg';
   /** @deprecated fontSize より sizePreset を推奨 */
   fontSize?: number;
+  /** Vrew風カスタムスタイル（設定されていればプリセットより優先） */
+  customStyle?: CustomTelopStyle | null;
 }
 
 // サイズプリセットから基本フォントサイズへのマッピング
@@ -43,6 +58,14 @@ const SIZE_PRESET_MAP: Record<string, number> = {
   'sm': 28,
   'md': 38,
   'lg': 52,
+};
+
+// フォントファミリーのマッピング
+const FONT_FAMILY_MAP: Record<string, string> = {
+  'noto-sans': "'Noto Sans JP', 'Hiragino Kaku Gothic ProN', sans-serif",
+  'noto-serif': "'Noto Serif JP', 'Hiragino Mincho ProN', serif",
+  'rounded': "'M PLUS Rounded 1c', 'Noto Sans JP', sans-serif",
+  'zen-maru': "'Zen Maru Gothic', 'Noto Sans JP', sans-serif",
 };
 
 export const Subtitle: React.FC<SubtitleProps> = ({
@@ -53,6 +76,7 @@ export const Subtitle: React.FC<SubtitleProps> = ({
   position = 'bottom',
   sizePreset = 'md',
   fontSize,
+  customStyle,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -261,9 +285,84 @@ export const Subtitle: React.FC<SubtitleProps> = ({
     }
   };
 
+  /**
+   * カスタムスタイルを適用してテキストスタイルを生成
+   * customStyle が指定されていればプリセットを上書き
+   */
+  const getCustomizedTextStyle = (): React.CSSProperties => {
+    const baseStyle = getTextStyle();
+    
+    // カスタムスタイルがなければプリセットをそのまま使用
+    if (!customStyle) {
+      return baseStyle;
+    }
+    
+    // カスタムスタイルを適用
+    const customized: React.CSSProperties = { ...baseStyle };
+    
+    // 文字色
+    if (customStyle.text_color) {
+      customized.color = customStyle.text_color;
+    }
+    
+    // フォント
+    if (customStyle.font_family) {
+      customized.fontFamily = FONT_FAMILY_MAP[customStyle.font_family] || FONT_FAMILY_MAP['noto-sans'];
+    }
+    
+    // 太さ
+    if (customStyle.font_weight) {
+      customized.fontWeight = customStyle.font_weight;
+    }
+    
+    // 縁取り（text-shadow）
+    const strokeWidth = customStyle.stroke_width ?? 2;
+    const strokeColor = customStyle.stroke_color || '#000000';
+    
+    if (strokeWidth > 0) {
+      // 縁取りを8方向で生成
+      const sw = strokeWidth;
+      customized.textShadow = `
+        -${sw}px -${sw}px 0 ${strokeColor},
+        ${sw}px -${sw}px 0 ${strokeColor},
+        -${sw}px ${sw}px 0 ${strokeColor},
+        ${sw}px ${sw}px 0 ${strokeColor},
+        -${sw}px 0 0 ${strokeColor},
+        ${sw}px 0 0 ${strokeColor},
+        0 -${sw}px 0 ${strokeColor},
+        0 ${sw}px 0 ${strokeColor},
+        0 0 10px rgba(0,0,0,0.5)
+      `;
+    } else {
+      // 縁取りなし（影のみ）
+      customized.textShadow = '2px 2px 8px rgba(0,0,0,0.8)';
+    }
+    
+    // 背景（透過度 > 0 の場合のみ）
+    const bgOpacity = customStyle.bg_opacity ?? 0;
+    if (bgOpacity > 0) {
+      const bgColor = customStyle.bg_color || '#000000';
+      // HEX to RGBA
+      const hex = bgColor.replace('#', '');
+      const r = parseInt(hex.substring(0, 2), 16);
+      const g = parseInt(hex.substring(2, 4), 16);
+      const b = parseInt(hex.substring(4, 6), 16);
+      customized.backgroundColor = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
+      customized.padding = '12px 24px';
+      customized.borderRadius = 4;
+    } else {
+      // 背景なし
+      customized.backgroundColor = undefined;
+      customized.padding = undefined;
+      customized.borderRadius = undefined;
+    }
+    
+    return customized;
+  };
+
   return (
     <div style={getStylePreset()}>
-      <div style={getTextStyle()}>
+      <div style={getCustomizedTextStyle()}>
         {text}
       </div>
     </div>

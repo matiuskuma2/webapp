@@ -1778,6 +1778,105 @@ app.get('/projects/:id', (c) => {
                                 </select>
                             </div>
                             
+                            <!-- カスタムスタイル設定（折りたたみ） -->
+                            <details class="mt-3 border border-amber-200 rounded-lg overflow-hidden">
+                                <summary class="px-3 py-2 bg-amber-50 cursor-pointer text-sm text-amber-700 hover:bg-amber-100 flex items-center gap-2">
+                                    <i class="fas fa-sliders-h"></i>
+                                    <span>カスタム設定（Vrew風）</span>
+                                    <span class="text-xs text-amber-500 ml-auto">クリックで展開</span>
+                                </summary>
+                                <div class="p-3 bg-white space-y-3">
+                                    <!-- 文字色 -->
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">文字色</label>
+                                            <div class="flex gap-2">
+                                                <input type="color" id="vbTelopTextColor" value="#FFFFFF" 
+                                                    class="w-10 h-8 rounded cursor-pointer border border-gray-300" />
+                                                <input type="text" id="vbTelopTextColorHex" value="#FFFFFF" 
+                                                    class="flex-1 px-2 py-1 border border-gray-300 rounded text-xs font-mono" 
+                                                    placeholder="#FFFFFF" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">縁取り色</label>
+                                            <div class="flex gap-2">
+                                                <input type="color" id="vbTelopStrokeColor" value="#000000" 
+                                                    class="w-10 h-8 rounded cursor-pointer border border-gray-300" />
+                                                <input type="text" id="vbTelopStrokeColorHex" value="#000000" 
+                                                    class="flex-1 px-2 py-1 border border-gray-300 rounded text-xs font-mono" 
+                                                    placeholder="#000000" />
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- 縁取り太さ -->
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">縁取りの太さ: <span id="vbTelopStrokeWidthValue">2</span>px</label>
+                                        <input type="range" id="vbTelopStrokeWidth" min="0" max="6" step="0.5" value="2" 
+                                            class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500" />
+                                    </div>
+                                    
+                                    <!-- 背景設定 -->
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">背景色</label>
+                                            <div class="flex gap-2">
+                                                <input type="color" id="vbTelopBgColor" value="#000000" 
+                                                    class="w-10 h-8 rounded cursor-pointer border border-gray-300" />
+                                                <input type="text" id="vbTelopBgColorHex" value="#000000" 
+                                                    class="flex-1 px-2 py-1 border border-gray-300 rounded text-xs font-mono" 
+                                                    placeholder="#000000" />
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">背景透過度: <span id="vbTelopBgOpacityValue">0</span>%</label>
+                                            <input type="range" id="vbTelopBgOpacity" min="0" max="100" step="5" value="0" 
+                                                class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-amber-500" />
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- フォント設定 -->
+                                    <div class="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">フォント</label>
+                                            <select id="vbTelopFontFamily" 
+                                                class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                                <option value="noto-sans">ゴシック（Noto Sans JP）</option>
+                                                <option value="noto-serif">明朝（Noto Serif JP）</option>
+                                                <option value="rounded">丸ゴシック（M PLUS Rounded）</option>
+                                                <option value="zen-maru">Zen丸ゴシック</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">太さ</label>
+                                            <select id="vbTelopFontWeight" 
+                                                class="w-full px-2 py-1.5 border border-gray-300 rounded text-sm">
+                                                <option value="400">通常 (400)</option>
+                                                <option value="500">中太 (500)</option>
+                                                <option value="600" selected>セミボールド (600)</option>
+                                                <option value="700">太字 (700)</option>
+                                                <option value="800">極太 (800)</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    
+                                    <!-- プリセットに戻すボタン -->
+                                    <div class="pt-2 border-t border-gray-200">
+                                        <button type="button" id="vbTelopResetCustom" 
+                                            class="w-full px-3 py-1.5 text-xs text-gray-600 bg-gray-100 hover:bg-gray-200 rounded transition-colors">
+                                            <i class="fas fa-undo mr-1"></i>プリセットのデフォルトに戻す
+                                        </button>
+                                    </div>
+                                    
+                                    <p class="text-xs text-gray-500">
+                                        <i class="fas fa-info-circle text-amber-500 mr-1"></i>
+                                        カスタム設定はプリセットより優先されます。<br/>
+                                        縁取り0pxで影のみ、背景透過0%で透明になります。
+                                    </p>
+                                </div>
+                            </details>
+                            
                             <p class="text-xs text-gray-500 mt-2">
                                 <i class="fas fa-info-circle text-amber-500 mr-1"></i>
                                 テロップ＝シーンごとの任意テキスト表現。<br/>

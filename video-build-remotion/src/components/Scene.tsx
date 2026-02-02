@@ -2,7 +2,7 @@ import React from 'react';
 import { AbsoluteFill, Img, Audio, Video, Sequence, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
 import type { ProjectScene, VoiceAsset, SfxAsset, SceneBgmAsset } from '../schemas/project-schema';
 import { msToFrames } from '../utils/timing';
-import { Subtitle, TelopStylePreset } from './Subtitle';
+import { Subtitle, TelopStylePreset, CustomTelopStyle } from './Subtitle';
 import { MotionWrapper, getMotionPreset } from './MotionWrapper';
 import { BalloonOverlay } from './BalloonOverlay';
 
@@ -17,6 +17,8 @@ interface SceneProps {
   telopSizePreset?: 'sm' | 'md' | 'lg';
   /** Phase 1: テロップ表示位置 */
   telopPosition?: 'bottom' | 'center' | 'top';
+  /** Vrew風カスタムスタイル */
+  telopCustomStyle?: CustomTelopStyle | null;
 }
 
 /**
@@ -54,6 +56,7 @@ export const Scene: React.FC<SceneProps> = ({
   telopStylePreset = 'outline',
   telopSizePreset = 'md',
   telopPosition = 'bottom',
+  telopCustomStyle = null,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -250,6 +253,7 @@ export const Scene: React.FC<SceneProps> = ({
             stylePreset={telopStylePreset}
             sizePreset={telopSizePreset}
             position={telopPosition}
+            customStyle={telopCustomStyle}
           />
         )}
         
@@ -418,6 +422,7 @@ export const Scene: React.FC<SceneProps> = ({
           stylePreset={telopStylePreset}
           sizePreset={telopSizePreset}
           position={telopPosition}
+          customStyle={telopCustomStyle}
         />
       )}
       

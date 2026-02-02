@@ -8871,6 +8871,9 @@ async function startVideoBuild() {
     ? (getVal('vbTelopPosition', 'bottom') || 'bottom')
     : 'bottom';
   
+  // Vrew風カスタムスタイル設定（UIから取得）
+  const customStyle = hasNewConfigUI ? getTelopCustomStyle() : null;
+  
   // Build settings for API (SSOT aligned)
   const buildSettings = {
     output_preset: preset,
@@ -8892,6 +8895,8 @@ async function startVideoBuild() {
       style_preset: telopStylePreset,  // minimal | outline | band | pop | cinematic
       position_preset: telopPositionPreset,  // bottom | center | top
       size_preset: telopSizePreset,  // sm | md | lg
+      // Vrew風カスタムスタイル（設定されていれば上書き）
+      custom_style: customStyle,
     },
   };
   
@@ -12879,6 +12884,158 @@ window.savePromptAndRegenerate = savePromptAndRegenerate;
 window.loadOutputPreset = loadOutputPreset;
 window.saveOutputPreset = saveOutputPreset;
 window.updateOutputPresetPreview = updateOutputPresetPreview;
+
+// ========== Vrew風カスタムテロップスタイル ==========
+
+/**
+ * カスタムスタイル設定をUIから取得
+ * @returns {object|null} カスタムスタイル設定（未設定ならnull）
+ */
+function getTelopCustomStyle() {
+  const textColor = document.getElementById('vbTelopTextColorHex')?.value || '#FFFFFF';
+  const strokeColor = document.getElementById('vbTelopStrokeColorHex')?.value || '#000000';
+  const strokeWidth = parseFloat(document.getElementById('vbTelopStrokeWidth')?.value || '2');
+  const bgColor = document.getElementById('vbTelopBgColorHex')?.value || '#000000';
+  const bgOpacity = parseInt(document.getElementById('vbTelopBgOpacity')?.value || '0', 10) / 100;
+  const fontFamily = document.getElementById('vbTelopFontFamily')?.value || 'noto-sans';
+  const fontWeight = document.getElementById('vbTelopFontWeight')?.value || '600';
+  
+  // デフォルト値と比較して、変更がなければnullを返す
+  const isDefault = (
+    textColor === '#FFFFFF' &&
+    strokeColor === '#000000' &&
+    strokeWidth === 2 &&
+    bgOpacity === 0 &&
+    fontFamily === 'noto-sans' &&
+    fontWeight === '600'
+  );
+  
+  if (isDefault) {
+    return null; // プリセットをそのまま使用
+  }
+  
+  return {
+    text_color: textColor,
+    stroke_color: strokeColor,
+    stroke_width: strokeWidth,
+    bg_color: bgColor,
+    bg_opacity: bgOpacity,
+    font_family: fontFamily,
+    font_weight: fontWeight,
+  };
+}
+
+/**
+ * カスタムスタイルUIの初期化
+ * - カラーピッカーとテキスト入力の同期
+ * - スライダーの値表示
+ */
+function initTelopCustomStyleUI() {
+  // カラーピッカー ↔ テキスト入力の同期
+  const colorPairs = [
+    ['vbTelopTextColor', 'vbTelopTextColorHex'],
+    ['vbTelopStrokeColor', 'vbTelopStrokeColorHex'],
+    ['vbTelopBgColor', 'vbTelopBgColorHex'],
+  ];
+  
+  colorPairs.forEach(([pickerId, hexId]) => {
+    const picker = document.getElementById(pickerId);
+    const hex = document.getElementById(hexId);
+    
+    if (picker && hex) {
+      picker.addEventListener('input', () => {
+        hex.value = picker.value.toUpperCase();
+      });
+      hex.addEventListener('change', () => {
+        // 有効なHEX値かチェック
+        if (/^#[0-9A-Fa-f]{6}$/.test(hex.value)) {
+          picker.value = hex.value;
+        }
+      });
+    }
+  });
+  
+  // 縁取り太さスライダー
+  const strokeWidthSlider = document.getElementById('vbTelopStrokeWidth');
+  const strokeWidthValue = document.getElementById('vbTelopStrokeWidthValue');
+  if (strokeWidthSlider && strokeWidthValue) {
+    strokeWidthSlider.addEventListener('input', () => {
+      strokeWidthValue.textContent = strokeWidthSlider.value;
+    });
+  }
+  
+  // 背景透過度スライダー
+  const bgOpacitySlider = document.getElementById('vbTelopBgOpacity');
+  const bgOpacityValue = document.getElementById('vbTelopBgOpacityValue');
+  if (bgOpacitySlider && bgOpacityValue) {
+    bgOpacitySlider.addEventListener('input', () => {
+      bgOpacityValue.textContent = bgOpacitySlider.value;
+    });
+  }
+  
+  // プリセットに戻すボタン
+  const resetBtn = document.getElementById('vbTelopResetCustom');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', resetTelopCustomStyle);
+  }
+  
+  console.log('[Project] Telop custom style UI initialized');
+}
+
+/**
+ * カスタムスタイルをデフォルトにリセット
+ */
+function resetTelopCustomStyle() {
+  // 文字色
+  const textColorPicker = document.getElementById('vbTelopTextColor');
+  const textColorHex = document.getElementById('vbTelopTextColorHex');
+  if (textColorPicker) textColorPicker.value = '#FFFFFF';
+  if (textColorHex) textColorHex.value = '#FFFFFF';
+  
+  // 縁取り色
+  const strokeColorPicker = document.getElementById('vbTelopStrokeColor');
+  const strokeColorHex = document.getElementById('vbTelopStrokeColorHex');
+  if (strokeColorPicker) strokeColorPicker.value = '#000000';
+  if (strokeColorHex) strokeColorHex.value = '#000000';
+  
+  // 縁取り太さ
+  const strokeWidthSlider = document.getElementById('vbTelopStrokeWidth');
+  const strokeWidthValue = document.getElementById('vbTelopStrokeWidthValue');
+  if (strokeWidthSlider) strokeWidthSlider.value = '2';
+  if (strokeWidthValue) strokeWidthValue.textContent = '2';
+  
+  // 背景色
+  const bgColorPicker = document.getElementById('vbTelopBgColor');
+  const bgColorHex = document.getElementById('vbTelopBgColorHex');
+  if (bgColorPicker) bgColorPicker.value = '#000000';
+  if (bgColorHex) bgColorHex.value = '#000000';
+  
+  // 背景透過度
+  const bgOpacitySlider = document.getElementById('vbTelopBgOpacity');
+  const bgOpacityValue = document.getElementById('vbTelopBgOpacityValue');
+  if (bgOpacitySlider) bgOpacitySlider.value = '0';
+  if (bgOpacityValue) bgOpacityValue.textContent = '0';
+  
+  // フォント
+  const fontFamilySelect = document.getElementById('vbTelopFontFamily');
+  if (fontFamilySelect) fontFamilySelect.value = 'noto-sans';
+  
+  // 太さ
+  const fontWeightSelect = document.getElementById('vbTelopFontWeight');
+  if (fontWeightSelect) fontWeightSelect.value = '600';
+  
+  showToast('カスタム設定をリセットしました', 'success');
+}
+
+// 初期化時に呼び出す
+document.addEventListener('DOMContentLoaded', () => {
+  // 遅延初期化（UIがレンダリングされた後）
+  setTimeout(initTelopCustomStyleUI, 500);
+});
+
+window.getTelopCustomStyle = getTelopCustomStyle;
+window.initTelopCustomStyleUI = initTelopCustomStyleUI;
+window.resetTelopCustomStyle = resetTelopCustomStyle;
 
 // ========== PR-Audio-Direct: シーンカードから直接音声生成 ==========
 /**
