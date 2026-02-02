@@ -786,9 +786,11 @@ async function generateUtteranceAudio(args: {
       },
     });
 
+    // Use relative path for R2 URL (same as audio-generation.ts)
+    // The frontend/Remotion will resolve this through the app's R2 serving endpoint
     const r2Url = (env as any).R2_PUBLIC_URL 
       ? `${(env as any).R2_PUBLIC_URL}/${r2Key}`
-      : `https://r2.marumuviai.com/${r2Key}`;
+      : `/${r2Key}`;
 
     // Calculate duration from file size
     const bytesLength = bytes.length;
