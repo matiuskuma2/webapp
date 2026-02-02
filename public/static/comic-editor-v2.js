@@ -1967,6 +1967,14 @@
       showToast('公開しました！', 'success');
       close();
       
+      // PR-Comic-Rebake-DiffBadge: 公開後にキャッシュ無効化してバッジ更新
+      if (typeof window.invalidateRebakeStatusCache === 'function') {
+        window.invalidateRebakeStatusCache();
+      }
+      if (typeof window.refreshAllRebakeBadges === 'function') {
+        window.refreshAllRebakeBadges();
+      }
+      
       if (typeof window.initBuilderTab === 'function') {
         window.initBuilderTab();
       } else if (typeof window.loadScenes === 'function') {
@@ -2132,13 +2140,25 @@
   }
 
   function getStatusBadge() {
-    // Phase 2-2: 再生成が必要かどうかをチェック
+    // PR-Comic-Rebake-DiffBadge: rebake-status 判定を統一
+    // SSOT: scene.comic_data から直接判定（エディタ内では API 呼び出しを避ける）
     const comicData = state.scene?.comic_data || {};
     const hasPendingRegeneration = !!comicData.pending_regeneration;
+    const hasPublished = !!comicData.published;
+    const appliedTelopsComic = comicData.published?.applied_telops_comic;
+    
+    // プロジェクトの telops_comic と比較（未反映チェック）
+    const projectTelopsComic = window.currentProject?.settings?.telops_comic;
+    const isOutdated = hasPublished && appliedTelopsComic && projectTelopsComic && (
+      appliedTelopsComic.style_preset !== projectTelopsComic.style_preset ||
+      appliedTelopsComic.size_preset !== projectTelopsComic.size_preset ||
+      appliedTelopsComic.position_preset !== projectTelopsComic.position_preset
+    );
     
     let badges = [];
     
-    if (state.published) {
+    // 公開状態バッジ
+    if (hasPublished) {
       badges.push('<span class="px-2 py-1 bg-green-100 text-green-700 text-xs rounded-full">公開済み</span>');
     } else if (state.draft && state.draft.bubbles?.length > 0) {
       badges.push('<span class="px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-full">未公開</span>');
@@ -2146,9 +2166,12 @@
       badges.push('<span class="px-2 py-1 bg-gray-100 text-gray-600 text-xs rounded-full">新規</span>');
     }
     
-    // Phase 2-2: 再生成保留中バッジ
+    // PR-Comic-Rebake-DiffBadge: 統一バッジ表示
+    // 優先順位: pending(予約中) > outdated(未反映)
     if (hasPendingRegeneration) {
-      badges.push('<span class="px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded-full ml-1">🟠 文字設定更新済み</span>');
+      badges.push('<span class="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 text-xs rounded-full border border-yellow-300 ml-1" title="文字設定の反映予約中。公開すると新設定で焼き込まれます"><span>🟡</span><span>予約中</span></span>');
+    } else if (isOutdated) {
+      badges.push('<span class="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 text-xs rounded-full border border-orange-300 ml-1" title="プロジェクトの文字設定が更新されています。再焼き込みが必要です"><span>🟠</span><span>未反映</span></span>');
     }
     
     return badges.join('');
@@ -2310,6 +2333,14 @@
         // シーンデータを再読み込み
         const res = await axios.get(`/api/scenes/${state.sceneId}?view=board`);
         state.scene = res.data;
+        
+        // PR-Comic-Rebake-DiffBadge: キャッシュ無効化してバッジ更新
+        if (typeof window.invalidateRebakeStatusCache === 'function') {
+          window.invalidateRebakeStatusCache();
+        }
+        if (typeof window.refreshAllRebakeBadges === 'function') {
+          window.refreshAllRebakeBadges();
+        }
         
         // バッジを更新（モーダルを再描画）
         const header = document.querySelector('#comicEditorModal .flex.items-center.gap-3');

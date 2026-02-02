@@ -460,6 +460,9 @@ async function initSceneSplitTab() {
     renderScenes(scenes);
     document.getElementById('scenesCount').textContent = scenes.length;
     
+    // PR-Comic-Rebake-DiffBadge: シーン描画後に非同期でバッジを読み込み
+    setTimeout(() => refreshAllRebakeBadges(), 100);
+    
     // Phase X-5: Show character traits summary section
     document.getElementById('characterTraitsSummarySection')?.classList.remove('hidden');
     
@@ -3636,6 +3639,9 @@ function renderSceneStatusBar(scene, utteranceStatus) {
           <span>${assetIcon}</span>
           <span class="font-semibold">${assetLabel}</span>
         </span>
+        
+        <!-- PR-Comic-Rebake-DiffBadge: 漫画シーンのみ rebake バッジ表示用プレースホルダ -->
+        ${displayAssetType === 'comic' ? `<span data-rebake-badge="${scene.id}" class="rebake-badge-container"></span>` : ''}
         
         <!-- 文字 -->
         <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${textClass}" title="${textTooltip}">
@@ -12606,10 +12612,9 @@ async function executeBulkRebake() {
       console.log('[BulkRebake] Success:', response.data);
       closeBulkRebakeModal();
       
-      // シーンデータをリロード（バッジ更新のため）
-      if (typeof fetchAndRenderScenes === 'function') {
-        await fetchAndRenderScenes();
-      }
+      // PR-Comic-Rebake-DiffBadge: キャッシュ無効化してバッジ再読み込み
+      invalidateRebakeStatusCache();
+      await refreshAllRebakeBadges();
     } else {
       throw new Error(response.data.error?.message || 'Unknown error');
     }
@@ -12625,6 +12630,159 @@ async function executeBulkRebake() {
   }
 }
 window.executeBulkRebake = executeBulkRebake;
+
+// =============================================================================
+// PR-Comic-Rebake-DiffBadge: 差分検知バッジ共通関数
+// SSOT: rebake-status API のみを参照、UIで判定ロジックを持たない
+// =============================================================================
+
+/**
+ * rebake-status キャッシュ（30秒）
+ */
+let rebakeStatusCache = {
+  data: null,
+  timestamp: 0,
+  TTL: 30000 // 30秒
+};
+
+/**
+ * rebake-status を取得（キャッシュ付き）
+ * @param {boolean} forceRefresh - trueならキャッシュを無視して再取得
+ */
+async function loadRebakeStatus(forceRefresh = false) {
+  const now = Date.now();
+  
+  // キャッシュが有効かチェック
+  if (!forceRefresh && rebakeStatusCache.data && (now - rebakeStatusCache.timestamp < rebakeStatusCache.TTL)) {
+    return rebakeStatusCache.data;
+  }
+  
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/comic/rebake-status`);
+    rebakeStatusCache.data = response.data;
+    rebakeStatusCache.timestamp = now;
+    console.log('[RebakeBadge] Status loaded:', response.data.summary);
+    return response.data;
+  } catch (error) {
+    console.error('[RebakeBadge] Failed to load status:', error);
+    return null;
+  }
+}
+window.loadRebakeStatus = loadRebakeStatus;
+
+/**
+ * キャッシュを無効化（操作後に呼ぶ）
+ */
+function invalidateRebakeStatusCache() {
+  rebakeStatusCache.data = null;
+  rebakeStatusCache.timestamp = 0;
+  console.log('[RebakeBadge] Cache invalidated');
+}
+window.invalidateRebakeStatusCache = invalidateRebakeStatusCache;
+
+/**
+ * 指定シーンのrebakeステータスを取得
+ * @param {number} sceneId
+ * @param {object|null} statusData - 既にロード済みの場合は渡す
+ */
+async function getSceneRebakeStatus(sceneId, statusData = null) {
+  const data = statusData || await loadRebakeStatus();
+  if (!data || !data.scenes) return null;
+  
+  const sceneStatus = data.scenes.find(s => s.scene_id === sceneId);
+  return sceneStatus || null;
+}
+window.getSceneRebakeStatus = getSceneRebakeStatus;
+
+/**
+ * rebakeステータスに応じたバッジHTMLを生成（SSOT: status値をそのまま表示）
+ * @param {string} status - 'pending' | 'outdated' | 'current' | 'no_publish'
+ * @param {string} size - 'sm' | 'md' (デフォルト: 'sm')
+ */
+function renderRebakeBadge(status, size = 'sm') {
+  const badges = {
+    pending: {
+      icon: '🟡',
+      label: '予約中',
+      bgClass: 'bg-yellow-100',
+      textClass: 'text-yellow-700',
+      borderClass: 'border-yellow-300'
+    },
+    outdated: {
+      icon: '🟠',
+      label: '未反映',
+      bgClass: 'bg-orange-100',
+      textClass: 'text-orange-700',
+      borderClass: 'border-orange-300'
+    },
+    current: {
+      icon: '✅',
+      label: '最新',
+      bgClass: 'bg-green-100',
+      textClass: 'text-green-700',
+      borderClass: 'border-green-300'
+    },
+    no_publish: {
+      icon: '⚪',
+      label: '未公開',
+      bgClass: 'bg-gray-100',
+      textClass: 'text-gray-600',
+      borderClass: 'border-gray-300'
+    }
+  };
+  
+  const badge = badges[status];
+  if (!badge) return '';
+  
+  const sizeClasses = size === 'md' 
+    ? 'px-2 py-1 text-xs' 
+    : 'px-1.5 py-0.5 text-[10px]';
+  
+  return `
+    <span class="inline-flex items-center gap-1 ${sizeClasses} ${badge.bgClass} ${badge.textClass} border ${badge.borderClass} rounded-full font-medium"
+          title="漫画文字設定: ${badge.label}">
+      <span>${badge.icon}</span>
+      <span>${badge.label}</span>
+    </span>
+  `;
+}
+window.renderRebakeBadge = renderRebakeBadge;
+
+/**
+ * シーンIDに対応するバッジをDOMに挿入（Scene Split用）
+ * @param {number} sceneId
+ * @param {string} targetSelector - バッジを挿入する要素のセレクタ
+ */
+async function insertRebakeBadgeForScene(sceneId, targetSelector) {
+  const target = document.querySelector(targetSelector);
+  if (!target) return;
+  
+  const sceneStatus = await getSceneRebakeStatus(sceneId);
+  if (!sceneStatus) {
+    target.innerHTML = '';
+    return;
+  }
+  
+  target.innerHTML = renderRebakeBadge(sceneStatus.status, 'sm');
+}
+window.insertRebakeBadgeForScene = insertRebakeBadgeForScene;
+
+/**
+ * Scene Splitの全シーンにバッジを適用
+ */
+async function refreshAllRebakeBadges() {
+  const statusData = await loadRebakeStatus(true); // 強制リフレッシュ
+  if (!statusData || !statusData.scenes) return;
+  
+  for (const sceneStatus of statusData.scenes) {
+    const badgeContainer = document.querySelector(`[data-rebake-badge="${sceneStatus.scene_id}"]`);
+    if (badgeContainer) {
+      badgeContainer.innerHTML = renderRebakeBadge(sceneStatus.status, 'sm');
+    }
+  }
+  console.log('[RebakeBadge] All badges refreshed:', statusData.summary);
+}
+window.refreshAllRebakeBadges = refreshAllRebakeBadges;
 
 /**
  * Save output_preset to API
