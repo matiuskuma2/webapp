@@ -1529,8 +1529,16 @@ async function formatAndSplit() {
       // 保存モードを更新（次回の変更検知用）
       savedSplitMode = 'raw';
       
-      // Hide progress UI
-      document.getElementById('formatProgressUI')?.classList.add('hidden');
+      // CRITICAL FIX: Reset formatSection to original UI before loadProject
+      // showFormatProgressUI() replaces formatSection.innerHTML with progress spinner
+      // We need to restore the original format section UI
+      const formatSection = document.getElementById('formatSection');
+      if (formatSection) {
+        formatSection.innerHTML = renderFormatSectionUI();
+        formatSection.className = 'mb-6 p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg';
+        formatSection.classList.add('hidden'); // Will be controlled by initSceneSplitTab
+        console.log('[Format] Reset formatSection innerHTML after raw mode completion');
+      }
       
       // Reload project to show scenes
       await loadProject();
@@ -1563,9 +1571,13 @@ async function formatAndSplit() {
       formatPollingInterval = null;
     }
     
-    // Hide progress UI and show format section
-    document.getElementById('formatProgressUI')?.classList.add('hidden');
-    document.getElementById('formatSection')?.classList.remove('hidden');
+    // CRITICAL FIX: Reset formatSection innerHTML to original UI
+    const formatSection = document.getElementById('formatSection');
+    if (formatSection) {
+      formatSection.innerHTML = renderFormatSectionUI();
+      formatSection.className = 'mb-6 p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg';
+      formatSection.classList.remove('hidden');
+    }
     
     // INVALID_STATUS (failed) の場合、復帰導線を表示
     if (error.response?.status === 400 && 
@@ -1678,9 +1690,13 @@ function startFormatPolling() {
         showToast('別のシーン化処理が開始されました。画面を更新してください。', 'warning');
         isProcessing = false;
         
-        // UIをリセット
-        document.getElementById('formatProgressUI')?.classList.add('hidden');
-        document.getElementById('formatSection')?.classList.remove('hidden');
+        // CRITICAL FIX: Reset formatSection innerHTML to original UI
+        const formatSection = document.getElementById('formatSection');
+        if (formatSection) {
+          formatSection.innerHTML = renderFormatSectionUI();
+          formatSection.className = 'mb-6 p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg';
+          formatSection.classList.remove('hidden');
+        }
         return;
       }
       
@@ -2109,6 +2125,8 @@ async function resumeFormatting() {
 async function onFormatComplete(data) {
   const { total_scenes, chunk_stats, failed } = data;
   
+  console.log('[onFormatComplete] Starting with data:', data);
+  
   // Calculate failed count from either chunk_stats or direct failed field
   const failedCount = chunk_stats?.failed ?? failed ?? 0;
   
@@ -2119,12 +2137,24 @@ async function onFormatComplete(data) {
     showToast(`完了！${total_scenes || 0}シーンを生成しました`, 'success');
   }
   
+  // CRITICAL FIX: Reset formatSection innerHTML before loadProject
+  // showFormatProgressUI() replaces innerHTML with progress spinner
+  const formatSection = document.getElementById('formatSection');
+  if (formatSection) {
+    formatSection.innerHTML = renderFormatSectionUI();
+    formatSection.className = 'mb-6 p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg';
+    console.log('[onFormatComplete] Reset formatSection innerHTML');
+  }
+  
   // キャッシュクリア（新しいシーンが生成された）
   window.sceneSplitInitialized = false;
   
   // Reload project and scenes
+  console.log('[onFormatComplete] Calling loadProject...');
   await loadProject();
+  console.log('[onFormatComplete] loadProject done, calling loadScenes...');
   await loadScenes();
+  console.log('[onFormatComplete] loadScenes done');
   
   // Hide format section
   document.getElementById('formatSection').classList.add('hidden');
@@ -2132,6 +2162,7 @@ async function onFormatComplete(data) {
   
   isProcessing = false;
   setButtonLoading('formatBtn', false);
+  console.log('[onFormatComplete] Completed');
   
   // Auto-navigate to Builder tab (optional)
   // window.location.href = `/builder.html?id=${PROJECT_ID}`;
