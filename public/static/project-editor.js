@@ -6547,8 +6547,9 @@ async function checkAndUpdateProjectStatus() {
     
     console.log(`[ProjectStatus] Current status: ${status}, pending: ${pending}, generating: ${generating}`);
     
-    // If all images are completed but project status is still "generating_images"
-    if (pending === 0 && generating === 0 && status === 'generating_images') {
+    // If all images are completed but project status is not yet "completed"
+    // Fix: Also trigger for "formatted" status when all images exist
+    if (pending === 0 && generating === 0 && (status === 'generating_images' || status === 'formatted')) {
       console.log('[ProjectStatus] All images completed, calling final API to update project status');
       
       // Call the batch API one more time to trigger status update to "completed"
