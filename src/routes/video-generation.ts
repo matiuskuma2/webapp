@@ -64,6 +64,45 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
   return absoluteUrl;
 }
 
+/**
+ * Convert presigned S3 URL to public S3 URL
+ * 
+ * Presigned URLs expire (typically 1 hour from Lambda STS session),
+ * so we extract bucket/key and construct a permanent public URL.
+ * 
+ * Prerequisites: S3 bucket must have public read access for renders/* path
+ * (configured via bucket policy)
+ * 
+ * Input formats:
+ * - Presigned: https://bucket.s3.region.amazonaws.com/key?X-Amz-...
+ * - Already public: https://bucket.s3.region.amazonaws.com/key
+ * 
+ * Output: https://bucket.s3.region.amazonaws.com/key (no query params)
+ */
+function toPublicS3Url(
+  presignedUrl: string | null | undefined,
+  s3Bucket?: string | null,
+  s3OutputKey?: string | null
+): string | null {
+  // If we have bucket and key, construct directly (most reliable)
+  if (s3Bucket && s3OutputKey) {
+    return `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${s3OutputKey}`;
+  }
+  
+  // If no presigned URL, return null
+  if (!presignedUrl) return null;
+  
+  // Try to parse the presigned URL and strip query params
+  try {
+    const url = new URL(presignedUrl);
+    // Return just the origin + pathname (no query string)
+    return `${url.origin}${url.pathname}`;
+  } catch (e) {
+    console.warn('[toPublicS3Url] Failed to parse URL:', presignedUrl);
+    return presignedUrl; // Return as-is if parsing fails
+  }
+}
+
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
 
 // ====================================================================
@@ -2920,6 +2959,7 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
       status: string;
       aws_job_id: string | null;
       remotion_render_id: string | null;
+      s3_bucket: string | null;
       s3_output_key: string | null;
       project_id: number;
     }>();
@@ -2982,7 +3022,17 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
     const newStatus = statusMap[awsStatus || ''] || build.status;
     
     if (awsStatus === 'completed' && awsResponse.output?.presigned_url) {
-      // 完了: download_url を更新
+      // 完了: download_url を公開S3 URLに変換して更新
+      // presigned URLは期限切れするため、s3_bucket/s3_output_keyから公開URLを構築
+      const publicDownloadUrl = toPublicS3Url(
+        awsResponse.output.presigned_url,
+        awsResponse.output.bucket || build.s3_bucket,
+        awsResponse.output.key || build.s3_output_key
+      );
+      
+      console.log(`[VideoBuild Refresh] Converting presigned URL to public URL for build=${buildId}`);
+      console.log(`[VideoBuild Refresh] Public URL: ${publicDownloadUrl}`);
+      
       await c.env.DB.prepare(`
         UPDATE video_builds 
         SET status = 'completed',
@@ -2997,7 +3047,7 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
             updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
       `).bind(
-        awsResponse.output.presigned_url,
+        publicDownloadUrl,
         awsResponse.output.size_bytes || null,
         awsResponse.output.duration_ms || null,
         buildId
