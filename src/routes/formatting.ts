@@ -1040,6 +1040,7 @@ async function processPreserveMode(
   await c.env.DB.batch(insertStatements)
   
   // 5. status更新 + split_mode保存（SSOT）
+  // Note: target_scene_count はユーザー指定値を保持（結果シーン数で上書きしない）
   await c.env.DB.prepare(`
     UPDATE projects 
     SET status = 'formatted', 
@@ -1047,7 +1048,9 @@ async function processPreserveMode(
         target_scene_count = ?,
         updated_at = CURRENT_TIMESTAMP 
     WHERE id = ?
-  `).bind(paragraphs.length, projectId).run()
+  `).bind(targetSceneCount, projectId).run()
+  
+  console.log(`[PreserveMode] Completed: requested=${targetSceneCount}, actual=${paragraphs.length} scenes`)
   
   // 監査ログ: split.rebuild イベント
   const sessionId = getCookie(c, 'session');
@@ -1161,33 +1164,46 @@ function mergeParagraphsPreserve(paragraphs: string[], targetCount: number): str
 function splitParagraphsPreserve(paragraphs: string[], targetCount: number): string[] {
   if (paragraphs.length >= targetCount) return paragraphs
   
-  const result: string[] = []
-  const neededSplits = targetCount - paragraphs.length
+  // 文単位に全体を分割して再構成する方式に変更
+  // これにより目標シーン数により正確に近づける
   
-  // 長い段落から順に分割対象を選ぶ
-  const sortedByLength = [...paragraphs].sort((a, b) => b.length - a.length)
-  const toSplit = new Set(sortedByLength.slice(0, neededSplits).map(p => paragraphs.indexOf(p)))
-  
-  for (let i = 0; i < paragraphs.length; i++) {
-    const p = paragraphs[i]
-    
-    if (toSplit.has(i) && p.length > 100) {
-      // 文境界（。！？）で分割（原文を変えない）
-      const sentences = p.split(/(?<=[。！？])/g).filter(s => s.length > 0)
-      if (sentences.length >= 2) {
-        const mid = Math.ceil(sentences.length / 2)
-        // join時に余計な文字を追加しない
-        result.push(sentences.slice(0, mid).join(''))
-        result.push(sentences.slice(mid).join(''))
-      } else {
-        result.push(p)
-      }
+  // 1. 全段落を文単位に分割
+  const allSentences: string[] = []
+  for (const p of paragraphs) {
+    // 文境界（。！？）で分割（原文を変えない）
+    const sentences = p.split(/(?<=[。！？])/g).filter(s => s.trim().length > 0)
+    if (sentences.length > 0) {
+      allSentences.push(...sentences)
     } else {
-      result.push(p)
+      // 文境界がない場合はそのまま追加
+      allSentences.push(p)
     }
   }
   
-  return result.slice(0, targetCount)
+  const totalSentences = allSentences.length
+  console.log(`[splitParagraphsPreserve] ${paragraphs.length} paragraphs → ${totalSentences} sentences, target=${targetCount}`)
+  
+  // 2. 文数が目標より少ない場合は文数が上限
+  const actualTarget = Math.min(targetCount, totalSentences)
+  
+  // 3. 各シーンに割り当てる文数を計算
+  const sentencesPerScene = Math.floor(totalSentences / actualTarget)
+  const extraSentences = totalSentences % actualTarget
+  
+  // 4. シーンを構築（文を結合）
+  const result: string[] = []
+  let sentenceIdx = 0
+  
+  for (let sceneIdx = 0; sceneIdx < actualTarget; sceneIdx++) {
+    // 前半のシーンには余りの文を1つずつ追加
+    const sceneSize = sentencesPerScene + (sceneIdx < extraSentences ? 1 : 0)
+    const sceneSentences = allSentences.slice(sentenceIdx, sentenceIdx + sceneSize)
+    result.push(sceneSentences.join(''))
+    sentenceIdx += sceneSize
+  }
+  
+  console.log(`[splitParagraphsPreserve] Result: ${result.length} scenes`)
+  return result
 }
 
 /**

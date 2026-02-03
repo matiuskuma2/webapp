@@ -1285,6 +1285,9 @@ async function confirmAndFormatSplit() {
   const targetInput = document.getElementById('targetSceneCount');
   if (targetInput) {
     currentTargetSceneCount = parseInt(targetInput.value) || 5;
+    console.log('[confirmAndFormatSplit] targetInput.value:', targetInput.value, '→ currentTargetSceneCount:', currentTargetSceneCount);
+  } else {
+    console.warn('[confirmAndFormatSplit] targetInput not found, using default:', currentTargetSceneCount);
   }
   
   const modeText = getSplitModeDisplayName(currentSplitMode);
@@ -1382,6 +1385,7 @@ async function formatAndSplit() {
   const apiSplitMode = currentSplitMode === 'raw' ? 'preserve' : 'ai';
   const targetSceneCount = currentTargetSceneCount || 5;
   
+  console.log('[Format] currentTargetSceneCount:', currentTargetSceneCount);
   console.log('[Format] Split mode:', currentSplitMode, '(API:', apiSplitMode, ') Target scene count:', targetSceneCount);
   
   isProcessing = true;
