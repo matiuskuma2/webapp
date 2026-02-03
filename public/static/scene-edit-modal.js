@@ -2352,7 +2352,7 @@
           audio_type: 'bgm',
           audio_library_type: libraryType,  // Fixed: was 'library_type'
           volume_override: 0.25,            // Fixed: was 'volume'
-          loop_override: true               // Fixed: was 'loop'
+          loop_override: false              // シーン別BGMでループは基本不要
         };
         
         // Set the appropriate ID based on library type
@@ -2617,8 +2617,8 @@
           audio_type: 'sfx',
           audio_library_type: libraryType,  // Fixed: was 'library_type'
           start_ms: 0,
-          volume_override: 0.8,             // Fixed: was 'volume'
-          loop_override: false              // Fixed: was 'loop'
+          volume_override: 0.8,             // SFXのボリューム
+          loop_override: false              // SFXはループしない
         };
         
         // Set the appropriate ID based on library type

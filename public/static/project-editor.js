@@ -9875,7 +9875,7 @@ async function selectProjectBgm(libraryType, itemId, itemName) {
     const payload = {
       audio_library_type: libraryType,
       volume: 0.25,
-      loop: true
+      loop: false  // ループはデフォルトOFF
     };
     
     if (libraryType === 'system') {
