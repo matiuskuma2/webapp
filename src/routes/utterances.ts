@@ -571,6 +571,7 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
     }
 
     const body = await c.req.json().catch(() => ({} as any));
+    const forceRegenerate = body.force === true || c.req.query('force') === 'true';
     
     // Get utterance with scene and project info
     const utterance = await c.env.DB.prepare(`
@@ -591,7 +592,7 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
     }
 
     // Check if this utterance already has a completed audio
-    if (utterance.audio_generation_id) {
+    if (utterance.audio_generation_id && !forceRegenerate) {
       const existingAudio = await c.env.DB.prepare(`
         SELECT id, status, r2_url FROM audio_generations WHERE id = ?
       `).bind(utterance.audio_generation_id).first<any>();
@@ -614,6 +615,12 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
         console.log(`[Utterance ${utteranceId}] Audio still generating (id=${existingAudio.id})`);
         return c.json(createErrorResponse('AUDIO_GENERATING', 'Audio generation already in progress for this utterance'), 409);
       }
+    } else if (forceRegenerate && utterance.audio_generation_id) {
+      console.log(`[Utterance ${utteranceId}] Force regenerate requested, clearing existing audio_generation_id`);
+      // Clear the existing audio_generation_id to allow fresh generation
+      await c.env.DB.prepare(`
+        UPDATE scene_utterances SET audio_generation_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(utteranceId).run();
     }
 
     // Determine voice settings
