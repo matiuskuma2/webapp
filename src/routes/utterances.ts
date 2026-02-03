@@ -3,6 +3,8 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
 import { createErrorResponse } from '../utils/error-response';
+import { generateFishTTS } from '../utils/fish-audio';
+import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
 
 const utterances = new Hono<{ Bindings: Bindings }>();
 
@@ -640,7 +642,7 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
     // Allow override from request body
     if (body.voice_id) voiceId = body.voice_id;
     if (body.provider) provider = body.provider;
-    const format = body.format || 'mp3';
+    let format = body.format || 'mp3';
     const sampleRate = provider === 'fish' ? 44100 : 24000;
 
     // Create audio_generation record with 'generating' status
@@ -766,11 +768,55 @@ async function generateUtteranceAudio(args: {
         bytes[i] = binaryString.charCodeAt(i);
       }
     } else if (provider === 'fish') {
-      // TODO: Fish Audio implementation
-      throw new Error('Fish Audio not implemented in utterance endpoint');
+      // Fish Audio implementation
+      const fishApiToken = (env as any).FISH_AUDIO_API_TOKEN;
+      if (!fishApiToken) {
+        throw new Error('FISH_AUDIO_API_TOKEN is not configured');
+      }
+      
+      // Extract reference_id from voiceId (format: fish:xxx or fish-xxx)
+      const referenceId = voiceId.replace(/^fish[-:]/, '');
+      console.log(`[Utterance ${utteranceId}] Using Fish Audio: reference_id=${referenceId}`);
+      
+      const fishResult = await generateFishTTS(fishApiToken, {
+        text: text,
+        reference_id: referenceId,
+        format: format === 'wav' ? 'wav' : 'mp3',
+        sample_rate: sampleRate,
+        mp3_bitrate: 128,
+      });
+      
+      // Convert ArrayBuffer to Uint8Array
+      bytes = new Uint8Array(fishResult.audio);
+      
     } else if (provider === 'elevenlabs') {
-      // TODO: ElevenLabs implementation
-      throw new Error('ElevenLabs not implemented in utterance endpoint');
+      // ElevenLabs implementation
+      const elevenLabsApiKey = (env as any).ELEVENLABS_API_KEY;
+      if (!elevenLabsApiKey) {
+        throw new Error('ELEVENLABS_API_KEY is not configured');
+      }
+      
+      // Extract voice_id from voiceId (format: elevenlabs:xxx or el-xxx)
+      const resolvedVoiceId = await resolveElevenLabsVoiceId(elevenLabsApiKey, voiceId);
+      console.log(`[Utterance ${utteranceId}] Using ElevenLabs: voice_id=${resolvedVoiceId}`);
+      
+      // Get model from env or use default
+      const model = (env as any).ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+      
+      const elevenLabsResult = await generateElevenLabsTTS(elevenLabsApiKey, {
+        text: text,
+        voice_id: resolvedVoiceId,
+        model_id: model,
+        output_format: 'mp3_44100_128',
+      });
+      
+      if (!elevenLabsResult.success || !elevenLabsResult.audio) {
+        throw new Error(elevenLabsResult.error || 'ElevenLabs TTS failed');
+      }
+      
+      // Convert ArrayBuffer to Uint8Array
+      bytes = new Uint8Array(elevenLabsResult.audio);
+      
     } else {
       throw new Error(`Unknown provider: ${provider}`);
     }
