@@ -94,10 +94,10 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
 
   // ライブラリタイプに応じて詳細情報を取得
   if (assignment.audio_library_type === 'system' && assignment.system_audio_id) {
+    // Note: system_audio_library uses file_url instead of r2_url
     const systemAudio = await c.env.DB.prepare(`
       SELECT id, audio_type, name, description, category, mood, tags,
-             r2_key, r2_url, duration_ms, default_volume, default_loop,
-             default_fade_in_ms, default_fade_out_ms
+             file_url, duration_ms
       FROM system_audio_library WHERE id = ?
     `).bind(assignment.system_audio_id).first();
     
@@ -110,12 +110,12 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
         category: systemAudio.category,
         mood: systemAudio.mood,
         tags: parseTags(systemAudio.tags),
-        r2_url: toAbsoluteUrl(systemAudio.r2_url, siteUrl),
+        r2_url: toAbsoluteUrl(systemAudio.file_url, siteUrl),
         duration_ms: systemAudio.duration_ms,
-        default_volume: systemAudio.default_volume,
-        default_loop: systemAudio.default_loop === 1,
-        default_fade_in_ms: systemAudio.default_fade_in_ms,
-        default_fade_out_ms: systemAudio.default_fade_out_ms,
+        default_volume: 0.5,  // system_audio_library doesn't have these columns
+        default_loop: true,   // BGM typically loops
+        default_fade_in_ms: 0,
+        default_fade_out_ms: 0,
       };
     }
   } else if (assignment.audio_library_type === 'user' && assignment.user_audio_id) {
@@ -246,8 +246,9 @@ sceneAudioAssignments.get('/:sceneId/audio-assignments', async (c) => {
       total: items.length,
     });
   } catch (error) {
-    console.error('[SceneAudioAssignments] GET list error:', error);
-    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get audio assignments' } }, 500);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('[SceneAudioAssignments] GET list error:', errMsg, error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get audio assignments', details: errMsg } }, 500);
   }
 });
 
