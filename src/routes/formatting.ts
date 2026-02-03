@@ -103,20 +103,56 @@ formatting.get('/:id/format/status', async (c) => {
     const done = statusMap.get('done') || 0
     const failed = statusMap.get('failed') || 0
     const processing = statusMap.get('processing') || 0
+    const pending = total - done - failed - processing
+
+    // ========================================
+    // ⚠️ BUG FIX: 不整合状態の自動修正
+    // - text_chunks が全て完了（pending=0, processing=0）
+    // - かつ scenes が存在する
+    // - かつ projects.status が 'uploaded' または 'formatting' のまま
+    // → status を 'formatted' に自動更新
+    // ========================================
+    let effectiveStatus = project.status as string
+    let autoFixed = false
+    
+    if (['uploaded', 'formatting'].includes(project.status as string) && 
+        total > 0 && pending === 0 && processing === 0) {
+      // シーンが存在するか確認
+      const sceneCount = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+      `).bind(projectId).first<{ count: number }>()
+      
+      if (sceneCount && sceneCount.count > 0) {
+        console.log(`[Format/Status] Auto-fixing inconsistent state for project ${projectId}: ` +
+          `status='${project.status}' but chunks done and ${sceneCount.count} scenes exist`)
+        
+        await c.env.DB.prepare(`
+          UPDATE projects 
+          SET status = 'formatted', updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(projectId).run()
+        
+        effectiveStatus = 'formatted'
+        autoFixed = true
+        console.log(`[Format/Status] Project ${projectId} status auto-fixed to 'formatted'`)
+      }
+    }
 
     return c.json({
       project_id: parseInt(projectId),
-      status: project.status,
+      status: effectiveStatus,
       error_message: project.error_message || null,
       total_chunks: total,
       processed: done,
       failed: failed,
       processing: processing,
-      pending: total - done - failed - processing,
+      pending: pending,
       // サポート用追加情報
       run_id: latestRun?.id || null,
       run_no: latestRun?.run_no || null,
-      started_at: latestRun?.created_at || project.updated_at
+      started_at: latestRun?.created_at || project.updated_at,
+      // デバッグ用: 自動修正フラグ
+      ...(autoFixed && { auto_fixed: true })
     })
 
   } catch (error) {
@@ -471,6 +507,32 @@ async function processTextChunks(
   targetSceneCount: number = 5
 ) {
   console.log(`[processTextChunks] mode=${splitMode}, target=${targetSceneCount}`)
+  
+  // ========================================
+  // ⚠️ BUG FIX: 不整合状態の自動修正（format APIからも呼ばれるため）
+  // - text_chunks が全て完了（pending=0, processing=0, done>0）
+  // - かつ scenes が存在する
+  // - かつ projects.status が 'uploaded' または 'formatting' のまま
+  // → status を 'formatted' に自動更新して正常レスポンスを返す
+  // ========================================
+  if (['uploaded', 'formatting'].includes(project.status)) {
+    const stats = await getChunkStats(c.env.DB, projectId)
+    
+    if (stats.total_chunks > 0 && stats.pending === 0 && stats.processing === 0) {
+      // シーンが存在するか確認
+      const sceneCount = await c.env.DB.prepare(`
+        SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+      `).bind(projectId).first<{ count: number }>()
+      
+      if (sceneCount && sceneCount.count > 0) {
+        console.log(`[processTextChunks] Auto-fixing inconsistent state for project ${projectId}: ` +
+          `status='${project.status}' but ${stats.total_chunks} chunks done and ${sceneCount.count} scenes exist`)
+        
+        // autoMergeScenesを呼び出して正式にステータスを更新
+        return await autoMergeScenes(c, projectId, stats)
+      }
+    }
+  }
   
   // ステータスチェック（parsed, formatting, uploaded を許可）
   const validStatuses = ['parsed', 'formatting', 'uploaded']

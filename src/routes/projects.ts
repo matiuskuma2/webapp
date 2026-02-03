@@ -372,6 +372,43 @@ projects.get('/:id', async (c) => {
       }, 404)
     }
 
+    // ========================================
+    // ⚠️ BUG FIX: 不整合状態の自動修正
+    // - text_chunks が全て完了（done>0, pending=0, processing=0）
+    // - かつ scenes が存在する
+    // - かつ projects.status が 'uploaded' または 'formatting' のまま
+    // → status を 'formatted' に自動更新
+    // ========================================
+    if (['uploaded', 'formatting'].includes(project.status)) {
+      const chunkStats = await c.env.DB.prepare(`
+        SELECT 
+          SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) as done,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+          SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing,
+          COUNT(*) as total
+        FROM text_chunks WHERE project_id = ?
+      `).bind(projectId).first<{ done: number; pending: number; processing: number; total: number }>()
+      
+      if (chunkStats && chunkStats.total > 0 && chunkStats.done > 0 && 
+          chunkStats.pending === 0 && chunkStats.processing === 0) {
+        const sceneCount = await c.env.DB.prepare(`
+          SELECT COUNT(*) as count FROM scenes WHERE project_id = ?
+        `).bind(projectId).first<{ count: number }>()
+        
+        if (sceneCount && sceneCount.count > 0) {
+          console.log(`[Projects/:id] Auto-fixing inconsistent state for project ${projectId}: ` +
+            `status='${project.status}' but ${chunkStats.done} chunks done and ${sceneCount.count} scenes exist`)
+          
+          await c.env.DB.prepare(`
+            UPDATE projects SET status = 'formatted', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(projectId).run()
+          
+          project.status = 'formatted'
+          console.log(`[Projects/:id] Project ${projectId} status auto-fixed to 'formatted'`)
+        }
+      }
+    }
+
     // SSOT: split_mode のノーマライズ（preserve → raw、未設定 → null）
     // Phase 2-1: settings_json をパースして返す（telops_comic などを含む）
     let settingsParsed: Record<string, unknown> = {};
