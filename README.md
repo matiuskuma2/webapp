@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-02-02（テロップ改善シリーズ完了 - Vrew級調整・永続化・自動rebake）
+- **最終更新**: 2026-02-03（BGMタイムライン制御対応 - audio_offset_ms, video_start_ms, video_end_ms）
 
 ---
 
@@ -171,6 +171,40 @@ projects (1) ──< (N) transcriptions
 - `GET /api/projects/:id/download/images` - 画像ZIP
 - `GET /api/projects/:id/download/csv` - セリフCSV
 - `GET /api/projects/:id/download/all` - 全ファイルZIP
+
+### 5. BGM管理機能
+
+#### 5.1 シーン別BGM
+シーンごとに個別のBGMを設定可能。プロジェクト全体BGMより優先される。
+
+| フィールド | 説明 |
+|----------|------|
+| `start_ms` | シーン内の再生開始位置（ms） |
+| `end_ms` | シーン内の再生終了位置（ms, null=シーン終了まで） |
+| `audio_offset_ms` | BGMファイルの再生開始位置（ms） |
+| `volume_override` | 音量（0.0-1.0） |
+| `loop_override` | ループ設定（デフォルト: OFF） |
+
+- **API**: `/api/scenes/:sceneId/audio-assignments`
+- **SSOT**: `scene_audio_assignments`
+
+#### 5.2 プロジェクト全体BGM
+動画全体を通して再生されるBGM。タイムライン制御をサポート。
+
+| フィールド | 説明 |
+|----------|------|
+| `video_start_ms` | 動画上の再生開始位置（ms） |
+| `video_end_ms` | 動画上の再生終了位置（ms, null=動画終了まで） |
+| `audio_offset_ms` | BGMファイルの再生開始位置（ms） |
+| `volume` | 音量（0.0-1.0） |
+| `loop` | ループ設定（デフォルト: OFF） |
+
+- **API**: `/api/projects/:projectId/audio-tracks`
+- **SSOT**: `project_audio_tracks`
+
+#### 5.3 BGMダッキング
+シーン別BGM再生中は、プロジェクト全体BGMの音量が自動的に下がる（完全ミュート）。
+フェードイン/アウト（120ms）でスムーズな切り替えを実現。
 
 ---
 
