@@ -2623,7 +2623,7 @@
     saveDraft,
     publish,
     // Phase 2-2: 再生成
-    openRegenModal,
+    openRegenModal: openRegenerateModal,  // 関数名のエイリアス
     closeRegenModal,
     showRegenStep1,
     showRegenStep2,

@@ -379,8 +379,9 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
 
     return c.json(formatted, 201);
   } catch (error) {
-    console.error('[SceneAudioAssignments] POST error:', error);
-    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create audio assignment' } }, 500);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('[SceneAudioAssignments] POST error:', errMsg, error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to create audio assignment', details: errMsg } }, 500);
   }
 });
 
