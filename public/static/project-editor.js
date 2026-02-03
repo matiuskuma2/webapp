@@ -9575,10 +9575,27 @@ async function handleBgmUpload(event) {
   try {
     showBgmUploadingState();
     
+    // Web Audio APIを使って音声の長さを取得
+    let durationMs = null;
+    try {
+      const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+      const arrayBuffer = await file.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      durationMs = Math.round(audioBuffer.duration * 1000);
+      await audioContext.close();
+      console.log(`[BGM] Detected duration: ${durationMs}ms`);
+    } catch (audioErr) {
+      console.warn('[BGM] Could not detect audio duration:', audioErr);
+      // duration取得に失敗してもアップロードは続行
+    }
+    
     const formData = new FormData();
     formData.append('file', file);
     formData.append('volume', '0.25');
     formData.append('loop', '1');
+    if (durationMs) {
+      formData.append('duration_ms', String(durationMs));
+    }
     
     const response = await axios.post(
       `${API_BASE}/projects/${PROJECT_ID}/audio-tracks/bgm/upload`,

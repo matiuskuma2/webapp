@@ -75,7 +75,7 @@ sceneAudioCues.get('/scenes/:sceneId/audio-cues', async (c) => {
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
       console.log(`[SceneAudioCues] GET: Access denied for scene ${sceneId}, user ${user.id}`);
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const siteUrl = c.env.SITE_URL || DEFAULT_SITE_URL;
@@ -136,7 +136,7 @@ sceneAudioCues.post('/scenes/:sceneId/audio-cues/upload', async (c) => {
     // SSOT: 所有者チェック - Superadminは全データにアクセス可能
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const formData = await c.req.formData();
@@ -244,7 +244,7 @@ sceneAudioCues.put('/scenes/:sceneId/audio-cues/:id', async (c) => {
     // SSOT: 所有者チェック - Superadminは全データにアクセス可能
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const body = await c.req.json();
@@ -349,7 +349,7 @@ sceneAudioCues.delete('/scenes/:sceneId/audio-cues/:id', async (c) => {
     // SSOT: 所有者チェック - Superadminは全データにアクセス可能
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     // 既存レコード確認

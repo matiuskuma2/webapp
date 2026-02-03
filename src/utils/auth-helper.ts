@@ -25,6 +25,8 @@ export interface AccessResult {
   valid: boolean;
   projectId?: number;
   error?: string;
+  errorCode?: 'NOT_FOUND' | 'FORBIDDEN' | 'INTERNAL_ERROR';  // HTTPステータスと対応するエラーコード
+  httpStatus?: 404 | 403 | 500;  // 適切なHTTPステータスコード
   details?: any;
 }
 
@@ -91,7 +93,12 @@ export async function validateSceneAccess(
     
     if (!scene) {
       console.log(`[AuthHelper] Scene ${sceneId} not found`);
-      return { valid: false, error: 'Scene not found' };
+      return { 
+        valid: false, 
+        error: 'Scene not found',
+        errorCode: 'NOT_FOUND',
+        httpStatus: 404
+      };
     }
     
     // SSOT: Superadmin と Admin は全データにアクセス可能
@@ -108,6 +115,8 @@ export async function validateSceneAccess(
       return { 
         valid: false, 
         error: 'Access denied',
+        errorCode: 'FORBIDDEN',
+        httpStatus: 403,
         details: { projectOwnerId: scene.project_user_id, requestUserId: user.id, sceneId, projectId: scene.project_id }
       };
     }
@@ -115,7 +124,12 @@ export async function validateSceneAccess(
     return { valid: true, projectId: scene.project_id };
   } catch (error) {
     console.error('[AuthHelper] Scene validation error:', error);
-    return { valid: false, error: 'Validation failed' };
+    return { 
+      valid: false, 
+      error: 'Validation failed',
+      errorCode: 'INTERNAL_ERROR',
+      httpStatus: 500
+    };
   }
 }
 

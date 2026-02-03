@@ -270,7 +270,10 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
 
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      // 適切なエラーコードとHTTPステータスを返す
+      const errorCode = access.errorCode || 'NOT_FOUND';
+      const httpStatus = access.httpStatus || 404;
+      return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const body = await c.req.json();
@@ -407,7 +410,7 @@ sceneAudioAssignments.put('/:sceneId/audio-assignments/:id', async (c) => {
 
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     // 既存レコード確認
@@ -506,7 +509,7 @@ sceneAudioAssignments.delete('/:sceneId/audio-assignments/:id', async (c) => {
 
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     // 既存レコード確認（R2削除用にdirect情報も取得）
@@ -562,7 +565,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/direct', async (c) => {
 
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const formData = await c.req.formData();
@@ -675,7 +678,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/upload', async (c) => {
 
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const formData = await c.req.formData();
@@ -791,7 +794,7 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments/deactivate-all', async (
 
     const access = await validateSceneAccess(c, sceneId, user);
     if (!access.valid) {
-      return c.json({ error: { code: 'NOT_FOUND', message: access.error } }, 404);
+      const errorCode = access.errorCode || 'NOT_FOUND'; const httpStatus = access.httpStatus || 404; return c.json({ error: { code: errorCode, message: access.error } }, httpStatus as any);
     }
 
     const body = await c.req.json().catch(() => ({}));

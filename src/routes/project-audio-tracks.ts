@@ -136,13 +136,15 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
     // 追加パラメータを取得
     const volume = parseFloat(formData.get('volume') as string) || 0.25;
     // ループはデフォルトOFF（全体通BGMも基本ループ不要）
-    const loop = (formData.get('loop') as string) === 'true';
+    const loop = (formData.get('loop') as string) === 'true' || (formData.get('loop') as string) === '1';
     const fadeInMs = parseInt(formData.get('fade_in_ms') as string) || 800;
     const fadeOutMs = parseInt(formData.get('fade_out_ms') as string) || 800;
     // タイムライン制御
     const videoStartMs = parseInt(formData.get('video_start_ms') as string) || 0;
     const videoEndMs = formData.get('video_end_ms') ? parseInt(formData.get('video_end_ms') as string) : null;
     const audioOffsetMs = parseInt(formData.get('audio_offset_ms') as string) || 0;
+    // 音声の長さ（フロントエンドから送信された場合）
+    const durationMs = formData.get('duration_ms') ? parseInt(formData.get('duration_ms') as string) : null;
 
     // 既存のactive BGMを非アクティブに
     await c.env.DB.prepare(`
@@ -154,13 +156,13 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
     // 新しいBGMを挿入
     const result = await c.env.DB.prepare(`
       INSERT INTO project_audio_tracks (
-        project_id, track_type, r2_key, r2_url, 
+        project_id, track_type, r2_key, r2_url, duration_ms,
         volume, loop, fade_in_ms, fade_out_ms,
         video_start_ms, video_end_ms, audio_offset_ms,
         is_active, created_at, updated_at
-      ) VALUES (?, 'bgm', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+      ) VALUES (?, 'bgm', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
     `).bind(
-      projectId, r2Key, r2Url,
+      projectId, r2Key, r2Url, durationMs,
       volume, loop ? 1 : 0, fadeInMs, fadeOutMs,
       videoStartMs, videoEndMs, audioOffsetMs
     ).run();
@@ -175,7 +177,7 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
       projectId,
       trackId: trackId as number,
       bytes: arrayBuffer.byteLength,
-      durationMs: null, // Audio duration detection would require ffprobe/web-audio
+      durationMs: durationMs, // フロントエンドから取得した音声の長さ
       format: ext,
       status: 'success',
     });
@@ -188,6 +190,7 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
         track_type: 'bgm',
         r2_key: r2Key,
         r2_url: toAbsoluteUrl(r2Url, siteUrl),
+        duration_ms: durationMs,
         volume,
         loop,
         fade_in_ms: fadeInMs,
