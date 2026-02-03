@@ -221,7 +221,7 @@ export const Scene: React.FC<SceneProps> = ({
           );
         })}
         
-        {/* P6-1: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止） */}
+        {/* P6-1: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止、audio_offset_ms対応） */}
         {hasSceneBgm && sceneBgm && (() => {
           // P6-1: start_ms / end_ms をフレーム精度で反映
           const bgmStartFrame = msToFrames(sceneBgm.start_ms ?? 0, fps);
@@ -229,6 +229,10 @@ export const Scene: React.FC<SceneProps> = ({
           const bgmEndMs = sceneBgm.end_ms ?? scene.timing.duration_ms;
           const bgmEndFrame = msToFrames(bgmEndMs, fps);
           const bgmDurationFrames = Math.max(1, bgmEndFrame - bgmStartFrame);
+          
+          // audio_offset_ms: BGMファイルの再生開始位置（startFrom用）
+          const audioOffsetMs = (sceneBgm as any).audio_offset_ms ?? 0;
+          const audioOffsetFrames = msToFrames(audioOffsetMs, fps);
           
           // safety: 不正データ防止
           if (bgmDurationFrames <= 0) return null;
@@ -241,6 +245,7 @@ export const Scene: React.FC<SceneProps> = ({
               <Audio
                 src={sceneBgm.url}
                 volume={sceneBgm.volume ?? 0.25}
+                startFrom={audioOffsetFrames}
                 // P6-1 SSOT: loop禁止（途中で切れてOK、次シーンに持ち越さない）
               />
             </Sequence>
@@ -357,7 +362,7 @@ export const Scene: React.FC<SceneProps> = ({
         );
       })}
       
-      {/* P6-1/P6-4: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止、フェード付き） */}
+      {/* P6-1/P6-4: シーン別BGMを再生（SSOT: start_ms/end_ms フレーム精度、loop禁止、フェード付き、audio_offset_ms対応） */}
       {hasSceneBgm && sceneBgm && (() => {
         const durationMs = scene.timing.duration_ms;
         
@@ -372,6 +377,10 @@ export const Scene: React.FC<SceneProps> = ({
         const bgmStartFrame = msToFrames(startMs, fps);
         const bgmEndFrame = msToFrames(endMs, fps);
         const bgmDurationFrames = bgmEndFrame - bgmStartFrame;
+        
+        // audio_offset_ms: BGMファイルの再生開始位置（startFrom用）
+        const audioOffsetMs = (sceneBgm as any).audio_offset_ms ?? 0;
+        const audioOffsetFrames = msToFrames(audioOffsetMs, fps);
         
         // safety: 不正データ防止（ゴミ区間は再生しない）
         if (bgmDurationFrames <= 0) return null;
@@ -411,6 +420,7 @@ export const Scene: React.FC<SceneProps> = ({
             <Audio
               src={sceneBgm.url}
               volume={volumeCallback}
+              startFrom={audioOffsetFrames}
               // P6-1 SSOT: loop禁止（途中で切れてOK、次シーンに持ち越さない）
             />
           </Sequence>

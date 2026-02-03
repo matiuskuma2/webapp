@@ -162,13 +162,49 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   return (
     <AbsoluteFill style={{ backgroundColor: 'black' }}>
       {/* 全体BGM（あれば） - P6: シーン別BGMがある区間ではduck */}
-      {projectJson?.assets?.bgm?.url && (
-        <Audio
-          src={projectJson.assets.bgm.url}
-          volume={globalBgmVolume}
-          loop
-        />
-      )}
+      {projectJson?.assets?.bgm?.url && (() => {
+        const bgm = projectJson.assets.bgm;
+        // タイムライン制御: 動画上の再生範囲
+        const videoStartMs = bgm?.video_start_ms ?? 0;
+        const videoEndMs = bgm?.video_end_ms ?? null; // null = 動画終了まで
+        // BGMファイルのオフセット（startFrom用）
+        const audioOffsetMs = bgm?.audio_offset_ms ?? 0;
+        const audioOffsetFrames = msToFrames(audioOffsetMs, fps);
+        // ループ設定（デフォルトOFF）
+        const shouldLoop = bgm?.loop ?? false;
+        
+        const videoStartFrame = msToFrames(videoStartMs, fps);
+        
+        // video_end_ms が未指定の場合は全体を通して再生
+        if (videoEndMs === null || videoEndMs === undefined) {
+          // 従来通り、Sequenceなしで全体再生
+          return (
+            <Audio
+              src={bgm.url}
+              volume={globalBgmVolume}
+              loop={shouldLoop}
+              startFrom={audioOffsetFrames}
+            />
+          );
+        }
+        
+        // video_end_ms が指定されている場合はSequenceで範囲を制御
+        const videoEndFrame = msToFrames(videoEndMs, fps);
+        const bgmDurationFrames = videoEndFrame - videoStartFrame;
+        
+        if (bgmDurationFrames <= 0) return null;
+        
+        return (
+          <Sequence from={videoStartFrame} durationInFrames={bgmDurationFrames}>
+            <Audio
+              src={bgm.url}
+              volume={globalBgmVolume}
+              loop={shouldLoop}
+              startFrom={audioOffsetFrames}
+            />
+          </Sequence>
+        );
+      })()}
       
       {/* シーン群 */}
       {scenesWithFrames.map(({ scene, startFrame, durationFrames }, index) => {

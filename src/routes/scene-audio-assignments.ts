@@ -83,6 +83,7 @@ async function formatAssignmentWithLibrary(c: any, assignment: any, siteUrl: str
     audio_type: assignment.audio_type,
     start_ms: assignment.start_ms,
     end_ms: assignment.end_ms,
+    audio_offset_ms: assignment.audio_offset_ms ?? 0,  // BGMファイルの再生開始位置（ms）
     volume_override: assignment.volume_override,
     loop_override: assignment.loop_override !== null ? assignment.loop_override === 1 : null,
     fade_in_ms_override: assignment.fade_in_ms_override,
@@ -346,8 +347,10 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
     // オプショナルパラメータ
     const startMs = body.start_ms ?? 0;
     const endMs = body.end_ms ?? null;
+    const audioOffsetMs = body.audio_offset_ms ?? 0;  // BGMファイルの再生開始位置（ms）
     const volumeOverride = body.volume_override ?? null;
-    const loopOverride = body.loop_override !== undefined ? (body.loop_override ? 1 : 0) : null;
+    // ループはデフォルトOFF（シーン別BGMでループは基本使わない）
+    const loopOverride = body.loop_override !== undefined ? (body.loop_override ? 1 : 0) : 0;
     const fadeInMsOverride = body.fade_in_ms_override ?? null;
     const fadeOutMsOverride = body.fade_out_ms_override ?? null;
 
@@ -356,14 +359,14 @@ sceneAudioAssignments.post('/:sceneId/audio-assignments', async (c) => {
       INSERT INTO scene_audio_assignments (
         scene_id, audio_library_type, system_audio_id, user_audio_id,
         direct_r2_key, direct_r2_url, direct_name, direct_duration_ms,
-        audio_type, start_ms, end_ms,
+        audio_type, start_ms, end_ms, audio_offset_ms,
         volume_override, loop_override, fade_in_ms_override, fade_out_ms_override,
         is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     `).bind(
       sceneId, audioLibraryType, systemAudioId, userAudioId,
       directR2Key, directR2Url, directName, directDurationMs,
-      audioType, startMs, endMs,
+      audioType, startMs, endMs, audioOffsetMs,
       volumeOverride, loopOverride, fadeInMsOverride, fadeOutMsOverride
     ).run();
 
@@ -430,6 +433,10 @@ sceneAudioAssignments.put('/:sceneId/audio-assignments/:id', async (c) => {
     if (body.end_ms !== undefined) {
       updates.push('end_ms = ?');
       values.push(body.end_ms);
+    }
+    if (body.audio_offset_ms !== undefined) {
+      updates.push('audio_offset_ms = ?');
+      values.push(body.audio_offset_ms);
     }
     if (body.volume_override !== undefined) {
       updates.push('volume_override = ?');

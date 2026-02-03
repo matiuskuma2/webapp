@@ -54,6 +54,7 @@ projectAudioTracks.get('/projects/:projectId/audio-tracks', async (c) => {
         r2_key, r2_url, duration_ms,
         volume, loop, fade_in_ms, fade_out_ms,
         ducking_enabled, ducking_volume, ducking_attack_ms, ducking_release_ms,
+        video_start_ms, video_end_ms, audio_offset_ms,
         is_active, created_at, updated_at
       FROM project_audio_tracks
       WHERE project_id = ?
@@ -66,6 +67,10 @@ projectAudioTracks.get('/projects/:projectId/audio-tracks', async (c) => {
       loop: t.loop === 1,
       is_active: t.is_active === 1,
       ducking_enabled: t.ducking_enabled === 1,
+      // タイムライン制御フィールド
+      video_start_ms: t.video_start_ms ?? 0,      // 動画上の再生開始位置
+      video_end_ms: t.video_end_ms ?? null,       // 動画上の再生終了位置（null=動画終了まで）
+      audio_offset_ms: t.audio_offset_ms ?? 0,    // BGMファイルの再生開始位置
     }));
 
     // アクティブなBGMを別途返す（便宜上）
@@ -130,9 +135,14 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
 
     // 追加パラメータを取得
     const volume = parseFloat(formData.get('volume') as string) || 0.25;
-    const loop = (formData.get('loop') as string) !== 'false';
+    // ループはデフォルトOFF（全体通BGMも基本ループ不要）
+    const loop = (formData.get('loop') as string) === 'true';
     const fadeInMs = parseInt(formData.get('fade_in_ms') as string) || 800;
     const fadeOutMs = parseInt(formData.get('fade_out_ms') as string) || 800;
+    // タイムライン制御
+    const videoStartMs = parseInt(formData.get('video_start_ms') as string) || 0;
+    const videoEndMs = formData.get('video_end_ms') ? parseInt(formData.get('video_end_ms') as string) : null;
+    const audioOffsetMs = parseInt(formData.get('audio_offset_ms') as string) || 0;
 
     // 既存のactive BGMを非アクティブに
     await c.env.DB.prepare(`
@@ -146,11 +156,13 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
       INSERT INTO project_audio_tracks (
         project_id, track_type, r2_key, r2_url, 
         volume, loop, fade_in_ms, fade_out_ms,
+        video_start_ms, video_end_ms, audio_offset_ms,
         is_active, created_at, updated_at
-      ) VALUES (?, 'bgm', ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+      ) VALUES (?, 'bgm', ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, datetime('now'), datetime('now'))
     `).bind(
       projectId, r2Key, r2Url,
-      volume, loop ? 1 : 0, fadeInMs, fadeOutMs
+      volume, loop ? 1 : 0, fadeInMs, fadeOutMs,
+      videoStartMs, videoEndMs, audioOffsetMs
     ).run();
 
     const trackId = result.meta.last_row_id;
@@ -180,6 +192,9 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/upload', async (c
         loop,
         fade_in_ms: fadeInMs,
         fade_out_ms: fadeOutMs,
+        video_start_ms: videoStartMs,
+        video_end_ms: videoEndMs,
+        audio_offset_ms: audioOffsetMs,
         is_active: true,
       },
     });
@@ -260,15 +275,21 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/from-library', as
 
     // 新しいBGMトラックを挿入
     const effectiveVolume = volume !== undefined ? Math.max(0, Math.min(1, parseFloat(volume))) : 0.25;
-    const effectiveLoop = loop !== undefined ? (loop ? 1 : 0) : 1;
+    // ループはデフォルトOFF
+    const effectiveLoop = loop !== undefined ? (loop ? 1 : 0) : 0;
+    // タイムライン制御
+    const effectiveVideoStartMs = body.video_start_ms ?? 0;
+    const effectiveVideoEndMs = body.video_end_ms ?? null;
+    const effectiveAudioOffsetMs = body.audio_offset_ms ?? 0;
 
     const result = await c.env.DB.prepare(`
       INSERT INTO project_audio_tracks (
         project_id, track_type, r2_key, r2_url,
         audio_library_type, system_audio_id, user_audio_id,
         duration_ms, volume, loop, fade_in_ms, fade_out_ms,
+        video_start_ms, video_end_ms, audio_offset_ms,
         is_active, created_at, updated_at
-      ) VALUES (?, 'bgm', NULL, ?, ?, ?, ?, ?, ?, ?, 800, 800, 1, datetime('now'), datetime('now'))
+      ) VALUES (?, 'bgm', NULL, ?, ?, ?, ?, ?, ?, ?, 800, 800, ?, ?, ?, 1, datetime('now'), datetime('now'))
     `).bind(
       projectId,
       sourceR2Url,
@@ -277,7 +298,10 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/from-library', as
       audio_library_type === 'user' ? user_audio_id : null,
       sourceAudio.duration_ms || null,
       effectiveVolume,
-      effectiveLoop
+      effectiveLoop,
+      effectiveVideoStartMs,
+      effectiveVideoEndMs,
+      effectiveAudioOffsetMs
     ).run();
 
     const trackId = result.meta.last_row_id;
@@ -294,6 +318,9 @@ projectAudioTracks.post('/projects/:projectId/audio-tracks/bgm/from-library', as
       duration_ms: sourceAudio.duration_ms,
       volume: effectiveVolume,
       loop: effectiveLoop === 1,
+      video_start_ms: effectiveVideoStartMs,
+      video_end_ms: effectiveVideoEndMs,
+      audio_offset_ms: effectiveAudioOffsetMs,
       is_active: true,
     });
   } catch (error) {
@@ -352,6 +379,19 @@ projectAudioTracks.put('/projects/:projectId/audio-tracks/:id', async (c) => {
       updates.push('ducking_release_ms = ?');
       values.push(Math.max(0, parseInt(body.ducking_release_ms)));
     }
+    // タイムライン制御フィールド
+    if (body.video_start_ms !== undefined) {
+      updates.push('video_start_ms = ?');
+      values.push(Math.max(0, parseInt(body.video_start_ms)));
+    }
+    if (body.video_end_ms !== undefined) {
+      updates.push('video_end_ms = ?');
+      values.push(body.video_end_ms !== null ? Math.max(0, parseInt(body.video_end_ms)) : null);
+    }
+    if (body.audio_offset_ms !== undefined) {
+      updates.push('audio_offset_ms = ?');
+      values.push(Math.max(0, parseInt(body.audio_offset_ms)));
+    }
 
     // is_active の処理（排他制御）
     if (body.is_active !== undefined) {
@@ -398,6 +438,9 @@ projectAudioTracks.put('/projects/:projectId/audio-tracks/:id', async (c) => {
         loop: (track as any).loop === 1,
         is_active: (track as any).is_active === 1,
         ducking_enabled: (track as any).ducking_enabled === 1,
+        video_start_ms: (track as any).video_start_ms ?? 0,
+        video_end_ms: (track as any).video_end_ms ?? null,
+        audio_offset_ms: (track as any).audio_offset_ms ?? 0,
       },
     });
   } catch (error) {

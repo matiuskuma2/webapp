@@ -106,11 +106,14 @@ export const SceneBgmAssetSchema = z.object({
   name: z.string().optional(),
   duration_ms: z.number().optional().nullable(),
   volume: z.number().default(0.25),
-  loop: z.boolean().default(true),
+  // ループはデフォルトOFF（シーン別BGMでループは基本使わない）
+  loop: z.boolean().default(false),
   fade_in_ms: z.number().default(800),
   fade_out_ms: z.number().default(800),
   start_ms: z.number().default(0),
   end_ms: z.number().optional().nullable(),
+  // BGMファイルの再生開始位置（ms）- Remotionの startFrom に変換
+  audio_offset_ms: z.number().default(0),
   source_type: z.enum(['system', 'user', 'direct']).optional(),
 });
 
@@ -262,6 +265,14 @@ export const ProjectJsonSchema = z.object({
       url: z.string(),
       duration_ms: z.number().optional(),
       volume: z.number(),
+      // ループはデフォルトOFF
+      loop: z.boolean().default(false),
+      // タイムライン制御フィールド
+      video_start_ms: z.number().default(0),      // 動画上の再生開始位置
+      video_end_ms: z.number().optional().nullable(),  // 動画上の再生終了位置（null=動画終了まで）
+      audio_offset_ms: z.number().default(0),     // BGMファイルの再生開始位置
+      fade_in_ms: z.number().default(800),
+      fade_out_ms: z.number().default(800),
     }).optional(),
   }).optional(),
   

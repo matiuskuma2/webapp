@@ -2221,6 +2221,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
             saa.direct_duration_ms,
             saa.start_ms,
             saa.end_ms,
+            saa.audio_offset_ms,
             saa.volume_override,
             saa.loop_override,
             saa.fade_in_ms_override,
@@ -2253,6 +2254,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           direct_duration_ms: number | null;
           start_ms: number;
           end_ms: number | null;
+          audio_offset_ms: number;
           volume_override: number | null;
           loop_override: number | null;
           fade_in_ms_override: number | null;
@@ -2407,6 +2409,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
             saa.direct_duration_ms,
             saa.start_ms,
             saa.end_ms,
+            saa.audio_offset_ms,
             saa.volume_override,
             saa.loop_override,
             saa.fade_in_ms_override,
@@ -2439,6 +2442,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           direct_duration_ms: number | null;
           start_ms: number;
           end_ms: number | null;
+          audio_offset_ms: number;
           volume_override: number | null;
           loop_override: number | null;
           fade_in_ms_override: number | null;
@@ -2489,11 +2493,13 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
               url: toAbsoluteUrl(url, siteUrl) || url,
               duration_ms,
               volume: bgmAssignment.volume_override ?? defaultVolume,
-              loop: bgmAssignment.loop_override !== null ? bgmAssignment.loop_override === 1 : defaultLoop,
+              // ループはデフォルトOFF（シーン別BGMでループは基本使わない）
+              loop: bgmAssignment.loop_override !== null ? bgmAssignment.loop_override === 1 : false,
               fade_in_ms: bgmAssignment.fade_in_ms_override ?? defaultFadeIn,
               fade_out_ms: bgmAssignment.fade_out_ms_override ?? defaultFadeOut,
               start_ms: bgmAssignment.start_ms,
               end_ms: bgmAssignment.end_ms,
+              audio_offset_ms: bgmAssignment.audio_offset_ms ?? 0,  // BGMファイルの再生開始位置
               source_type: bgmAssignment.audio_library_type,
             };
             
@@ -2617,7 +2623,8 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     const activeBgm = await c.env.DB.prepare(`
       SELECT id, r2_key, r2_url, duration_ms, volume, loop, 
              fade_in_ms, fade_out_ms, ducking_enabled, ducking_volume,
-             ducking_attack_ms, ducking_release_ms
+             ducking_attack_ms, ducking_release_ms,
+             video_start_ms, video_end_ms, audio_offset_ms
       FROM project_audio_tracks
       WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
       LIMIT 1
@@ -2634,6 +2641,10 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       ducking_volume: number;
       ducking_attack_ms: number;
       ducking_release_ms: number;
+      // タイムライン制御フィールド
+      video_start_ms: number;
+      video_end_ms: number | null;
+      audio_offset_ms: number;
     }>();
     
     // 5. Settings構築（Output preset 情報を含む）
@@ -2668,9 +2679,14 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         url: activeBgm?.r2_url ? toAbsoluteUrl(activeBgm.r2_url, siteUrl) : body.bgm?.url,
         track: body.bgm?.track,
         volume: activeBgm?.volume ?? body.bgm?.volume ?? outputPresetConfig.bgm_volume_default,
-        loop: activeBgm ? activeBgm.loop === 1 : (body.bgm?.loop ?? true),
+        // ループはデフォルトOFF
+        loop: activeBgm ? activeBgm.loop === 1 : (body.bgm?.loop ?? false),
         fade_in_ms: activeBgm?.fade_in_ms ?? body.bgm?.fade_in_ms ?? 800,
         fade_out_ms: activeBgm?.fade_out_ms ?? body.bgm?.fade_out_ms ?? 800,
+        // タイムライン制御（動画上の再生範囲・BGMファイル内のオフセット）
+        video_start_ms: activeBgm?.video_start_ms ?? body.bgm?.video_start_ms ?? 0,
+        video_end_ms: activeBgm?.video_end_ms ?? body.bgm?.video_end_ms ?? null,
+        audio_offset_ms: activeBgm?.audio_offset_ms ?? body.bgm?.audio_offset_ms ?? 0,
         // R3-B: ダッキング設定（preset から ducking_enabled を反映）
         ducking: {
           enabled: activeBgm ? activeBgm.ducking_enabled === 1 : (body.bgm?.ducking?.enabled ?? outputPresetConfig.ducking_enabled),
