@@ -37,6 +37,10 @@ export interface VideoBuildSettings {
     loop?: boolean;  // R3-A: Loop BGM
     fade_in_ms?: number;   // R3-A: Fade in duration
     fade_out_ms?: number;  // R3-A: Fade out duration
+    // R4: Timeline control settings
+    video_start_ms?: number;   // 動画タイムライン上でBGMが開始する位置（ms）
+    video_end_ms?: number | null;  // 動画タイムライン上でBGMが終了する位置（null=動画終了まで）
+    audio_offset_ms?: number;  // BGMファイル内の再生開始位置（ms）= Remotion startFrom
     // R3-B: Voice ducking settings
     ducking?: {
       enabled: boolean;

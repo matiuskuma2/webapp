@@ -1827,11 +1827,12 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
       };
     }));
     
-    // R3-A: アクティブBGMを取得
+    // R3-A: アクティブBGMを取得（R4: タイムライン制御フィールド追加）
     const activeBgm = await c.env.DB.prepare(`
       SELECT id, r2_key, r2_url, duration_ms, volume, loop, 
              fade_in_ms, fade_out_ms, ducking_enabled, ducking_volume,
-             ducking_attack_ms, ducking_release_ms
+             ducking_attack_ms, ducking_release_ms,
+             video_start_ms, video_end_ms, audio_offset_ms
       FROM project_audio_tracks
       WHERE project_id = ? AND track_type = 'bgm' AND is_active = 1
       LIMIT 1
@@ -1846,6 +1847,10 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
       ducking_volume: number;
       ducking_attack_ms: number;
       ducking_release_ms: number;
+      // R4: タイムライン制御フィールド
+      video_start_ms: number;
+      video_end_ms: number | null;
+      audio_offset_ms: number;
     }>();
     
     const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
@@ -1861,7 +1866,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         fps: 30,
         transition_type: 'fade',
         transition_duration_ms: 500,
-        // R3-A: BGM設定
+        // R3-A: BGM設定（R4: タイムライン制御追加）
         bgm: activeBgm ? {
           enabled: true,
           url: activeBgm.r2_url?.startsWith('/') 
@@ -1871,6 +1876,10 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
           loop: activeBgm.loop === 1,
           fade_in_ms: activeBgm.fade_in_ms,
           fade_out_ms: activeBgm.fade_out_ms,
+          // R4: タイムライン制御
+          video_start_ms: activeBgm.video_start_ms ?? 0,
+          video_end_ms: activeBgm.video_end_ms ?? null,
+          audio_offset_ms: activeBgm.audio_offset_ms ?? 0,
           ducking: activeBgm.ducking_enabled === 1 ? {
             enabled: true,
             volume: activeBgm.ducking_volume,

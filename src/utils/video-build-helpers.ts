@@ -1686,6 +1686,7 @@ export function buildProjectJson(
       transition_duration_ms: 300,
     },
     // R3-A: BGM対応（通しBGM with ducking）
+    // R4: タイムライン制御（video_start_ms, video_end_ms, audio_offset_ms）
     assets: settings.bgm?.enabled && settings.bgm?.url ? {
       bgm: {
         url: settings.bgm.url,
@@ -1693,6 +1694,13 @@ export function buildProjectJson(
         loop: settings.bgm.loop ?? true,
         fade_in_ms: settings.bgm.fade_in_ms ?? 800,
         fade_out_ms: settings.bgm.fade_out_ms ?? 800,
+        // R4: タイムライン制御
+        // video_start_ms: 動画タイムライン上でBGMが開始する位置（Remotion: delay_ms として使用）
+        // video_end_ms: 動画タイムライン上でBGMが終了する位置（null=動画終了まで）
+        // audio_offset_ms: BGMファイル内の再生開始位置（Remotion: startFrom として使用）
+        video_start_ms: settings.bgm.video_start_ms ?? 0,
+        video_end_ms: settings.bgm.video_end_ms ?? null,
+        audio_offset_ms: settings.bgm.audio_offset_ms ?? 0,
         // R3-B: ducking設定（音声再生時にBGM音量を下げる）
         ducking: settings.bgm.ducking?.enabled ? {
           enabled: true,
