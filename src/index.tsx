@@ -1779,21 +1779,27 @@ app.get('/projects/:id', (c) => {
                             </div>
                             
                             <!-- テロッププレビュー -->
-                            <div class="mt-3 mb-2">
-                                <label class="block text-xs text-gray-600 mb-2">
-                                    <i class="fas fa-eye mr-1"></i>プレビュー
+                            <div class="mt-3 mb-2 p-3 bg-gray-100 rounded-lg border border-gray-300">
+                                <label class="block text-xs text-gray-600 mb-2 font-semibold">
+                                    <i class="fas fa-eye mr-1 text-amber-600"></i>プレビュー
                                 </label>
-                                <div id="vbTelopPreviewContainer" class="relative w-full h-28 bg-gradient-to-br from-gray-700 to-gray-900 rounded-lg overflow-hidden shadow-inner">
-                                    <!-- 背景画像のプレースホルダー（映像風） -->
-                                    <div class="absolute inset-0 bg-cover bg-center opacity-40" style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 56%22%3E%3Cdefs%3E%3ClinearGradient id=%22sky%22 x1=%220%25%22 y1=%220%25%22 x2=%220%25%22 y2=%22100%25%22%3E%3Cstop offset=%220%25%22 style=%22stop-color:%234A90D9%22/%3E%3Cstop offset=%22100%25%22 style=%22stop-color:%2387CEEB%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect fill=%22url(%23sky)%22 width=%22100%22 height=%2256%22/%3E%3Ccircle cx=%2275%22 cy=%2215%22 r=%228%22 fill=%22%23FFE066%22/%3E%3Cellipse cx=%2250%22 cy=%2250%22 rx=%2255%22 ry=%2220%22 fill=%22%2390EE90%22/%3E%3C/svg%3E')"></div>
+                                <div id="vbTelopPreviewContainer" class="relative w-full rounded-lg overflow-hidden border-2 border-gray-400" style="height: 120px; background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);">
+                                    <!-- 映像風の背景装飾 -->
+                                    <div class="absolute inset-0 opacity-30">
+                                        <div class="absolute top-4 right-8 w-12 h-12 bg-yellow-300 rounded-full"></div>
+                                        <div class="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-green-600/50 to-transparent"></div>
+                                        <div class="absolute top-1/3 left-1/4 w-16 h-10 bg-green-700/40 rounded-full blur-sm"></div>
+                                    </div>
                                     <!-- テロップ表示エリア -->
-                                    <div id="vbTelopPreviewText" class="absolute left-1/2 transform -translate-x-1/2 px-4 py-1 max-w-[90%] text-center" style="bottom: 8px;">
-                                        <span class="text-white text-sm font-semibold" style="text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;">
+                                    <div id="vbTelopPreviewText" class="absolute left-1/2 transform -translate-x-1/2 px-4 py-2 max-w-[90%] text-center" style="bottom: 12px;">
+                                        <span class="text-white font-semibold" style="font-size: 16px; text-shadow: -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000;">
                                             サンプルテロップ
                                         </span>
                                     </div>
                                 </div>
-                                <p class="text-xs text-gray-400 mt-1 text-center">設定を変更するとプレビューが更新されます</p>
+                                <p class="text-xs text-gray-500 mt-2 text-center">
+                                    <i class="fas fa-info-circle mr-1"></i>設定を変更するとリアルタイムで反映されます
+                                </p>
                             </div>
                             
                             <!-- カスタムスタイル設定（折りたたみ） -->
