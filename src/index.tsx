@@ -1778,6 +1778,24 @@ app.get('/projects/:id', (c) => {
                                 </select>
                             </div>
                             
+                            <!-- テロッププレビュー -->
+                            <div class="mt-3 mb-2">
+                                <label class="block text-xs text-gray-600 mb-2">
+                                    <i class="fas fa-eye mr-1"></i>プレビュー
+                                </label>
+                                <div id="vbTelopPreviewContainer" class="relative w-full h-28 bg-gradient-to-br from-gray-700 to-gray-900 rounded-lg overflow-hidden shadow-inner">
+                                    <!-- 背景画像のプレースホルダー（映像風） -->
+                                    <div class="absolute inset-0 bg-cover bg-center opacity-40" style="background-image: url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 56%22%3E%3Cdefs%3E%3ClinearGradient id=%22sky%22 x1=%220%25%22 y1=%220%25%22 x2=%220%25%22 y2=%22100%25%22%3E%3Cstop offset=%220%25%22 style=%22stop-color:%234A90D9%22/%3E%3Cstop offset=%22100%25%22 style=%22stop-color:%2387CEEB%22/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect fill=%22url(%23sky)%22 width=%22100%22 height=%2256%22/%3E%3Ccircle cx=%2275%22 cy=%2215%22 r=%228%22 fill=%22%23FFE066%22/%3E%3Cellipse cx=%2250%22 cy=%2250%22 rx=%2255%22 ry=%2220%22 fill=%22%2390EE90%22/%3E%3C/svg%3E')"></div>
+                                    <!-- テロップ表示エリア -->
+                                    <div id="vbTelopPreviewText" class="absolute left-1/2 transform -translate-x-1/2 px-4 py-1 max-w-[90%] text-center" style="bottom: 8px;">
+                                        <span class="text-white text-sm font-semibold" style="text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;">
+                                            サンプルテロップ
+                                        </span>
+                                    </div>
+                                </div>
+                                <p class="text-xs text-gray-400 mt-1 text-center">設定を変更するとプレビューが更新されます</p>
+                            </div>
+                            
                             <!-- カスタムスタイル設定（折りたたみ） -->
                             <details class="mt-3 border border-amber-200 rounded-lg overflow-hidden">
                                 <summary class="px-3 py-2 bg-amber-50 cursor-pointer text-sm text-amber-700 hover:bg-amber-100 flex items-center gap-2">
