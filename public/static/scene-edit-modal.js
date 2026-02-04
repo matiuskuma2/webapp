@@ -1557,6 +1557,12 @@
      */
     close() {
       console.log('[SceneEditModal] Closing');
+      
+      // Stop any playing audio in UtterancesTab
+      if (window.UtterancesTab && typeof window.UtterancesTab.stopAudio === 'function') {
+        window.UtterancesTab.stopAudio();
+      }
+      
       const modal = document.getElementById('scene-edit-modal');
       if (modal) {
         modal.classList.add('hidden');

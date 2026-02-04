@@ -21,6 +21,8 @@
     assignedCharacters: [], // Characters assigned to this scene
     isLoading: false,
     audioGeneratingIds: new Set(), // utterance IDs currently generating audio
+    currentAudio: null, // Currently playing audio element
+    currentPlayingUtteranceId: null, // ID of utterance currently playing
     
     /**
      * Initialize the utterances tab
@@ -236,7 +238,8 @@
           <div class="flex items-center gap-2">
             ${hasAudio ? `
               <button 
-                class="btn-play-audio px-3 py-1 bg-green-100 text-green-700 rounded text-sm hover:bg-green-200"
+                class="btn-play-audio px-3 py-1 bg-blue-100 text-blue-700 rounded text-sm hover:bg-blue-200"
+                data-utterance-id="${utterance.id}"
                 data-audio-url="${utterance.audio_url}"
               >
                 <i class="fas fa-play mr-1"></i>再生
@@ -475,11 +478,12 @@
         });
       });
       
-      // Play audio
+      // Play/Stop audio toggle
       document.querySelectorAll('.btn-play-audio').forEach(btn => {
         btn.addEventListener('click', (e) => {
+          const utteranceId = parseInt(e.currentTarget.dataset.utteranceId);
           const url = e.currentTarget.dataset.audioUrl;
-          this.playAudio(url);
+          this.toggleAudio(utteranceId, url);
         });
       });
       
@@ -759,15 +763,86 @@
     },
     
     /**
-     * Play audio
+     * Play or stop audio
+     */
+    toggleAudio(utteranceId, url) {
+      if (!url) return;
+      
+      // If clicking the same utterance that's playing, stop it
+      if (this.currentPlayingUtteranceId === utteranceId && this.currentAudio) {
+        this.stopAudio();
+        return;
+      }
+      
+      // Stop any currently playing audio
+      this.stopAudio();
+      
+      // Play new audio
+      this.currentAudio = new Audio(url);
+      this.currentPlayingUtteranceId = utteranceId;
+      
+      // Update UI to show playing state
+      this.updatePlayButtonState(utteranceId, true);
+      
+      this.currentAudio.play().catch(err => {
+        console.error('[UtterancesTab] Audio play failed:', err);
+        alert('音声の再生に失敗しました');
+        this.stopAudio();
+      });
+      
+      // When audio ends, reset state
+      this.currentAudio.addEventListener('ended', () => {
+        this.stopAudio();
+      });
+    },
+    
+    /**
+     * Stop currently playing audio
+     */
+    stopAudio() {
+      if (this.currentAudio) {
+        this.currentAudio.pause();
+        this.currentAudio.currentTime = 0;
+        this.currentAudio = null;
+      }
+      
+      if (this.currentPlayingUtteranceId) {
+        this.updatePlayButtonState(this.currentPlayingUtteranceId, false);
+        this.currentPlayingUtteranceId = null;
+      }
+    },
+    
+    /**
+     * Update play button appearance
+     */
+    updatePlayButtonState(utteranceId, isPlaying) {
+      const btn = document.querySelector(`[data-utterance-id="${utteranceId}"].btn-play-audio`);
+      if (btn) {
+        if (isPlaying) {
+          btn.innerHTML = '<i class="fas fa-stop mr-1"></i>停止';
+          btn.classList.remove('bg-blue-100', 'text-blue-700', 'hover:bg-blue-200');
+          btn.classList.add('bg-red-100', 'text-red-700', 'hover:bg-red-200');
+        } else {
+          btn.innerHTML = '<i class="fas fa-play mr-1"></i>再生';
+          btn.classList.remove('bg-red-100', 'text-red-700', 'hover:bg-red-200');
+          btn.classList.add('bg-blue-100', 'text-blue-700', 'hover:bg-blue-200');
+        }
+      }
+    },
+    
+    /**
+     * Legacy play audio (for backward compatibility)
      */
     playAudio(url) {
       if (!url) return;
-      
-      const audio = new Audio(url);
-      audio.play().catch(err => {
+      this.stopAudio();
+      this.currentAudio = new Audio(url);
+      this.currentAudio.play().catch(err => {
         console.error('[UtterancesTab] Audio play failed:', err);
         alert('音声の再生に失敗しました');
+      });
+      this.currentAudio.addEventListener('ended', () => {
+        this.currentAudio = null;
       });
     },
     
