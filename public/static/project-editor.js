@@ -13629,28 +13629,42 @@ function initTelopCustomStyleUI() {
   }
   
   // ========== テロッププレビュー機能 ==========
-  // 全ての設定変更でプレビューを更新
+  // 全ての設定変更でプレビューを更新（漏れなく全て登録）
   const previewTriggers = [
-    'vbTelopStyle', 'vbTelopSize', 'vbTelopPosition',
+    // 基本設定
+    'vbTelopStyle', 'vbTelopSize', 'vbTelopPosition', 'vbTelopsToggle',
+    // カラー設定
     'vbTelopTextColor', 'vbTelopTextColorHex',
     'vbTelopStrokeColor', 'vbTelopStrokeColorHex',
-    'vbTelopStrokeWidth', 'vbTelopBgColor', 'vbTelopBgColorHex',
-    'vbTelopBgOpacity', 'vbTelopFontFamily', 'vbTelopFontWeight',
-    'vbTelopLineHeight', 'vbTelopsToggle'
+    'vbTelopBgColor', 'vbTelopBgColorHex',
+    // スライダー
+    'vbTelopStrokeWidth', 'vbTelopBgOpacity',
+    'vbTelopLineHeight', 'vbTelopLetterSpacing',
+    // フォント
+    'vbTelopFontFamily', 'vbTelopFontWeight',
+    // Typography追加
+    'vbTelopMaxLines', 'vbTelopOverflowMode'
   ];
   
+  let registeredCount = 0;
   previewTriggers.forEach(id => {
     const el = document.getElementById(id);
     if (el) {
+      // 既存のリスナーを重複登録しないようにする
+      el.removeEventListener('input', updateTelopPreview);
+      el.removeEventListener('change', updateTelopPreview);
       el.addEventListener('input', updateTelopPreview);
       el.addEventListener('change', updateTelopPreview);
+      registeredCount++;
+    } else {
+      console.warn(`[TelopPreview] Element not found: ${id}`);
     }
   });
   
   // 初期プレビュー表示
-  setTimeout(updateTelopPreview, 100);
+  setTimeout(updateTelopPreview, 200);
   
-  console.log('[Project] Telop custom style UI initialized (with Typography + Preview)');
+  console.log(`[Project] Telop preview initialized: ${registeredCount}/${previewTriggers.length} elements`);
 }
 
 /**
@@ -13723,7 +13737,10 @@ function resetTelopCustomStyle() {
 function updateTelopPreview() {
   const previewContainer = document.getElementById('vbTelopPreviewContainer');
   const previewText = document.getElementById('vbTelopPreviewText');
-  if (!previewContainer || !previewText) return;
+  if (!previewContainer || !previewText) {
+    console.log('[TelopPreview] Container not found');
+    return;
+  }
   
   // 表示/非表示
   const enabled = document.getElementById('vbTelopsToggle')?.checked ?? true;
@@ -13744,99 +13761,116 @@ function updateTelopPreview() {
   const fontFamily = document.getElementById('vbTelopFontFamily')?.value || 'noto-sans';
   const fontWeight = document.getElementById('vbTelopFontWeight')?.value || '600';
   const lineHeight = parseInt(document.getElementById('vbTelopLineHeight')?.value || '140', 10) / 100;
+  const letterSpacing = parseFloat(document.getElementById('vbTelopLetterSpacing')?.value || '0');
   
-  // サイズマッピング
-  const fontSizeMap = { sm: '12px', md: '14px', lg: '18px' };
-  const fontSize = fontSizeMap[sizePreset] || '14px';
+  console.log('[TelopPreview] Updating:', { stylePreset, sizePreset, positionPreset, strokeWidth, bgOpacity, letterSpacing });
+  
+  // サイズマッピング（より大きな差をつける）
+  const fontSizeMap = { sm: '14px', md: '18px', lg: '24px' };
+  const fontSize = fontSizeMap[sizePreset] || '18px';
   
   // フォントファミリーマッピング
   const fontFamilyMap = {
-    'noto-sans': '"Noto Sans JP", sans-serif',
-    'noto-serif': '"Noto Serif JP", serif',
-    'rounded': '"M PLUS Rounded 1c", sans-serif',
-    'zen-maru': '"Zen Maru Gothic", sans-serif'
+    'noto-sans': '"Noto Sans JP", "Hiragino Sans", "Yu Gothic", sans-serif',
+    'noto-serif': '"Noto Serif JP", "Yu Mincho", serif',
+    'rounded': '"M PLUS Rounded 1c", "Hiragino Maru Gothic ProN", sans-serif',
+    'zen-maru': '"Zen Maru Gothic", "Hiragino Maru Gothic ProN", sans-serif'
   };
   const fontFamilyCSS = fontFamilyMap[fontFamily] || fontFamilyMap['noto-sans'];
   
-  // 位置設定
-  previewText.style.top = '';
-  previewText.style.bottom = '';
+  // 位置設定（リセットしてから設定）
+  previewText.style.top = 'auto';
+  previewText.style.bottom = 'auto';
+  previewText.style.transform = 'translateX(-50%)';
+  
   if (positionPreset === 'top') {
-    previewText.style.top = '8px';
-    previewText.style.bottom = '';
+    previewText.style.top = '12px';
   } else if (positionPreset === 'center') {
     previewText.style.top = '50%';
-    previewText.style.bottom = '';
     previewText.style.transform = 'translate(-50%, -50%)';
   } else {
-    previewText.style.bottom = '8px';
-    previewText.style.top = '';
-    previewText.style.transform = 'translateX(-50%)';
+    previewText.style.bottom = '12px';
   }
   
-  // スタイルプリセットに応じた設定
-  let previewStyles = {};
+  // スタイルプリセットに応じた設定（より明確な違い）
+  let textShadowStyle = '';
+  let bgStyle = 'transparent';
+  let paddingStyle = '6px 16px';
+  let borderRadiusStyle = '4px';
+  let borderStyle = 'none';
+  
+  // 縁取りのtext-shadow生成（strokeWidthを使用）
+  const sw = Math.max(strokeWidth, 0);
+  const outlineShadow = sw > 0 ? `
+    -${sw}px -${sw}px 0 ${strokeColor},
+    ${sw}px -${sw}px 0 ${strokeColor},
+    -${sw}px ${sw}px 0 ${strokeColor},
+    ${sw}px ${sw}px 0 ${strokeColor},
+    -${sw}px 0 0 ${strokeColor},
+    ${sw}px 0 0 ${strokeColor},
+    0 -${sw}px 0 ${strokeColor},
+    0 ${sw}px 0 ${strokeColor}
+  ` : 'none';
   
   switch (stylePreset) {
     case 'outline':
-      previewStyles = {
-        textShadow: `
-          -${strokeWidth}px -${strokeWidth}px 0 ${strokeColor},
-          ${strokeWidth}px -${strokeWidth}px 0 ${strokeColor},
-          -${strokeWidth}px ${strokeWidth}px 0 ${strokeColor},
-          ${strokeWidth}px ${strokeWidth}px 0 ${strokeColor}
-        `,
-        background: bgOpacity > 0 ? `rgba(${hexToRgb(bgColor)}, ${bgOpacity})` : 'transparent',
-        padding: '4px 12px',
-        borderRadius: '4px'
-      };
+      // アウトライン：縁取り + 任意の背景
+      textShadowStyle = outlineShadow;
+      bgStyle = bgOpacity > 0 ? `rgba(${hexToRgb(bgColor)}, ${bgOpacity})` : 'transparent';
+      borderRadiusStyle = '4px';
       break;
+      
     case 'minimal':
-      previewStyles = {
-        textShadow: `0 2px 4px rgba(0,0,0,0.5)`,
-        background: 'transparent',
-        padding: '4px 8px',
-        borderRadius: '0'
-      };
+      // ミニマル：影のみ、シンプル
+      textShadowStyle = '0 2px 8px rgba(0,0,0,0.8)';
+      bgStyle = 'transparent';
+      paddingStyle = '4px 12px';
+      borderRadiusStyle = '0';
       break;
+      
     case 'band':
-      previewStyles = {
-        textShadow: 'none',
-        background: `rgba(${hexToRgb(bgColor)}, ${Math.max(bgOpacity, 0.7)})`,
-        padding: '6px 16px',
-        borderRadius: '0'
-      };
+      // 帯付き：背景帯が特徴（常に70%以上の背景）
+      textShadowStyle = 'none';
+      bgStyle = `rgba(${hexToRgb(bgColor)}, ${Math.max(bgOpacity, 0.75)})`;
+      paddingStyle = '8px 24px';
+      borderRadiusStyle = '0';
+      // 帯は画面幅いっぱいに
+      previewText.style.width = '100%';
+      previewText.style.maxWidth = '100%';
+      previewText.style.left = '0';
+      previewText.style.transform = positionPreset === 'center' ? 'translateY(-50%)' : 'none';
       break;
+      
     case 'pop':
-      previewStyles = {
-        textShadow: `
-          -${strokeWidth}px -${strokeWidth}px 0 ${strokeColor},
-          ${strokeWidth}px -${strokeWidth}px 0 ${strokeColor},
-          -${strokeWidth}px ${strokeWidth}px 0 ${strokeColor},
-          ${strokeWidth}px ${strokeWidth}px 0 ${strokeColor},
-          0 4px 8px rgba(0,0,0,0.3)
-        `,
-        background: bgOpacity > 0 ? `rgba(${hexToRgb(bgColor)}, ${bgOpacity})` : 'transparent',
-        padding: '4px 12px',
-        borderRadius: '8px'
-      };
+      // ポップ：カラフル、ドロップシャドウ、丸角
+      textShadowStyle = `${outlineShadow}, 3px 3px 6px rgba(0,0,0,0.4)`;
+      bgStyle = bgOpacity > 0 ? `rgba(${hexToRgb(bgColor)}, ${bgOpacity})` : 'transparent';
+      paddingStyle = '8px 20px';
+      borderRadiusStyle = '12px';
+      borderStyle = `2px solid ${strokeColor}`;
       break;
+      
     case 'cinematic':
-      previewStyles = {
-        textShadow: `0 0 10px rgba(255,255,255,0.5), 0 2px 4px rgba(0,0,0,0.8)`,
-        background: 'transparent',
-        padding: '4px 12px',
-        borderRadius: '0',
-        letterSpacing: '2px'
-      };
+      // シネマティック：グロー効果、広い文字間隔
+      textShadowStyle = `0 0 20px rgba(255,255,255,0.6), 0 0 40px rgba(255,255,255,0.3), 0 4px 8px rgba(0,0,0,0.8)`;
+      bgStyle = 'transparent';
+      paddingStyle = '6px 16px';
+      borderRadiusStyle = '0';
       break;
+      
     default:
-      previewStyles = {
-        textShadow: `-1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000`,
-        background: 'transparent',
-        padding: '4px 8px',
-        borderRadius: '0'
-      };
+      textShadowStyle = outlineShadow;
+      bgStyle = 'transparent';
+  }
+  
+  // band以外は通常の中央寄せに戻す
+  if (stylePreset !== 'band') {
+    previewText.style.width = 'auto';
+    previewText.style.maxWidth = '90%';
+    previewText.style.left = '50%';
+    if (positionPreset !== 'center') {
+      previewText.style.transform = 'translateX(-50%)';
+    }
   }
   
   // プレビューテキストのスタイルを適用
@@ -13846,14 +13880,17 @@ function updateTelopPreview() {
     spanEl.style.fontSize = fontSize;
     spanEl.style.fontFamily = fontFamilyCSS;
     spanEl.style.fontWeight = fontWeight;
-    spanEl.style.textShadow = previewStyles.textShadow || 'none';
-    spanEl.style.lineHeight = lineHeight;
-    spanEl.style.letterSpacing = previewStyles.letterSpacing || '0';
+    spanEl.style.textShadow = textShadowStyle;
+    spanEl.style.lineHeight = String(lineHeight);
+    spanEl.style.letterSpacing = `${letterSpacing}px`;
+    spanEl.style.display = 'inline-block';
   }
   
-  previewText.style.background = previewStyles.background || 'transparent';
-  previewText.style.padding = previewStyles.padding || '4px 8px';
-  previewText.style.borderRadius = previewStyles.borderRadius || '0';
+  previewText.style.background = bgStyle;
+  previewText.style.padding = paddingStyle;
+  previewText.style.borderRadius = borderRadiusStyle;
+  previewText.style.border = borderStyle;
+  previewText.style.transition = 'all 0.2s ease';
 }
 
 /**
