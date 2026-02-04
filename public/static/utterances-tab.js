@@ -711,11 +711,18 @@
     async generateAudio(utteranceId) {
       if (this.audioGeneratingIds.has(utteranceId)) return;
       
+      // Check if this utterance already has audio (means regeneration)
+      const utterance = this.utterances.find(u => u.id === utteranceId);
+      const hasExistingAudio = utterance && utterance.audio_generation_id;
+      
       this.audioGeneratingIds.add(utteranceId);
       this.render();
       
       try {
-        const response = await axios.post(`/api/utterances/${utteranceId}/generate-audio`);
+        // force: true for regeneration to use updated text
+        const response = await axios.post(`/api/utterances/${utteranceId}/generate-audio`, {
+          force: hasExistingAudio
+        });
         console.log('[UtterancesTab] Audio generation started:', response.data);
         
         // Poll for completion (simple approach)
