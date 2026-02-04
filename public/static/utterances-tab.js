@@ -740,9 +740,11 @@
       this.render();
       
       try {
-        // force: true for regeneration to use updated text
+        // ALWAYS send force: true to ensure fresh generation with current text
+        // This prevents any caching issues where old text might be used
+        console.log(`[UtterancesTab] Generating audio for utterance ${utteranceId} with force: true`);
         const response = await axios.post(`/api/utterances/${utteranceId}/generate-audio`, {
-          force: hasExistingAudio
+          force: true  // Always force to use latest text from DB
         });
         console.log('[UtterancesTab] Audio generation started:', response.data);
         
