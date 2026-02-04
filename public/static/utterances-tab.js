@@ -711,9 +711,26 @@
     async generateAudio(utteranceId) {
       if (this.audioGeneratingIds.has(utteranceId)) return;
       
+      // If currently editing this utterance, save first
+      if (this.editingUtteranceId === utteranceId) {
+        console.log('[UtterancesTab] Saving edited text before regeneration');
+        await this.saveInlineEdit(utteranceId);
+        // Wait for state to update
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+      
       // Check if this utterance already has audio (means regeneration)
       const utterance = this.utterances.find(u => u.id === utteranceId);
       const hasExistingAudio = utterance && utterance.audio_generation_id;
+      
+      // Confirm regeneration if already has audio
+      if (hasExistingAudio) {
+        const confirmRegenerate = confirm(
+          '音声を再生成しますか？\n\n' +
+          '※セリフを変更した場合は、新しいテキストで音声が生成されます。'
+        );
+        if (!confirmRegenerate) return;
+      }
       
       this.audioGeneratingIds.add(utteranceId);
       this.render();
