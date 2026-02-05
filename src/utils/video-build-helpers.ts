@@ -1419,10 +1419,19 @@ export function buildProjectJson(
     currentMs += durationMs;
     
     // 4. visual URL 取得 (Convert to absolute URL for Remotion Lambda)
+    // SSOT: display_asset_type に基づいて image_url または video_url を設定
     let imageUrl: string | undefined;
+    let videoUrl: string | undefined;
+    let videoDurationMs: number | undefined;
     const displayType = scene.display_asset_type || 'image';
     
-    if (displayType === 'comic' && scene.active_comic?.r2_url) {
+    if (displayType === 'video' && scene.active_video?.r2_url && scene.active_video?.status === 'completed') {
+      // video モード: video_clip を使用
+      videoUrl = toAbsoluteUrl(scene.active_video.r2_url, siteUrl) || undefined;
+      videoDurationMs = scene.active_video.duration_sec ? scene.active_video.duration_sec * 1000 : undefined;
+      hasVideoClips = true;
+      console.log(`[buildProjectJson] Scene ${scene.idx}: Using video_clip (display_asset_type=video), url=${videoUrl?.substring(0, 80)}...`);
+    } else if (displayType === 'comic' && scene.active_comic?.r2_url) {
       imageUrl = toAbsoluteUrl(scene.active_comic.r2_url, siteUrl) || undefined;
     } else if (scene.active_image?.r2_url) {
       imageUrl = toAbsoluteUrl(scene.active_image.r2_url, siteUrl) || undefined;
@@ -1584,6 +1593,11 @@ export function buildProjectJson(
           url: imageUrl,
           width: resolutionSize.width,
           height: resolutionSize.height,
+        } : undefined,
+        // video_clip: display_asset_type='video' の場合に設定
+        video_clip: videoUrl ? {
+          url: videoUrl,
+          duration_ms: videoDurationMs || durationMs,
         } : undefined,
         audio: audioAsset,  // 後方互換
         voices: voices.length > 0 ? voices : undefined,  // R1.5

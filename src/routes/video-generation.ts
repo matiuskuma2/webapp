@@ -1750,6 +1750,14 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         LIMIT 1
       `).bind(scene.id).first();
       
+      // Active video (for display_asset_type='video')
+      const activeVideo = await c.env.DB.prepare(`
+        SELECT id, status, r2_url, model, duration_sec
+        FROM video_generations
+        WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+        LIMIT 1
+      `).bind(scene.id).first();
+      
       // Utterances
       const { results: utterances } = await c.env.DB.prepare(`
         SELECT su.*, ag.r2_url as audio_r2_url, ag.duration_ms as audio_duration_ms, ag.status as audio_status
@@ -1777,6 +1785,13 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         ...scene,
         active_image: activeImage ? { r2_key: activeImage.r2_key, r2_url: activeImage.r2_url } : null,
         active_comic: activeComic ? { r2_key: activeComic.r2_key, r2_url: activeComic.r2_url } : null,
+        active_video: activeVideo ? { 
+          id: activeVideo.id, 
+          status: activeVideo.status, 
+          r2_url: activeVideo.r2_url,
+          model: activeVideo.model,
+          duration_sec: activeVideo.duration_sec
+        } : null,
         utterances: utterances?.map((u: any) => ({
           id: u.id,
           role: u.role,
