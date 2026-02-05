@@ -41,7 +41,8 @@
       imageCharacterKeys: [],
       voiceCharacterKey: null,
       sceneTraits: {}, // { character_key: trait_description }
-      sfxCues: [], // R3-B: SFX cues
+      sfxCues: [], // R3-B: Legacy SFX cues (scene_audio_cues table)
+      sfxAssignments: [], // P2: New SSOT SFX (scene_audio_assignments table)
       sceneBgm: null // P3: Scene BGM assignment { id, source, name, url, volume, loop }
     },
     
@@ -893,7 +894,10 @@
             class="px-4 py-2 font-semibold text-sm border-b-2 transition-colors scene-edit-tab-btn ${this.activeTab === 'sfx' ? 'border-pink-500 text-pink-600' : 'border-transparent text-gray-500 hover:text-gray-700'}"
           >
             <i class="fas fa-volume-up mr-1"></i>SFX
-            ${(this.currentState?.sfxCues?.length || 0) > 0 ? '<span class="ml-1 bg-pink-400 text-white text-xs px-1.5 py-0.5 rounded-full">' + this.currentState.sfxCues.length + '</span>' : ''}
+            ${(() => {
+              const totalSfx = (this.currentState?.sfxCues?.length || 0) + (this.currentState?.sfxAssignments?.length || 0);
+              return totalSfx > 0 ? '<span class="ml-1 bg-pink-400 text-white text-xs px-1.5 py-0.5 rounded-full">' + totalSfx + '</span>' : '';
+            })()}
           </button>
         </div>
       `;
@@ -1703,8 +1707,29 @@
       `;
       
       try {
-        const response = await axios.get(`/api/scenes/${this.currentSceneId}/audio-cues`);
-        this.currentState.sfxCues = response.data.cues || [];
+        // Fetch both data sources in parallel
+        const [legacyResponse, assignmentsResponse] = await Promise.all([
+          axios.get(`/api/scenes/${this.currentSceneId}/audio-cues`),
+          axios.get(`/api/scenes/${this.currentSceneId}/audio-assignments?audio_type=sfx`).catch(() => ({ data: { sfx: [] } }))
+        ]);
+        
+        // Legacy SFX cues (scene_audio_cues table)
+        this.currentState.sfxCues = legacyResponse.data.cues || [];
+        
+        // New SSOT SFX assignments (scene_audio_assignments table)
+        const sfxAssignments = assignmentsResponse.data.sfx || [];
+        this.currentState.sfxAssignments = sfxAssignments.map(a => ({
+          id: a.id,
+          name: a.effective?.name || a.name || 'SFX',
+          start_ms: a.start_ms || 0,
+          end_ms: a.end_ms,
+          duration_ms: a.effective?.duration_ms,
+          volume: a.effective?.volume || 0.8,
+          loop: a.effective?.loop || false,
+          r2_url: a.effective?.r2_url,
+          source: a.audio_library_type  // 'system' or 'user'
+        }));
+        
         this.renderSfxTab();
       } catch (error) {
         console.error('[SceneEditModal] Failed to load SFX:', error);
@@ -1750,7 +1775,12 @@
       const container = document.getElementById('scene-edit-tab-sfx');
       if (!container) return;
       
-      const cues = this.currentState.sfxCues || [];
+      // Combine both data sources: legacy cues and new assignments
+      const legacyCues = (this.currentState.sfxCues || []).map(cue => ({...cue, _isAssignment: false}));
+      const assignments = (this.currentState.sfxAssignments || []).map(a => ({...a, _isAssignment: true}));
+      
+      // Merge and sort by start_ms
+      const allSfx = [...legacyCues, ...assignments].sort((a, b) => (a.start_ms || 0) - (b.start_ms || 0));
       
       container.innerHTML = `
         <div class="p-4 border border-gray-200 rounded-lg bg-gray-50 mb-4">
@@ -1789,7 +1819,7 @@
             </div>
           </div>
           
-          ${cues.length === 0 ? `
+          ${allSfx.length === 0 ? `
             <div class="text-center py-8 text-gray-400">
               <i class="fas fa-drum text-4xl mb-3"></i>
               <p>効果音がありません</p>
@@ -1797,7 +1827,7 @@
             </div>
           ` : `
             <div class="space-y-3" id="sfx-cues-list">
-              ${cues.map((cue, index) => this.renderSfxCueItem(cue, index)).join('')}
+              ${allSfx.map((cue, index) => this.renderSfxCueItem(cue, index)).join('')}
             </div>
           `}
         </div>
@@ -1826,37 +1856,45 @@
     
     /**
      * Render single SFX cue item
+     * Supports both legacy cues and new assignments
      * @param {object} cue 
      * @param {number} index 
      * @returns {string}
      */
     renderSfxCueItem(cue, index) {
-      const startSec = (cue.start_ms / 1000).toFixed(1);
+      const startSec = ((cue.start_ms || 0) / 1000).toFixed(1);
       const durationSec = cue.duration_ms ? (cue.duration_ms / 1000).toFixed(1) : '?';
       const volume = Math.round((cue.volume || 0.8) * 100);
+      const isAssignment = cue._isAssignment;
       
       // P1-B: 連番は 1-indexed（チャット参照用）
       const sfxNumber = index + 1;
       
+      // Source badge for assignments
+      const sourceBadge = isAssignment && cue.source ? `
+        <span class="px-1.5 py-0.5 ${cue.source === 'system' ? 'bg-blue-100 text-blue-700' : 'bg-green-100 text-green-700'} text-xs rounded">
+          ${cue.source === 'system' ? 'システム' : 'マイ'}
+        </span>
+      ` : '';
+      
       return `
-        <div class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg" data-cue-id="${cue.id}">
+        <div class="flex items-center gap-3 p-3 bg-white border border-gray-200 rounded-lg" data-cue-id="${cue.id}" data-is-assignment="${isAssignment}">
           <div class="flex-shrink-0 flex flex-col items-center">
             <span class="text-2xl">💥</span>
-            <!-- P1-B: 識別子ラベル（チャット参照用） -->
             <span class="px-1.5 py-0.5 bg-pink-100 text-pink-700 text-xs font-mono rounded mt-1">
               #${sfxNumber}
             </span>
           </div>
           <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-1">
+            <div class="flex items-center gap-2 mb-1 flex-wrap">
               <input 
                 type="text" 
                 value="${this.escapeHtml(cue.name || 'SFX')}"
                 class="text-sm font-semibold text-gray-800 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-pink-500 focus:outline-none px-1 w-32"
-                onchange="SceneEditModal.updateSfxCue(${cue.id}, 'name', this.value)"
+                onchange="SceneEditModal.updateSfxCue(${cue.id}, 'name', this.value, ${isAssignment})"
                 placeholder="効果音名"
               />
-              <span class="text-xs text-gray-400 font-mono">scene-${this.currentSceneId}-sfx-${sfxNumber}</span>
+              ${sourceBadge}
               <span class="text-xs text-gray-500">${durationSec}秒</span>
             </div>
             <div class="flex items-center gap-4 text-xs text-gray-600 flex-wrap">
@@ -1868,7 +1906,7 @@
                   min="0"
                   step="0.1"
                   class="w-14 px-1 py-0.5 border border-gray-300 rounded text-center"
-                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'start_ms', Math.round(parseFloat(this.value) * 1000))"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'start_ms', Math.round(parseFloat(this.value) * 1000), ${isAssignment})"
                 />秒
               </label>
               <label class="flex items-center gap-1">
@@ -1880,7 +1918,7 @@
                   step="0.1"
                   placeholder="自動"
                   class="w-14 px-1 py-0.5 border border-gray-300 rounded text-center"
-                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'end_ms', this.value ? Math.round(parseFloat(this.value) * 1000) : null)"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'end_ms', this.value ? Math.round(parseFloat(this.value) * 1000) : null, ${isAssignment})"
                 />秒
               </label>
               <label class="flex items-center gap-1">
@@ -1891,7 +1929,7 @@
                   min="0"
                   max="100"
                   class="w-14 h-2 accent-pink-500"
-                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'volume', parseFloat(this.value) / 100)"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'volume', parseFloat(this.value) / 100, ${isAssignment})"
                 />
                 <span class="w-8">${volume}%</span>
               </label>
@@ -1900,7 +1938,7 @@
                   type="checkbox" 
                   ${cue.loop ? 'checked' : ''}
                   class="accent-pink-500"
-                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'loop', this.checked)"
+                  onchange="SceneEditModal.updateSfxCue(${cue.id}, 'loop', this.checked, ${isAssignment})"
                 />
                 <span>ループ</span>
               </label>
@@ -1911,7 +1949,7 @@
               <audio src="${cue.r2_url}" class="h-8 w-24" controls></audio>
             ` : ''}
             <button 
-              onclick="SceneEditModal.deleteSfxCue(${cue.id})"
+              onclick="SceneEditModal.deleteSfxCue(${cue.id}, ${isAssignment})"
               class="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
               title="削除"
             >
@@ -1972,20 +2010,49 @@
     
     /**
      * Update SFX cue property
+     * Supports both legacy cues (scene_audio_cues) and new assignments (scene_audio_assignments)
      * @param {number} cueId 
      * @param {string} field 
      * @param {any} value 
+     * @param {boolean} isAssignment - true for scene_audio_assignments, false for scene_audio_cues
      */
-    async updateSfxCue(cueId, field, value) {
+    async updateSfxCue(cueId, field, value, isAssignment = false) {
       try {
-        await axios.put(`/api/scenes/${this.currentSceneId}/audio-cues/${cueId}`, {
-          [field]: value
-        });
+        // Choose the appropriate API endpoint
+        const endpoint = isAssignment
+          ? `/api/scenes/${this.currentSceneId}/audio-assignments/${cueId}`
+          : `/api/scenes/${this.currentSceneId}/audio-cues/${cueId}`;
+        
+        // Map field names for assignments API (uses _override suffix for some fields)
+        let body = {};
+        if (isAssignment) {
+          switch (field) {
+            case 'volume':
+              body = { volume_override: value };
+              break;
+            case 'loop':
+              body = { loop_override: value ? 1 : 0 };
+              break;
+            default:
+              body = { [field]: value };
+          }
+        } else {
+          body = { [field]: value };
+        }
+        
+        await axios.put(endpoint, body);
         
         // Update local state
-        const cue = this.currentState.sfxCues.find(c => c.id === cueId);
-        if (cue) {
-          cue[field] = value;
+        if (isAssignment) {
+          const assignment = this.currentState.sfxAssignments?.find(a => a.id === cueId);
+          if (assignment) {
+            assignment[field] = value;
+          }
+        } else {
+          const cue = this.currentState.sfxCues.find(c => c.id === cueId);
+          if (cue) {
+            cue[field] = value;
+          }
         }
         
       } catch (error) {
@@ -1996,16 +2063,28 @@
     
     /**
      * Delete SFX cue
+     * Supports both legacy cues (scene_audio_cues) and new assignments (scene_audio_assignments)
      * @param {number} cueId 
+     * @param {boolean} isAssignment - true for scene_audio_assignments, false for scene_audio_cues
      */
-    async deleteSfxCue(cueId) {
+    async deleteSfxCue(cueId, isAssignment = false) {
       if (!confirm('この効果音を削除しますか？')) return;
       
       try {
-        await axios.delete(`/api/scenes/${this.currentSceneId}/audio-cues/${cueId}`);
+        // Choose the appropriate API endpoint
+        const endpoint = isAssignment
+          ? `/api/scenes/${this.currentSceneId}/audio-assignments/${cueId}`
+          : `/api/scenes/${this.currentSceneId}/audio-cues/${cueId}`;
+        
+        await axios.delete(endpoint);
         
         // Remove from local state
-        this.currentState.sfxCues = this.currentState.sfxCues.filter(c => c.id !== cueId);
+        if (isAssignment) {
+          this.currentState.sfxAssignments = (this.currentState.sfxAssignments || []).filter(a => a.id !== cueId);
+        } else {
+          this.currentState.sfxCues = this.currentState.sfxCues.filter(c => c.id !== cueId);
+        }
+        
         this.renderSfxTab();
         this.renderTabs(); // Update badge
         this.showToast('SFXを削除しました', 'success');
@@ -2547,6 +2626,9 @@
         return;
       }
       
+      // Store current library type for upload
+      this._currentSfxLibraryType = libraryType;
+      
       title.textContent = libraryType === 'system' ? 'システム効果音ライブラリ' : 'マイ効果音ライブラリ';
       content.innerHTML = '<div class="text-center py-8 text-gray-500"><i class="fas fa-spinner fa-spin mr-2"></i>読み込み中...</div>';
       modal.classList.remove('hidden');
@@ -2558,18 +2640,37 @@
         const response = await axios.get(endpoint);
         const items = response.data.items || [];
         
+        // アップロードボタン（ユーザーライブラリの場合のみ）
+        const uploadButton = libraryType === 'user' ? `
+          <div class="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <label class="cursor-pointer px-4 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors font-semibold text-sm inline-flex items-center gap-2">
+              <i class="fas fa-upload"></i>
+              新しいSFXをアップロード
+              <input 
+                type="file" 
+                accept="audio/*"
+                class="hidden"
+                onchange="SceneEditModal.handleSfxUploadToLibrary(event)"
+              />
+            </label>
+            <span class="ml-3 text-xs text-gray-500">MP3, WAV, M4A（最大50MB）</span>
+          </div>
+        ` : '';
+        
         if (items.length === 0) {
           content.innerHTML = `
+            ${uploadButton}
             <div class="text-center py-8 text-gray-400">
               <i class="fas fa-drum text-4xl mb-3"></i>
               <p>効果音が登録されていません</p>
-              ${libraryType === 'user' ? '<p class="text-xs mt-2">「アップロード」から追加できます</p>' : ''}
+              ${libraryType === 'user' ? '<p class="text-xs mt-2">上のボタンからアップロードできます</p>' : ''}
             </div>
           `;
           return;
         }
         
         content.innerHTML = `
+          ${uploadButton}
           <div class="space-y-2">
             ${items.map(item => `
               <div class="flex items-center gap-3 p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
@@ -2613,18 +2714,65 @@
     },
     
     /**
+     * Upload SFX to user library (from library modal)
+     */
+    async handleSfxUploadToLibrary(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      
+      // Validate file type
+      if (!file.type.startsWith('audio/')) {
+        this.showToast('音声ファイルを選択してください', 'error');
+        return;
+      }
+      
+      // Validate file size (50MB)
+      const maxSize = 50 * 1024 * 1024;
+      if (file.size > maxSize) {
+        this.showToast('ファイルサイズは50MB以下にしてください', 'error');
+        return;
+      }
+      
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('audio_type', 'sfx');
+        formData.append('name', file.name.replace(/\.[^.]+$/, '') || 'SFX');
+        
+        this.showToast('アップロード中...', 'info');
+        
+        // Upload to user library
+        const response = await axios.post('/api/audio-library/upload', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+        
+        if (response.data.id) {
+          this.showToast('SFXをライブラリに追加しました', 'success');
+          // Refresh the library view
+          this.openSfxLibrary('user');
+        }
+      } catch (error) {
+        console.error('[SceneEditModal] Failed to upload SFX to library:', error);
+        this.showToast('アップロードに失敗しました', 'error');
+      }
+      
+      // Clear the input
+      event.target.value = '';
+    },
+    
+    /**
      * P3: Select SFX from library and add to scene
-     * Fixed: Use correct API parameter names (audio_library_type, system_audio_id/user_audio_id)
+     * Fixed: Use correct API parameter names and response handling
      */
     async selectSfxFromLibrary(libraryType, itemId, itemName, durationMs) {
       try {
         // Build request body with correct parameter names
         const body = {
           audio_type: 'sfx',
-          audio_library_type: libraryType,  // Fixed: was 'library_type'
+          audio_library_type: libraryType,
           start_ms: 0,
-          volume_override: 0.8,             // SFXのボリューム
-          loop_override: false              // SFXはループしない
+          volume_override: 0.8,
+          loop_override: false
         };
         
         // Set the appropriate ID based on library type
@@ -2637,18 +2785,23 @@
         const response = await axios.post(`/api/scenes/${this.currentSceneId}/audio-assignments`, body);
         
         if (response.data.id) {
-          // Add to local state
-          const newCue = {
+          // Add to sfxAssignments (new SSOT), not sfxCues (legacy)
+          const newAssignment = {
             id: response.data.id,
-            name: itemName,
-            start_ms: 0,
-            duration_ms: durationMs || 1000,
-            volume: 0.8,
-            loop: false,
-            r2_url: response.data.r2_url
+            name: response.data.effective?.name || itemName,
+            start_ms: response.data.start_ms || 0,
+            end_ms: response.data.end_ms,
+            duration_ms: response.data.effective?.duration_ms || durationMs || 1000,
+            volume: response.data.effective?.volume || 0.8,
+            loop: response.data.effective?.loop || false,
+            r2_url: response.data.effective?.r2_url || response.data.library?.r2_url,
+            source: libraryType,  // 'system' or 'user'
+            _isAssignment: true   // Flag to distinguish from legacy cues
           };
-          this.currentState.sfxCues = this.currentState.sfxCues || [];
-          this.currentState.sfxCues.push(newCue);
+          
+          // Initialize if needed
+          this.currentState.sfxAssignments = this.currentState.sfxAssignments || [];
+          this.currentState.sfxAssignments.push(newAssignment);
           
           this.closeSfxLibrary();
           this.renderSfxTab();
@@ -2657,7 +2810,8 @@
         }
       } catch (error) {
         console.error('[SceneEditModal] Failed to add SFX:', error);
-        this.showToast('効果音の追加に失敗しました', 'error');
+        const errMsg = error.response?.data?.error?.message || '効果音の追加に失敗しました';
+        this.showToast(errMsg, 'error');
       }
     }
   };
