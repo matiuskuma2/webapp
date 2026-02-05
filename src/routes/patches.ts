@@ -1196,6 +1196,15 @@ async function fetchScenesWithAssets(
       ORDER BY created_at DESC LIMIT 1
     `).bind(sceneId).first<{ id: number; r2_key: string; r2_url: string }>();
 
+    // アクティブ動画（video_generations テーブル）
+    // P2 SSOT: display_asset_type = 'video' の場合、動画の尺を取得するために必要
+    const activeVideo = await db.prepare(`
+      SELECT id, r2_url, duration_sec, status
+      FROM video_generations
+      WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(sceneId).first<{ id: number; r2_url: string; duration_sec: number; status: string }>();
+
     // Utterances（音声パーツ）
     const utteranceRows = await db.prepare(`
       SELECT 
@@ -1345,6 +1354,16 @@ async function fetchScenesWithAssets(
         id: activeImage.id,
         r2_key: activeImage.r2_key,
         r2_url: toAbsoluteUrl(activeImage.r2_url, siteUrl),
+      };
+    }
+
+    // P2 SSOT: 動画モードの場合、動画情報を追加（尺計算で使用）
+    if (displayAssetType === 'video' && activeVideo) {
+      sceneData.active_video = {
+        id: activeVideo.id,
+        r2_url: toAbsoluteUrl(activeVideo.r2_url, siteUrl),
+        duration_sec: activeVideo.duration_sec,
+        status: activeVideo.status,
       };
     }
 
