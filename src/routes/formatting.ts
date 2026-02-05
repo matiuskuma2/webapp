@@ -1303,14 +1303,14 @@ async function generateImagePromptFromText(
         messages: [
           {
             role: 'system',
-            content: 'Generate a concise English image prompt (30-200 chars) for an infographic video scene. Focus on visual elements that represent the text content. Output only the prompt, no explanation.'
+            content: 'Generate a detailed English image prompt (100-300 chars) for an infographic video scene. Focus on visual elements, composition, lighting, and style that represent the text content. Output only the prompt, no explanation.'
           },
           {
             role: 'user',
             content: `Project: ${projectTitle}\nText: ${text}`
           }
         ],
-        max_tokens: 100,
+        max_tokens: 500,  // Increased from 100 to prevent prompt truncation
         temperature: 0.7
       })
     })
@@ -1321,10 +1321,19 @@ async function generateImagePromptFromText(
     }
     
     const result = await response.json() as any
-    return result.choices?.[0]?.message?.content?.trim() || 'Abstract digital illustration'
+    const generatedPrompt = result.choices?.[0]?.message?.content?.trim() || ''
+    
+    // Safety guard: Ensure prompt is not too short (indicates generation failure)
+    const MIN_PROMPT_LENGTH = 30
+    if (generatedPrompt.length < MIN_PROMPT_LENGTH) {
+      console.warn(`[ImagePrompt] Generated prompt too short (${generatedPrompt.length} chars), using fallback`)
+      return 'Abstract digital illustration representing the concept with modern design elements'
+    }
+    
+    return generatedPrompt
   } catch (error) {
     console.error('Image prompt generation error:', error)
-    return 'Abstract digital illustration representing the concept'
+    return 'Abstract digital illustration representing the concept with modern design elements'
   }
 }
 

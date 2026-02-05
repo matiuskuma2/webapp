@@ -2431,4 +2431,141 @@ projects.get('/:id/comic/rebake-status', async (c) => {
   }
 })
 
+// ====================================================================
+// PUT /api/projects/:id/narration-voice - Set default narration voice
+// ====================================================================
+// SSOT: projects.settings_json.default_narration_voice
+// This voice is used for all narration utterances in the project
+// unless explicitly overridden in the generate request.
+
+projects.put('/:id/narration-voice', async (c) => {
+  const projectId = c.req.param('id')
+  
+  try {
+    const body = await c.req.json<{
+      provider?: string;
+      voice_id: string;
+    }>()
+    
+    // Validate voice_id
+    if (!body.voice_id || typeof body.voice_id !== 'string') {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: 'voice_id is required' }
+      }, 400)
+    }
+    
+    // Auto-detect provider if not specified
+    let provider = body.provider || 'google'
+    if (!body.provider) {
+      if (body.voice_id.startsWith('elevenlabs:') || body.voice_id.startsWith('el-')) {
+        provider = 'elevenlabs'
+      } else if (body.voice_id.startsWith('fish:') || body.voice_id.startsWith('fish-')) {
+        provider = 'fish'
+      }
+    }
+    
+    // Validate provider
+    const validProviders = ['google', 'elevenlabs', 'fish']
+    if (!validProviders.includes(provider)) {
+      return c.json({
+        error: { code: 'INVALID_REQUEST', message: `Invalid provider. Must be one of: ${validProviders.join(', ')}` }
+      }, 400)
+    }
+    
+    // Get current project settings
+    const project = await c.env.DB.prepare(`
+      SELECT settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{ settings_json: string | null }>()
+    
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+    
+    // Parse existing settings or create new
+    let settings: Record<string, any> = {}
+    if (project.settings_json) {
+      try {
+        settings = JSON.parse(project.settings_json)
+      } catch (e) {
+        console.warn(`[Project ${projectId}] Failed to parse existing settings_json, creating new`)
+      }
+    }
+    
+    // Update default_narration_voice
+    settings.default_narration_voice = {
+      provider,
+      voice_id: body.voice_id
+    }
+    
+    // Save back to DB
+    await c.env.DB.prepare(`
+      UPDATE projects 
+      SET settings_json = ?, updated_at = CURRENT_TIMESTAMP 
+      WHERE id = ?
+    `).bind(JSON.stringify(settings), projectId).run()
+    
+    console.log(`[Project ${projectId}] Updated default_narration_voice: provider=${provider}, voice_id=${body.voice_id}`)
+    
+    return c.json({
+      success: true,
+      default_narration_voice: settings.default_narration_voice
+    })
+    
+  } catch (error) {
+    console.error('[Projects] Set narration voice error:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to set narration voice' }
+    }, 500)
+  }
+})
+
+// ====================================================================
+// GET /api/projects/:id/narration-voice - Get default narration voice
+// ====================================================================
+
+projects.get('/:id/narration-voice', async (c) => {
+  const projectId = c.req.param('id')
+  
+  try {
+    const project = await c.env.DB.prepare(`
+      SELECT settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{ settings_json: string | null }>()
+    
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+    
+    let defaultVoice = {
+      provider: 'google',
+      voice_id: 'ja-JP-Neural2-B'  // Ultimate fallback
+    }
+    
+    if (project.settings_json) {
+      try {
+        const settings = JSON.parse(project.settings_json)
+        if (settings.default_narration_voice?.voice_id) {
+          defaultVoice = settings.default_narration_voice
+        }
+      } catch (e) {
+        console.warn(`[Project ${projectId}] Failed to parse settings_json`)
+      }
+    }
+    
+    return c.json({
+      default_narration_voice: defaultVoice,
+      is_custom: project.settings_json?.includes('default_narration_voice') || false
+    })
+    
+  } catch (error) {
+    console.error('[Projects] Get narration voice error:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to get narration voice' }
+    }, 500)
+  }
+})
+
 export default projects

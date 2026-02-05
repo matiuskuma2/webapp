@@ -623,12 +623,21 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
       `).bind(utteranceId).run();
     }
 
-    // Determine voice settings
+    // ========================================
+    // SSOT: Voice Selection Logic
+    // ========================================
+    // Priority (MUST NOT be changed without spec review):
+    // 1. dialogue + character_key → project_character_models.voice_preset_id
+    // 2. narration → projects.settings_json.default_narration_voice
+    // 3. fallback (only when nothing configured) → ja-JP-Neural2-B
+    // ========================================
+    
     let provider = 'google';
-    let voiceId = 'ja-JP-Neural2-B'; // Default narrator voice
+    let voiceId = 'ja-JP-Neural2-B'; // Ultimate fallback only
+    let voiceSource = 'fallback';
 
     if (utterance.role === 'dialogue' && utterance.character_key) {
-      // Get character's voice preset
+      // Priority 1: Character voice for dialogue
       const character = await c.env.DB.prepare(`
         SELECT voice_preset_id FROM project_character_models
         WHERE project_id = ? AND character_key = ?
@@ -636,6 +645,7 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
 
       if (character?.voice_preset_id) {
         voiceId = character.voice_preset_id;
+        voiceSource = 'character';
         
         // Detect provider from voice_preset_id
         if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
@@ -645,8 +655,39 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
         }
       }
     }
+    
+    // Priority 2: Project default narration voice (for narration or when character voice not found)
+    if (voiceSource === 'fallback') {
+      const project = await c.env.DB.prepare(`
+        SELECT settings_json FROM projects WHERE id = ?
+      `).bind(utterance.project_id).first<{ settings_json: string | null }>();
+      
+      if (project?.settings_json) {
+        try {
+          const settings = JSON.parse(project.settings_json);
+          if (settings.default_narration_voice?.voice_id) {
+            voiceId = settings.default_narration_voice.voice_id;
+            provider = settings.default_narration_voice.provider || 'google';
+            voiceSource = 'project_default';
+            
+            // Re-detect provider if not explicitly set
+            if (!settings.default_narration_voice.provider) {
+              if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
+                provider = 'elevenlabs';
+              } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
+                provider = 'fish';
+              }
+            }
+          }
+        } catch (e) {
+          console.warn(`[Utterance ${utteranceId}] Failed to parse settings_json:`, e);
+        }
+      }
+    }
+    
+    console.log(`[Utterance ${utteranceId}] Voice resolved: source=${voiceSource}, provider=${provider}, voiceId=${voiceId}`);
 
-    // Allow override from request body
+    // Allow override from request body (explicit user request only)
     if (body.voice_id) voiceId = body.voice_id;
     if (body.provider) provider = body.provider;
     let format = body.format || 'mp3';

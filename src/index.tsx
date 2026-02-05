@@ -61,6 +61,7 @@ import { audioLibrary } from './routes/audio-library' // P1: User Audio Library
 import { sceneAudioAssignments } from './routes/scene-audio-assignments' // P2: Scene Audio Assignments
 import webhooks from './routes/webhooks' // AWS Orchestrator webhooks
 import patches from './routes/patches' // R4: SSOT Patch API (chat edit)
+import bulkAudio from './routes/bulk-audio' // Step3: Bulk audio generation
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -137,6 +138,9 @@ app.route('/api', settings) // For /api/settings/api-keys/*
 // Authentication routes
 app.route('/api', auth) // For /api/auth/*
 app.route('/api/admin', admin) // For /api/admin/* (superadmin only)
+
+// Bulk audio generation routes
+app.route('/api', bulkAudio) // For /api/projects/:projectId/audio/bulk-*
 
 // Root route - serve HTML
 // Root route - with authentication check
