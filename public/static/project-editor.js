@@ -8815,20 +8815,104 @@ function getVideoBuildStatusInfo(status) {
 }
 
 /**
- * Show progress section
+ * Format time duration as human-readable string
+ */
+function formatDuration(ms) {
+  if (!ms || ms < 0) return '計算中...';
+  
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  
+  if (hours > 0) {
+    return `約${hours}時間${minutes}分`;
+  } else if (minutes > 0) {
+    return `約${minutes}分${seconds}秒`;
+  } else {
+    return `約${seconds}秒`;
+  }
+}
+
+/**
+ * Calculate estimated remaining time based on progress
+ */
+function calculateEta(build) {
+  const percent = build.progress_percent || 0;
+  const createdAt = build.created_at ? new Date(build.created_at) : null;
+  const startedAt = build.render_started_at ? new Date(build.render_started_at) : null;
+  
+  // Use render_started_at if available, otherwise created_at
+  const startTime = startedAt || createdAt;
+  if (!startTime || percent <= 0) {
+    return { elapsed: null, remaining: null, total: null };
+  }
+  
+  const now = new Date();
+  const elapsedMs = now - startTime;
+  
+  // Calculate remaining time based on current progress rate
+  // If 30% done in 2 minutes, remaining 70% should take ~4.7 minutes
+  if (percent > 0 && percent < 100) {
+    const remainingPercent = 100 - percent;
+    const estimatedTotalMs = (elapsedMs / percent) * 100;
+    const estimatedRemainingMs = (elapsedMs / percent) * remainingPercent;
+    
+    return {
+      elapsed: elapsedMs,
+      remaining: estimatedRemainingMs,
+      total: estimatedTotalMs
+    };
+  }
+  
+  return { elapsed: elapsedMs, remaining: 0, total: elapsedMs };
+}
+
+/**
+ * Show progress section with ETA
  */
 function showVideoBuildProgress(build) {
   const progressEl = document.getElementById('videoBuildProgress');
   if (!progressEl) return;
   
   const statusInfo = getVideoBuildStatusInfo(build.status);
+  const percent = build.progress_percent || 0;
   
+  // Basic info
   document.getElementById('videoBuildProgressIcon').textContent = statusInfo.icon;
   document.getElementById('videoBuildProgressTitle').textContent = statusInfo.label;
-  document.getElementById('videoBuildProgressPercent').textContent = `${build.progress_percent || 0}%`;
-  document.getElementById('videoBuildProgressBar').style.width = `${build.progress_percent || 0}%`;
-  document.getElementById('videoBuildProgressStage').textContent = build.progress_stage || '準備中...';
+  document.getElementById('videoBuildProgressPercent').textContent = `${percent}%`;
+  document.getElementById('videoBuildProgressBar').style.width = `${percent}%`;
+  document.getElementById('videoBuildProgressStage').textContent = build.progress_stage || build.progress_message || '準備中...';
   document.getElementById('videoBuildProgressId').textContent = `#${build.id}`;
+  
+  // Calculate and display ETA
+  const eta = calculateEta(build);
+  const etaEl = document.getElementById('videoBuildProgressEta');
+  const elapsedEl = document.getElementById('videoBuildProgressElapsed');
+  const durationEl = document.getElementById('videoBuildProgressDuration');
+  
+  if (etaEl) {
+    if (percent === 0) {
+      etaEl.textContent = '初期化中...';
+    } else if (percent >= 100) {
+      etaEl.textContent = '完了処理中...';
+    } else if (eta.remaining !== null) {
+      etaEl.textContent = `残り ${formatDuration(eta.remaining)}`;
+    } else {
+      etaEl.textContent = '残り時間を計算中...';
+    }
+  }
+  
+  if (elapsedEl && eta.elapsed !== null) {
+    elapsedEl.textContent = `経過時間: ${formatDuration(eta.elapsed)}`;
+  }
+  
+  if (durationEl && eta.total !== null && percent > 5) {
+    durationEl.textContent = `推定総時間: ${formatDuration(eta.total)}`;
+  } else if (durationEl) {
+    durationEl.textContent = '推定総時間: 計算中...';
+  }
   
   progressEl.classList.remove('hidden');
 }

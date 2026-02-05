@@ -2148,7 +2148,10 @@ app.get('/projects/:id', (c) => {
                             <span id="videoBuildProgressIcon" class="mr-2">🎬</span>
                             <span id="videoBuildProgressTitle">レンダリング中...</span>
                         </h3>
-                        <span id="videoBuildProgressPercent" class="text-2xl font-bold text-blue-600">0%</span>
+                        <div class="text-right">
+                            <span id="videoBuildProgressPercent" class="text-2xl font-bold text-blue-600">0%</span>
+                            <div id="videoBuildProgressEta" class="text-sm text-gray-500 mt-1">残り時間を計算中...</div>
+                        </div>
                     </div>
                     
                     <!-- Progress Bar -->
@@ -2159,6 +2162,19 @@ app.get('/projects/:id', (c) => {
                     <div class="flex items-center justify-between text-sm">
                         <span id="videoBuildProgressStage" class="text-gray-600">準備中...</span>
                         <span id="videoBuildProgressId" class="text-gray-400 font-mono text-xs"></span>
+                    </div>
+                    
+                    <!-- Additional Info -->
+                    <div id="videoBuildProgressInfo" class="mt-3 pt-3 border-t border-gray-200 text-xs text-gray-500">
+                        <span id="videoBuildProgressElapsed">経過時間: 計算中...</span>
+                        <span class="mx-2">|</span>
+                        <span id="videoBuildProgressDuration">推定総時間: 計算中...</span>
+                    </div>
+                    
+                    <!-- User Note -->
+                    <div class="mt-3 p-3 bg-blue-50 rounded-lg text-sm text-blue-700">
+                        <i class="fas fa-info-circle mr-2"></i>
+                        このページを閉じても、動画生成はバックグラウンドで継続されます。完了後、履歴からダウンロードできます。
                     </div>
                 </div>
                 
