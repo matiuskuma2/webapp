@@ -411,6 +411,45 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
   }
   
+  // 2.5. Access control check - ユーザーがこのシーンにアクセスできるか検証
+  const { getCookie } = await import('hono/cookie');
+  const sessionIdForAccess = getCookie(c, 'session');
+  let accessUserId: number | null = null;
+  let accessUserRole: string | null = null;
+  
+  if (sessionIdForAccess) {
+    const sessionUser = await c.env.DB.prepare(`
+      SELECT s.user_id, u.role FROM sessions s
+      JOIN users u ON s.user_id = u.id
+      WHERE s.id = ? AND s.expires_at > datetime('now')
+    `).bind(sessionIdForAccess).first<{ user_id: number; role: string }>();
+    
+    if (sessionUser) {
+      accessUserId = sessionUser.user_id;
+      accessUserRole = sessionUser.role;
+    }
+  }
+  
+  // アクセス制御: superadmin/adminは全プロジェクトにアクセス可能、それ以外はオーナーのみ
+  const isPrivileged = accessUserRole === 'superadmin' || accessUserRole === 'admin';
+  if (!isPrivileged && scene.owner_user_id !== accessUserId) {
+    console.log(`[VideoGen] Access denied: project owner ${scene.owner_user_id} !== logged-in user ${accessUserId}`);
+    await logError({
+      sceneId: sceneId,
+      projectId: scene.project_id,
+      userId: accessUserId || undefined,
+      errorCode: 'ACCESS_DENIED',
+      errorMessage: `Access denied: user ${accessUserId} cannot access project owned by ${scene.owner_user_id}`,
+      httpStatusCode: 403,
+    });
+    return c.json({
+      error: {
+        code: 'ACCESS_DENIED',
+        message: 'このプロジェクトにアクセスする権限がありません',
+      },
+    }, 403);
+  }
+  
   // 3. Active image 取得
   const activeImage = await getSceneActiveImage(c.env.DB, sceneId);
   if (!activeImage) {
@@ -461,25 +500,9 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   const videoEngine: VideoEngine = body.video_engine || 
     (body.model?.includes('veo-3') ? 'veo3' : 'veo2');
   
-  // 5.5. Get logged-in user info (for superadmin check)
-  const { getCookie } = await import('hono/cookie');
-  const sessionId = getCookie(c, 'session');
-  let loggedInUserId: number | null = null;
-  let loggedInUserRole: string | null = null;
-  
-  if (sessionId) {
-    const sessionUser = await c.env.DB.prepare(`
-      SELECT s.user_id, u.role FROM sessions s
-      JOIN users u ON s.user_id = u.id
-      WHERE s.id = ? AND s.expires_at > datetime('now')
-    `).bind(sessionId).first<{ user_id: number; role: string }>();
-    
-    if (sessionUser) {
-      loggedInUserId = sessionUser.user_id;
-      loggedInUserRole = sessionUser.role;
-    }
-  }
-  
+  // 5.5. Use already-obtained session info from access control (avoid duplicate DB query)
+  const loggedInUserId = accessUserId;
+  const loggedInUserRole = accessUserRole;
   const isSuperadmin = loggedInUserRole === 'superadmin';
   
   // ========================================================================
