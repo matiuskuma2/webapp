@@ -14,7 +14,235 @@
  * 
  * ## Remotion契約
  * Remotion は BuildRequest JSON のみを参照し、DB を直接読まない。
+ * 
+ * ## Silent Fallback 禁止
+ * 素材が不足している場合は、自動代替せずにエラーを返す。
+ * preflight赤エラーでVideo Buildボタンを無効化する。
  */
+
+// ====================================================================
+// VISUAL ERROR CODES (赤エラー仕様・SSOT)
+// ====================================================================
+
+/**
+ * 視覚素材エラーコード
+ * 
+ * これらのエラーが1件でも存在する場合、Video Buildボタンは無効化される。
+ * Silent fallbackは禁止。
+ */
+export type VisualErrorCode =
+  | 'VISUAL_VIDEO_MISSING'        // display_asset_type='video' だが active_video 不在/未完了/r2_url null
+  | 'VISUAL_IMAGE_MISSING'        // display_asset_type='image' だが active_image 不在/r2_url null
+  | 'VISUAL_COMIC_MISSING'        // display_asset_type='comic' だが active_comic 不在/r2_url null
+  | 'VISUAL_ASSET_URL_INVALID'    // 選ばれた素材のURLが不正（空、形式不正）
+  | 'VISUAL_CONFLICT_BOTH_PRESENT'; // image と video が同時に指定（設計違反）
+
+/**
+ * 視覚素材エラー
+ */
+export interface VisualAssetError {
+  type: 'VISUAL_MISSING';
+  code: VisualErrorCode;
+  severity: 'error';
+  scene_id: number;
+  scene_idx: number;
+  display_asset_type: 'image' | 'comic' | 'video';
+  message: string;
+  action_hint: string;
+}
+
+/**
+ * 視覚素材検証結果
+ */
+export interface VisualAssetValidationResult {
+  is_valid: boolean;
+  errors: VisualAssetError[];
+  // ログ用の詳細情報
+  debug_info: Array<{
+    scene_id: number;
+    scene_idx: number;
+    display_asset_type: string;
+    has_active_image: boolean;
+    has_active_comic: boolean;
+    has_active_video: boolean;
+    video_status?: string;
+    resolved_visual: 'image' | 'comic' | 'video' | 'none';
+  }>;
+}
+
+/**
+ * エラーメッセージ定義（日本語・UIフレンドリー）
+ */
+const VISUAL_ERROR_MESSAGES: Record<VisualErrorCode, { message: string; action_hint: string }> = {
+  VISUAL_VIDEO_MISSING: {
+    message: 'このシーンは「動画」表示ですが、生成動画が未完了/未選択です。',
+    action_hint: 'Builderで動画を生成して「動画に切替」を押してください。',
+  },
+  VISUAL_IMAGE_MISSING: {
+    message: 'このシーンは「画像」表示ですが、画像が未生成/未選択です。',
+    action_hint: '画像を生成して、シーンの表示素材を確認してください。',
+  },
+  VISUAL_COMIC_MISSING: {
+    message: 'このシーンは「漫画」表示ですが、漫画画像が未生成/未公開です。',
+    action_hint: '漫画編集で「公開」を実行してください。',
+  },
+  VISUAL_ASSET_URL_INVALID: {
+    message: '素材のURLが不正です（空、形式不正）。',
+    action_hint: '素材を再アップロード/再生成してURLを更新してください。',
+  },
+  VISUAL_CONFLICT_BOTH_PRESENT: {
+    message: '画像と動画が同時に指定されました。',
+    action_hint: '運営に連絡してください（コード: VISUAL_CONFLICT_BOTH_PRESENT）。',
+  },
+};
+
+/**
+ * 視覚素材の検証（SSOT）
+ * 
+ * Silent fallback禁止: 素材が不足している場合はエラーを返す。
+ * この関数で検出されたエラーが1件でもあれば Video Build ボタンは無効化される。
+ * 
+ * @param scenes シーンデータ配列
+ * @returns 検証結果
+ */
+export function validateVisualAssets(scenes: SceneData[]): VisualAssetValidationResult {
+  const errors: VisualAssetError[] = [];
+  const debug_info: VisualAssetValidationResult['debug_info'] = [];
+
+  for (const scene of scenes) {
+    const displayType = scene.display_asset_type || 'image';
+    const hasActiveImage = !!(scene.active_image?.r2_url);
+    const hasActiveComic = !!(scene.active_comic?.r2_url);
+    const hasActiveVideo = !!(
+      scene.active_video?.r2_url && 
+      scene.active_video?.status === 'completed'
+    );
+
+    // デバッグ情報を収集
+    let resolvedVisual: 'image' | 'comic' | 'video' | 'none' = 'none';
+
+    // display_asset_type に基づいて検証
+    switch (displayType) {
+      case 'video':
+        if (!hasActiveVideo) {
+          // 動画が見つからない
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_VIDEO_MISSING;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_VIDEO_MISSING',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'video',
+            message: `シーン${scene.idx}：動画が見つかりません - ${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else if (!isValidUrl(scene.active_video!.r2_url)) {
+          // URLが不正
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_INVALID;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_ASSET_URL_INVALID',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'video',
+            message: `シーン${scene.idx}：${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else {
+          resolvedVisual = 'video';
+        }
+        break;
+
+      case 'comic':
+        if (!hasActiveComic) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_COMIC_MISSING;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_COMIC_MISSING',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'comic',
+            message: `シーン${scene.idx}：漫画画像が見つかりません - ${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else if (!isValidUrl(scene.active_comic!.r2_url)) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_INVALID;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_ASSET_URL_INVALID',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'comic',
+            message: `シーン${scene.idx}：${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else {
+          resolvedVisual = 'comic';
+        }
+        break;
+
+      default: // 'image'
+        if (!hasActiveImage) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_IMAGE_MISSING;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_IMAGE_MISSING',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'image',
+            message: `シーン${scene.idx}：画像が見つかりません - ${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else if (!isValidUrl(scene.active_image!.r2_url)) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_INVALID;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_ASSET_URL_INVALID',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'image',
+            message: `シーン${scene.idx}：${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else {
+          resolvedVisual = 'image';
+        }
+        break;
+    }
+
+    debug_info.push({
+      scene_id: scene.id,
+      scene_idx: scene.idx,
+      display_asset_type: displayType,
+      has_active_image: hasActiveImage,
+      has_active_comic: hasActiveComic,
+      has_active_video: hasActiveVideo,
+      video_status: scene.active_video?.status,
+      resolved_visual: resolvedVisual,
+    });
+  }
+
+  return {
+    is_valid: errors.length === 0 && scenes.length > 0,
+    errors,
+    debug_info,
+  };
+}
+
+/**
+ * URLが有効かどうかを検証
+ */
+function isValidUrl(url: string | undefined | null): boolean {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return trimmed !== '' && (trimmed.startsWith('http://') || trimmed.startsWith('https://'));
+}
 
 // ====================================================================
 // BuildRequest v1 Types (Remotion契約)

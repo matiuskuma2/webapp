@@ -25,11 +25,13 @@ import { logVideoBuildRender } from '../utils/usage-logger';
 import { 
   validateProjectAssets, 
   validateUtterancesPreflight, 
+  validateVisualAssets,
   buildProjectJson, 
   hashProjectJson,
   validateProjectJson,
   validateRenderInputs,
   type RenderInputScene,
+  type VisualAssetError,
 } from '../utils/video-build-helpers';
 
 /**
@@ -1469,6 +1471,22 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     // 素材 Preflight検証（画像/漫画/動画）
     const assetValidation = validateProjectAssets(scenesWithAssets);
     
+    // ============================================================
+    // C仕様: 視覚素材の赤エラー検証（Silent Fallback禁止）
+    // VISUAL_VIDEO_MISSING, VISUAL_IMAGE_MISSING, VISUAL_COMIC_MISSING 等
+    // これらが1件でもあれば Video Build ボタンは無効化される
+    // ============================================================
+    const visualValidation = validateVisualAssets(scenesWithAssets);
+    
+    // デバッグログ: 視覚素材検証結果
+    if (!visualValidation.is_valid) {
+      console.log('[VideoBuild] Preflight: Visual validation failed', {
+        projectId,
+        errors: visualValidation.errors,
+        debug_info: visualValidation.debug_info,
+      });
+    }
+    
     // R1.6: Utterances Preflight検証
     const utteranceValidation = validateUtterancesPreflight(scenesWithAssets);
     
@@ -1559,21 +1577,55 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
 
     const projectJsonValidation = validateRenderInputs(renderInputs);
     
-    // 全体の判定: 素材OK かつ AWS設定あり かつ project.json検証OK なら生成可能
-    // PR-A2: projectJsonValidation.is_valid を追加（これで「押せない」が実現）
-    const canGenerate = assetValidation.is_ready && awsConfigured && projectJsonValidation.is_valid;
+    // ============================================================
+    // canGenerate 判定 (SSOT)
+    // C仕様: 視覚素材エラーが1件でもあればボタン無効化
+    // ============================================================
+    const canGenerate = 
+      assetValidation.is_ready && 
+      visualValidation.is_valid &&  // C仕様: Silent Fallback禁止
+      awsConfigured && 
+      projectJsonValidation.is_valid;
     
+    // ============================================================
     // 警告を「必須」と「推奨」に分類
-    // 必須エラー（赤・生成停止）: 素材不足 + project.json検証エラー
-    const requiredErrors = [
-      // 素材不足エラー
-      ...assetValidation.missing.map(m => ({
-        type: 'ASSET_MISSING' as const,
+    // ============================================================
+    
+    // 必須エラー（赤・生成停止）: 視覚素材エラー + 素材不足 + project.json検証エラー
+    const requiredErrors: Array<{
+      type: string;
+      code?: string;
+      level: 'error';
+      scene_id: number | null;
+      scene_idx: number;
+      display_asset_type?: string;
+      message: string;
+      action_hint?: string;
+    }> = [
+      // ============================================================
+      // C仕様: 視覚素材エラー（VISUAL_VIDEO_MISSING等）
+      // これらは UIフレンドリーなメッセージと action_hint を含む
+      // ============================================================
+      ...visualValidation.errors.map((e: VisualAssetError) => ({
+        type: e.type,
+        code: e.code,
         level: 'error' as const,
-        scene_id: m.scene_id,
-        scene_idx: m.scene_idx,
-        message: `シーン${m.scene_idx}：${m.required_asset === 'active_comic.r2_url' ? '漫画画像' : '画像'}がありません`,
+        scene_id: e.scene_id,
+        scene_idx: e.scene_idx,
+        display_asset_type: e.display_asset_type,
+        message: e.message,
+        action_hint: e.action_hint,
       })),
+      // 素材不足エラー（後方互換用 - visualValidationと重複する可能性あり）
+      ...assetValidation.missing
+        .filter(m => !visualValidation.errors.some(e => e.scene_id === m.scene_id))  // 重複排除
+        .map(m => ({
+          type: 'ASSET_MISSING' as const,
+          level: 'error' as const,
+          scene_id: m.scene_id,
+          scene_idx: m.scene_idx,
+          message: `シーン${m.scene_idx}：${m.required_asset === 'active_comic.r2_url' ? '漫画画像' : m.required_asset === 'active_video.r2_url' ? '動画' : '画像'}がありません`,
+        })),
       // PR-A2: project.json検証エラー
       ...projectJsonValidation.critical_errors.map(e => ({
         type: 'PROJECT_JSON_ERROR' as const,
@@ -1671,6 +1723,16 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
         is_valid: projectJsonValidation.is_valid,
         critical_errors: projectJsonValidation.critical_errors,
         warnings: projectJsonValidation.warnings,
+      },
+      // ============================================================
+      // C仕様: 視覚素材検証結果（SSOT）
+      // Silent Fallback禁止のための赤エラー検証
+      // ============================================================
+      visual_validation: {
+        is_valid: visualValidation.is_valid,
+        errors: visualValidation.errors,
+        // デバッグ用: 各シーンの素材状態
+        debug_info: visualValidation.debug_info,
       },
     });
     
