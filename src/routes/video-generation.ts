@@ -192,32 +192,41 @@ async function getUserApiKey(
 // Helper: Cost estimation for video generation
 // ====================================================================
 // 
-// Video API pricing (as of 2024):
-// - Google Veo 2: ~$0.35/sec (generate mode), ~$0.10/sec (extend mode)
-// - Veo 2 minimum is typically 5 seconds ($1.75)
-// - Imagen 3 Video: Similar pricing
+// Video API pricing (as of 2025-02):
+// - Google Veo 2 (Gemini API): $0.35/sec
+// - Google Veo 2 (Vertex AI): $0.50/sec
+// - Google Veo 3 (Vertex AI): $0.50/sec (audio off), $0.75/sec (audio on)
+// - Veo 3 Fast: $0.25/sec (audio off), $0.40/sec (audio on)
+// - Veo minimum duration: 5 seconds
 // 
 // Remotion Lambda pricing:
 // - AWS Lambda: ~$0.0001 per GB-second
 // - Typical 30-sec video render: ~$0.002-0.005
+// 
+// SSOT: コスト追跡は api_usage_logs テーブルに記録
 
-function estimateVideoCost(model: string, durationSec: number): number {
-  // Veo 2 pricing: approximately $0.35 per second
-  // This is an estimate - actual pricing may vary
-  const veoRatePerSecond = 0.35;
+function estimateVideoCost(model: string, durationSec: number, hasAudio: boolean = false): number {
+  const modelLower = model?.toLowerCase() || '';
   
-  switch (model?.toLowerCase()) {
-    case 'veo-2':
-    case 'veo2':
-    case 'veo-002':
-      return durationSec * veoRatePerSecond;
-    case 'imagen-3-video':
-    case 'imagen3':
-      return durationSec * 0.30; // Slightly cheaper estimate
-    default:
-      // Default to Veo 2 pricing as fallback
-      return durationSec * veoRatePerSecond;
+  // Veo 3 pricing (Vertex AI) - 2025-02 rates
+  if (modelLower.includes('veo-3') || modelLower.includes('veo3')) {
+    // Veo 3: $0.50/sec (audio off), $0.75/sec (audio on)
+    return durationSec * (hasAudio ? 0.75 : 0.50);
   }
+  
+  // Veo 2 pricing (Gemini API) - 2025-02 rates
+  if (modelLower.includes('veo-2') || modelLower.includes('veo2') || modelLower.includes('veo-002')) {
+    // Gemini API rate: $0.35/sec
+    return durationSec * 0.35;
+  }
+  
+  // Imagen 3 Video - similar to Veo 2
+  if (modelLower.includes('imagen-3-video') || modelLower.includes('imagen3')) {
+    return durationSec * 0.30;
+  }
+  
+  // Default: assume Veo 2 pricing for unknown models
+  return durationSec * 0.35;
 }
 
 // Remotion/video build cost estimate
@@ -838,8 +847,10 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   // 10. api_usage_logs 記録
   // - user_id: 実行者（executor）
   // - sponsored_by_user_id: スポンサー課金時は支払い者、user課金時はNULL
-  // - estimated_cost_usd: Veo 2 pricing (~$0.35/sec for generate mode)
-  const estimatedCostUsd = estimateVideoCost(model, durationSec);
+  // - estimated_cost_usd: Veo 2 ($0.35/sec), Veo 3 ($0.50/sec)
+  // - hasAudio: Veo 3 with audio は $0.75/sec（現在未サポート）
+  const hasAudio = false; // Veo 3 audio generation is not yet supported
+  const estimatedCostUsd = estimateVideoCost(model, durationSec, hasAudio);
   
   await c.env.DB.prepare(`
     INSERT INTO api_usage_logs (
