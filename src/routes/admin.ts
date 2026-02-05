@@ -11,6 +11,7 @@
  * - GET /api/admin/usage - Get API usage summary
  * - GET /api/admin/usage/daily - Get daily usage stats
  * - GET /api/admin/usage/sponsor - Get sponsor usage
+ * - GET /api/admin/usage/infrastructure - Get AWS/Cloudflare infrastructure costs
  * - GET /api/admin/video-builds/summary - Get video build summary
  * - GET /api/admin/sales/summary - Get sales summary
  * - GET /api/admin/sales/by-user - Get sales by user
@@ -26,6 +27,7 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Bindings } from '../types/bindings';
+import { fetchInfrastructureCosts } from '../utils/infrastructure-cost';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -2153,6 +2155,69 @@ admin.post('/audio-library/upload', async (c) => {
     return c.json({ 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to upload audio' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// GET /api/admin/usage/infrastructure - Get AWS/Cloudflare infrastructure costs
+// ====================================================================
+// 
+// Fetches real infrastructure costs from:
+// - AWS Cost Explorer (Lambda, S3, Data Transfer)
+// - Cloudflare Analytics (Workers, R2, D1)
+// 
+// Note: AWS Cost Explorer API costs $0.01 per request
+
+admin.get('/usage/infrastructure', async (c) => {
+  const days = parseInt(c.req.query('days') || '30');
+  
+  try {
+    // Check for AWS credentials
+    const awsConfig = (c.env.AWS_ACCESS_KEY_ID && c.env.AWS_SECRET_ACCESS_KEY)
+      ? {
+          accessKeyId: c.env.AWS_ACCESS_KEY_ID,
+          secretAccessKey: c.env.AWS_SECRET_ACCESS_KEY,
+          region: c.env.AWS_REGION || 'us-east-1'
+        }
+      : null;
+    
+    // Check for Cloudflare credentials
+    const cloudflareConfig = (c.env.CF_ACCOUNT_ID && c.env.CF_API_TOKEN)
+      ? {
+          accountId: c.env.CF_ACCOUNT_ID,
+          apiToken: c.env.CF_API_TOKEN
+        }
+      : null;
+    
+    // Log what's configured
+    console.log('[Infrastructure] Config status:', {
+      awsConfigured: !!awsConfig,
+      cloudflareConfigured: !!cloudflareConfig,
+      days
+    });
+    
+    // Fetch costs
+    const result = await fetchInfrastructureCosts(awsConfig, cloudflareConfig, days);
+    
+    return c.json({
+      success: true,
+      ...result,
+      config: {
+        awsConfigured: !!awsConfig,
+        cloudflareConfigured: !!cloudflareConfig
+      }
+    });
+    
+  } catch (error) {
+    console.error('Get infrastructure costs error:', error);
+    return c.json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch infrastructure costs',
+      config: {
+        awsConfigured: !!(c.env.AWS_ACCESS_KEY_ID && c.env.AWS_SECRET_ACCESS_KEY),
+        cloudflareConfigured: !!(c.env.CF_ACCOUNT_ID && c.env.CF_API_TOKEN)
+      }
     }, 500);
   }
 });

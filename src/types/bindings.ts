@@ -29,4 +29,7 @@ export type Bindings = {
   ASSET_VERSION?: string;  // e.g. "20260125-1" or git commit hash
   // Debug flags
   DEBUG_REFERENCE_IMAGES?: string;  // '1' で参照画像取得の詳細ログを出力
+  // Cloudflare Analytics API
+  CF_ACCOUNT_ID?: string;          // Cloudflare Account ID
+  CF_API_TOKEN?: string;           // Cloudflare API Token (Analytics read permission)
 }

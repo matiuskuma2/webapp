@@ -304,6 +304,21 @@ export const adminHtml = `
                         </div>
                     </div>
                 </div>
+                
+                <!-- Infrastructure Costs Section -->
+                <div class="bg-gradient-to-r from-blue-50 to-cyan-50 rounded-xl shadow mt-6 border border-blue-200">
+                    <div class="p-6 border-b border-blue-200 flex items-center justify-between">
+                        <h2 class="text-lg font-bold text-blue-800">
+                            <i class="fas fa-server mr-2 text-blue-600"></i>インフラコスト (AWS/Cloudflare)
+                        </h2>
+                        <button onclick="loadInfrastructureCosts()" class="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
+                            <i class="fas fa-sync-alt mr-1"></i>更新
+                        </button>
+                    </div>
+                    <div id="infrastructureCosts" class="p-6">
+                        <div class="text-gray-500 text-center py-4">読み込み中...</div>
+                    </div>
+                </div>
             </div>
             
             <!-- Video Build Tab (Phase C) -->
@@ -1195,6 +1210,7 @@ export const adminHtml = `
                 
                 if (tabName === 'cost' && !costLoaded) {
                     loadCostData();
+                    loadInfrastructureCosts();
                 }
                 if (tabName === 'videoBuild' && !videoBuildLoaded) {
                     vbBuildMonthOptions();
@@ -1841,6 +1857,140 @@ export const adminHtml = `
                     <div class="text-gray-500 text-center py-8">
                         <i class="fas fa-cogs text-4xl text-gray-300 mb-4"></i>
                         <p>オペレーションデータがありません</p>
+                    </div>
+                \`;
+            }
+        }
+        
+        // ========================================
+        // Infrastructure Costs (AWS/Cloudflare)
+        // ========================================
+        
+        async function loadInfrastructureCosts() {
+            const el = document.getElementById('infrastructureCosts');
+            if (!el) return;
+            
+            el.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-blue-500 text-2xl"></i><p class="text-gray-500 mt-2">インフラコストを取得中...</p></div>';
+            
+            try {
+                const days = document.getElementById('costDaysSelect')?.value || '30';
+                const res = await axios.get('/api/admin/usage/infrastructure?days=' + days);
+                const data = res.data;
+                
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to fetch');
+                }
+                
+                const aws = data.aws || {};
+                const cf = data.cloudflare || {};
+                const config = data.config || {};
+                
+                let html = '<div class="grid grid-cols-1 md:grid-cols-2 gap-6">';
+                
+                // AWS Section
+                html += \`
+                    <div class="bg-white rounded-lg p-4 border border-orange-200">
+                        <h3 class="font-bold text-orange-700 mb-3">
+                            <i class="fab fa-aws mr-2"></i>AWS
+                            \${!config.awsConfigured ? '<span class="text-xs text-gray-400 ml-2">(未設定)</span>' : ''}
+                        </h3>
+                \`;
+                
+                if (aws.success && aws.data) {
+                    html += \`
+                        <div class="text-2xl font-bold text-orange-600 mb-2">\\\$\${aws.data.totalCost.toFixed(2)}</div>
+                        <p class="text-xs text-gray-500 mb-3">\${aws.data.period.start} 〜 \${aws.data.period.end}</p>
+                        <div class="space-y-2">
+                    \`;
+                    for (const svc of (aws.data.services || []).slice(0, 5)) {
+                        html += \`
+                            <div class="flex justify-between text-sm">
+                                <span class="text-gray-600">\${escapeHtml(svc.service)}</span>
+                                <span class="font-medium">\\\$\${svc.cost.toFixed(4)}</span>
+                            </div>
+                        \`;
+                    }
+                    html += '</div>';
+                } else {
+                    html += \`
+                        <div class="text-gray-400 text-sm">
+                            <i class="fas fa-exclamation-circle mr-1"></i>
+                            \${aws.error || 'データなし'}
+                        </div>
+                    \`;
+                }
+                html += '</div>';
+                
+                // Cloudflare Section
+                html += \`
+                    <div class="bg-white rounded-lg p-4 border border-orange-200">
+                        <h3 class="font-bold text-orange-700 mb-3">
+                            <i class="fas fa-cloud mr-2"></i>Cloudflare
+                            \${!config.cloudflareConfigured ? '<span class="text-xs text-gray-400 ml-2">(未設定)</span>' : ''}
+                        </h3>
+                \`;
+                
+                if (cf.success && cf.data) {
+                    html += \`
+                        <div class="text-2xl font-bold text-orange-600 mb-2">\\\$\${cf.data.totalEstimatedCost.toFixed(2)}</div>
+                        <p class="text-xs text-gray-500 mb-3">\${cf.data.period.start} 〜 \${cf.data.period.end}</p>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600"><i class="fas fa-cog mr-1"></i>Workers</span>
+                                <span>\${(cf.data.workers.requests / 1000000).toFixed(2)}M req / \\\$\${cf.data.workers.estimatedCost.toFixed(2)}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600"><i class="fas fa-hdd mr-1"></i>R2</span>
+                                <span>\${((cf.data.r2?.classAOperations || 0) / 1000).toFixed(1)}K ops / \\\$\${(cf.data.r2?.estimatedCost || 0).toFixed(2)}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600"><i class="fas fa-database mr-1"></i>D1</span>
+                                <span>\${((cf.data.d1?.rowsRead || 0) / 1000000).toFixed(2)}M rows / \\\$\${(cf.data.d1?.estimatedCost || 0).toFixed(2)}</span>
+                            </div>
+                        </div>
+                    \`;
+                } else {
+                    html += \`
+                        <div class="text-gray-400 text-sm">
+                            <i class="fas fa-exclamation-circle mr-1"></i>
+                            \${cf.error || 'データなし'}
+                        </div>
+                    \`;
+                }
+                html += '</div>';
+                
+                html += '</div>';
+                
+                // Total
+                html += \`
+                    <div class="mt-4 p-3 bg-blue-100 rounded-lg text-center">
+                        <span class="text-blue-800 font-medium">インフラ合計コスト: </span>
+                        <span class="text-2xl font-bold text-blue-700">\\\$\${(data.totalCost || 0).toFixed(2)}</span>
+                        <span class="text-gray-500 text-sm ml-2">(\${data.fetchedAt ? new Date(data.fetchedAt).toLocaleString('ja-JP') : '-'})</span>
+                    </div>
+                \`;
+                
+                // Setup note
+                if (!config.awsConfigured || !config.cloudflareConfigured) {
+                    html += \`
+                        <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            <strong>設定方法:</strong>
+                            \${!config.awsConfigured ? 'AWS: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY を環境変数に設定 ' : ''}
+                            \${!config.cloudflareConfigured ? 'Cloudflare: CF_ACCOUNT_ID, CF_API_TOKEN を環境変数に設定' : ''}
+                        </div>
+                    \`;
+                }
+                
+                el.innerHTML = html;
+                
+            } catch (err) {
+                console.error('Failed to load infrastructure costs:', err);
+                el.innerHTML = \`
+                    <div class="text-gray-500 text-center py-8">
+                        <i class="fas fa-server text-4xl text-gray-300 mb-4"></i>
+                        <p>インフラコストの取得に失敗しました</p>
+                        <p class="text-sm text-gray-400 mt-2">\${err.message || ''}</p>
                     </div>
                 \`;
             }
