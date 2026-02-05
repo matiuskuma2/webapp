@@ -1806,6 +1806,21 @@
           <i class="fas fa-info-circle mr-2"></i>
           <strong>ヒント:</strong> 開始時間を設定すると、シーン開始からの相対位置で効果音が再生されます。
         </div>
+        
+        <!-- SFXライブラリモーダル -->
+        <div id="sfx-library-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center">
+          <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div class="p-4 border-b border-gray-200 flex items-center justify-between">
+              <h3 class="font-bold text-lg" id="sfx-library-title">効果音ライブラリ</h3>
+              <button onclick="SceneEditModal.closeSfxLibrary()" class="text-gray-500 hover:text-gray-700">
+                <i class="fas fa-times text-xl"></i>
+              </button>
+            </div>
+            <div id="sfx-library-content" class="p-4 overflow-y-auto max-h-[60vh]">
+              <!-- ライブラリ内容が動的に挿入される -->
+            </div>
+          </div>
+        </div>
       `;
     },
     
@@ -2242,21 +2257,6 @@
               </button>
             </div>
             <div id="bgm-library-content" class="p-4 overflow-y-auto max-h-[60vh]">
-              <!-- ライブラリ内容が動的に挿入される -->
-            </div>
-          </div>
-        </div>
-        
-        <!-- SFXライブラリモーダル（動的に表示） -->
-        <div id="sfx-library-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
-          <div class="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
-            <div class="p-4 border-b border-gray-200 flex items-center justify-between">
-              <h3 class="font-bold text-lg" id="sfx-library-title">効果音ライブラリ</h3>
-              <button onclick="SceneEditModal.closeSfxLibrary()" class="text-gray-500 hover:text-gray-700">
-                <i class="fas fa-times text-xl"></i>
-              </button>
-            </div>
-            <div id="sfx-library-content" class="p-4 overflow-y-auto max-h-[60vh]">
               <!-- ライブラリ内容が動的に挿入される -->
             </div>
           </div>
