@@ -3269,6 +3269,9 @@ window.initBuilderTab = async function initBuilderTab() {
     // ✅ AUTO-RESUME: Detect generating scenes and restart polling
     autoResumeGeneratingScenes(scenes);
     
+    // ✅ Step3-PR3: Check for running bulk audio job and resume polling
+    checkAndResumeBulkAudioJob();
+    
     // ✅ Bind Auto-Assign button in Builder tab (Phase F-6 fix)
     bindBuilderAutoAssignButton();
     
@@ -14025,26 +14028,32 @@ async function generateSceneAudio(sceneId) {
 window.generateSceneAudio = generateSceneAudio;
 
 // ========== PR-Audio-Bulk: Preflight画面から一括音声生成 ==========
+// Step3-PR3: バックエンドのbulk-audio APIを使用（SSOT: project_audio_jobs）
+
+// 一括音声生成のジョブ状態をポーリング
+let bulkAudioPollingInterval = null;
+
 /**
- * 全シーンの未生成音声を一括生成
- * - Preflight画面の「音声を一括生成」ボタンから呼び出し
- * - window.missingAudioSceneIdsにキャッシュされたシーンIDを使用
- * - 各シーンのutterancesを取得し、未生成分を順次生成
+ * 全シーンの未生成音声を一括生成（バックエンドAPI版）
+ * - POST /api/projects/:projectId/audio/bulk-generate を呼び出し
+ * - ジョブの進捗をポーリングで監視
  * @param {boolean} skipConfirm - trueの場合、確認ダイアログをスキップ
  */
 async function generateAllMissingAudio(skipConfirm = false) {
   const btn = document.getElementById('btnBulkAudioGenerate');
   const originalContent = btn?.innerHTML || '';
+  const projectId = window.currentProjectId;
   
-  // 対象シーン取得
-  const sceneIds = window.missingAudioSceneIds || [];
-  if (sceneIds.length === 0) {
-    showToast('未生成の音声がありません', 'info');
+  if (!projectId) {
+    showToast('プロジェクトが選択されていません', 'error');
     return;
   }
   
+  // 対象シーン取得（表示用）
+  const sceneIds = window.missingAudioSceneIds || [];
+  
   // 確認ダイアログ（skipConfirmがtrueの場合はスキップ）
-  if (!skipConfirm) {
+  if (!skipConfirm && sceneIds.length > 0) {
     const confirmed = confirm(`${sceneIds.length}シーンの音声を一括生成します。\n\n続行しますか？`);
     if (!confirmed) return;
   }
@@ -14056,134 +14065,201 @@ async function generateAllMissingAudio(skipConfirm = false) {
   // ボタン無効化
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>準備中...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>開始中...';
     btn.className = 'ml-3 px-3 py-1 text-xs bg-gray-400 text-white rounded-lg cursor-not-allowed whitespace-nowrap';
   }
   
-  let totalGenerated = 0;
-  let totalErrors = 0;
-  let processedScenes = 0;
-  
   try {
-    // 各シーンを順次処理
-    for (const sceneId of sceneIds) {
-      processedScenes++;
-      
-      if (btn) {
-        btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${processedScenes}/${sceneIds.length}シーン処理中...`;
-      }
-      
-      try {
-        // 1. シーンのutterancesを取得
-        const response = await axios.get(`${API_BASE}/scenes/${sceneId}/utterances`);
-        const utterances = response.data.utterances || [];
-        
-        // 未生成のutterancesをフィルタ
-        const pendingUtterances = utterances.filter(u => 
-          u.text && u.text.trim().length > 0 && 
-          (!u.audio_generation_id || u.audio_status !== 'completed')
-        );
-        
-        if (pendingUtterances.length === 0) {
-          console.log(`[BulkAudio] Scene ${sceneId}: No pending utterances`);
-          continue;
-        }
-        
-        // 2. 各utteranceの音声を生成
-        for (const utt of pendingUtterances) {
-          try {
-            // キャラクターのvoice_preset_idを取得
-            // Google TTS形式: ja-JP-Standard-A（google-プレフィックスなし）
-            let voicePresetId = 'ja-JP-Standard-A'; // デフォルト
-            let provider = 'google';
-            
-            if (utt.character_key) {
-              const characterResponse = await axios.get(`${API_BASE}/projects/${window.currentProjectId}/characters`);
-              const characters = characterResponse.data.characters || [];
-              const character = characters.find(c => c.character_key === utt.character_key);
-              
-              if (character?.voice_preset_id) {
-                voicePresetId = character.voice_preset_id;
-                // providerを判定
-                if (voicePresetId.startsWith('el-') || voicePresetId.startsWith('elevenlabs')) {
-                  provider = 'elevenlabs';
-                } else if (voicePresetId.startsWith('fish:') || voicePresetId.startsWith('fish-')) {
-                  provider = 'fish';
-                } else {
-                  provider = 'google';
-                }
-              }
-            }
-            
-            // 音声生成API呼び出し
-            await axios.post(`${API_BASE}/utterances/${utt.id}/generate-audio`, {
-              voice_id: voicePresetId,
-              provider: provider,
-              format: 'mp3',
-              sample_rate: provider === 'fish' ? 44100 : 24000
-            });
-            
-            totalGenerated++;
-            
-            // レート制限対策
-            await new Promise(resolve => setTimeout(resolve, 500));
-            
-          } catch (err) {
-            console.error(`[BulkAudio] Failed utterance ${utt.id}:`, err);
-            totalErrors++;
-          }
-        }
-        
-        // シーン間でも少し待機
-        await new Promise(resolve => setTimeout(resolve, 300));
-        
-      } catch (err) {
-        console.error(`[BulkAudio] Failed scene ${sceneId}:`, err);
-        totalErrors++;
-      }
+    // バックエンドAPIでジョブを開始
+    const response = await axios.post(`${API_BASE}/projects/${projectId}/audio/bulk-generate`, {
+      mode: 'missing',  // 未生成のみ
+      force_regenerate: false
+    });
+    
+    if (!response.data.success) {
+      throw new Error(response.data.error?.message || 'ジョブの開始に失敗しました');
     }
     
-    // 結果通知
-    if (totalErrors === 0 && totalGenerated > 0) {
-      showToast(`${totalGenerated}件の音声生成を開始しました`, 'success');
-    } else if (totalGenerated > 0) {
-      showToast(`${totalGenerated}件開始 / ${totalErrors}件失敗`, 'warning');
-    } else {
-      showToast('音声生成に失敗しました', 'error');
-    }
+    const jobId = response.data.job_id;
+    console.log(`[BulkAudio] Started job ${jobId} for project ${projectId}`);
+    showToast('一括音声生成を開始しました', 'success');
     
-    // 少し待ってからPreflightを再チェック（非同期生成の反映待ち）
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    await updateVideoBuildRequirements();
-    
-    // PR-Audio-UI: 音声生成完了 - フラグを下ろす
-    window.isGeneratingAudio = false;
-    updateVideoBuildButtonState();
+    // ポーリング開始
+    startBulkAudioPolling(projectId, btn, originalContent);
     
   } catch (error) {
     console.error('[generateAllMissingAudio] Error:', error);
-    showToast(error.response?.data?.error?.message || '一括音声生成に失敗しました', 'error');
-    // PR-Audio-UI: エラー時もフラグをリセット
-    window.isGeneratingAudio = false;
-    updateVideoBuildButtonState();
-  } finally {
-    // ボタンを完了状態に更新
-    if (btn) {
-      if (totalGenerated > 0) {
-        btn.innerHTML = `<i class="fas fa-check mr-1"></i>音声生成完了`;
-        btn.className = 'ml-3 px-3 py-1 text-xs bg-green-500 text-white rounded-lg whitespace-nowrap';
-        btn.disabled = true;
-      } else {
-        btn.innerHTML = originalContent;
-        btn.className = 'ml-3 px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors whitespace-nowrap';
-        btn.disabled = false;
-      }
+    
+    // 409の場合は既存ジョブがある
+    if (error.response?.status === 409) {
+      const existingJobId = error.response?.data?.existing_job_id;
+      showToast('既に一括生成が実行中です', 'warning');
+      // 既存ジョブのポーリングを開始
+      startBulkAudioPolling(projectId, btn, originalContent);
+      return;
     }
     
-    // missingAudioSceneIds をクリア（既に生成済み）
-    window.missingAudioSceneIds = [];
+    showToast(error.response?.data?.error?.message || '一括音声生成に失敗しました', 'error');
+    
+    // エラー時はフラグをリセット
+    window.isGeneratingAudio = false;
+    updateVideoBuildButtonState();
+    
+    if (btn) {
+      btn.innerHTML = originalContent;
+      btn.className = 'ml-3 px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors whitespace-nowrap';
+      btn.disabled = false;
+    }
   }
 }
+
+/**
+ * 一括音声生成のポーリングを開始
+ */
+function startBulkAudioPolling(projectId, btn, originalContent) {
+  // 既存のポーリングがあれば停止
+  if (bulkAudioPollingInterval) {
+    clearInterval(bulkAudioPollingInterval);
+  }
+  
+  bulkAudioPollingInterval = setInterval(async () => {
+    try {
+      const statusResponse = await axios.get(`${API_BASE}/projects/${projectId}/audio/bulk-status`);
+      const data = statusResponse.data;
+      
+      if (!data.has_job) {
+        stopBulkAudioPolling(btn, originalContent, false);
+        return;
+      }
+      
+      const job = data.job;
+      console.log(`[BulkAudio] Job ${job.id} status: ${job.status}, progress: ${job.processed_utterances}/${job.total_utterances}`);
+      
+      // ボタンの進捗表示を更新
+      if (btn && (job.status === 'running' || job.status === 'queued')) {
+        const progressPercent = job.progress_percent || 0;
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${progressPercent}% (${job.processed_utterances}/${job.total_utterances})`;
+      }
+      
+      // ジョブ完了チェック
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'canceled') {
+        const isSuccess = job.status === 'completed' && job.failed_count === 0;
+        const hasPartialSuccess = job.success_count > 0;
+        
+        // 結果通知
+        if (isSuccess) {
+          showToast(`${job.success_count}件の音声生成が完了しました`, 'success');
+        } else if (hasPartialSuccess) {
+          showToast(`${job.success_count}件成功 / ${job.failed_count}件失敗`, 'warning');
+        } else if (job.status === 'canceled') {
+          showToast('音声生成がキャンセルされました', 'info');
+        } else {
+          showToast('音声生成に失敗しました', 'error');
+        }
+        
+        stopBulkAudioPolling(btn, originalContent, hasPartialSuccess || isSuccess);
+        
+        // Preflightを再チェック
+        await updateVideoBuildRequirements();
+      }
+      
+    } catch (error) {
+      console.error('[BulkAudio Polling] Error:', error);
+      // ポーリングエラーは無視して続行（一時的なネットワークエラーの可能性）
+    }
+  }, 2000); // 2秒ごとにポーリング
+}
+
+/**
+ * 一括音声生成のポーリングを停止
+ */
+function stopBulkAudioPolling(btn, originalContent, wasSuccessful) {
+  if (bulkAudioPollingInterval) {
+    clearInterval(bulkAudioPollingInterval);
+    bulkAudioPollingInterval = null;
+  }
+  
+  // フラグをリセット
+  window.isGeneratingAudio = false;
+  updateVideoBuildButtonState();
+  
+  // ボタンを更新
+  if (btn) {
+    if (wasSuccessful) {
+      btn.innerHTML = `<i class="fas fa-check mr-1"></i>音声生成完了`;
+      btn.className = 'ml-3 px-3 py-1 text-xs bg-green-500 text-white rounded-lg whitespace-nowrap';
+      btn.disabled = true;
+    } else {
+      btn.innerHTML = originalContent;
+      btn.className = 'ml-3 px-3 py-1 text-xs bg-purple-500 hover:bg-purple-600 text-white rounded-lg transition-colors whitespace-nowrap';
+      btn.disabled = false;
+    }
+  }
+  
+  // missingAudioSceneIds をクリア
+  window.missingAudioSceneIds = [];
+}
+
+/**
+ * 一括音声生成をキャンセル
+ */
+async function cancelBulkAudioGeneration() {
+  const projectId = window.currentProjectId;
+  if (!projectId) return;
+  
+  try {
+    await axios.post(`${API_BASE}/projects/${projectId}/audio/bulk-cancel`);
+    showToast('一括音声生成をキャンセルしました', 'info');
+  } catch (error) {
+    console.error('[cancelBulkAudioGeneration] Error:', error);
+    showToast('キャンセルに失敗しました', 'error');
+  }
+}
+
+// グローバルに公開
+window.cancelBulkAudioGeneration = cancelBulkAudioGeneration;
+
+/**
+ * ページ読み込み時に実行中の一括音声ジョブがあれば再開
+ */
+async function checkAndResumeBulkAudioJob() {
+  const projectId = window.currentProjectId;
+  if (!projectId) return;
+  
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${projectId}/audio/bulk-status`);
+    const data = response.data;
+    
+    if (!data.has_job) return;
+    
+    const job = data.job;
+    
+    // 実行中のジョブがあればポーリングを再開
+    if (job.status === 'queued' || job.status === 'running') {
+      console.log(`[BulkAudio] Found running job ${job.id}, resuming polling`);
+      
+      window.isGeneratingAudio = true;
+      updateVideoBuildButtonState();
+      
+      const btn = document.getElementById('btnBulkAudioGenerate');
+      const originalContent = btn?.innerHTML || '<i class="fas fa-volume-up mr-1"></i>音声を一括生成';
+      
+      if (btn) {
+        btn.disabled = true;
+        btn.className = 'ml-3 px-3 py-1 text-xs bg-gray-400 text-white rounded-lg cursor-not-allowed whitespace-nowrap';
+        const progressPercent = job.progress_percent || 0;
+        btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${progressPercent}%`;
+      }
+      
+      startBulkAudioPolling(projectId, btn, originalContent);
+    }
+  } catch (error) {
+    console.warn('[checkAndResumeBulkAudioJob] Error:', error);
+  }
+}
+
+// グローバルに公開
+window.checkAndResumeBulkAudioJob = checkAndResumeBulkAudioJob;
 
 // グローバルに公開
 window.generateAllMissingAudio = generateAllMissingAudio;
