@@ -795,10 +795,10 @@ projects.get('/:id/scenes', async (c) => {
             idx: scene.idx,
             role: scene.role,
             title: scene.title,
-            dialogue: (scene.dialogue || '').substring(0, 100), // 最初の100文字のみ
+            dialogue: scene.dialogue || '', // フルテキスト（詳細編集で使用）
             speech_type: scene.speech_type || 'narration',
             bullets: bulletsParsed,
-            image_prompt: (scene.image_prompt || '').substring(0, 100), // 最初の100文字のみ
+            image_prompt: scene.image_prompt || '', // フルテキスト（プロンプト編集で使用）
             style_preset_id: scene.style_preset_id || null,
             // Phase1.7: display_asset_type と active_comic を追加
             display_asset_type: scene.display_asset_type || 'image',
