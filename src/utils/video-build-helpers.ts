@@ -807,36 +807,27 @@ export function computeSceneDurationMs(scene: SceneData): number {
 export function computeSceneDurationMsWithReason(scene: SceneData): DurationResult {
   const displayType = scene.display_asset_type || 'image';
   
-  // 1. video モード: 動画の尺を使用
-  if (displayType === 'video' && scene.active_video?.duration_sec) {
-    return {
-      duration_ms: scene.active_video.duration_sec * 1000,
-      reason: 'video',
-    };
-  }
-  
   // ============================================================
-  // P2 SSOT: 音声下限保証
+  // P2 SSOT: 音声下限保証（video モードでも適用）
   // ============================================================
   // 「セリフ（発話音声）が途中で切れる」を構造的に防止
-  // - voice_required_ms: 音声が完全に再生されるのに必要な最低尺
-  // - duration_override_ms は「希望値」として扱い、音声下限より大きい方を採用
+  // - video モードでも音声の長さと動画の長さの大きい方を採用
+  // - 音声が動画より長い場合、音声が完全に再生されるまでシーンを継続
   // ============================================================
   
-  // 音声の必要尺を計算
+  // 音声の必要尺を計算（video モードでも先に計算）
   let voiceRequiredMs = 0;
   
-  // 2a. scene_utterances（R1.5+）の音声合計
+  // scene_utterances（R1.5+）の音声合計
   const utterances = scene.utterances || [];
   const totalUtteranceDuration = utterances.reduce((sum, u) => {
-    // duration_ms があるもの（音声生成済み）のみ加算
     return sum + (u.duration_ms || 0);
   }, 0);
   if (totalUtteranceDuration > 0) {
     voiceRequiredMs = totalUtteranceDuration + AUDIO_PADDING_MS;
   }
   
-  // 2b. comic モード: comic_data.utterances の合計尺（後方互換）
+  // comic モード: comic_data.utterances の合計尺（後方互換）
   if (voiceRequiredMs === 0 && displayType === 'comic') {
     const comicUtterances = scene.comic_data?.utterances || [];
     const totalComicDuration = comicUtterances.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
@@ -845,12 +836,37 @@ export function computeSceneDurationMsWithReason(scene: SceneData): DurationResu
     }
   }
   
-  // 2c. active_audio（旧式音声）
+  // active_audio（旧式音声）
   if (voiceRequiredMs === 0 && scene.active_audio?.duration_ms) {
     voiceRequiredMs = scene.active_audio.duration_ms + AUDIO_PADDING_MS;
   }
   
-  // 3. duration_override_ms がある場合
+  // 1. video モード: 動画の尺と音声の尺の大きい方を使用
+  if (displayType === 'video' && scene.active_video?.duration_sec) {
+    const videoDurationMs = scene.active_video.duration_sec * 1000;
+    
+    // 音声が動画より長い場合は音声優先（セリフ切れ防止）
+    if (voiceRequiredMs > videoDurationMs) {
+      console.log(`[computeSceneDuration] Scene ${scene.idx}: voice (${voiceRequiredMs}ms) > video (${videoDurationMs}ms), using voice duration`);
+      return {
+        duration_ms: voiceRequiredMs,
+        reason: 'voice',
+      };
+    }
+    
+    // 動画が音声以上の場合は動画の尺を使用
+    return {
+      duration_ms: videoDurationMs,
+      reason: 'video',
+    };
+  }
+  
+  // ============================================================
+  // 以下は非 video モード（image, comic）の尺計算
+  // 注: voiceRequiredMs は既に上部で計算済み
+  // ============================================================
+  
+  // duration_override_ms がある場合
   //    SSOT: override は「希望値」として扱い、音声下限より大きい方を採用
   if (scene.duration_override_ms != null && scene.duration_override_ms > 0) {
     const overrideMs = Math.min(Math.max(scene.duration_override_ms, MIN_DURATION_MS), MAX_DURATION_MS);
@@ -1858,11 +1874,26 @@ export function buildProjectJson(
     }
     
     // 2. duration_ms 確定 (SSOT)
-    // voices があれば Σ(voices[].duration_ms) + padding
+    // 音声と動画の両方がある場合、大きい方を採用（音声切れ防止）
     let durationMs: number;
+    const displayType_forDuration = scene.display_asset_type || 'image';
+    const videoDurationMsCalc = (displayType_forDuration === 'video' && scene.active_video?.duration_sec)
+      ? scene.active_video.duration_sec * 1000
+      : 0;
+    
     if (voices.length > 0) {
       const voicesDuration = voices.reduce((sum, v) => sum + v.duration_ms, 0);
-      durationMs = voicesDuration + AUDIO_PADDING_MS;
+      const voiceRequiredMs = voicesDuration + AUDIO_PADDING_MS;
+      
+      // 動画モードの場合: 音声と動画の大きい方を採用
+      if (videoDurationMsCalc > 0) {
+        durationMs = Math.max(voiceRequiredMs, videoDurationMsCalc);
+        if (voiceRequiredMs > videoDurationMsCalc) {
+          console.log(`[buildProjectJson] Scene ${scene.idx}: voice (${voiceRequiredMs}ms) > video (${videoDurationMsCalc}ms), using voice duration`);
+        }
+      } else {
+        durationMs = voiceRequiredMs;
+      }
     } else {
       durationMs = computeSceneDurationMs(scene);
     }
