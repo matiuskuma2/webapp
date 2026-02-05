@@ -640,10 +640,9 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
         return c.json({
           error: {
             code: 'SPONSOR_VERTEX_NOT_CONFIGURED',
-            message: isSuperadmin
-              ? 'Vertex APIキーが設定されていません。設定画面でVertex APIキーを設定してください。'
-              : 'スポンサーのVertex APIキーが設定されていません。',
-            redirect: '/settings?focus=vertex',
+            message: 'Veo3 (Vertex AI) は現在サービスアカウント認証対応中です。Veo2 をご利用ください。',
+            hint: 'Vertex AI はAPIキーではなくサービスアカウント認証が必要なため、現在対応作業中です。',
+            redirect: '/settings?focus=google',
           },
         }, 400);
       }
@@ -666,8 +665,9 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
         return c.json({
           error: {
             code: 'USER_KEY_ERROR',
-            message: keyResult.error,
-            redirect: '/settings?focus=vertex',
+            message: 'Veo3 (Vertex AI) は現在サービスアカウント認証対応中です。Veo2 をご利用ください。',
+            hint: 'Vertex AI はAPIキーではなくサービスアカウント認証が必要なため、現在対応作業中です。',
+            redirect: '/settings?focus=google',
           },
         }, 400);
       }

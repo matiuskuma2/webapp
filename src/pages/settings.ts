@@ -133,9 +133,12 @@ export const settingsHtml = `
                 <div class="bg-blue-50 border border-blue-200 rounded-lg p-3">
                     <p class="font-semibold text-blue-800 mb-2">📌 Veo2 と Veo3 の違い</p>
                     <ul class="text-xs text-blue-700 space-y-1 ml-4 list-disc">
-                        <li><strong>Veo2</strong>: Google AI Studio のAPIキー（GCP課金設定必須）</li>
-                        <li><strong>Veo3</strong>: Vertex AI のAPIキー（高品質、GCP プロジェクト必要）</li>
+                        <li><strong>Veo2</strong>: Google AI Studio のAPIキー（GCP課金設定必須）✅ 推奨</li>
+                        <li><strong>Veo3</strong>: Vertex AI（⚠️ 現在サービスアカウント認証対応作業中）</li>
                     </ul>
+                    <p class="text-[10px] text-blue-600 mt-2">
+                        ⚠️ Veo3 (Vertex AI) は単純なAPIキーではなくサービスアカウント認証が必要です。現在対応中のため、Veo2 の使用を推奨します。
+                    </p>
                 </div>
                 
                 <!-- GCP Billing Setup Guide -->
@@ -382,11 +385,11 @@ export const settingsHtml = `
             },
             { 
                 provider: 'vertex', 
-                name: '🚀 Veo3 (Vertex AI)', 
-                description: 'Vertex AI のAPIキーで高品質動画生成',
-                placeholder: 'AQ.Ab8RN...',
-                helpUrl: 'https://console.cloud.google.com/vertex-ai/studio/settings/api-keys',
-                helpText: 'Vertex AI Studio > 設定 > APIキー で取得'
+                name: '🚀 Veo3 (Vertex AI) ⚠️ 準備中', 
+                description: '⚠️ サービスアカウント認証対応中。現在はVeo2を推奨します。',
+                placeholder: '現在対応中...',
+                helpUrl: 'https://console.cloud.google.com/iam-admin/serviceaccounts',
+                helpText: '⚠️ Vertex AI はAPIキーではなくサービスアカウント認証が必要です'
             }
         ];
         
