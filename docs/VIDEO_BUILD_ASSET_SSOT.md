@@ -74,9 +74,22 @@ else:
 | `VISUAL_IMAGE_MISSING`         | `display_asset_type='image'` なのに `active_image` が無い / `r2_url null`                         | **赤**。Video Build不可 |
 | `VISUAL_COMIC_MISSING`         | `display_asset_type='comic'` なのに `active_comic` が無い / `r2_url null`                         | **赤**。Video Build不可 |
 | `VISUAL_ASSET_URL_INVALID`     | 選ばれた素材のURLが不正（空、形式不正）                                                                       | **赤**。Video Build不可 |
+| `VISUAL_ASSET_URL_FORBIDDEN`   | 素材URLにアクセスできない（403/404/timeout）                                                             | **赤**。Video Build不可 |
 | `VISUAL_CONFLICT_BOTH_PRESENT` | `assets.image` と `assets.video_clip` が同時に生成される（設計違反）                                        | **赤**（内部矛盾）。即修正対象   |
 
 → **1件でもあれば Video Build ボタン無効**
+
+### 2.2 URL到達性検証（D仕様）
+
+preflight エンドポイントでクエリパラメータ `check_reachability=true` を指定すると、
+各素材URLの到達性を HEAD リクエストで検証する。
+
+```
+GET /api/projects/{projectId}/video-builds/preflight?check_reachability=true
+```
+
+- 403/404/timeout の場合は `VISUAL_ASSET_URL_FORBIDDEN` エラー
+- Remotion Lambda が素材を取得できない問題を事前に検出
 
 ### 2.2 エラー構造（API レスポンス）
 
@@ -366,6 +379,10 @@ preflightの返却に含める（サーバログにも出す）：
 
 | 日付 | 変更内容 |
 | --- | --- |
+| 2026-02-05 | D仕様（ログ強化・URL到達性検証）実装完了 |
+| 2026-02-05 | VISUAL_ASSET_URL_FORBIDDEN エラーコード追加 |
+| 2026-02-05 | buildProjectJson に最終選択ログ・混入検知ログを追加 |
+| 2026-02-05 | VIDEO_BUILD_OPERATIONS_RUNBOOK.md 作成 |
 | 2026-02-05 | C仕様（赤エラー）実装完了。VISUAL_VIDEO_MISSING等のエラーコード追加 |
 | 2026-02-05 | buildProjectJson に video_clip 分岐を追加（静止画化バグ修正） |
 | 2026-02-05 | 本ドキュメント作成 |

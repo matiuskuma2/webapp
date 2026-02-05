@@ -35,6 +35,7 @@ export type VisualErrorCode =
   | 'VISUAL_IMAGE_MISSING'        // display_asset_type='image' だが active_image 不在/r2_url null
   | 'VISUAL_COMIC_MISSING'        // display_asset_type='comic' だが active_comic 不在/r2_url null
   | 'VISUAL_ASSET_URL_INVALID'    // 選ばれた素材のURLが不正（空、形式不正）
+  | 'VISUAL_ASSET_URL_FORBIDDEN'  // 素材URLにアクセスできない（403/404/timeout）
   | 'VISUAL_CONFLICT_BOTH_PRESENT'; // image と video が同時に指定（設計違反）
 
 /**
@@ -90,11 +91,235 @@ const VISUAL_ERROR_MESSAGES: Record<VisualErrorCode, { message: string; action_h
     message: '素材のURLが不正です（空、形式不正）。',
     action_hint: '素材を再アップロード/再生成してURLを更新してください。',
   },
+  VISUAL_ASSET_URL_FORBIDDEN: {
+    message: '素材URLにアクセスできません（403/404/timeout）。Remotionが素材を取得できないため生成できません。',
+    action_hint: '素材を再アップロード/再生成してURLを更新してください。',
+  },
   VISUAL_CONFLICT_BOTH_PRESENT: {
     message: '画像と動画が同時に指定されました。',
     action_hint: '運営に連絡してください（コード: VISUAL_CONFLICT_BOTH_PRESENT）。',
   },
 };
+
+/**
+ * URL到達性検証の結果
+ */
+export interface UrlReachabilityResult {
+  url: string;
+  reachable: boolean;
+  status_code?: number;
+  error?: string;
+}
+
+/**
+ * URLが到達可能かを検証（HEAD リクエスト）
+ * 
+ * @param url 検証するURL
+ * @param timeoutMs タイムアウト（ミリ秒）
+ * @returns 到達性検証結果
+ */
+export async function checkUrlReachability(url: string, timeoutMs: number = 5000): Promise<UrlReachabilityResult> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    
+    const response = await fetch(url, {
+      method: 'HEAD',
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (response.ok) {
+      return { url, reachable: true, status_code: response.status };
+    } else {
+      return { url, reachable: false, status_code: response.status, error: `HTTP ${response.status}` };
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return { url, reachable: false, error: errorMessage };
+  }
+}
+
+/**
+ * 視覚素材の検証（非同期版・URL到達性検証付き）
+ * 
+ * Silent fallback禁止: 素材が不足している場合、またはURLにアクセスできない場合はエラーを返す。
+ * この関数で検出されたエラーが1件でもあれば Video Build ボタンは無効化される。
+ * 
+ * @param scenes シーンデータ配列
+ * @param checkReachability URL到達性を検証するかどうか（デフォルト: false）
+ * @returns 検証結果
+ */
+export async function validateVisualAssetsAsync(
+  scenes: SceneData[],
+  checkReachability: boolean = false
+): Promise<VisualAssetValidationResult> {
+  const errors: VisualAssetError[] = [];
+  const debug_info: VisualAssetValidationResult['debug_info'] = [];
+  
+  // 到達性検証が必要なURLを収集
+  const urlsToCheck: Array<{ scene: SceneData; url: string; type: 'image' | 'comic' | 'video' }> = [];
+
+  for (const scene of scenes) {
+    const displayType = scene.display_asset_type || 'image';
+    const hasActiveImage = !!(scene.active_image?.r2_url);
+    const hasActiveComic = !!(scene.active_comic?.r2_url);
+    const hasActiveVideo = !!(
+      scene.active_video?.r2_url && 
+      scene.active_video?.status === 'completed'
+    );
+
+    let resolvedVisual: 'image' | 'comic' | 'video' | 'none' = 'none';
+    let urlToVerify: string | null = null;
+
+    switch (displayType) {
+      case 'video':
+        if (!hasActiveVideo) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_VIDEO_MISSING;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_VIDEO_MISSING',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'video',
+            message: `シーン${scene.idx}：動画が見つかりません - ${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else if (!isValidUrl(scene.active_video!.r2_url)) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_INVALID;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_ASSET_URL_INVALID',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'video',
+            message: `シーン${scene.idx}：${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else {
+          resolvedVisual = 'video';
+          urlToVerify = scene.active_video!.r2_url;
+        }
+        break;
+
+      case 'comic':
+        if (!hasActiveComic) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_COMIC_MISSING;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_COMIC_MISSING',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'comic',
+            message: `シーン${scene.idx}：漫画画像が見つかりません - ${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else if (!isValidUrl(scene.active_comic!.r2_url)) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_INVALID;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_ASSET_URL_INVALID',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'comic',
+            message: `シーン${scene.idx}：${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else {
+          resolvedVisual = 'comic';
+          urlToVerify = scene.active_comic!.r2_url;
+        }
+        break;
+
+      default: // 'image'
+        if (!hasActiveImage) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_IMAGE_MISSING;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_IMAGE_MISSING',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'image',
+            message: `シーン${scene.idx}：画像が見つかりません - ${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else if (!isValidUrl(scene.active_image!.r2_url)) {
+          const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_INVALID;
+          errors.push({
+            type: 'VISUAL_MISSING',
+            code: 'VISUAL_ASSET_URL_INVALID',
+            severity: 'error',
+            scene_id: scene.id,
+            scene_idx: scene.idx,
+            display_asset_type: 'image',
+            message: `シーン${scene.idx}：${msgDef.message}`,
+            action_hint: msgDef.action_hint,
+          });
+        } else {
+          resolvedVisual = 'image';
+          urlToVerify = scene.active_image!.r2_url;
+        }
+        break;
+    }
+
+    // URL到達性検証用にリストに追加
+    if (checkReachability && urlToVerify && resolvedVisual !== 'none') {
+      urlsToCheck.push({ scene, url: urlToVerify, type: resolvedVisual });
+    }
+
+    debug_info.push({
+      scene_id: scene.id,
+      scene_idx: scene.idx,
+      display_asset_type: displayType,
+      has_active_image: hasActiveImage,
+      has_active_comic: hasActiveComic,
+      has_active_video: hasActiveVideo,
+      video_status: scene.active_video?.status,
+      resolved_visual: resolvedVisual,
+    });
+  }
+
+  // URL到達性検証（並列実行）
+  if (checkReachability && urlsToCheck.length > 0) {
+    const reachabilityResults = await Promise.all(
+      urlsToCheck.map(async ({ scene, url, type }) => {
+        const result = await checkUrlReachability(url);
+        return { scene, type, result };
+      })
+    );
+
+    for (const { scene, type, result } of reachabilityResults) {
+      if (!result.reachable) {
+        const msgDef = VISUAL_ERROR_MESSAGES.VISUAL_ASSET_URL_FORBIDDEN;
+        errors.push({
+          type: 'VISUAL_MISSING',
+          code: 'VISUAL_ASSET_URL_FORBIDDEN',
+          severity: 'error',
+          scene_id: scene.id,
+          scene_idx: scene.idx,
+          display_asset_type: type,
+          message: `シーン${scene.idx}：${msgDef.message} (${result.error || `HTTP ${result.status_code}`})`,
+          action_hint: msgDef.action_hint,
+        });
+        
+        // ログ出力（事故調査用）
+        console.error(`[validateVisualAssetsAsync] URL unreachable: scene=${scene.idx}, url=${result.url}, error=${result.error || `HTTP ${result.status_code}`}`);
+      }
+    }
+  }
+
+  return {
+    is_valid: errors.length === 0 && scenes.length > 0,
+    errors,
+    debug_info,
+  };
+}
 
 /**
  * 視覚素材の検証（SSOT）
@@ -1653,16 +1878,50 @@ export function buildProjectJson(
     let videoDurationMs: number | undefined;
     const displayType = scene.display_asset_type || 'image';
     
+    // ============================================================
+    // D仕様: 最終選択ログ（混入検知・事故調査用）
+    // 各シーンで何が選ばれたかを必ず記録
+    // ============================================================
+    const visualSelectionLog = {
+      scene_id: scene.id,
+      scene_idx: scene.idx,
+      display_asset_type: displayType,
+      has_active_image: !!scene.active_image?.r2_url,
+      has_active_comic: !!scene.active_comic?.r2_url,
+      has_active_video: !!(scene.active_video?.r2_url && scene.active_video?.status === 'completed'),
+      video_status: scene.active_video?.status || null,
+      chosen_visual: 'none' as 'image' | 'comic' | 'video' | 'none',
+      chosen_url_prefix: '' as string,
+    };
+    
     if (displayType === 'video' && scene.active_video?.r2_url && scene.active_video?.status === 'completed') {
       // video モード: video_clip を使用
       videoUrl = toAbsoluteUrl(scene.active_video.r2_url, siteUrl) || undefined;
       videoDurationMs = scene.active_video.duration_sec ? scene.active_video.duration_sec * 1000 : undefined;
       hasVideoClips = true;
-      console.log(`[buildProjectJson] Scene ${scene.idx}: Using video_clip (display_asset_type=video), url=${videoUrl?.substring(0, 80)}...`);
+      visualSelectionLog.chosen_visual = 'video';
+      visualSelectionLog.chosen_url_prefix = videoUrl?.substring(0, 80) || '';
     } else if (displayType === 'comic' && scene.active_comic?.r2_url) {
       imageUrl = toAbsoluteUrl(scene.active_comic.r2_url, siteUrl) || undefined;
+      visualSelectionLog.chosen_visual = 'comic';
+      visualSelectionLog.chosen_url_prefix = imageUrl?.substring(0, 80) || '';
     } else if (scene.active_image?.r2_url) {
       imageUrl = toAbsoluteUrl(scene.active_image.r2_url, siteUrl) || undefined;
+      visualSelectionLog.chosen_visual = 'image';
+      visualSelectionLog.chosen_url_prefix = imageUrl?.substring(0, 80) || '';
+    }
+    
+    // 最終選択ログを出力（必須）
+    console.log(`[buildProjectJson] Scene ${scene.idx} visual selection:`, JSON.stringify(visualSelectionLog));
+    
+    // 混入検知: display_asset_type と実際の選択が一致しない場合は警告
+    if (displayType !== visualSelectionLog.chosen_visual && visualSelectionLog.chosen_visual !== 'none') {
+      console.warn(`[buildProjectJson] SSOT MISMATCH: Scene ${scene.idx} has display_asset_type='${displayType}' but chosen_visual='${visualSelectionLog.chosen_visual}'`);
+    }
+    
+    // 混入検知: display_asset_type='video' だが video が選ばれていない
+    if (displayType === 'video' && visualSelectionLog.chosen_visual !== 'video') {
+      console.error(`[buildProjectJson] CRITICAL: Scene ${scene.idx} display_asset_type='video' but video_clip NOT generated! Falling back to: ${visualSelectionLog.chosen_visual}`);
     }
     
     // 5. legacy audio 構築（後方互換）- Convert URL to absolute

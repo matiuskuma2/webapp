@@ -26,6 +26,7 @@ import {
   validateProjectAssets, 
   validateUtterancesPreflight, 
   validateVisualAssets,
+  validateVisualAssetsAsync,
   buildProjectJson, 
   hashProjectJson,
   validateProjectJson,
@@ -1475,13 +1476,21 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     // C仕様: 視覚素材の赤エラー検証（Silent Fallback禁止）
     // VISUAL_VIDEO_MISSING, VISUAL_IMAGE_MISSING, VISUAL_COMIC_MISSING 等
     // これらが1件でもあれば Video Build ボタンは無効化される
+    // 
+    // D仕様: URL到達性検証（VISUAL_ASSET_URL_FORBIDDEN）
+    // クエリパラメータ check_reachability=true で有効化（デフォルト: false）
+    // 本番運用では有効化を推奨
     // ============================================================
-    const visualValidation = validateVisualAssets(scenesWithAssets);
+    const checkReachability = c.req.query('check_reachability') === 'true';
+    
+    // 非同期版を使用してURL到達性検証を行う
+    const visualValidation = await validateVisualAssetsAsync(scenesWithAssets, checkReachability);
     
     // デバッグログ: 視覚素材検証結果
     if (!visualValidation.is_valid) {
       console.log('[VideoBuild] Preflight: Visual validation failed', {
         projectId,
+        checkReachability,
         errors: visualValidation.errors,
         debug_info: visualValidation.debug_info,
       });
