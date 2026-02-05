@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-02-03（BGMタイムライン制御対応 - audio_offset_ms, video_start_ms, video_end_ms）
+- **最終更新**: 2026-02-05（display_asset_type=video修正 + シーン合成ルール文書化）
 
 ---
 
@@ -593,6 +593,177 @@ npx wrangler deploy
   - video → `video_generations` (is_active=1, status='completed')
 - **音声**: `audio_generations` (is_active=1, status='completed')
 - **尺計算**: 音声尺 + 500ms パディング（音声なし: デフォルト3000ms）
+
+---
+
+## シーン合成ルール（Video Build）
+
+### 1. 素材選択ルール（display_asset_type SSOT）
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ display_asset_type の判定フロー                              │
+│                                                             │
+│  scenes.display_asset_type = ?                              │
+│     │                                                       │
+│     ├── 'image' ──► image_generations (is_active=1)         │
+│     │              └─► assets.image.url を使用               │
+│     │                                                       │
+│     ├── 'comic' ──► image_generations (asset_type='comic')  │
+│     │              └─► assets.image.url を使用               │
+│     │                                                       │
+│     └── 'video' ──► video_generations (is_active=1,         │
+│                      status='completed')                    │
+│                    └─► assets.video_clip.url を使用          │
+│                                                             │
+│ ⚠️ 同一シーンに画像と動画の両方があっても、                    │
+│    display_asset_type で決まった方のみ使用される              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 2. 音声レイヤー構造（3層）
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Layer 1: BGM（プロジェクト全体）                                │
+│ ├── SSOT: project_audio_tracks (track_type='bgm', is_active=1) │
+│ ├── ダッキング: 音声再生中は音量を自動低下（0.12）               │
+│ └── タイムライン制御: video_start_ms, audio_offset_ms          │
+├───────────────────────────────────────────────────────────────┤
+│ Layer 2: シーン別BGM（シーン単位で上書き）                       │
+│ ├── SSOT: scene_audio_assignments (audio_type='bgm')          │
+│ ├── 優先度: シーン別BGM > プロジェクトBGM                       │
+│ └── シーン別BGM再生中は全体BGMを完全ダック                       │
+├───────────────────────────────────────────────────────────────┤
+│ Layer 3: SFX（シーン単位・複数可）                              │
+│ ├── SSOT: scene_audio_assignments (audio_type='sfx')          │
+│ ├── start_ms: シーン内の開始タイミング                         │
+│ └── 複数追加可能（1シーンにN個のSFX）                           │
+├───────────────────────────────────────────────────────────────┤
+│ Layer 4: Voice（発話音声）                                     │
+│ ├── SSOT: scene_utterances + audio_generations                │
+│ ├── 複数話者: narration / dialogue 混在可能                    │
+│ └── 尺計算の基準: Σ(utterance.duration_ms) + padding           │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### 3. 尺計算の優先順位（computeSceneDurationMs）
+
+```
+1. display_asset_type = 'video' 
+   └─► video_generations.duration_sec × 1000
+   
+2. scene_utterances の音声合計
+   └─► Σ(utterances[].duration_ms) + 500ms padding
+   
+3. duration_override_ms（手動設定）
+   └─► シーン編集で設定した無音尺（1-60秒）
+   
+4. comic_data.utterances の合計尺（後方互換）
+   └─► 漫画モードの旧形式
+   
+5. active_audio.duration_ms（旧式シーン音声）
+   └─► 後方互換用
+   
+6. dialogue テキストから推定
+   └─► 文字数 × 300ms（日本語）
+   
+7. デフォルト
+   └─► 5000ms（5秒）
+
+⚠️ 音声がある場合、手動設定より音声尺が優先（セリフ切れ防止）
+```
+
+### 4. テロップ表示ルール
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ テロップ設定（SSOT: projects.settings_json.telops_remotion）│
+│                                                            │
+│ ├── enabled: true/false（全体ON/OFF）                       │
+│ ├── style_preset: outline/minimal/band/pop/cinematic       │
+│ ├── size_preset: sm/md/lg                                  │
+│ ├── position_preset: bottom/center/top                     │
+│ └── scene_overrides: { scene_idx: enabled }               │
+│                                                            │
+│ 表示テキスト:                                               │
+│   scene.dialogue または utterance.text を使用               │
+│                                                            │
+│ シーン単位のON/OFF:                                         │
+│   scene_overrides[scene_idx] が設定されていれば優先         │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 5. 吹き出し（バルーン）表示ルール
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ 吹き出し設定（SSOT: scene_balloons）                        │
+│                                                            │
+│ display_policy:                                            │
+│   ├── 'always_on' ──► シーン全体（0〜duration_ms）で表示    │
+│   ├── 'voice_window' ──► utterance の start_ms〜end_ms    │
+│   └── 'manual_window' ──► timing.start_ms〜end_ms を使用  │
+│                                                            │
+│ text_render_mode:                                          │
+│   ├── 'remotion' ──► Remotion で文字を動的描画             │
+│   ├── 'baked' ──► bubble_r2_url の画像をそのまま表示       │
+│   └── 'none' ──► バルーン出力しない                        │
+│                                                            │
+│ ⚠️ comic モードはデフォルト baked（二重表示防止）            │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 6. モーション（Ken Burns効果）
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ モーション設定（SSOT: scene_motion）                         │
+│                                                            │
+│ motion_type:                                               │
+│   ├── 'none' ──► 静止（comic モードのデフォルト）           │
+│   ├── 'zoom' ──► ズームイン/アウト                         │
+│   ├── 'pan' ──► パン（左右移動）                           │
+│   └── 'combined' ──► ズーム + パン                         │
+│                                                            │
+│ デフォルト動作:                                             │
+│   ├── image モード ──► kenburns_soft (zoom 1.0→1.05)       │
+│   ├── comic モード ──► none                                │
+│   └── video モード ──► none（動画自体がモーションを持つ）    │
+└────────────────────────────────────────────────────────────┘
+```
+
+### 7. buildProjectJson 出力構造
+
+```json
+{
+  "schema_version": "1.5",
+  "project_id": 168,
+  "build_settings": {
+    "aspect_ratio": "16:9",
+    "resolution": { "width": 1920, "height": 1080 },
+    "telops": { "enabled": true, "style_preset": "outline" }
+  },
+  "assets": {
+    "bgm": { "url": "...", "volume": 0.25, "ducking": {...} }
+  },
+  "scenes": [
+    {
+      "idx": 1,
+      "timing": { "start_ms": 0, "duration_ms": 5000 },
+      "assets": {
+        "image": { "url": "..." },      // display_asset_type = 'image'/'comic'
+        "video_clip": { "url": "..." }, // display_asset_type = 'video'
+        "voices": [...]
+      },
+      "balloons": [...],
+      "sfx": [...],
+      "bgm": {...},  // シーン別BGM（あれば）
+      "motion": {...}
+    }
+  ]
+}
+```
 
 ### API エンドポイント
 - `GET /api/video-builds/usage` - 利用状況（月間/同時）
