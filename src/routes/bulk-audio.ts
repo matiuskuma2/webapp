@@ -496,6 +496,30 @@ async function runBulkGenerationJob(
     
     console.log(`[BulkAudio Job ${jobId}] Completed: status=${finalStatus}, success=${successCount}, failed=${failedCount}, skipped=${skippedCount}`);
     
+    // Step3-PR4: Audit log for bulk audio job completion
+    try {
+      await env.DB.prepare(`
+        INSERT INTO api_usage_logs (user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json, created_at)
+        VALUES (NULL, ?, 'bulk_audio_generation', 'internal', ?, 0, ?, CURRENT_TIMESTAMP)
+      `).bind(
+        projectId,
+        finalStatus,
+        JSON.stringify({
+          job_id: jobId,
+          mode: mode,
+          force_regenerate: forceRegenerate,
+          total_utterances: processedCount,
+          success_count: successCount,
+          failed_count: failedCount,
+          skipped_count: skippedCount,
+          narration_provider: narrationProvider,
+          narration_voice_id: narrationVoiceId,
+        })
+      ).run();
+    } catch (logError) {
+      console.warn(`[BulkAudio Job ${jobId}] Failed to log audit:`, logError);
+    }
+    
   } catch (error) {
     console.error(`[BulkAudio Job ${jobId}] Critical error:`, error);
     

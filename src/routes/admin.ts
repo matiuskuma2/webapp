@@ -13,6 +13,10 @@
  * - GET /api/admin/usage/sponsor - Get sponsor usage
  * - GET /api/admin/usage/infrastructure - Get AWS/Cloudflare infrastructure costs
  * - GET /api/admin/video-builds/summary - Get video build summary
+ * - POST /api/admin/cron/cleanup-stuck-builds - Cleanup stuck video builds
+ * - GET /api/admin/stuck-builds - List stuck video builds
+ * - POST /api/admin/cron/cleanup-stuck-audio-jobs - Cleanup stuck audio jobs (Step3-PR4)
+ * - GET /api/admin/stuck-audio-jobs - List stuck audio jobs (Step3-PR4)
  * - GET /api/admin/sales/summary - Get sales summary
  * - GET /api/admin/sales/by-user - Get sales by user
  * - GET /api/admin/sales/records - Get sales records
@@ -1587,6 +1591,177 @@ admin.get('/stuck-builds', async (c) => {
     return c.json({ 
       success: false, 
       error: error instanceof Error ? error.message : 'Failed to get stuck builds' 
+    }, 500);
+  }
+});
+
+// ====================================================================
+// Step3-PR4: Stuck Audio Jobs Management
+// ====================================================================
+
+// POST /api/admin/cron/cleanup-stuck-audio-jobs - スタック音声ジョブ検知・自動キャンセル
+admin.post('/cron/cleanup-stuck-audio-jobs', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    const STUCK_THRESHOLD_MINUTES = 30; // queued/running が30分以上続いたらstuck
+    
+    // stuck candidates を取得
+    const stuckJobs = await DB.prepare(`
+      SELECT 
+        j.id, j.project_id, j.status, j.mode,
+        j.total_utterances, j.processed_utterances,
+        j.created_at, j.started_at, j.started_by_user_id
+      FROM project_audio_jobs j
+      WHERE j.status IN ('queued', 'running')
+        AND datetime(COALESCE(j.started_at, j.created_at), '+${STUCK_THRESHOLD_MINUTES} minutes') < datetime('now')
+      ORDER BY j.created_at ASC
+    `).all<{
+      id: number;
+      project_id: number;
+      status: string;
+      mode: string;
+      total_utterances: number;
+      processed_utterances: number;
+      created_at: string;
+      started_at: string | null;
+      started_by_user_id: number | null;
+    }>();
+    
+    const jobs = stuckJobs.results || [];
+    const cancelledIds: number[] = [];
+    const errors: { id: number; error: string }[] = [];
+    
+    for (const job of jobs) {
+      try {
+        await DB.prepare(`
+          UPDATE project_audio_jobs
+          SET 
+            status = 'failed',
+            last_error = ?,
+            completed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(
+          `Job stuck in ${job.status} state for over ${STUCK_THRESHOLD_MINUTES} minutes. Automatically cancelled.`,
+          job.id
+        ).run();
+        
+        cancelledIds.push(job.id);
+        console.log(`[cron] Cancelled stuck audio job ${job.id} (was: ${job.status}, project: ${job.project_id})`);
+      } catch (e) {
+        const errorMsg = e instanceof Error ? e.message : String(e);
+        errors.push({ id: job.id, error: errorMsg });
+        console.error(`[cron] Failed to cancel stuck audio job ${job.id}:`, e);
+      }
+    }
+    
+    const result = {
+      success: true,
+      timestamp: new Date().toISOString(),
+      threshold_minutes: STUCK_THRESHOLD_MINUTES,
+      found: jobs.length,
+      cancelled: cancelledIds.length,
+      cancelled_ids: cancelledIds,
+      errors: errors.length,
+      error_details: errors.slice(0, 10),
+    };
+    
+    // Audit log
+    try {
+      await DB.prepare(`
+        INSERT INTO api_usage_logs (user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json, created_at)
+        VALUES (NULL, NULL, 'cron', 'internal', 'cleanup_stuck_audio_jobs', 0, ?, CURRENT_TIMESTAMP)
+      `).bind(JSON.stringify({
+        found: jobs.length,
+        cancelled: cancelledIds.length,
+        threshold_minutes: STUCK_THRESHOLD_MINUTES,
+      })).run();
+    } catch (logError) {
+      console.warn('[cron] Failed to log audit:', logError);
+    }
+    
+    console.log('[cron] Cleanup stuck audio jobs completed:', result);
+    
+    return c.json(result);
+    
+  } catch (error) {
+    console.error('Cron cleanup stuck audio jobs error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to cleanup' 
+    }, 500);
+  }
+});
+
+// GET /api/admin/stuck-audio-jobs - Stuck 音声ジョブの一覧取得
+admin.get('/stuck-audio-jobs', async (c) => {
+  const { DB } = c.env;
+  
+  try {
+    const STUCK_THRESHOLD_MINUTES = 30;
+    
+    const stuckJobs = await DB.prepare(`
+      SELECT 
+        j.id, j.project_id, j.status, j.mode,
+        j.total_utterances, j.processed_utterances, j.success_count, j.failed_count,
+        j.last_error, j.created_at, j.started_at, j.started_by_user_id,
+        p.title AS project_title,
+        u.email AS owner_email,
+        ROUND((julianday('now') - julianday(COALESCE(j.started_at, j.created_at))) * 1440, 1) AS minutes_stuck
+      FROM project_audio_jobs j
+      LEFT JOIN projects p ON j.project_id = p.id
+      LEFT JOIN users u ON j.started_by_user_id = u.id
+      WHERE j.status IN ('queued', 'running')
+        AND datetime(COALESCE(j.started_at, j.created_at), '+${STUCK_THRESHOLD_MINUTES} minutes') < datetime('now')
+      ORDER BY j.created_at ASC
+      LIMIT 100
+    `).all<{
+      id: number;
+      project_id: number;
+      status: string;
+      mode: string;
+      total_utterances: number;
+      processed_utterances: number;
+      success_count: number;
+      failed_count: number;
+      last_error: string | null;
+      created_at: string;
+      started_at: string | null;
+      started_by_user_id: number | null;
+      project_title: string | null;
+      owner_email: string | null;
+      minutes_stuck: number;
+    }>();
+    
+    const jobs = stuckJobs.results || [];
+    
+    return c.json({
+      success: true,
+      threshold_minutes: STUCK_THRESHOLD_MINUTES,
+      count: jobs.length,
+      jobs: jobs.map(j => ({
+        id: j.id,
+        project_id: j.project_id,
+        project_title: j.project_title,
+        status: j.status,
+        mode: j.mode,
+        progress: `${j.processed_utterances}/${j.total_utterances}`,
+        success_count: j.success_count,
+        failed_count: j.failed_count,
+        owner_email: j.owner_email,
+        minutes_stuck: j.minutes_stuck,
+        last_error: j.last_error,
+        created_at: j.created_at,
+        started_at: j.started_at,
+      })),
+    });
+    
+  } catch (error) {
+    console.error('Get stuck audio jobs error:', error);
+    return c.json({ 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Failed to get stuck audio jobs' 
     }, 500);
   }
 });
