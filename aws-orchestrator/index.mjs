@@ -126,16 +126,23 @@ async function handleStart(body) {
     
     // Remotion Lambda has a limit of 200 concurrent functions
     // Calculate optimal framesPerLambda to stay under 200 functions
-    // Max supported: 200 scenes × 30sec avg = 6000sec = 180,000 frames @ 30fps
-    // With framesPerLambda = 900, that's 200 functions exactly
-    const MAX_LAMBDA_FUNCTIONS = 200;
-    const MIN_FRAMES_PER_LAMBDA = 60;   // Minimum for quality
-    const MAX_FRAMES_PER_LAMBDA = 1200; // Maximum practical value
+    // 
+    // 2026-02-05 Update: Increased MIN_FRAMES_PER_LAMBDA to support longer videos
+    // - 30fps × 45min = 81,000 frames
+    // - With framesPerLambda = 450, that's 180 functions (under 200)
+    // - Tradeoff: Slightly longer render time for longer videos
+    // 
+    // Supported durations (theoretical max):
+    // - MIN 200: up to 22 min without dynamic adjustment
+    // - Dynamic: up to 2h 40min with framesPerLambda = 2400
+    const MAX_LAMBDA_FUNCTIONS = 190;   // Leave 10 buffer for overhead
+    const MIN_FRAMES_PER_LAMBDA = 200;  // Minimum: supports up to ~22min @ 30fps
+    const MAX_FRAMES_PER_LAMBDA = 2400; // Maximum: supports up to ~2h 40min @ 30fps
     
-    // Auto-calculate: ensure we stay under 200 functions
+    // Auto-calculate: ensure we stay under 190 functions (with buffer)
     let framesPerLambda = Math.ceil(totalFrames / MAX_LAMBDA_FUNCTIONS);
-    framesPerLambda = Math.max(MIN_FRAMES_PER_LAMBDA, framesPerLambda);  // At least 60
-    framesPerLambda = Math.min(MAX_FRAMES_PER_LAMBDA, framesPerLambda);  // At most 1200
+    framesPerLambda = Math.max(MIN_FRAMES_PER_LAMBDA, framesPerLambda);  // At least 200
+    framesPerLambda = Math.min(MAX_FRAMES_PER_LAMBDA, framesPerLambda);  // At most 2400
     
     const estimatedFunctions = Math.ceil(totalFrames / framesPerLambda);
     const durationSec = Math.round(totalDurationMs / 1000);
