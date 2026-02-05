@@ -2082,3 +2082,100 @@ d47dfa0 P3-5: SceneEditModal.open(source)でチャット修正ボタンの表示
 
 ---
 
+## 2026-02-05 SSOT整合 & 一括音声生成機能
+
+### 概要
+SFX/音声生成のSSOT整合確認と、一括音声生成機能（Step3）の完全実装。
+
+### Step1: 画像プロンプト途切れ修正
+**問題**: formatting.ts の `max_tokens: 100` が原因で画像プロンプトが途中で切れる
+**修正**: max_tokens を 100 → 500 に変更、生成後の短文ガード（30文字未満は再生成扱い）を追加
+**ファイル**: `src/routes/formatting.ts`
+
+### Step2: ナレーション音声SSOT化
+**問題**: utterances.ts でナレーション voice がハードコード（ja-JP-Neural2-B）
+**修正**: `projects.settings_json.default_narration_voice` を導入
+
+**音声決定ロジックの優先順位（SSOT）**:
+1. dialogue + character_key → `project_character_models.voice_preset_id`
+2. narration → `projects.settings_json.default_narration_voice`
+3. fallback → `ja-JP-Neural2-B`
+
+**新規API**:
+- `PUT /api/projects/:id/narration-voice` - デフォルトナレーション音声を設定
+
+### Step3: 一括音声生成機能
+
+#### PR1: project_audio_jobs テーブル（マイグレーション 0049）
+```sql
+project_audio_jobs
+├── id, project_id, mode, force_regenerate
+├── status ('queued' | 'running' | 'completed' | 'failed' | 'canceled')
+├── total_utterances, processed_utterances, success_count, failed_count, skipped_count
+├── last_error, error_details_json
+├── locked_until (スタック回復用)
+└── created_at, started_at, completed_at, updated_at
+```
+
+#### PR2: Bulk実行エンジン（API + waitUntil）
+**API**:
+- `POST /api/projects/:projectId/audio/bulk-generate` - ジョブ開始
+  - `mode`: missing（デフォルト）, pending, all
+  - `force_regenerate`: false（デフォルト）
+  - 202 レスポンスで job_id を返却
+- `GET /api/projects/:projectId/audio/bulk-status` - ジョブ状態取得
+  - 進捗: total, processed, success, failed, skipped
+  - エラー詳細: error_details（最大50件保存）
+- `POST /api/projects/:projectId/audio/bulk-cancel` - ジョブキャンセル
+- `GET /api/projects/:projectId/audio/bulk-history` - ジョブ履歴
+
+**設計方針（ユーザー確認済み）**:
+- 単位: utterance（発話）レベル
+- 失敗時: 最後まで走らせて、最終的にまとめて報告
+- デフォルト: 未生成のみ（forceは明示操作のみ）
+- 並列度: 2（レート制限対策）
+
+#### PR3: フロントエンドUI
+**変更点**:
+- クライアント側ループ → バックエンドAPI呼び出しに置換
+- 2秒ごとのポーリングで進捗表示
+- ページリロード時に実行中ジョブがあれば自動再開
+- キャンセル機能追加
+
+#### PR4: 運用ガード（スタック検知・audit_logs）
+**Admin API**:
+- `POST /api/admin/cron/cleanup-stuck-audio-jobs` - 30分以上stuck のジョブを自動キャンセル
+- `GET /api/admin/stuck-audio-jobs` - stuck ジョブ一覧
+
+**Audit Logging**:
+- ジョブ完了時に `api_usage_logs` へ記録（api_type: 'bulk_audio_generation'）
+- メタデータ: job_id, mode, counts, narration_voice 等
+
+### Veo3 コスト修正
+**問題**: Veo3のコスト推定値が $0.35/秒（Veo2と同じ）のまま
+**修正**: Veo3は $0.50/秒（audio off）、$0.75/秒（audio on - 将来対応）
+**ファイル**: `src/routes/video-generation.ts`
+
+### AWS Cost Explorer & Cloudflare Analytics 統合
+**追加ファイル**: `src/utils/infrastructure-cost.ts`
+
+**機能**:
+- AWS Cost Explorer API でLambda/S3/Data Transfer実コストを取得
+- Cloudflare GraphQL Analytics API でWorkers/R2/D1メトリクスを取得
+- Admin UIに「インフラコスト」タブを追加
+
+**必要な環境変数**:
+- `CF_ACCOUNT_ID`: Cloudflare Account ID
+- `CF_API_TOKEN`: Cloudflare API Token（Analytics Read権限）
+
+### Gitコミット
+```
+61b296b fix: update Veo 3 cost estimation to $0.50/sec
+f98334e feat: add AWS Cost Explorer and Cloudflare Analytics integration
+9cccf04 feat: implement bulk audio generation API (Step3-PR2)
+b83b62d feat: update frontend to use bulk-audio API (Step3-PR3)
+75493ca feat: add stuck audio job detection and audit logging (Step3-PR4)
+```
+
+---
+
