@@ -100,6 +100,7 @@ async function fetchMotionPreset(
 // POST /api/projects - プロジェクト作成
 projects.post('/', async (c) => {
   try {
+    const { getCookie } = await import('hono/cookie')
     const { title } = await c.req.json()
 
     if (!title || title.trim() === '') {
@@ -115,10 +116,20 @@ projects.post('/', async (c) => {
       }, 400)
     }
 
+    // セッションからuser_idを取得
+    let userId: number | null = null
+    const sessionId = getCookie(c, 'session')
+    if (sessionId) {
+      const session = await c.env.DB.prepare(`
+        SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
+      `).bind(sessionId).first<{ user_id: number }>()
+      userId = session?.user_id || null
+    }
+
     const result = await c.env.DB.prepare(`
-      INSERT INTO projects (title, status) 
-      VALUES (?, 'created')
-    `).bind(title.trim()).run()
+      INSERT INTO projects (title, status, user_id) 
+      VALUES (?, 'created', ?)
+    `).bind(title.trim(), userId).run()
 
     const projectId = result.meta.last_row_id as number
 
