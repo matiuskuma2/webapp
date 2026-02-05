@@ -606,8 +606,11 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     
     if (isSuperadmin || billingSource === 'sponsor') {
       // Superadmin/Sponsor: Try user's own Vertex key first
+      console.log(`[VideoGen/Veo3] Sponsor mode: isSuperadmin=${isSuperadmin}, billingSource=${billingSource}, sponsorUserId=${sponsorUserId}, keyRing.length=${keyRing.length}`);
+      
       if (isSuperadmin && loggedInUserId) {
         const keyResult = await getUserApiKey(c.env.DB, loggedInUserId, 'vertex', keyRing);
+        console.log(`[VideoGen/Veo3] Superadmin key result:`, 'key' in keyResult ? 'found' : keyResult.error);
         if ('key' in keyResult) {
           vertexApiKey = keyResult.key;
         }
@@ -616,6 +619,7 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
       // If superadmin has no key, try sponsor's key
       if (!vertexApiKey && sponsorUserId) {
         const keyResult = await getUserApiKey(c.env.DB, sponsorUserId, 'vertex', keyRing);
+        console.log(`[VideoGen/Veo3] Sponsor (userId=${sponsorUserId}) key result:`, 'key' in keyResult ? 'found' : keyResult.error);
         if ('key' in keyResult) {
           vertexApiKey = keyResult.key;
         }
