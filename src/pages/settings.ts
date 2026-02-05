@@ -254,6 +254,15 @@ export const settingsHtml = `
                 document.getElementById('infoCreatedAt').textContent = 
                     new Date(currentUser.created_at).toLocaleDateString('ja-JP');
                 
+                // Check sponsor status and update UI accordingly
+                if (currentUser.api_sponsor_id) {
+                    // User is sponsored - show sponsor notice instead of API key inputs
+                    showSponsoredUserNotice();
+                } else {
+                    // User is not sponsored - load API keys as normal
+                    loadApiKeys();
+                }
+                
                 // Show content
                 document.getElementById('authLoading').classList.add('hidden');
                 document.getElementById('mainContent').classList.remove('hidden');
@@ -602,8 +611,50 @@ export const settingsHtml = `
             setTimeout(() => el.classList.add('hidden'), 8000);
         }
         
-        // Load API keys on page load
-        setTimeout(loadApiKeys, 500); // After init()
+        // Show notice for sponsored users (they don't need to configure API keys)
+        function showSponsoredUserNotice() {
+            const section = document.getElementById('apiKeysSection');
+            section.innerHTML = \`
+                <div class="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl p-6">
+                    <div class="flex items-start gap-4">
+                        <div class="flex-shrink-0">
+                            <div class="w-12 h-12 bg-green-500 rounded-full flex items-center justify-center">
+                                <i class="fas fa-gift text-white text-xl"></i>
+                            </div>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-bold text-green-800 mb-2">
+                                <i class="fas fa-star text-yellow-500 mr-2"></i>
+                                スポンサー対象アカウント
+                            </h3>
+                            <p class="text-green-700 mb-3">
+                                このアカウントは<strong>スポンサー対象</strong>に設定されています。
+                                APIキーを自分で設定する必要はありません。
+                            </p>
+                            <div class="bg-white/60 rounded-lg p-4 text-sm text-green-800">
+                                <p class="font-semibold mb-2">利用可能な機能：</p>
+                                <ul class="space-y-1">
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>画像生成（Gemini Imagen）</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>動画生成（Veo2）</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>音声生成（ElevenLabs / Google TTS）</li>
+                                    <li><i class="fas fa-check text-green-600 mr-2"></i>Video Build（動画合成）</li>
+                                </ul>
+                            </div>
+                            <p class="text-xs text-green-600 mt-3">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                スポンサー設定についてのご質問は管理者にお問い合わせください。
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            \`;
+            
+            // Hide migration notice for sponsored users
+            const migrationNotice = document.getElementById('migrationNotice');
+            if (migrationNotice) {
+                migrationNotice.classList.add('hidden');
+            }
+        }
         
         init();
     </script>
