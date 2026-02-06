@@ -1177,6 +1177,87 @@ videoGeneration.delete('/videos/:videoId', async (c) => {
 });
 
 // ====================================================================
+// POST /api/videos/:videoId/cancel
+// Cancel a generating video (user can cancel their own)
+// ====================================================================
+
+videoGeneration.post('/videos/:videoId/cancel', async (c) => {
+  const videoId = parseInt(c.req.param('videoId'), 10);
+  if (isNaN(videoId)) {
+    return c.json({ error: { code: 'INVALID_VIDEO_ID', message: 'Invalid video ID' } }, 400);
+  }
+  
+  // Auth check
+  const { getCookie } = await import('hono/cookie');
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const session = await c.env.DB.prepare(`
+    SELECT s.user_id, u.role FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number; role: string }>();
+  
+  if (!session) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+  
+  // Get video with project owner info
+  const video = await c.env.DB.prepare(`
+    SELECT vg.id, vg.scene_id, vg.status, vg.job_id, s.project_id, p.user_id as owner_user_id
+    FROM video_generations vg
+    JOIN scenes s ON vg.scene_id = s.id
+    JOIN projects p ON s.project_id = p.id
+    WHERE vg.id = ?
+  `).bind(videoId).first<{
+    id: number;
+    scene_id: number;
+    status: string;
+    job_id: string | null;
+    project_id: number;
+    owner_user_id: number;
+  }>();
+  
+  if (!video) {
+    return c.json({ error: { code: 'VIDEO_NOT_FOUND', message: 'Video generation not found' } }, 404);
+  }
+  
+  // Permission check
+  const isPrivileged = session.role === 'superadmin' || session.role === 'admin';
+  if (!isPrivileged && video.owner_user_id !== session.user_id) {
+    return c.json({ error: { code: 'ACCESS_DENIED', message: 'Access denied' } }, 403);
+  }
+  
+  // Can only cancel if status is 'generating' or 'pending'
+  if (video.status !== 'generating' && video.status !== 'pending') {
+    return c.json({
+      error: {
+        code: 'CANNOT_CANCEL',
+        message: `Cannot cancel video with status '${video.status}'. Only 'generating' or 'pending' can be cancelled.`
+      }
+    }, 400);
+  }
+  
+  // Update status to cancelled
+  await c.env.DB.prepare(`
+    UPDATE video_generations 
+    SET status = 'cancelled', error_message = 'Cancelled by user', updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(videoId).run();
+  
+  console.log(`[VideoGen] Video ${videoId} cancelled by user ${session.user_id}`);
+  
+  return c.json({
+    success: true,
+    video_id: videoId,
+    status: 'cancelled',
+    message: '動画生成をキャンセルしました'
+  });
+});
+
+// ====================================================================
 // Stuck Job Sweeper API (Manual trigger)
 // ====================================================================
 

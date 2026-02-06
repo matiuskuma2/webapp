@@ -555,8 +555,8 @@ bulkAudio.post('/projects/:projectId/audio/bulk-generate', async (c) => {
     
     // Verify project exists and user has access
     const project = await c.env.DB.prepare(`
-      SELECT id, owner_user_id, settings_json FROM projects WHERE id = ?
-    `).bind(projectId).first<{ id: number; owner_user_id: number; settings_json: string | null }>();
+      SELECT id, user_id, settings_json FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; user_id: number; settings_json: string | null }>();
     
     if (!project) {
       return c.json(createErrorResponse('NOT_FOUND', 'Project not found'), 404);
@@ -650,8 +650,17 @@ bulkAudio.post('/projects/:projectId/audio/bulk-generate', async (c) => {
     }, 202);
     
   } catch (error) {
-    console.error('[POST /api/projects/:projectId/audio/bulk-generate] Error:', error);
-    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to start bulk audio generation'), 500);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error('[POST /api/projects/:projectId/audio/bulk-generate] Error:', errorMessage, errorStack);
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to start bulk audio generation',
+        details: errorMessage,
+        stack: process.env.NODE_ENV === 'development' ? errorStack : undefined
+      }
+    }, 500);
   }
 });
 
