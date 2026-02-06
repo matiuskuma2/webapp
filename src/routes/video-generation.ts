@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
-import { createAwsVideoClient, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
+import { createAwsVideoClient, refreshS3PresignedUrl, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
@@ -1983,25 +1983,49 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
       }>();
       
       // 署名付きURLの期限切れチェック＆リフレッシュ
+      // 改善: AWS Video Proxyに依存せず、直接S3 presigned URLを生成
       let refreshedVideoUrl = activeVideo?.r2_url || null;
-      if (activeVideo && activeVideo.job_id && activeVideo.r2_url?.includes('X-Amz-Expires')) {
-        // 署名付きURLの場合、AWS Video Proxyから新しいURLを取得
-        const awsClient = createAwsVideoClient(c.env);
-        if (awsClient) {
+      if (activeVideo && activeVideo.r2_url?.includes('X-Amz-Expires')) {
+        // r2_keyがある場合は直接presigned URLを生成（最も信頼性が高い）
+        if (activeVideo.r2_key) {
           try {
-            const statusResponse = await awsClient.getStatus(activeVideo.job_id);
-            if (statusResponse.success && statusResponse.job?.presigned_url) {
-              refreshedVideoUrl = statusResponse.job.presigned_url;
+            const newPresignedUrl = await refreshS3PresignedUrl(
+              activeVideo.r2_url,
+              c.env,
+              activeVideo.r2_key,
+              'rilarc-video-results'
+            );
+            if (newPresignedUrl) {
+              refreshedVideoUrl = newPresignedUrl;
               // DBも更新（次回のために）
-              const s3Key = statusResponse.job.s3_key || activeVideo.r2_key;
               await c.env.DB.prepare(`
-                UPDATE video_generations SET r2_url = ?, r2_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-              `).bind(refreshedVideoUrl, s3Key, activeVideo.id).run();
-              console.log(`[VideoBuild] Refreshed video URL for scene ${scene.id}, video ${activeVideo.id}`);
+                UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+              `).bind(refreshedVideoUrl, activeVideo.id).run();
+              console.log(`[VideoBuild] Refreshed video URL directly for scene ${scene.id}, video ${activeVideo.id}`);
             }
           } catch (err) {
-            console.warn(`[VideoBuild] Failed to refresh video URL for scene ${scene.id}:`, err);
-            // 失敗してもビルドは続行（古いURLで試みる）
+            console.warn(`[VideoBuild] Direct refresh failed for scene ${scene.id}:`, err);
+          }
+        }
+        
+        // r2_keyがない場合、または直接生成が失敗した場合はAWS Video Proxyを試す
+        if (refreshedVideoUrl === activeVideo.r2_url && activeVideo.job_id) {
+          const awsClient = createAwsVideoClient(c.env);
+          if (awsClient) {
+            try {
+              const statusResponse = await awsClient.getStatus(activeVideo.job_id);
+              if (statusResponse.success && statusResponse.job?.presigned_url) {
+                refreshedVideoUrl = statusResponse.job.presigned_url;
+                const s3Key = statusResponse.job.s3_key || activeVideo.r2_key;
+                await c.env.DB.prepare(`
+                  UPDATE video_generations SET r2_url = ?, r2_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+                `).bind(refreshedVideoUrl, s3Key, activeVideo.id).run();
+                console.log(`[VideoBuild] Refreshed video URL via AWS Proxy for scene ${scene.id}, video ${activeVideo.id}`);
+              }
+            } catch (err) {
+              console.warn(`[VideoBuild] AWS Proxy refresh failed for scene ${scene.id}:`, err);
+              // 失敗してもビルドは続行（古いURLで試みる）
+            }
           }
         }
       }

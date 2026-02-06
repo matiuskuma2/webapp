@@ -315,3 +315,206 @@ export function createAwsVideoClient(env: {
     env.AWS_REGION
   );
 }
+
+// ====================================================================
+// S3 Presigned URL Generation (Direct, without AWS Video Proxy)
+// ====================================================================
+
+const S3_SERVICE = 's3';
+const DEFAULT_S3_BUCKET = 'rilarc-video-results';
+const DEFAULT_PRESIGN_EXPIRES = 86400; // 24 hours
+
+/**
+ * Generate S3 presigned URL for GET request
+ * This allows Cloudflare Workers to directly generate presigned URLs
+ * without relying on AWS Video Proxy
+ */
+export async function generateS3PresignedUrl(
+  s3Key: string,
+  env: {
+    AWS_ACCESS_KEY_ID?: string;
+    AWS_SECRET_ACCESS_KEY?: string;
+    AWS_REGION?: string;
+  },
+  options?: {
+    bucket?: string;
+    expiresIn?: number;
+  }
+): Promise<string | null> {
+  if (!env.AWS_ACCESS_KEY_ID || !env.AWS_SECRET_ACCESS_KEY) {
+    console.error('[S3Presign] Missing AWS credentials');
+    return null;
+  }
+
+  const bucket = options?.bucket || DEFAULT_S3_BUCKET;
+  const region = env.AWS_REGION || DEFAULT_AWS_REGION;
+  const expiresIn = options?.expiresIn || DEFAULT_PRESIGN_EXPIRES;
+
+  try {
+    const presignedUrl = await createS3PresignedUrl(
+      'GET',
+      bucket,
+      s3Key,
+      env.AWS_ACCESS_KEY_ID,
+      env.AWS_SECRET_ACCESS_KEY,
+      region,
+      expiresIn
+    );
+    return presignedUrl;
+  } catch (error) {
+    console.error('[S3Presign] Failed to generate presigned URL:', error);
+    return null;
+  }
+}
+
+/**
+ * Create S3 presigned URL using SigV4 signing
+ * Implements AWS Signature Version 4 for S3 presigned URLs
+ */
+async function createS3PresignedUrl(
+  method: string,
+  bucket: string,
+  key: string,
+  accessKeyId: string,
+  secretAccessKey: string,
+  region: string,
+  expiresIn: number
+): Promise<string> {
+  const host = `${bucket}.s3.${region}.amazonaws.com`;
+  const encodedKey = key.split('/').map(part => encodeURIComponent(part)).join('/');
+  
+  const now = new Date();
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  
+  const credentialScope = `${dateStamp}/${region}/${S3_SERVICE}/aws4_request`;
+  const credential = `${accessKeyId}/${credentialScope}`;
+  
+  // Query parameters for presigned URL
+  const queryParams: Record<string, string> = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': credential,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'host',
+  };
+  
+  // Build canonical query string (sorted)
+  const sortedKeys = Object.keys(queryParams).sort();
+  const canonicalQueryString = sortedKeys
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+    .join('&');
+  
+  // Canonical request
+  const canonicalUri = `/${encodedKey}`;
+  const canonicalHeaders = `host:${host}\n`;
+  const signedHeaders = 'host';
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+  
+  const canonicalRequest = [
+    method,
+    canonicalUri,
+    canonicalQueryString,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash
+  ].join('\n');
+  
+  // String to sign
+  const canonicalRequestHash = await sha256(canonicalRequest);
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    canonicalRequestHash
+  ].join('\n');
+  
+  // Calculate signature
+  const signingKey = await getSignatureKey(secretAccessKey, dateStamp, region, S3_SERVICE);
+  const signatureBuffer = await hmacSha256(signingKey, stringToSign);
+  const signature = toHex(signatureBuffer);
+  
+  // Build final presigned URL
+  const presignedUrl = `https://${host}${canonicalUri}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+  
+  return presignedUrl;
+}
+
+/**
+ * Extract S3 bucket and key from various URL formats
+ * 
+ * Supported formats:
+ * - Presigned: https://bucket.s3.region.amazonaws.com/key?X-Amz-...
+ * - Public: https://bucket.s3.region.amazonaws.com/key
+ * - Path style: https://s3.region.amazonaws.com/bucket/key
+ */
+export function parseS3Url(url: string): { bucket: string; key: string } | null {
+  if (!url) return null;
+  
+  try {
+    const parsed = new URL(url);
+    
+    // Virtual-hosted style: bucket.s3.region.amazonaws.com/key
+    const virtualHostMatch = parsed.hostname.match(/^([^.]+)\.s3\.([^.]+)\.amazonaws\.com$/);
+    if (virtualHostMatch) {
+      const bucket = virtualHostMatch[1];
+      const key = parsed.pathname.slice(1); // Remove leading /
+      return { bucket, key };
+    }
+    
+    // Path style: s3.region.amazonaws.com/bucket/key
+    const pathStyleMatch = parsed.hostname.match(/^s3\.([^.]+)\.amazonaws\.com$/);
+    if (pathStyleMatch) {
+      const parts = parsed.pathname.slice(1).split('/');
+      if (parts.length >= 2) {
+        const bucket = parts[0];
+        const key = parts.slice(1).join('/');
+        return { bucket, key };
+      }
+    }
+    
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refresh an expired S3 presigned URL
+ * 
+ * This function:
+ * 1. Parses the existing URL to extract bucket and key
+ * 2. Generates a new presigned URL with fresh expiration
+ * 
+ * @param expiredUrl - The expired presigned URL
+ * @param env - Environment with AWS credentials
+ * @param s3Key - Optional: S3 key if known (more reliable than parsing)
+ * @param s3Bucket - Optional: S3 bucket if known
+ * @returns New presigned URL or null on failure
+ */
+export async function refreshS3PresignedUrl(
+  expiredUrl: string,
+  env: {
+    AWS_ACCESS_KEY_ID?: string;
+    AWS_SECRET_ACCESS_KEY?: string;
+    AWS_REGION?: string;
+  },
+  s3Key?: string | null,
+  s3Bucket?: string | null
+): Promise<string | null> {
+  // Use provided key/bucket if available
+  if (s3Key) {
+    return generateS3PresignedUrl(s3Key, env, { 
+      bucket: s3Bucket || DEFAULT_S3_BUCKET 
+    });
+  }
+  
+  // Otherwise, parse from URL
+  const parsed = parseS3Url(expiredUrl);
+  if (!parsed) {
+    console.error('[S3Presign] Failed to parse S3 URL:', expiredUrl);
+    return null;
+  }
+  
+  return generateS3PresignedUrl(parsed.key, env, { bucket: parsed.bucket });
+}
