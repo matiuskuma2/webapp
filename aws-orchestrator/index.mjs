@@ -264,6 +264,16 @@ async function handleStart(body) {
         bucket: bucketName,
         key: `renders/${actualRenderId}/out.mp4`
       },
+      // Frame-level metadata for debugging "Too many functions" errors
+      render_config: {
+        total_frames: totalFrames,
+        frames_per_lambda: framesPerLambda,
+        estimated_functions: estimatedFunctions,
+        max_lambda_functions: MAX_LAMBDA_FUNCTIONS,
+        fps: fps,
+        total_duration_ms: totalDurationMs,
+        total_duration_sec: durationSec
+      },
       status: 'accepted',
       timestamp: new Date().toISOString()
     });

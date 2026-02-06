@@ -3000,6 +3000,16 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     const s3Bucket = awsResponse.output?.bucket || DEFAULT_OUTPUT_BUCKET;
     const s3OutputKey = awsResponse.output?.key || getDefaultOutputKey(ownerUserId, videoBuildId);
     
+    // Merge render_config into settings_json for debugging "Too many functions" errors
+    const renderConfig = (awsResponse as any).render_config;
+    let updatedSettingsJson = buildSettings;
+    if (renderConfig) {
+      updatedSettingsJson = {
+        ...buildSettings,
+        render_config: renderConfig
+      };
+    }
+    
     await c.env.DB.prepare(`
       UPDATE video_builds 
       SET status = 'submitted',
@@ -3008,6 +3018,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           remotion_site_name = ?,
           s3_bucket = ?,
           s3_output_key = ?,
+          settings_json = ?,
           progress_stage = 'Submitted',
           progress_message = 'AWS に送信しました',
           render_started_at = CURRENT_TIMESTAMP
@@ -3018,6 +3029,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       awsResponse.remotion?.site_name || null,
       s3Bucket,
       s3OutputKey,
+      JSON.stringify(updatedSettingsJson),
       videoBuildId
     ).run();
     
