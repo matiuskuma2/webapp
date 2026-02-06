@@ -1966,12 +1966,45 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
       `).bind(scene.id).first();
       
       // Active video (for display_asset_type='video')
+      // job_idも取得して、署名付きURLの場合はリフレッシュ可能にする
       const activeVideo = await c.env.DB.prepare(`
-        SELECT id, status, r2_url, model, duration_sec
+        SELECT id, status, r2_url, r2_key, job_id, model, duration_sec
         FROM video_generations
         WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
         LIMIT 1
-      `).bind(scene.id).first();
+      `).bind(scene.id).first<{
+        id: number;
+        status: string;
+        r2_url: string;
+        r2_key: string | null;
+        job_id: string | null;
+        model: string | null;
+        duration_sec: number;
+      }>();
+      
+      // 署名付きURLの期限切れチェック＆リフレッシュ
+      let refreshedVideoUrl = activeVideo?.r2_url || null;
+      if (activeVideo && activeVideo.job_id && activeVideo.r2_url?.includes('X-Amz-Expires')) {
+        // 署名付きURLの場合、AWS Video Proxyから新しいURLを取得
+        const awsClient = createAwsVideoClient(c.env);
+        if (awsClient) {
+          try {
+            const statusResponse = await awsClient.getStatus(activeVideo.job_id);
+            if (statusResponse.success && statusResponse.job?.presigned_url) {
+              refreshedVideoUrl = statusResponse.job.presigned_url;
+              // DBも更新（次回のために）
+              const s3Key = statusResponse.job.s3_key || activeVideo.r2_key;
+              await c.env.DB.prepare(`
+                UPDATE video_generations SET r2_url = ?, r2_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+              `).bind(refreshedVideoUrl, s3Key, activeVideo.id).run();
+              console.log(`[VideoBuild] Refreshed video URL for scene ${scene.id}, video ${activeVideo.id}`);
+            }
+          } catch (err) {
+            console.warn(`[VideoBuild] Failed to refresh video URL for scene ${scene.id}:`, err);
+            // 失敗してもビルドは続行（古いURLで試みる）
+          }
+        }
+      }
       
       // Utterances
       const { results: utterances } = await c.env.DB.prepare(`
@@ -2003,7 +2036,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         active_video: activeVideo ? { 
           id: activeVideo.id, 
           status: activeVideo.status, 
-          r2_url: activeVideo.r2_url,
+          r2_url: refreshedVideoUrl || activeVideo.r2_url,
           model: activeVideo.model,
           duration_sec: activeVideo.duration_sec
         } : null,
