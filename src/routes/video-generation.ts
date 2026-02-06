@@ -966,16 +966,31 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
             UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
           `).bind(video.scene_id).run();
           
+          // Build permanent URL from s3_bucket and s3_key (not presigned_url which expires)
+          // s3_key example: videos/126/1338/vp-abc123.mp4
+          const s3Key = awsStatus.job.s3_key || null;
+          const s3Bucket = awsStatus.job.s3_bucket || 'rilarc-video-results';
+          
+          // Build permanent public URL (assuming bucket has public access or CloudFront)
+          // Format: https://{bucket}.s3.{region}.amazonaws.com/{key}
+          const permanentUrl = s3Key 
+            ? `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${s3Key}`
+            : awsStatus.job.presigned_url; // Fallback to presigned if no key
+          
           // Then, set this video as active and completed
+          // Store s3_key in r2_key column for future reference
           await c.env.DB.prepare(`
             UPDATE video_generations 
-            SET status = 'completed', r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+            SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(awsStatus.job.presigned_url, videoId).run();
+          `).bind(s3Key, permanentUrl, videoId).run();
+          
+          console.log(`[VideoGen] Video ${videoId} completed: s3_key=${s3Key}, permanent_url=${permanentUrl?.substring(0, 80)}...`);
           
           return c.json({
             status: 'completed',
-            r2_url: awsStatus.job.presigned_url,
+            r2_url: permanentUrl,
+            s3_key: s3Key,
             progress_stage: 'completed',
           });
         } else if (jobStatus === 'failed') {
@@ -1049,18 +1064,28 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
             UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
           `).bind(video.scene_id).run();
           
+          // Build permanent URL from s3_bucket and s3_key
+          const s3Key = awsStatus.job.s3_key || null;
+          const s3Bucket = awsStatus.job.s3_bucket || 'rilarc-video-results';
+          const permanentUrl = s3Key 
+            ? `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${s3Key}`
+            : awsStatus.job.presigned_url;
+          
           // Then, set this video as active and completed
           await c.env.DB.prepare(`
             UPDATE video_generations 
-            SET status = 'completed', r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+            SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(awsStatus.job.presigned_url, videoId).run();
+          `).bind(s3Key, permanentUrl, videoId).run();
+          
+          console.log(`[VideoGen] Video ${videoId} completed (status check): s3_key=${s3Key}`);
           
           return c.json({
             video: {
               id: videoId,
               status: 'completed',
-              r2_url: awsStatus.job.presigned_url,
+              r2_url: permanentUrl,
+              s3_key: s3Key,
               progress_stage: 'completed',
             },
           });
