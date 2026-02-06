@@ -971,6 +971,12 @@ export function computeSceneDurationMsWithReason(scene: SceneData): DurationResu
     voiceRequiredMs = totalUtteranceDuration + AUDIO_PADDING_MS;
   }
   
+  // DEBUG: 音声尺計算のログ
+  console.log(`[computeSceneDuration] Scene ${scene.idx}: utterances=${utterances.length}, totalUtteranceDuration=${totalUtteranceDuration}ms, voiceRequiredMs=${voiceRequiredMs}ms, displayType=${displayType}`);
+  if (displayType === 'video' && scene.active_video) {
+    console.log(`[computeSceneDuration] Scene ${scene.idx}: video mode, active_video.duration_sec=${scene.active_video.duration_sec}`);
+  }
+  
   // comic モード: comic_data.utterances の合計尺（後方互換）
   if (voiceRequiredMs === 0 && displayType === 'comic') {
     const comicUtterances = scene.comic_data?.utterances || [];

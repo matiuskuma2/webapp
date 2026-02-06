@@ -8087,10 +8087,11 @@ async function updateVideoBuildRequirements() {
     blockReasons.push('今月の生成上限（60本）に達しています');
     summaryStatus = 'error';
   }
-  if (hasConcurrent) {
-    blockReasons.push('別の動画が生成中です（完了後に再試行してください）');
-    summaryStatus = 'error';
-  }
+  // 削除: 別の動画生成中でもVideo Buildは並列実行可能なので、ブロックしない
+  // if (hasConcurrent) {
+  //   blockReasons.push('別の動画が生成中です（完了後に再試行してください）');
+  //   summaryStatus = 'error';
+  // }
   
   // UIを更新
   requiredEl.innerHTML = requiredHtml;
@@ -8166,20 +8167,22 @@ function updateVideoBuildButtonState() {
   
   const usage = window.videoBuildUsageCache || {};
   const isAtLimit = (usage.monthly_builds || 0) >= 60;
+  // 修正: hasConcurrentはボタン表示のみに使用、ブロックには使わない
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
   // Phase 1: Limit to 100 scenes until segment rendering is implemented
   const SCENE_LIMIT_THRESHOLD = 100;
   const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
   
-  // R1.6: canStart は can_generate を使用（+ 音声生成中は不可 + 生成中は不可）
-  const canStart = canGenerate && !isAtLimit && !hasConcurrent && !exceedsSceneLimit && !isGeneratingAudio;
+  // R1.6: canStart は can_generate を使用（+ 上限チェック）
+  // 修正: hasConcurrentはブロック条件から削除（Video Buildは並列実行可能）
+  const canStart = canGenerate && !isAtLimit && !exceedsSceneLimit && !isGeneratingAudio;
   btn.disabled = !canStart;
   
   // ボタン表示を状態に応じて変更
   if (hasConcurrent) {
-    // 動画生成中
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>動画生成中...';
+    // 動画生成中でも開始可能だが、状態を表示（情報として）
+    btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成 <span class="text-xs opacity-75">(他に生成中あり)</span>';
   } else if (isGeneratingAudio) {
     // 音声生成中
     btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>音声生成中...';
