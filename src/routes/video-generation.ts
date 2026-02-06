@@ -4379,4 +4379,422 @@ videoGeneration.get('/:sceneId/balloons', async (c) => {
   return c.json({ balloons: balloons || [] });
 });
 
+// ====================================================================
+// Issue 1: 動画プロンプト再編集 API
+// ====================================================================
+
+/**
+ * PUT /api/video-generations/:id/prompt
+ * 
+ * プロンプトのみ更新（再生成しない）
+ * 
+ * ## SSOT
+ * - video_generations.prompt がSSOT
+ * - 更新後も status/r2_url は変更しない
+ * - active の切替もしない
+ * 
+ * ## ユースケース
+ * - 次回再生成用にプロンプトを事前に調整
+ * - 誤ったプロンプトの修正（再生成なし）
+ */
+videoGeneration.put('/video-generations/:id/prompt', async (c) => {
+  const { getCookie } = await import('hono/cookie');
+  
+  const videoId = parseInt(c.req.param('id'), 10);
+  if (isNaN(videoId)) {
+    return c.json({ error: { code: 'INVALID_ID', message: 'Invalid video generation ID' } }, 400);
+  }
+  
+  // 認証確認
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const sessionUser = await c.env.DB.prepare(`
+    SELECT s.user_id, u.role FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number; role: string }>();
+  
+  if (!sessionUser) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+  
+  // リクエストボディ
+  let body: { prompt?: string };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: { code: 'INVALID_BODY', message: 'Invalid JSON body' } }, 400);
+  }
+  
+  if (!body.prompt || typeof body.prompt !== 'string') {
+    return c.json({ error: { code: 'INVALID_PROMPT', message: 'Prompt is required' } }, 400);
+  }
+  
+  // video_generation 取得
+  const video = await c.env.DB.prepare(`
+    SELECT vg.id, vg.scene_id, vg.prompt, vg.status, s.project_id, p.user_id as owner_user_id
+    FROM video_generations vg
+    JOIN scenes s ON vg.scene_id = s.id
+    JOIN projects p ON s.project_id = p.id
+    WHERE vg.id = ?
+  `).bind(videoId).first<{
+    id: number;
+    scene_id: number;
+    prompt: string | null;
+    status: string;
+    project_id: number;
+    owner_user_id: number;
+  }>();
+  
+  if (!video) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Video generation not found' } }, 404);
+  }
+  
+  // アクセス制御
+  const isPrivileged = sessionUser.role === 'superadmin' || sessionUser.role === 'admin';
+  if (!isPrivileged && video.owner_user_id !== sessionUser.user_id) {
+    return c.json({ error: { code: 'ACCESS_DENIED', message: 'Access denied' } }, 403);
+  }
+  
+  // プロンプト更新（statusやr2_urlは変更しない）
+  await c.env.DB.prepare(`
+    UPDATE video_generations 
+    SET prompt = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(body.prompt.trim(), videoId).run();
+  
+  console.log(`[VideoGen] Prompt updated: video_id=${videoId}, old_prompt="${video.prompt?.substring(0, 50)}...", new_prompt="${body.prompt.substring(0, 50)}..."`);
+  
+  return c.json({
+    success: true,
+    video_generation: {
+      id: videoId,
+      scene_id: video.scene_id,
+      prompt: body.prompt.trim(),
+      status: video.status,
+    },
+    message: 'プロンプトを更新しました（再生成は別途実行してください）'
+  });
+});
+
+/**
+ * POST /api/scenes/:sceneId/video-regenerate
+ * 
+ * 動画を再生成（新しい video_generation を作成）
+ * 
+ * ## SSOT
+ * - 新しい video_generations レコードを INSERT
+ * - 成功時のみ is_active を切替
+ * - 失敗時は旧 active を維持（事故防止）
+ * 
+ * ## フロー
+ * 1. 新 video_generations を INSERT (is_active=0, status='generating')
+ * 2. Veo API 呼び出し
+ * 3. 成功時:
+ *    - 新レコード is_active=1
+ *    - 旧 active を is_active=0
+ * 4. 失敗時:
+ *    - 新レコード status='failed'
+ *    - active 切替なし
+ */
+videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
+  const { getCookie } = await import('hono/cookie');
+  
+  const sceneId = parseInt(c.req.param('sceneId'), 10);
+  if (isNaN(sceneId)) {
+    return c.json({ error: { code: 'INVALID_SCENE_ID', message: 'Invalid scene ID' } }, 400);
+  }
+  
+  // 認証確認
+  const sessionId = getCookie(c, 'session');
+  if (!sessionId) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401);
+  }
+  
+  const sessionUser = await c.env.DB.prepare(`
+    SELECT s.user_id, u.role FROM sessions s
+    JOIN users u ON s.user_id = u.id
+    WHERE s.id = ? AND s.expires_at > datetime('now')
+  `).bind(sessionId).first<{ user_id: number; role: string }>();
+  
+  if (!sessionUser) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Session expired' } }, 401);
+  }
+  
+  // リクエストボディ（prompt はオプション）
+  let body: { prompt?: string; model?: string; duration_sec?: number } = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // empty body is OK
+  }
+  
+  // シーン + プロジェクト情報取得
+  const scene = await c.env.DB.prepare(`
+    SELECT s.id, s.project_id, s.dialogue, p.user_id as owner_user_id
+    FROM scenes s
+    JOIN projects p ON p.id = s.project_id
+    WHERE s.id = ?
+  `).bind(sceneId).first<{
+    id: number;
+    project_id: number;
+    dialogue: string;
+    owner_user_id: number;
+  }>();
+  
+  if (!scene) {
+    return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
+  }
+  
+  // アクセス制御
+  const isPrivileged = sessionUser.role === 'superadmin' || sessionUser.role === 'admin';
+  if (!isPrivileged && scene.owner_user_id !== sessionUser.user_id) {
+    return c.json({ error: { code: 'ACCESS_DENIED', message: 'Access denied' } }, 403);
+  }
+  
+  // 現在の active_video からプロンプトを取得（上書きされていなければ）
+  const currentActive = await c.env.DB.prepare(`
+    SELECT id, prompt, model, duration_sec, source_image_r2_key
+    FROM video_generations
+    WHERE scene_id = ? AND is_active = 1
+    ORDER BY id DESC
+    LIMIT 1
+  `).bind(sceneId).first<{
+    id: number;
+    prompt: string | null;
+    model: string | null;
+    duration_sec: number;
+    source_image_r2_key: string;
+  }>();
+  
+  // プロンプト決定: body.prompt > currentActive.prompt > scene.dialogue
+  const finalPrompt = body.prompt?.trim() || currentActive?.prompt || scene.dialogue || '';
+  
+  if (!finalPrompt) {
+    return c.json({ 
+      error: { code: 'NO_PROMPT', message: 'Prompt is required for video regeneration' } 
+    }, 400);
+  }
+  
+  // Active image 取得（再生成に必要）
+  const activeImage = await getSceneActiveImage(c.env.DB, sceneId);
+  if (!activeImage) {
+    return c.json({
+      error: {
+        code: 'NO_ACTIVE_IMAGE',
+        message: 'No active image for this scene. Generate and activate an image first.',
+      },
+    }, 400);
+  }
+  
+  // 競合チェック
+  await detectAndMarkStuckJobs(c.env.DB, sceneId);
+  
+  const generating = await c.env.DB.prepare(`
+    SELECT id FROM video_generations
+    WHERE scene_id = ? AND status = 'generating'
+  `).bind(sceneId).first();
+  
+  if (generating) {
+    return c.json({
+      error: {
+        code: 'GENERATION_IN_PROGRESS',
+        message: 'Video generation already in progress for this scene',
+      },
+    }, 409);
+  }
+  
+  // モデルとduration決定
+  const model = body.model || currentActive?.model || 'veo-2.0-generate-001';
+  const durationSec = body.duration_sec || currentActive?.duration_sec || 5;
+  const videoEngine: VideoEngine = model.includes('veo-3') ? 'veo3' : 'veo2';
+  
+  // 課金判定（既存ロジックを再利用）
+  const isSuperadmin = sessionUser.role === 'superadmin';
+  let billingSource: BillingSource = 'user';
+  let sponsorUserId: number | null = null;
+  
+  if (isSuperadmin) {
+    billingSource = 'sponsor';
+    sponsorUserId = sessionUser.user_id;
+  } else {
+    const billingInfo = await determineBillingSource(
+      c.env.DB, scene.project_id, scene.owner_user_id
+    );
+    billingSource = billingInfo.billingSource;
+    sponsorUserId = billingInfo.sponsorUserId;
+  }
+  
+  const executorUserId = sessionUser.user_id;
+  const billingUserId = billingSource === 'sponsor' && sponsorUserId 
+    ? sponsorUserId 
+    : executorUserId;
+  
+  console.log(`[VideoRegenerate] Starting: scene_id=${sceneId}, prompt="${finalPrompt.substring(0, 50)}...", model=${model}, billing=${billingSource}`);
+  
+  // 新しい video_generation を作成（is_active=0）
+  const insertResult = await c.env.DB.prepare(`
+    INSERT INTO video_generations (
+      scene_id, user_id, provider, model, status,
+      duration_sec, prompt, source_image_r2_key, is_active
+    ) VALUES (?, ?, 'google_veo', ?, 'generating', ?, ?, ?, 0)
+  `).bind(
+    sceneId,
+    executorUserId,
+    model,
+    durationSec,
+    finalPrompt,
+    activeImage.r2_key
+  ).run();
+  
+  const newVideoId = insertResult.meta.last_row_id as number;
+  
+  // Veo API 呼び出し（既存のgenerate-videoと同じロジック）
+  // ここでは簡略化のため、generate-video エンドポイントを内部呼び出しするのではなく
+  // 直接 AWS Video Proxy を呼び出す
+  
+  const keyRing = [
+    c.env.ENCRYPTION_KEY,
+    c.env.ENCRYPTION_KEY_OLD_1,
+    c.env.ENCRYPTION_KEY_OLD_2
+  ].filter(Boolean) as string[];
+  
+  let apiKey: string | null = null;
+  let vertexSaJson: string | null = null;
+  let vertexProjectId: string | null = null;
+  let vertexLocation: string | null = null;
+  
+  if (videoEngine === 'veo2') {
+    if (isSuperadmin || billingSource === 'sponsor') {
+      apiKey = c.env.GEMINI_API_KEY || null;
+    } else {
+      const keyResult = await getUserApiKeyWithKeyRing(
+        c.env.DB, billingUserId, 'google_gemini', keyRing
+      );
+      if (keyResult.key) {
+        apiKey = keyResult.key;
+      }
+    }
+  } else {
+    // veo3: Vertex AI
+    if (isSuperadmin || billingSource === 'sponsor') {
+      vertexSaJson = c.env.VERTEX_SA_JSON || null;
+      vertexProjectId = c.env.VERTEX_PROJECT_ID || null;
+      vertexLocation = c.env.VERTEX_LOCATION || 'us-central1';
+    } else {
+      const saResult = await getUserApiKeyWithKeyRing(
+        c.env.DB, billingUserId, 'google_vertex_sa', keyRing
+      );
+      if (saResult.key) {
+        try {
+          const parsed = JSON.parse(saResult.key);
+          vertexSaJson = saResult.key;
+          vertexProjectId = parsed.project_id;
+        } catch {}
+      }
+      const locationResult = await getUserApiKeyWithKeyRing(
+        c.env.DB, billingUserId, 'google_vertex_location', keyRing
+      );
+      if (locationResult.key) {
+        vertexLocation = locationResult.key;
+      }
+    }
+  }
+  
+  // API呼び出し
+  const awsVideoProxyUrl = c.env.AWS_VIDEO_PROXY_URL;
+  if (!awsVideoProxyUrl) {
+    await c.env.DB.prepare(`
+      UPDATE video_generations SET status = 'failed', error_message = 'AWS Video Proxy URL not configured'
+      WHERE id = ?
+    `).bind(newVideoId).run();
+    
+    return c.json({
+      error: { code: 'CONFIG_ERROR', message: 'Video generation service not configured' }
+    }, 500);
+  }
+  
+  // Signed URL for source image
+  const signedImageUrl = await generateSignedImageUrl(
+    c.env.R2, activeImage.r2_key, c.env.IMAGE_SIGNING_KEY, 3600
+  );
+  
+  if (!signedImageUrl) {
+    await c.env.DB.prepare(`
+      UPDATE video_generations SET status = 'failed', error_message = 'Failed to generate signed URL for source image'
+      WHERE id = ?
+    `).bind(newVideoId).run();
+    
+    return c.json({
+      error: { code: 'IMAGE_ERROR', message: 'Failed to access source image' }
+    }, 500);
+  }
+  
+  // AWS Video Proxy Client
+  const awsClient = createAwsVideoClient({
+    baseUrl: awsVideoProxyUrl,
+    apiKey: apiKey || undefined,
+    vertexSaJson: vertexSaJson || undefined,
+    vertexProjectId: vertexProjectId || undefined,
+    vertexLocation: vertexLocation || undefined,
+    accessKeyId: c.env.AWS_ACCESS_KEY_ID || '',
+    secretAccessKey: c.env.AWS_SECRET_ACCESS_KEY || '',
+  });
+  
+  try {
+    const result = await awsClient.generateVideo({
+      image_url: signedImageUrl,
+      prompt: finalPrompt,
+      duration_sec: durationSec,
+      video_engine: videoEngine,
+      model: model,
+    });
+    
+    if (!result.job_id) {
+      throw new Error('No job_id returned from video generation service');
+    }
+    
+    // job_id を保存
+    await c.env.DB.prepare(`
+      UPDATE video_generations SET job_id = ? WHERE id = ?
+    `).bind(result.job_id, newVideoId).run();
+    
+    console.log(`[VideoRegenerate] Started: video_id=${newVideoId}, job_id=${result.job_id}`);
+    
+    return c.json({
+      success: true,
+      video_generation: {
+        id: newVideoId,
+        scene_id: sceneId,
+        prompt: finalPrompt,
+        model: model,
+        status: 'generating',
+        job_id: result.job_id,
+      },
+      message: '動画生成を開始しました（完了後に自動でアクティブになります）'
+    }, 201);
+    
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    await c.env.DB.prepare(`
+      UPDATE video_generations SET status = 'failed', error_message = ?
+      WHERE id = ?
+    `).bind(errorMessage.substring(0, 500), newVideoId).run();
+    
+    console.error(`[VideoRegenerate] Failed: video_id=${newVideoId}, error=${errorMessage}`);
+    
+    return c.json({
+      error: {
+        code: 'GENERATION_FAILED',
+        message: '動画生成の開始に失敗しました',
+        details: errorMessage,
+      }
+    }, 500);
+  }
+});
+
 export default videoGeneration;

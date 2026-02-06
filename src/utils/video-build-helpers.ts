@@ -470,6 +470,150 @@ function isValidUrl(url: string | undefined | null): boolean {
 }
 
 // ====================================================================
+// Motion Preset Definitions (SSOT)
+// ====================================================================
+
+/**
+ * モーションプリセット定義
+ * 
+ * ## SSOT (Single Source of Truth)
+ * - Remotion は motion.id と motion.params のみを参照
+ * - ランダム要素は buildProjectJson で事前に確定
+ * - auto の場合、params.chosen に実際のプリセットIDが入る
+ */
+export interface MotionPresetDef {
+  id: string;
+  motion_type: 'none' | 'zoom' | 'pan' | 'combined' | 'hold_then_pan';
+  params: {
+    start_scale?: number;
+    end_scale?: number;
+    start_x?: number;
+    end_x?: number;
+    start_y?: number;
+    end_y?: number;
+    hold_ratio?: number;
+    seed?: number;
+    chosen?: string;
+  };
+}
+
+/**
+ * モーションプリセット定義マップ
+ * ※ Remotion側のMOTION_PRESETSと同期
+ */
+const MOTION_PRESETS_MAP: Record<string, MotionPresetDef> = {
+  none: { id: 'none', motion_type: 'none', params: {} },
+  kenburns_soft: { id: 'kenburns_soft', motion_type: 'zoom', params: { start_scale: 1.0, end_scale: 1.05 } },
+  kenburns_strong: { id: 'kenburns_strong', motion_type: 'zoom', params: { start_scale: 1.0, end_scale: 1.15 } },
+  kenburns_zoom_out: { id: 'kenburns_zoom_out', motion_type: 'zoom', params: { start_scale: 1.1, end_scale: 1.0 } },
+  pan_lr: { id: 'pan_lr', motion_type: 'pan', params: { start_x: -5, end_x: 5, start_y: 0, end_y: 0 } },
+  pan_rl: { id: 'pan_rl', motion_type: 'pan', params: { start_x: 5, end_x: -5, start_y: 0, end_y: 0 } },
+  pan_tb: { id: 'pan_tb', motion_type: 'pan', params: { start_x: 0, end_x: 0, start_y: -5, end_y: 5 } },
+  pan_bt: { id: 'pan_bt', motion_type: 'pan', params: { start_x: 0, end_x: 0, start_y: 5, end_y: -5 } },
+  slide_lr: { id: 'slide_lr', motion_type: 'pan', params: { start_x: -10, end_x: 10, start_y: 0, end_y: 0 } },
+  slide_rl: { id: 'slide_rl', motion_type: 'pan', params: { start_x: 10, end_x: -10, start_y: 0, end_y: 0 } },
+  slide_tb: { id: 'slide_tb', motion_type: 'pan', params: { start_x: 0, end_x: 0, start_y: -10, end_y: 10 } },
+  slide_bt: { id: 'slide_bt', motion_type: 'pan', params: { start_x: 0, end_x: 0, start_y: 10, end_y: -10 } },
+  hold_then_slide_lr: { id: 'hold_then_slide_lr', motion_type: 'hold_then_pan', params: { start_x: -5, end_x: 10, start_y: 0, end_y: 0, hold_ratio: 0.3 } },
+  hold_then_slide_rl: { id: 'hold_then_slide_rl', motion_type: 'hold_then_pan', params: { start_x: 5, end_x: -10, start_y: 0, end_y: 0, hold_ratio: 0.3 } },
+  hold_then_slide_tb: { id: 'hold_then_slide_tb', motion_type: 'hold_then_pan', params: { start_x: 0, end_x: 0, start_y: -5, end_y: 10, hold_ratio: 0.3 } },
+  hold_then_slide_bt: { id: 'hold_then_slide_bt', motion_type: 'hold_then_pan', params: { start_x: 0, end_x: 0, start_y: 5, end_y: -10, hold_ratio: 0.3 } },
+  combined_zoom_pan_lr: { id: 'combined_zoom_pan_lr', motion_type: 'combined', params: { start_scale: 1.0, end_scale: 1.08, start_x: -3, end_x: 3, start_y: 0, end_y: 0 } },
+  combined_zoom_pan_rl: { id: 'combined_zoom_pan_rl', motion_type: 'combined', params: { start_scale: 1.0, end_scale: 1.08, start_x: 3, end_x: -3, start_y: 0, end_y: 0 } },
+};
+
+/**
+ * Auto選択用のプリセットリスト（ランダム選択の候補）
+ */
+const AUTO_MOTION_CANDIDATES: string[] = [
+  'kenburns_soft',
+  'kenburns_zoom_out',
+  'pan_lr',
+  'pan_rl',
+  'slide_lr',
+  'slide_rl',
+  'hold_then_slide_lr',
+  'hold_then_slide_rl',
+];
+
+/**
+ * seed から auto モーションを決定論的に選択
+ * 
+ * ★ 重要: この関数は buildProjectJson でのみ呼ばれる
+ * Remotion 側では呼ばない（再現性を保証するため）
+ * 
+ * @param seed シード値（scene_id + project_id から生成）
+ * @returns 選ばれたプリセットID
+ */
+function pickAutoMotion(seed: number): string {
+  const index = Math.abs(seed) % AUTO_MOTION_CANDIDATES.length;
+  return AUTO_MOTION_CANDIDATES[index];
+}
+
+/**
+ * シーンのモーションプリセットを解決
+ * 
+ * ## ルール
+ * 1. comic → 常に none（静止画）
+ * 2. scene.motion が指定されていればそれを使用
+ * 3. auto の場合は seed で決定論的に選択
+ * 4. デフォルトは kenburns_soft
+ * 
+ * ## SSOT
+ * - auto の場合、params.seed と params.chosen をセット
+ * - Remotion は chosen のみを使用（ランダムしない）
+ */
+function resolveMotionPreset(
+  scene: { id: number; idx: number; display_asset_type?: string; motion?: any },
+  projectId: number
+): MotionPresetDef {
+  // comic は常に静止
+  if (scene.display_asset_type === 'comic') {
+    return MOTION_PRESETS_MAP.none;
+  }
+  
+  // scene.motion が指定されている場合
+  if (scene.motion) {
+    const presetId = scene.motion.preset_id || scene.motion.id;
+    
+    // auto の場合: seed で決定論的に選択
+    if (presetId === 'auto') {
+      // seed = scene_id XOR project_id（再現可能な値）
+      const seed = scene.id ^ projectId;
+      const chosen = pickAutoMotion(seed);
+      const chosenPreset = MOTION_PRESETS_MAP[chosen] || MOTION_PRESETS_MAP.kenburns_soft;
+      
+      console.log(`[resolveMotionPreset] Scene ${scene.idx}: auto -> ${chosen} (seed: ${seed})`);
+      
+      return {
+        id: 'auto',
+        motion_type: chosenPreset.motion_type,
+        params: {
+          ...chosenPreset.params,
+          seed,
+          chosen,
+        }
+      };
+    }
+    
+    // 既知のプリセットの場合
+    if (MOTION_PRESETS_MAP[presetId]) {
+      return MOTION_PRESETS_MAP[presetId];
+    }
+    
+    // カスタムパラメータの場合
+    return {
+      id: presetId,
+      motion_type: scene.motion.motion_type || 'zoom',
+      params: scene.motion.params || {},
+    };
+  }
+  
+  // デフォルト
+  return MOTION_PRESETS_MAP.kenburns_soft;
+}
+
+// ====================================================================
 // BuildRequest v1 Types (Remotion契約)
 // ====================================================================
 
@@ -656,8 +800,8 @@ export interface SceneData {
   // R2-C: モーションプリセット（scene_motion から読み込み）
   motion?: {
     preset_id: string;
-    motion_type: 'none' | 'zoom' | 'pan' | 'combined';
-    params: Record<string, number>;
+    motion_type: 'none' | 'zoom' | 'pan' | 'combined' | 'hold_then_pan';
+    params: Record<string, number | string | undefined>;
   } | null;
   // P5: シーン別BGM（scene_audio_assignments から読み込み）
   bgm?: {
@@ -1618,10 +1762,10 @@ export interface RemotionScene_R1 {
   balloons?: BalloonAsset[];
   /** R3-B: SFX（効果音） */
   sfx?: SfxAsset[];
-  /** R2-C: モーションプリセット */
+  /** R2-C: モーションプリセット（拡張版：hold_then_pan, auto対応） */
   motion?: {
     id: string;
-    motion_type: 'none' | 'zoom' | 'pan' | 'combined';
+    motion_type: 'none' | 'zoom' | 'pan' | 'combined' | 'hold_then_pan';
     params: {
       start_scale?: number;
       end_scale?: number;
@@ -1629,6 +1773,9 @@ export interface RemotionScene_R1 {
       end_x?: number;
       start_y?: number;
       end_y?: number;
+      hold_ratio?: number;  // hold_then_pan用
+      seed?: number;        // auto用（決定論的選択のシード）
+      chosen?: string;      // auto用（実際に選ばれたプリセットID）
     };
   };
   /** P5: シーン別BGM（プロジェクト全体BGMより優先） */
@@ -2137,14 +2284,8 @@ export function buildProjectJson(
       })) : undefined,
       // R2-C: motion
       // comic は none（静止画）、image/video はプリセット or デフォルト
-      motion: scene.motion ? {
-        id: scene.motion.preset_id,
-        motion_type: scene.motion.motion_type,
-        params: scene.motion.params,
-      } : (scene.display_asset_type === 'comic' 
-        ? { id: 'none', motion_type: 'none', params: {} }
-        : { id: 'kenburns_soft', motion_type: 'zoom', params: { start_scale: 1.0, end_scale: 1.05 } }
-      ),
+      // ★ auto の場合は seed で決定論的に選択（Remotion内でランダムしない）
+      motion: resolveMotionPreset(scene, project.id),
       // P5: シーン別BGM（新SSOT優先、プロジェクト全体BGMより優先）
       // scene.bgm がある場合は projectJson.assets.bgm より優先して再生
       // Remotion側で duck/mute 処理
