@@ -73,7 +73,7 @@ export const Scene: React.FC<SceneProps> = ({
     const lastVoice = voices_check[voices_check.length - 1];
     const voiceEndMs = (lastVoice.start_ms ?? 0) + lastVoice.duration_ms;
     if (voiceEndMs > scene.timing.duration_ms) {
-      console.warn(`[Scene ${scene.idx}] ⚠️ VOICE OVERFLOW: lastVoice ends at ${voiceEndMs}ms but scene duration is ${scene.timing.duration_ms}ms. Audio will be clipped!`);
+      console.warn(`[Scene ${scene.idx}] ⚠️ VOICE OVERFLOW: lastVoice ends at ${voiceEndMs}ms but scene duration is ${scene.timing.duration_ms}ms. Audio Sequence will use remaining scene frames to prevent clipping.`);
     }
   }
   
@@ -215,15 +215,20 @@ export const Scene: React.FC<SceneProps> = ({
           />
         )}
         {/* R1.5: voices[] を再生 */}
+        {/* ★ FIX: durationInFrames をシーン尺の残りまで拡張
+            voice.duration_ms が不正確でも、実際の音声ファイルの長さまで再生される。
+            Remotion の <Audio> は音声ファイル終了で自動停止するため、長めに取っても問題ない。
+            これにより duration_ms の計算誤差による音声切れを構造的に防止する。 */}
         {effectiveVoices.map((voice) => {
           const voiceStartFrame = msToFrames(voice.start_ms ?? 0, fps);
-          const voiceDurationFrames = msToFrames(voice.duration_ms, fps);
+          // シーン尺の残りフレーム = シーンの終わりまで音声再生を許可
+          const remainingFrames = Math.max(1, durationFrames - voiceStartFrame);
           
           return (
             <Sequence 
               key={voice.id} 
               from={voiceStartFrame} 
-              durationInFrames={voiceDurationFrames}
+              durationInFrames={remainingFrames}
             >
               <Audio src={voice.audio_url} />
             </Sequence>
@@ -356,15 +361,17 @@ export const Scene: React.FC<SceneProps> = ({
       </MotionWrapper>
       
       {/* R1.5: voices[] を再生 */}
+      {/* ★ FIX: durationInFrames をシーン尺の残りまで拡張（音声切れ防止） */}
       {effectiveVoices.map((voice) => {
         const voiceStartFrame = msToFrames(voice.start_ms ?? 0, fps);
-        const voiceDurationFrames = msToFrames(voice.duration_ms, fps);
+        // シーン尺の残りフレーム = シーンの終わりまで音声再生を許可
+        const remainingFrames = Math.max(1, durationFrames - voiceStartFrame);
         
         return (
           <Sequence 
             key={voice.id} 
             from={voiceStartFrame} 
-            durationInFrames={voiceDurationFrames}
+            durationInFrames={remainingFrames}
           >
             <Audio src={voice.audio_url} />
           </Sequence>

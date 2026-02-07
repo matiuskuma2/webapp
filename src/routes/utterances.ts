@@ -3,6 +3,7 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
 import { createErrorResponse } from '../utils/error-response';
+import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration';
 import { generateFishTTS } from '../utils/fish-audio';
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
 
@@ -886,11 +887,31 @@ async function generateUtteranceAudio(args: {
       ? `${(env as any).R2_PUBLIC_URL}/${r2Key}`
       : `/${r2Key}`;
 
-    // Calculate duration from file size
+    // Calculate duration: MP3ヘッダーを解析して正確なdurationを取得
+    // ★ FIX: 以前は bitrate=16000 で粗雑計算していたため、
+    //    実際の音声長と大幅にズレてセリフ切れの根本原因になっていた
     const bytesLength = bytes.length;
-    const bitrate = format === 'wav' ? 176400 : 16000;
-    const calculatedDurationMs = Math.round((bytesLength / bitrate) * 1000);
-    const estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+    let estimatedDurationMs: number;
+    
+    if (format === 'wav') {
+      // WAV: ファイルサイズから計算（24kHz 16bit mono = 48000 bytes/sec）
+      const sampleBytes = sampleRate * 2; // 16-bit = 2 bytes per sample, mono
+      const calculatedDurationMs = Math.round((bytesLength / sampleBytes) * 1000);
+      estimatedDurationMs = Math.max(1000, calculatedDurationMs);
+      console.log(`[Utterance ${utteranceId}] WAV duration: ${bytesLength} bytes / ${sampleBytes} = ${calculatedDurationMs}ms`);
+    } else {
+      // MP3: ヘッダーを解析して正確なdurationを取得
+      const parsedDurationMs = getMp3Duration(bytes.buffer);
+      if (parsedDurationMs && parsedDurationMs > 0) {
+        estimatedDurationMs = parsedDurationMs;
+        console.log(`[Utterance ${utteranceId}] MP3 parsed duration: ${parsedDurationMs}ms (${(parsedDurationMs/1000).toFixed(2)}s)`);
+      } else {
+        // フォールバック: 64kbpsを仮定（TTSは通常32-128kbps）
+        const calculatedDurationMs = estimateMp3Duration(bytesLength, 64);
+        estimatedDurationMs = Math.max(1000, calculatedDurationMs);
+        console.log(`[Utterance ${utteranceId}] MP3 fallback duration: ${bytesLength} bytes @ 64kbps = ${calculatedDurationMs}ms`);
+      }
+    }
 
     // Update audio_generation to completed
     await env.DB.prepare(`

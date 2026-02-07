@@ -963,11 +963,18 @@ export function computeSceneDurationMsWithReason(scene: SceneData): DurationResu
   let voiceRequiredMs = 0;
   
   // scene_utterances（R1.5+）の音声合計
-  // ★ FIX: duration_ms が null でも audio_url がある場合はテキストから推定
-  //    「セリフ音声があるのに尺が0」を構造的に防止
+  // ★ FIX v2: 旧バグ (bitrate=16000) で保存された不正な duration_ms を検出・補正
   const utterances = scene.utterances || [];
   const totalUtteranceDuration = utterances.reduce((sum, u) => {
+    const textMinMs = Math.max(MIN_DURATION_MS, (u.text?.length || 0) * 150);
+    
     if (u.duration_ms && u.duration_ms > 0) {
+      // DB値が異常に短い場合（テキスト最低値の50%以下）は推定値に置換
+      if (u.audio_url && u.duration_ms < textMinMs * 0.5 && (u.text?.length || 0) > 5) {
+        const fallback = Math.max(MIN_DURATION_MS, (u.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR);
+        console.warn(`[computeSceneDuration] Utt ${u.id}: suspicious duration_ms=${u.duration_ms} for ${u.text?.length}chars. Using fallback=${fallback}ms`);
+        return sum + fallback;
+      }
       return sum + u.duration_ms;
     }
     // duration_ms が null/0 だが audio_url がある場合、テキストから推定
@@ -1977,23 +1984,54 @@ export function buildProjectJson(
     
     // R1.5/R2: scene_utterances があればそこから voices を構築（SSOT優先）
     // R2: utterance_id と end_ms を追加（balloon 同期用）
-    // ★ FIX: 全utteranceの尺を必ず計算し、音声が途中で切れないことを保証
+    // ★ FIX v2: 全utteranceの尺を必ず計算し、音声が途中で切れないことを保証
+    //
+    // 根本原因: utterances.ts の旧duration計算が不正確 (bitrate=16000の粗雑計算)
+    // により、audio_generations.duration_ms と scene_utterances.duration_ms が
+    // 実際の音声長と大きくズレていた。
+    //
+    // 防御策:
+    // 1. duration_ms が存在してもテキスト推定値と比較し、短すぎる場合は推定値を優先
+    // 2. Remotion側でも Audio Sequence を「シーン尺の残り」まで拡張（二重防御）
+    // 3. AUDIO_PADDING_MS でシーン尺にバッファを追加
     if (scene.utterances && scene.utterances.length > 0) {
       let voiceStartMs = 0;
       for (const utt of scene.utterances) {
-        // ★ FIX: duration_ms が null でも audio_url がある場合はテキストから推定して voices に追加
-        //    以前は (audio_url && duration_ms) の両方が必要だったが、
-        //    duration_ms が null の場合にセリフ音声が丸ごとスキップされていた
-        const estimatedDurationMs = Math.max(
+        // テキストからの最低限の推定値（日本語: 約150ms/文字、最低2秒）
+        // 注: TTSの実速度は130-300ms/文字の範囲で変動するため、
+        //     ここでは「最低でもこれだけ必要」の下限として使用
+        const textMinDurationMs = Math.max(
           MIN_DURATION_MS,
-          (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
+          (utt.text?.length || 0) * 150  // 最低ラインとして150ms/文字
         );
         
         if (utt.audio_url) {
           hasAudio = true;
           
-          // duration_ms: 確定値があれば使用、なければテキストから推定
-          const effectiveDurationMs = utt.duration_ms || estimatedDurationMs;
+          // duration_ms の決定ロジック:
+          //   1. DB上の duration_ms があればそれを使用
+          //   2. null の場合はテキスト推定値（300ms/文字）をフォールバック
+          //   3. DB値が異常に短い場合（テキスト最低値の50%以下）は推定値を採用
+          //      → 旧バグ (bitrate=16000) で保存された不正値を検出
+          const dbDurationMs = utt.duration_ms;
+          const fallbackDurationMs = Math.max(
+            MIN_DURATION_MS,
+            (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
+          );
+          
+          let effectiveDurationMs: number;
+          if (dbDurationMs && dbDurationMs > 0) {
+            // DB値が異常に短い場合は旧バグの可能性が高い
+            if (dbDurationMs < textMinDurationMs * 0.5 && (utt.text?.length || 0) > 5) {
+              console.warn(`[buildProjectJson] Scene ${scene.idx} utt ${utt.id}: ⚠️ DB duration_ms=${dbDurationMs} is suspiciously short for "${(utt.text || '').substring(0, 30)}..." (${utt.text?.length}chars, min=${textMinDurationMs}ms). Using fallback=${fallbackDurationMs}ms`);
+              effectiveDurationMs = fallbackDurationMs;
+            } else {
+              effectiveDurationMs = dbDurationMs;
+            }
+          } else {
+            effectiveDurationMs = fallbackDurationMs;
+            console.warn(`[buildProjectJson] Scene ${scene.idx} utt ${utt.id}: ⚠️ No duration_ms in DB. Using text estimate=${fallbackDurationMs}ms for "${(utt.text || '').substring(0, 30)}..."`);
+          }
           
           voices.push({
             id: `voice-utt-${utt.id}`,
@@ -2009,14 +2047,17 @@ export function buildProjectJson(
             format: 'mp3',
           });
           
-          console.log(`[buildProjectJson] Scene ${scene.idx} utt ${utt.id}: audio_url=YES, duration_ms=${utt.duration_ms}, effective=${effectiveDurationMs}, start=${voiceStartMs}`);
+          console.log(`[buildProjectJson] Scene ${scene.idx} utt ${utt.id}: audio_url=YES, db_duration=${dbDurationMs}, effective=${effectiveDurationMs}, text_min=${textMinDurationMs}, start=${voiceStartMs}`);
           
           voiceStartMs += effectiveDurationMs;
         } else {
           // R2-A: 音声なしの utterance は duration 計算に使うが、voices には追加しない
           // (Remotion Lambda は空の audio_url で "No src passed" エラーになるため)
           // balloon 同期は別途 utterances データから行う
-          const durationMsValue = utt.duration_ms || estimatedDurationMs;
+          const durationMsValue = utt.duration_ms || Math.max(
+            MIN_DURATION_MS,
+            (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
+          );
           
           // 注意: voiceStartMs は進めるが voices には追加しない
           // これにより後続の音声付き utterance のタイミングが正しく計算される
