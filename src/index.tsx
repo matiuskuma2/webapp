@@ -2058,7 +2058,21 @@ app.get('/projects/:id', (c) => {
                                 class="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200 text-sm">
                                 <option value="none">動きなし</option>
                                 <option value="kenburns_soft" selected>ゆっくりズーム</option>
-                                <option value="kenburns_medium">ズーム（標準）</option>
+                                <option value="kenburns_strong">強めズーム</option>
+                                <option value="kenburns_zoom_out">ズームアウト</option>
+                                <option value="pan_lr">パン（左→右）</option>
+                                <option value="pan_rl">パン（右→左）</option>
+                                <option value="pan_tb">パン（上→下）</option>
+                                <option value="pan_bt">パン（下→上）</option>
+                                <option value="slide_lr">スライド（左→右）</option>
+                                <option value="slide_rl">スライド（右→左）</option>
+                                <option value="slide_tb">スライド（上→下）</option>
+                                <option value="slide_bt">スライド（下→上）</option>
+                                <option value="hold_then_slide_lr">静止→スライド（左→右）</option>
+                                <option value="hold_then_slide_rl">静止→スライド（右→左）</option>
+                                <option value="combined_zoom_pan_lr">ズーム＋パン（左→右）</option>
+                                <option value="combined_zoom_pan_rl">ズーム＋パン（右→左）</option>
+                                <option value="auto">自動（シード基準）</option>
                             </select>
                             <p class="text-xs text-gray-500 mt-1">
                                 画像シーンにカメラワーク的な動きを付けます

@@ -157,33 +157,52 @@ export const Scene: React.FC<SceneProps> = ({
   
   // ========================================
   // 動画クリップがある場合
-  // 修正: 動画が音声より短い場合、最後のフレームでフリーズ
+  // 修正: 動画が音声より短い場合、動画終了後はサムネイル画像を表示
   // ========================================
   if (scene.assets?.video_clip?.url) {
     // 動画の長さ（ミリ秒）- project.jsonから取得、なければシーン長を使用
     const videoDurationMs = scene.assets.video_clip.duration_ms || scene.timing.duration_ms;
     const videoDurationFrames = msToFrames(videoDurationMs, fps);
     
-    // シーンの長さが動画より長い場合、動画を最後のフレームでフリーズ
-    // Remotionの<Video>はendAtを超えると最後のフレームを表示し続ける
-    const shouldFreezeLastFrame = durationFrames > videoDurationFrames;
+    // 現在のフレームが動画の長さを超えているか
+    const isAfterVideoEnd = frame >= videoDurationFrames;
     
-    if (shouldFreezeLastFrame && frame === 0) {
-      console.log(`[Scene ${scene.idx}] Video freeze mode: video=${videoDurationMs}ms, scene=${scene.timing.duration_ms}ms`);
+    // 元の画像URL（動画終了後に表示するサムネイル）
+    // video_clip.thumbnail_url または scene.assets.image.url を使用
+    const thumbnailUrl = scene.assets.video_clip.thumbnail_url || scene.assets?.image?.url;
+    
+    if (frame === 0) {
+      console.log(`[Scene ${scene.idx}] Video mode: video=${videoDurationMs}ms (${videoDurationFrames}f), scene=${scene.timing.duration_ms}ms (${durationFrames}f)`);
+      if (durationFrames > videoDurationFrames) {
+        console.log(`[Scene ${scene.idx}] Will show thumbnail after frame ${videoDurationFrames}, thumbnail=${thumbnailUrl}`);
+      }
     }
     
     return (
       <AbsoluteFill style={{ opacity }}>
-        <Video
-          src={scene.assets.video_clip.url}
-          style={{
-            width: '100%',
-            height: '100%',
-            objectFit: 'cover',
-          }}
-          // 動画がシーンより短い場合、endAtで最後のフレームでフリーズ
-          endAt={shouldFreezeLastFrame ? videoDurationFrames : undefined}
-        />
+        {/* 動画終了前: 動画を再生 */}
+        {!isAfterVideoEnd && (
+          <Video
+            src={scene.assets.video_clip.url}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+            }}
+          />
+        )}
+        
+        {/* 動画終了後: サムネイル画像を表示（音声が終わるまで） */}
+        {isAfterVideoEnd && thumbnailUrl && (
+          <Img
+            src={thumbnailUrl}
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+            }}
+          />
+        )}
         {/* R1.5: voices[] を再生 */}
         {effectiveVoices.map((voice) => {
           const voiceStartFrame = msToFrames(voice.start_ms ?? 0, fps);

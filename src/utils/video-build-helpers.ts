@@ -2078,6 +2078,12 @@ export function buildProjectJson(
       chosen_url_prefix: '' as string,
     };
     
+    // 元の画像URLを取得（動画終了後のサムネイル用）
+    let thumbnailUrl: string | undefined;
+    if (scene.active_image?.r2_url) {
+      thumbnailUrl = toAbsoluteUrl(scene.active_image.r2_url, siteUrl) || undefined;
+    }
+    
     if (displayType === 'video' && scene.active_video?.r2_url && scene.active_video?.status === 'completed') {
       // video モード: video_clip を使用
       videoUrl = toAbsoluteUrl(scene.active_video.r2_url, siteUrl) || undefined;
@@ -2085,6 +2091,7 @@ export function buildProjectJson(
       hasVideoClips = true;
       visualSelectionLog.chosen_visual = 'video';
       visualSelectionLog.chosen_url_prefix = videoUrl?.substring(0, 80) || '';
+      console.log(`[buildProjectJson] Scene ${scene.idx} video with thumbnail: video=${videoDurationMs}ms, thumbnail=${thumbnailUrl?.substring(0, 50)}`);
     } else if (displayType === 'comic' && scene.active_comic?.r2_url) {
       imageUrl = toAbsoluteUrl(scene.active_comic.r2_url, siteUrl) || undefined;
       visualSelectionLog.chosen_visual = 'comic';
@@ -2269,6 +2276,7 @@ export function buildProjectJson(
         video_clip: videoUrl ? {
           url: videoUrl,
           duration_ms: videoDurationMs || durationMs,
+          thumbnail_url: thumbnailUrl,  // 動画終了後に表示する画像
         } : undefined,
         audio: audioAsset,  // 後方互換
         voices: voices.length > 0 ? voices : undefined,  // R1.5
