@@ -4111,7 +4111,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
              controls
              preload="metadata"
              poster="${imageUrl || ''}"
-             onerror="refreshVideoUrl(${activeVideo.id}, ${scene.id})"
+             onerror="this.onerror=null;refreshVideoUrl(${activeVideo.id}, ${scene.id})"
            >
              <source src="${activeVideo.r2_url}" type="video/mp4">
            </video>
@@ -4236,34 +4236,43 @@ window.switchDisplayAssetType = switchDisplayAssetType;
 window.refreshVideoUrl = async function(videoId, sceneId) {
   console.log(`[refreshVideoUrl] Refreshing video ${videoId} for scene ${sceneId}`);
   try {
-    // ステータスAPIを呼び出して最新のpresigned URLを取得
+    // ステータスAPIを呼び出して最新のURLを取得
     const res = await axios.get(`${API_BASE}/videos/${videoId}/status`);
-    if (res.data.r2_url) {
+    // APIレスポンスは { video: { id, status, r2_url, ... } } 構造
+    const videoData = res.data?.video || res.data;
+    
+    if (videoData.r2_url) {
       const videoEl = document.getElementById(`sceneVideo-${sceneId}`);
       if (videoEl) {
         // onerrorを一時的に無効化して無限ループを防ぐ
         videoEl.onerror = null;
-        videoEl.src = res.data.r2_url;
+        videoEl.src = videoData.r2_url;
         // sourceタグも更新
         const source = videoEl.querySelector('source');
         if (source) {
-          source.src = res.data.r2_url;
+          source.src = videoData.r2_url;
         }
         videoEl.load();
         console.log(`[refreshVideoUrl] Updated video URL for scene ${sceneId}`);
         showToast('動画URLを更新しました', 'success');
+        
+        // 5秒後にonerrorを再設定（次回の期限切れに対応）
+        setTimeout(() => {
+          if (videoEl) {
+            videoEl.onerror = () => refreshVideoUrl(videoId, sceneId);
+          }
+        }, 5000);
       }
-    } else if (res.data.status === 'failed') {
+    } else if (videoData.status === 'failed') {
       showToast('動画の生成に失敗しています', 'error');
-    } else if (res.data.status === 'processing' || res.data.status === 'pending') {
-      // 処理中の場合は静かに待機（トーストなし）
-      console.log(`[refreshVideoUrl] Video ${videoId} is still ${res.data.status}`);
+    } else if (videoData.status === 'processing' || videoData.status === 'pending' || videoData.status === 'generating') {
+      // 処理中の場合は静かに待機
+      console.log(`[refreshVideoUrl] Video ${videoId} is still ${videoData.status}`);
     } else {
-      // その他の場合もログのみ（onerrorからの自動呼び出し時は静かに失敗）
-      console.warn(`[refreshVideoUrl] Video ${videoId} has no r2_url, status: ${res.data.status}`);
+      // URL取得不可の場合、リトライせずに静かに失敗
+      console.warn(`[refreshVideoUrl] Video ${videoId} has no r2_url, status: ${videoData.status}`);
     }
   } catch (e) {
-    // ネットワークエラーの場合のみログ（トーストは出さない：onerrorからの自動呼び出しでノイズになる）
     console.error('[refreshVideoUrl] Error:', e);
   }
 };
