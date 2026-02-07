@@ -2179,3 +2179,117 @@ b83b62d feat: update frontend to use bulk-audio API (Step3-PR3)
 
 ---
 
+## 2026-02-07 音声同期修正 & MP3 Duration正確化
+
+### 問題
+- **動画終了後の黒画面**: 動画が5秒でも音声が9.888秒の場合、動画終了後に黒画面が表示されていた
+- **音声途中切れ**: DB上の`duration_ms`が実際のMP3ファイルの長さと異なっていた（6890ms vs 9888ms）
+- **モーションプリセット不足**: UIで選択できるモーションが3種類のみだった
+
+### 修正内容
+
+#### 1. 動画終了後のサムネイル表示
+**ファイル**: `video-build-remotion/src/components/Scene.tsx`
+- 動画終了後は`thumbnail_url`（元の画像）を表示するよう変更
+- `shouldFreezeLastFrame`フラグで動画モードと画像モードを切り替え
+
+#### 2. MP3 Duration正確化
+**新規ファイル**: `src/utils/mp3-duration.ts`
+- MP3ヘッダー解析によるビットレート取得
+- VBR/CBR両対応
+- フレーム解析による正確なduration計算
+
+**修正ファイル**: `src/routes/audio-generation.ts`, `src/routes/bulk-audio.ts`
+- 従来: `bytesLength / 16000 * 1000`（推定）
+- 改善: `calculateMP3Duration(audioBuffer)`（正確）
+
+#### 3. モーションプリセット追加
+**ファイル**: `public/static/project-editor.js`
+- 3種類 → 17種類に拡張
+- slide_* / pan_* / hold_then_* / combined_* / auto を追加
+
+### Gitコミット
+```
+50911cf fix: Accurate MP3 duration parsing for audio files
+6a5a302 fix: Video freeze shows thumbnail instead of black screen, add more motion presets to UI
+28d7724 chore: Update deployment-info.json with video freeze feature
+144081f fix: Freeze video at last frame when audio is longer than video
+```
+
+---
+
+## 🔄 再開方法（サンドボックス復旧手順）
+
+### 前提条件
+- GitHub: https://github.com/matiuskuma2/webapp
+- 本番URL: https://webapp-c7n.pages.dev
+- AWS Remotion Lambda: ap-northeast-1 (rilarc-video-build)
+
+### 手順
+
+#### 1. リポジトリのクローン
+```bash
+cd /home/user
+git clone https://github.com/matiuskuma2/webapp.git
+cd webapp
+```
+
+#### 2. 依存関係のインストール
+```bash
+# メインアプリ
+npm install
+
+# Remotionプロジェクト（動画生成が必要な場合）
+cd video-build-remotion && npm install && cd ..
+```
+
+#### 3. 環境変数の設定（必要に応じて）
+```bash
+# Cloudflare認証（デプロイ時）
+# → setup_cloudflare_api_key ツールを使用
+
+# GitHub認証（Push時）
+# → setup_github_environment ツールを使用
+
+# AWS認証（Remotion Lambda）
+export AWS_ACCESS_KEY_ID="your-key"
+export AWS_SECRET_ACCESS_KEY="your-secret"
+export AWS_REGION="ap-northeast-1"
+```
+
+#### 4. ビルド & デプロイ
+```bash
+# Cloudflare Pages
+npm run build
+npx wrangler pages deploy dist --project-name webapp-c7n
+
+# Remotion Lambda（変更がある場合）
+cd video-build-remotion
+npm run build
+npx remotion lambda sites create --site-name=rilarc-video-build --region=ap-northeast-1
+```
+
+#### 5. ローカル開発サーバー
+```bash
+npm run build
+pm2 start ecosystem.config.cjs
+curl http://localhost:3000
+```
+
+### 重要なパス
+| 項目 | パス |
+|------|------|
+| メインアプリ | `/home/user/webapp/` |
+| Remotionプロジェクト | `/home/user/webapp/video-build-remotion/` |
+| MP3 Duration計算 | `src/utils/mp3-duration.ts` |
+| 音声生成API | `src/routes/audio-generation.ts` |
+| 動画ビルドAPI | `src/routes/video-generation.ts` |
+| フロントエンド | `public/static/project-editor.js` |
+
+### 既知の課題（進行中）
+1. **音声途中切れ**: Scene 1338のduration修正済み（9888ms）、他シーンは再生成で修正
+2. **進捗時間表示**: 99%表示時の残り時間計算ロジックの改善が必要
+3. **モーション自動適用**: UIでの選択が正しくバックエンドに伝わっているか要確認
+
+---
+
