@@ -13389,16 +13389,16 @@ function renderDialogueSummary(scene) {
         ? '<i class="fas fa-volume-up text-green-500 ml-1" title="音声生成済み"></i>' 
         : '<i class="fas fa-volume-mute text-gray-300 ml-1" title="音声未生成"></i>';
       
-      return \`
-        <div class="flex items-start gap-2 py-1.5 \${idx > 0 ? 'border-t border-gray-100' : ''}">
-          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold \${speakerColor} whitespace-nowrap flex-shrink-0">
-            <i class="fas \${isNarration ? 'fa-book-reader' : 'fa-user'} mr-1 text-[10px]"></i>
-            \${escapeHtml(speaker)}
-            \${audioIcon}
+      return `
+        <div class="flex items-start gap-2 py-1.5 ${idx > 0 ? 'border-t border-gray-100' : ''}">
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold ${speakerColor} whitespace-nowrap flex-shrink-0">
+            <i class="fas ${isNarration ? 'fa-book-reader' : 'fa-user'} mr-1 text-[10px]"></i>
+            ${escapeHtml(speaker)}
+            ${audioIcon}
           </span>
-          <span class="text-gray-700 text-sm leading-tight">\${escapeHtml(truncatedText) || '<span class="text-gray-400">（空）</span>'}</span>
+          <span class="text-gray-700 text-sm leading-tight">${escapeHtml(truncatedText) || '<span class="text-gray-400">（空）</span>'}</span>
         </div>
-      \`;
+      `;
     }).join('');
     
     const remainingText = remaining > 0 
