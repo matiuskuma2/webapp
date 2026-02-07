@@ -8553,7 +8553,7 @@ function renderVideoBuildItem(build) {
     // FIX: 有効期限チェックを削除 - 常にプレビュー/修正/DLボタンを表示
     // 動画が再生できない場合はプレビューモーダル内でエラーハンドリング
     // PR-4-3: プレビュー → 修正 → DL の順
-    // FIX: Use refresh-enabled functions to handle expired presigned URLs
+    // CloudFront URLs are permanent - no refresh needed for preview/edit/download
     actionHtml = `
       <div class="flex items-center gap-2">
         <button onclick="openPreviewWithRefresh(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
@@ -8677,7 +8677,8 @@ function renderVideoBuildItem(build) {
 }
 
 /**
- * Refresh video build to get new presigned URL
+ * Refresh video build download URL (fetch CloudFront URL from server)
+ * Used when download_url is missing (e.g., completed build without URL stored)
  * PR-4-4: 二重送信ガード + スクロール導線 + エラー表示統一
  * @param {number} buildId 
  */
@@ -8732,46 +8733,13 @@ async function refreshVideoBuildDownload(buildId) {
 }
 
 /**
- * Open chat edit modal with automatic URL refresh
- * Handles expired signed URLs by refreshing before opening modal
+ * Open chat edit modal (CloudFront URLs are permanent - no refresh needed)
  * @param {number} buildId 
- * @param {string} videoUrl - Current URL (may be expired)
+ * @param {string} videoUrl - CloudFront URL (permanent, no expiry)
  */
 async function openChatEditWithRefresh(buildId, videoUrl) {
   try {
-    // Check if URL looks like an S3 presigned URL that might be expired
-    const isPresignedUrl = videoUrl && (
-      videoUrl.includes('X-Amz-Signature') || 
-      videoUrl.includes('Signature=') ||
-      videoUrl.includes('x-amz-')
-    );
-    
-    // For presigned URLs, always try to get a fresh one
-    if (isPresignedUrl) {
-      showToast('動画URLを更新中...', 'info');
-      
-      try {
-        const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
-        const build = response.data.build;
-        
-        if (response.data.success && build?.download_url) {
-          // Update cache
-          const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
-          if (idx >= 0) {
-            window.videoBuildListCache[idx].download_url = build.download_url;
-          }
-          
-          // Open with fresh URL
-          openChatEditModal(buildId, build.download_url);
-          return;
-        }
-      } catch (refreshError) {
-        console.warn('[ChatEdit] Failed to refresh URL, trying with original:', refreshError);
-        // Fall through to use original URL
-      }
-    }
-    
-    // Use original URL if not presigned or refresh failed
+    // CloudFront URLs are permanent - open directly
     openChatEditModal(buildId, videoUrl);
   } catch (error) {
     console.error('[ChatEdit] Error:', error);
@@ -8780,46 +8748,13 @@ async function openChatEditWithRefresh(buildId, videoUrl) {
 }
 
 /**
- * Open preview modal with automatic URL refresh
- * Handles expired signed URLs by refreshing before opening modal
+ * Open preview modal (CloudFront URLs are permanent - no refresh needed)
  * @param {number} buildId 
- * @param {string} videoUrl - Current URL (may be expired)
+ * @param {string} videoUrl - CloudFront URL (permanent, no expiry)
  */
 async function openPreviewWithRefresh(buildId, videoUrl) {
   try {
-    // Check if URL looks like an S3 presigned URL that might be expired
-    const isPresignedUrl = videoUrl && (
-      videoUrl.includes('X-Amz-Signature') || 
-      videoUrl.includes('Signature=') ||
-      videoUrl.includes('x-amz-')
-    );
-    
-    // For presigned URLs, always try to get a fresh one
-    if (isPresignedUrl) {
-      showToast('動画URLを更新中...', 'info');
-      
-      try {
-        const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
-        const build = response.data.build;
-        
-        if (response.data.success && build?.download_url) {
-          // Update cache
-          const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
-          if (idx >= 0) {
-            window.videoBuildListCache[idx].download_url = build.download_url;
-          }
-          
-          // Open with fresh URL
-          openVideoBuildPreviewModal(buildId, build.download_url);
-          return;
-        }
-      } catch (refreshError) {
-        console.warn('[Preview] Failed to refresh URL, trying with original:', refreshError);
-        // Fall through to use original URL
-      }
-    }
-    
-    // Use original URL if not presigned or refresh failed
+    // CloudFront URLs are permanent - open directly
     openVideoBuildPreviewModal(buildId, videoUrl);
   } catch (error) {
     console.error('[Preview] Error:', error);
@@ -10298,55 +10233,18 @@ function openVideoBuildPreviewModal(buildId, videoUrl) {
   if (src && videoUrl) {
     src.src = videoUrl;
     
-    // FIX: 動画読み込みエラー時のハンドリング
-    video.onerror = async () => {
-      console.warn('[VideoBuild] Video load error, attempting URL refresh for build:', buildId);
+    // CloudFront URLs are permanent - simple error handling
+    video.onerror = () => {
+      console.warn('[VideoBuild] Video load error for build:', buildId);
       if (errorEl) {
         errorEl.innerHTML = `
-          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
-            <i class="fas fa-exclamation-triangle mr-1"></i>
-            動画を読み込めませんでした。再読み込みを試みています...
+          <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
+            <i class="fas fa-times-circle mr-1"></i>
+            動画の読み込みに失敗しました。<br/>
+            <span class="text-xs text-red-600">動画ファイルが存在しない可能性があります。</span>
           </div>
         `;
         errorEl.classList.remove('hidden');
-      }
-      
-      // 自動的にURL再取得を試みる
-      try {
-        const response = await axios.post(`${API_BASE}/video-builds/${buildId}/refresh`);
-        const newUrl = response.data.build?.download_url;
-        
-        if (response.data.success && newUrl) {
-          // 新しいURLで再読み込み
-          src.src = newUrl;
-          video.load();
-          if (errorEl) errorEl.classList.add('hidden');
-          
-          // キャッシュも更新
-          const idx = (window.videoBuildListCache || []).findIndex(b => b.id === buildId);
-          if (idx >= 0) {
-            window.videoBuildListCache[idx].download_url = newUrl;
-          }
-          
-          // DLリンクも更新
-          const dl = document.getElementById('vbPreviewDownloadLink');
-          if (dl) dl.href = newUrl;
-          
-          showToast('URLを更新しました', 'success');
-        } else {
-          throw new Error(response.data.warning || 'URLの取得に失敗しました');
-        }
-      } catch (refreshError) {
-        console.error('[VideoBuild] URL refresh failed:', refreshError);
-        if (errorEl) {
-          errorEl.innerHTML = `
-            <div class="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">
-              <i class="fas fa-times-circle mr-1"></i>
-              動画の読み込みに失敗しました。<br/>
-              <span class="text-xs text-red-600">${extractErrorMessage(refreshError, '動画が存在しない可能性があります')}</span>
-            </div>
-          `;
-        }
       }
     };
     
