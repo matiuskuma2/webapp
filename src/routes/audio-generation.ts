@@ -1078,17 +1078,22 @@ audioGeneration.get('/tts/usage/check', async (c) => {
 /**
  * POST /api/audio/fix-durations
  * シーンのaudio_generationsとscene_utterancesのduration_msを一括修正
- * - 対象: status='completed' かつ duration_ms IS NULL
+ * - 対象: status='completed' かつ (duration_ms IS NULL OR duration_ms < 500)
  * - 計算: テキスト長 * 130ms（最低2秒）
+ * - オプション: ?project_id=XXX でプロジェクト絞り込み
  */
 audioGeneration.post('/audio/fix-durations', async (c) => {
   try {
-    // 1. duration_ms が NULL で completed な audio_generations を取得
+    // P3-1: project_id パラメータで絞り込み可能に
+    const projectIdParam = c.req.query('project_id');
+    const projectFilter = projectIdParam ? ` AND s.project_id = ${parseInt(projectIdParam)}` : '';
+    
+    // 1. duration_ms が NULL/0/不正 で completed な audio_generations を取得
     const { results: audioList } = await c.env.DB.prepare(`
       SELECT ag.id, ag.scene_id, ag.text, ag.duration_ms, ag.is_active, s.project_id
       FROM audio_generations ag
       JOIN scenes s ON ag.scene_id = s.id
-      WHERE ag.status = 'completed' AND ag.r2_url IS NOT NULL
+      WHERE ag.status = 'completed' AND ag.r2_url IS NOT NULL${projectFilter}
       ORDER BY ag.id ASC
     `).all<{
       id: number;
@@ -1108,8 +1113,8 @@ audioGeneration.post('/audio/fix-durations', async (c) => {
       const textLength = audio.text?.length || 20; // デフォルト20文字
       const estimatedDurationMs = Math.max(2000, textLength * 130);
       
-      // audio_generations を更新（duration_ms が NULL の場合のみ）
-      if (audio.duration_ms === null) {
+      // audio_generations を更新（duration_ms が NULL または不正（500ms未満）の場合）
+      if (audio.duration_ms === null || audio.duration_ms < 500) {
         await c.env.DB.prepare(`
           UPDATE audio_generations 
           SET duration_ms = ?, updated_at = CURRENT_TIMESTAMP

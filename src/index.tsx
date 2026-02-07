@@ -1490,6 +1490,48 @@ app.get('/projects/:id', (c) => {
                         </p>
                     </div>
                     
+                    <!-- P0-1: ナレーションデフォルトボイス設定 -->
+                    <div class="bg-white rounded-lg border border-gray-200 p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <div class="flex items-center gap-2">
+                                <i class="fas fa-microphone-alt text-purple-600"></i>
+                                <span class="font-semibold text-gray-800 text-sm">ナレーション音声</span>
+                                <span id="narrationVoiceStatus" class="text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full">未設定</span>
+                            </div>
+                            <button id="narrationVoiceEditBtn" onclick="toggleNarrationVoicePanel()" 
+                                class="text-xs px-3 py-1 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors">
+                                <i class="fas fa-cog mr-1"></i>設定
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-500">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            ナレーション発話のデフォルト音声を設定します。キャラクター発話は各キャラに紐づいた声が使われます。
+                        </p>
+                        <!-- P0-1: 設定パネル（非表示→トグル） -->
+                        <div id="narrationVoicePanel" class="hidden mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+                            <label class="block text-xs font-semibold text-gray-700 mb-1">音声プリセット</label>
+                            <select id="narrationVoiceSelect" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                <option value="">選択してください</option>
+                                <optgroup label="Google TTS (日本語)">
+                                    <option value="google:ja-JP-Neural2-B">ja-JP-Neural2-B (男性・落ち着き)</option>
+                                    <option value="google:ja-JP-Neural2-C">ja-JP-Neural2-C (女性・明るい)</option>
+                                    <option value="google:ja-JP-Neural2-D">ja-JP-Neural2-D (男性・若々しい)</option>
+                                    <option value="google:ja-JP-Wavenet-A">ja-JP-Wavenet-A (女性・ソフト)</option>
+                                    <option value="google:ja-JP-Wavenet-B">ja-JP-Wavenet-B (男性・自然)</option>
+                                    <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (女性・自然)</option>
+                                    <option value="google:ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・低音)</option>
+                                </optgroup>
+                            </select>
+                            <div class="flex items-center justify-between mt-2">
+                                <span id="narrationVoiceCurrent" class="text-xs text-gray-500">現在: ja-JP-Neural2-B（フォールバック）</span>
+                                <button id="narrationVoiceSaveBtn" onclick="saveNarrationVoice()" 
+                                    class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700 transition-colors">
+                                    <i class="fas fa-save mr-1"></i>保存
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
                     <div class="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
                         <!-- Status Summary -->
                         <div id="builderStatusSummary" class="text-sm text-gray-600">

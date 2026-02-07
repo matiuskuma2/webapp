@@ -1,8 +1,88 @@
 # Video Build SSOT & 依存関係ドキュメント
 
-**最終更新**: 2026-01-19  
-**バージョン**: 1.2  
+**最終更新**: 2026-02-07  
+**バージョン**: 1.3  
 **目的**: 全シーンの最終動画化（Video Build）を完走するための依存関係とSSOT定義
+
+---
+
+## P2-3: 発話・音声・テロップ・動画の依存関係
+
+### データフロー全体図
+
+```
+[dialogue テキスト]
+    │
+    ▼ (dialogue-parser.ts)
+[scene_utterances] ─── SSOT: 発話テキスト・話者・順番
+    │
+    ├── role: 'narration' | 'dialogue'
+    ├── character_key: キャラ参照（dialogueのみ）
+    ├── text: 発話テキスト
+    └── order_no: 順番
+    │
+    ▼ (audio-generation.ts / bulk-audio.ts)
+[audio_generations] ─── SSOT: 音声ファイル
+    │
+    ├── voice解決優先順位:
+    │   1. キャラのvoice_preset_id (project_character_models)
+    │   2. プロジェクトのdefault_narration_voice (projects.settings_json)
+    │   3. フォールバック: google/ja-JP-Neural2-B
+    ├── audio_url: R2上の音声ファイルURL
+    └── duration_ms: 音声の尺（ミリ秒）
+    │
+    ├──── [画像モード] ───────────┐
+    │     テロップ: Remotion描画    │
+    │     text_render_mode: 'remotion' │
+    │     表示: voice.text をそのまま │
+    │     タイミング: voice.start_ms  │
+    │     → voice.start_ms + duration_ms │
+    │                                 │
+    ├──── [漫画モード] ───────────┐
+    │     吹き出し: 最大3件          │
+    │     text_render_mode: 'baked'   │
+    │     comic_data.utterances       │
+    │     ※ scene_utterances と      │
+    │       comic_dataは独立          │
+    │     ※ 吹き出し外の発話は       │
+    │       音声のみ再生              │
+    │                                 │
+    ▼                                 ▼
+[video-build-helpers.ts: buildProjectJson()]
+    │
+    ├── voices[]: 各発話の音声URL・テキスト・duration
+    ├── balloons[]: 漫画の吹き出し（bakedのみ）
+    ├── timing.duration_ms: シーンの合計尺
+    │   計算: MAX(音声合計+500ms, duration_override_ms, 3000)
+    └── assets.image/video_clip: 画像/動画アセット
+    │
+    ▼ (Remotion: Scene.tsx)
+[最終動画レンダリング]
+    ├── テロップ表示（remotionモード時）
+    │   現在再生中の voice.text を字幕として表示
+    │   タイミング: currentMs が voice.start_ms 〜 end_ms の範囲
+    ├── 吹き出し表示（bakedモード時）
+    │   bubble_image_url を合成
+    ├── 音声再生
+    │   各 voice の audio_url を start_ms から再生
+    └── BGM
+        ダッキング（音声再生時に自動減衰）
+```
+
+### 動画生成前提条件（Preflight）
+
+| 条件 | 画像モード | 漫画モード | 備考 |
+|------|-----------|-----------|------|
+| 画像/漫画 | image_url 必須 | comic image_url 必須 | アクティブな画像 |
+| 発話テキスト | 推奨 | 推奨 | 無くても生成可能（無音） |
+| 音声生成 | 推奨 | 推奨 | 無ければ無音で尺3秒 |
+| 吹き出し画像 | 不要 | baked時は必須 | bubble_r2_url |
+| voice_preset_id | 推奨 | 推奨 | 無ければフォールバック |
+
+### 音声未生成時の挙動
+
+- **一括再生モード**: 音声が無い場合、シーン間のトランジションのみで尺3秒
+- **読み終わり待ちモード**: 音声生成済みの場合、全音声の再生終了まで待機
 
 ---
 

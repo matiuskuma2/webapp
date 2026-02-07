@@ -150,6 +150,9 @@ async function loadProject() {
     // PR-Remotion-Telop-DefaultSave: Load Remotion telop settings
     loadRemotionTelopSettings();
     
+    // P0-1: Load narration voice settings
+    loadNarrationVoiceSettings();
+    
     // Safe Chat v1: Refresh Builder Wizard
     refreshBuilderWizard();
   } catch (error) {
@@ -4531,6 +4534,26 @@ function renderSpeakerSummarySection(scene, opts = { showEditButton: true }) {
   const speakerSummary = scene.speaker_summary || null;
   const utteranceStatus = scene.utterance_status || { total: 0, with_audio: 0 };
   
+  // P0-3: voice_preset_id NULL 警告
+  // characters 配列から voice_preset_id が null のキャラクターを検出
+  const characters = scene.characters || [];
+  const voiceChar = scene.voice_character || null;
+  const utteranceList = scene.utterance_list || [];
+  const dialogueCharKeys = [...new Set(utteranceList.filter(u => u.role === 'dialogue' && u.character_key).map(u => u.character_key))];
+  const charsWithoutVoice = dialogueCharKeys.filter(key => {
+    const charInfo = characters.find(c => c.character_key === key);
+    return !charInfo || !charInfo.voice_preset_id;
+  });
+  const voiceWarning = charsWithoutVoice.length > 0 
+    ? `<div class="mt-1.5 px-2 py-1 bg-orange-100 border border-orange-300 rounded text-xs text-orange-800">
+        <i class="fas fa-exclamation-triangle mr-1"></i>
+        <strong>${charsWithoutVoice.map(k => {
+          const c = characters.find(c => c.character_key === k);
+          return c?.character_name || k;
+        }).join('・')}</strong> に声が未設定です（デフォルト音声で生成されます）
+       </div>` 
+    : '';
+  
   // 話者リスト
   let speakerDisplay = '';
   if (speakerSummary && speakerSummary.speakers && speakerSummary.speakers.length > 0) {
@@ -4609,6 +4632,7 @@ function renderSpeakerSummarySection(scene, opts = { showEditButton: true }) {
           </span>
         ` : ''}
       </div>
+      ${voiceWarning}
     </div>
   `;
 }
@@ -4715,6 +4739,39 @@ function renderSceneAudioGuide(scene) {
             <li>順番の入れ替えも可能</li>
           </ul>
         </div>
+        
+        <!-- P2-2: テロップタイムラインプレビュー -->
+        ${(() => {
+          const uttList = scene.utterance_list || [];
+          const hasTimings = uttList.some(u => u.duration_ms > 0);
+          if (!hasTimings || uttList.length === 0) return '';
+          
+          const totalMs = uttList.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
+          if (totalMs === 0) return '';
+          
+          const bars = uttList.map((u, i) => {
+            const pct = totalMs > 0 ? ((u.duration_ms || 0) / totalMs * 100) : 0;
+            if (pct < 1) return '';
+            const isNarr = u.role === 'narration';
+            const bg = isNarr ? 'bg-gray-400' : ['bg-blue-400', 'bg-purple-400', 'bg-green-400', 'bg-pink-400'][i % 4];
+            const speaker = isNarr ? 'ナレ' : (u.character_name || '').slice(0, 3);
+            return \`<div class="\${bg} h-full relative group cursor-default rounded-sm" style="width:\${pct.toFixed(1)}%" title="\${escapeHtml(u.character_name || 'ナレーション')}: \${(u.duration_ms / 1000).toFixed(1)}秒 — \${escapeHtml((u.text || '').slice(0, 30))}">
+              \${pct > 8 ? \`<span class="absolute inset-0 flex items-center justify-center text-white text-[9px] font-bold truncate px-0.5">\${speaker}</span>\` : ''}
+            </div>\`;
+          }).filter(Boolean).join('');
+          
+          return \`
+            <div class="mt-2">
+              <div class="text-xs text-gray-500 mb-1 flex items-center gap-1">
+                <i class="fas fa-film text-purple-400"></i>テロップタイミング
+                <span class="text-gray-400">(${(totalMs / 1000).toFixed(1)}秒)</span>
+              </div>
+              <div class="flex h-5 rounded overflow-hidden bg-gray-200 gap-px">
+                \${bars}
+              </div>
+            </div>
+          \`;
+        })()}
         
         <!-- 音声タブを開くボタン -->
         <button 
@@ -12614,6 +12671,79 @@ async function loadOutputPreset() {
 }
 
 /**
+ * P0-1: ナレーションデフォルトボイス設定
+ */
+function toggleNarrationVoicePanel() {
+  const panel = document.getElementById('narrationVoicePanel');
+  if (panel) {
+    panel.classList.toggle('hidden');
+  }
+}
+window.toggleNarrationVoicePanel = toggleNarrationVoicePanel;
+
+async function loadNarrationVoiceSettings() {
+  try {
+    const res = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/narration-voice`);
+    const data = res.data;
+    const voice = data.default_narration_voice;
+    const statusEl = document.getElementById('narrationVoiceStatus');
+    const selectEl = document.getElementById('narrationVoiceSelect');
+    const currentEl = document.getElementById('narrationVoiceCurrent');
+    
+    if (voice && voice.voice_id) {
+      const provider = voice.provider || 'google';
+      const voiceId = voice.voice_id;
+      const selectValue = `${provider}:${voiceId}`;
+      
+      if (statusEl) {
+        statusEl.textContent = voiceId;
+        statusEl.className = 'text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full';
+      }
+      if (selectEl) selectEl.value = selectValue;
+      if (currentEl) currentEl.textContent = `現在: ${voiceId}（${data.is_custom ? 'カスタム設定' : 'デフォルト'}）`;
+    } else {
+      if (statusEl) {
+        statusEl.textContent = 'ja-JP-Neural2-B（デフォルト）';
+        statusEl.className = 'text-xs px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full';
+      }
+      if (currentEl) currentEl.textContent = '現在: ja-JP-Neural2-B（フォールバック）';
+    }
+  } catch (err) {
+    console.warn('[loadNarrationVoiceSettings] Failed:', err.message);
+  }
+}
+
+async function saveNarrationVoice() {
+  const selectEl = document.getElementById('narrationVoiceSelect');
+  if (!selectEl || !selectEl.value) {
+    showToast('音声を選択してください', 'warning');
+    return;
+  }
+  
+  const [provider, voiceId] = selectEl.value.split(':');
+  const btn = document.getElementById('narrationVoiceSaveBtn');
+  if (btn) btn.disabled = true;
+  
+  try {
+    await axios.put(`${API_BASE}/projects/${PROJECT_ID}/narration-voice`, {
+      provider: provider,
+      voice_id: voiceId
+    });
+    showToast('ナレーション音声を保存しました', 'success');
+    await loadNarrationVoiceSettings();
+    // パネルを閉じる
+    const panel = document.getElementById('narrationVoicePanel');
+    if (panel) panel.classList.add('hidden');
+  } catch (err) {
+    console.error('[saveNarrationVoice] Error:', err);
+    showToast('保存に失敗しました: ' + (err.response?.data?.error?.message || err.message), 'error');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+window.saveNarrationVoice = saveNarrationVoice;
+
+/**
  * Phase 2-1: Load comic telop settings from project.settings
  */
 async function loadComicTelopSettings() {
@@ -13235,6 +13365,19 @@ function renderDialogueSummary(scene) {
       ? `<div class="text-xs text-gray-500 mt-1">…他 ${remaining}件</div>` 
       : '';
     
+    // P2-1: scene_utterances（音声読み上げ用）との不整合を表示
+    const audioUtterances = scene.utterance_list || [];
+    const audioVsComicNote = audioUtterances.length > 0 && audioUtterances.length !== utterances.length
+      ? `<div class="mt-2 px-2 py-1.5 bg-blue-50 border border-blue-200 rounded text-xs text-blue-800">
+          <i class="fas fa-info-circle mr-1"></i>
+          <strong>吹き出し: ${utterances.length}件</strong>（漫画に表示） / 
+          <strong>音声読み上げ: ${audioUtterances.length}件</strong>（動画で再生）
+          ${audioUtterances.length > utterances.length 
+            ? '<br/><span class="text-blue-600">※ 吹き出しに収まらない分はテロップ/音声のみで再生されます</span>' 
+            : ''}
+         </div>`
+      : '';
+    
     return `
       <div>
         <label class="block text-sm font-semibold text-gray-700 mb-2">
@@ -13244,12 +13387,60 @@ function renderDialogueSummary(scene) {
         <div class="p-3 bg-orange-50 rounded-lg border border-orange-200 text-sm">
           ${utteranceRows}
           ${remainingText}
+          ${audioVsComicNote}
         </div>
       </div>
     `;
   }
   
-  // 画像モード: 通常のdialogue表示
+  // 画像モード: utterance_list があれば発話プレビューを表示（P0-2）
+  const utteranceList = scene.utterance_list || [];
+  
+  if (utteranceList.length > 0) {
+    const maxDisplay = 5;
+    const displayItems = utteranceList.slice(0, maxDisplay);
+    const remaining = utteranceList.length - maxDisplay;
+    
+    const utteranceRows = displayItems.map((u, idx) => {
+      const isNarration = u.role === 'narration';
+      const speaker = isNarration ? 'ナレーション' : (u.character_name || u.character_key || '不明');
+      const speakerColor = isNarration ? 'text-gray-600 bg-gray-100' : 'text-blue-700 bg-blue-100';
+      const truncatedText = (u.text || '').length > 50 ? u.text.slice(0, 50) + '…' : (u.text || '');
+      const audioIcon = u.has_audio 
+        ? '<i class="fas fa-volume-up text-green-500 ml-1" title="音声生成済み"></i>' 
+        : '<i class="fas fa-volume-mute text-gray-300 ml-1" title="音声未生成"></i>';
+      
+      return \`
+        <div class="flex items-start gap-2 py-1.5 \${idx > 0 ? 'border-t border-gray-100' : ''}">
+          <span class="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-bold \${speakerColor} whitespace-nowrap flex-shrink-0">
+            <i class="fas \${isNarration ? 'fa-book-reader' : 'fa-user'} mr-1 text-[10px]"></i>
+            \${escapeHtml(speaker)}
+            \${audioIcon}
+          </span>
+          <span class="text-gray-700 text-sm leading-tight">\${escapeHtml(truncatedText) || '<span class="text-gray-400">（空）</span>'}</span>
+        </div>
+      \`;
+    }).join('');
+    
+    const remainingText = remaining > 0 
+      ? `<div class="text-xs text-gray-500 mt-1 text-right">…他 ${remaining}件の発話</div>` 
+      : '';
+    
+    return `
+      <div>
+        <label class="block text-sm font-semibold text-gray-700 mb-2">
+          <i class="fas fa-comment-alt mr-1 text-blue-500"></i>発話一覧
+          <span class="text-xs font-normal text-gray-500 ml-2">${utteranceList.length}件</span>
+        </label>
+        <div class="p-3 bg-blue-50 rounded-lg border border-blue-200 text-sm">
+          ${utteranceRows}
+          ${remainingText}
+        </div>
+      </div>
+    `;
+  }
+  
+  // フォールバック: utterance_list がない場合は dialogue テキストを表示
   const text = scene.dialogue || '';
   const truncated = text.length > 120 ? text.slice(0, 120) + '…' : text;
 

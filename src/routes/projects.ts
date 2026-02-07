@@ -945,6 +945,18 @@ projects.get('/:id/scenes', async (c) => {
                 utterance_total: utteranceRows.length
               };
             })(),
+            // P0-2: utterance_list（発話プレビュー用 — 各発話のテキスト・話者・音声状態を返す）
+            utterance_list: utteranceRows.map((u: any) => ({
+              id: u.id,
+              role: u.role || 'narration',
+              character_key: u.character_key || null,
+              character_name: u.character_key
+                ? ((charDetailsMap.get(u.character_key) as any)?.character_name || u.character_key)
+                : null,
+              text: u.text || '',
+              has_audio: !!(u.audio_generation_id && u.audio_status === 'completed'),
+              duration_ms: u.duration_ms || null
+            })),
             // R2-C: text_render_mode (computed from display_asset_type)
             text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
             // R3-B: SFX（効果音）数

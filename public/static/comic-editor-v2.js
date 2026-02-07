@@ -2002,7 +2002,7 @@
     
     const modal = document.createElement('div');
     modal.id = 'comicEditorModal';
-    modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50';
+    modal.className = 'fixed inset-0 z-[9990] flex items-center justify-center bg-black bg-opacity-50';
     modal.innerHTML = `
       <div class="bg-white rounded-xl shadow-2xl w-full max-w-5xl mx-4 max-h-[90vh] flex flex-col">
         <!-- Header -->
@@ -2015,7 +2015,7 @@
           </div>
           <div class="flex items-center gap-2">
             <!-- Phase 2-3: 再焼き込みボタン（AI画像は固定） -->
-            <button onclick="window.ComicEditorV2.openRegenModal()" 
+            <button id="comicRegenOpenBtn" onclick="window.ComicEditorV2.openRegenModal()" 
               class="px-3 py-1.5 text-sm text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors"
               title="プロジェクトの漫画文字設定を次回公開に反映（AI画像は変わりません）">
               <i class="fas fa-paint-brush mr-1"></i>文字設定を反映
@@ -2180,8 +2180,14 @@
   // ============== Phase 2-3: 再焼き込みモーダル（AI画像は固定） ==============
   
   function openRegenerateModal() {
+    // P1-1: 連打防止 — 既に開いている場合はスキップ
     const existingModal = document.getElementById('comicRegenModal');
-    if (existingModal) existingModal.remove();
+    if (existingModal) return; // 二重表示を防止
+    
+    // ボタンを一時無効化
+    const openBtn = document.getElementById('comicRegenOpenBtn');
+    if (openBtn) openBtn.disabled = true;
+    setTimeout(() => { if (openBtn) openBtn.disabled = false; }, 500);
     
     // プロジェクトの telops_comic 設定を取得（currentProject から）
     const settings = window.currentProject?.settings || {};
@@ -2203,7 +2209,7 @@
     
     const modal = document.createElement('div');
     modal.id = 'comicRegenModal';
-    modal.className = 'fixed inset-0 z-[60] flex items-center justify-center bg-black bg-opacity-60';
+    modal.className = 'fixed inset-0 z-[9995] flex items-center justify-center bg-black bg-opacity-60';
     modal.innerHTML = `
       <div class="bg-white rounded-xl shadow-2xl max-w-md mx-4 overflow-hidden">
         <!-- Step 1: 確認 -->
@@ -2282,7 +2288,7 @@
             </button>
             <button id="regenExecuteBtn" onclick="window.ComicEditorV2.executeRegenerate()" 
               class="px-4 py-2 text-white bg-green-600 hover:bg-green-700 rounded-lg">
-              <i class="fas fa-check mr-1"></i> 適用予約する
+              <i class="fas fa-check mr-1"></i> この設定で予約（次回公開時に反映）
             </button>
           </div>
         </div>
@@ -2353,11 +2359,15 @@
       }
     } catch (error) {
       console.error('[ComicEditorV2] Regenerate error:', error);
-      const errorMsg = error.response?.data?.error?.message || '設定の適用予約に失敗しました';
+      let errorMsg = error.response?.data?.error?.message || '設定の適用予約に失敗しました';
+      // P1-2: Scene not found を分かりやすく変換
+      if (errorMsg.includes('Scene not found') || errorMsg.includes('NOT_FOUND')) {
+        errorMsg = 'このシーンがデータベースに見つかりませんでした。ページを再読み込みしてお試しください。';
+      }
       showToast(errorMsg, 'error');
     } finally {
       btn.disabled = false;
-      btn.innerHTML = '<i class="fas fa-check mr-1"></i> 適用予約する';
+      btn.innerHTML = '<i class="fas fa-check mr-1"></i> この設定で予約（次回公開時に反映）';
     }
   }
 
