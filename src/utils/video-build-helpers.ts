@@ -963,9 +963,19 @@ export function computeSceneDurationMsWithReason(scene: SceneData): DurationResu
   let voiceRequiredMs = 0;
   
   // scene_utterances（R1.5+）の音声合計
+  // ★ FIX: duration_ms が null でも audio_url がある場合はテキストから推定
+  //    「セリフ音声があるのに尺が0」を構造的に防止
   const utterances = scene.utterances || [];
   const totalUtteranceDuration = utterances.reduce((sum, u) => {
-    return sum + (u.duration_ms || 0);
+    if (u.duration_ms && u.duration_ms > 0) {
+      return sum + u.duration_ms;
+    }
+    // duration_ms が null/0 だが audio_url がある場合、テキストから推定
+    if (u.audio_url) {
+      const estimated = Math.max(MIN_DURATION_MS, (u.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR);
+      return sum + estimated;
+    }
+    return sum;
   }, 0);
   if (totalUtteranceDuration > 0) {
     voiceRequiredMs = totalUtteranceDuration + AUDIO_PADDING_MS;
@@ -1967,12 +1977,23 @@ export function buildProjectJson(
     
     // R1.5/R2: scene_utterances があればそこから voices を構築（SSOT優先）
     // R2: utterance_id と end_ms を追加（balloon 同期用）
+    // ★ FIX: 全utteranceの尺を必ず計算し、音声が途中で切れないことを保証
     if (scene.utterances && scene.utterances.length > 0) {
       let voiceStartMs = 0;
       for (const utt of scene.utterances) {
-        // 音声URLがあるutteranceのみ voices に追加
-        if (utt.audio_url && utt.duration_ms) {
+        // ★ FIX: duration_ms が null でも audio_url がある場合はテキストから推定して voices に追加
+        //    以前は (audio_url && duration_ms) の両方が必要だったが、
+        //    duration_ms が null の場合にセリフ音声が丸ごとスキップされていた
+        const estimatedDurationMs = Math.max(
+          MIN_DURATION_MS,
+          (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
+        );
+        
+        if (utt.audio_url) {
           hasAudio = true;
+          
+          // duration_ms: 確定値があれば使用、なければテキストから推定
+          const effectiveDurationMs = utt.duration_ms || estimatedDurationMs;
           
           voices.push({
             id: `voice-utt-${utt.id}`,
@@ -1981,22 +2002,21 @@ export function buildProjectJson(
             character_key: utt.character_key || null,
             character_name: utt.character_name || null,
             audio_url: toAbsoluteUrl(utt.audio_url, siteUrl) || utt.audio_url,  // Absolute URL
-            duration_ms: utt.duration_ms,
+            duration_ms: effectiveDurationMs,
             text: utt.text || '',
             start_ms: voiceStartMs,
-            end_ms: voiceStartMs + utt.duration_ms,  // R2
+            end_ms: voiceStartMs + effectiveDurationMs,  // R2
             format: 'mp3',
           });
           
-          voiceStartMs += utt.duration_ms;
+          console.log(`[buildProjectJson] Scene ${scene.idx} utt ${utt.id}: audio_url=YES, duration_ms=${utt.duration_ms}, effective=${effectiveDurationMs}, start=${voiceStartMs}`);
+          
+          voiceStartMs += effectiveDurationMs;
         } else {
           // R2-A: 音声なしの utterance は duration 計算に使うが、voices には追加しない
           // (Remotion Lambda は空の audio_url で "No src passed" エラーになるため)
           // balloon 同期は別途 utterances データから行う
-          const durationMsValue = utt.duration_ms || Math.max(
-            MIN_DURATION_MS,
-            (utt.text?.length || 0) * TEXT_DURATION_MS_PER_CHAR
-          );
+          const durationMsValue = utt.duration_ms || estimatedDurationMs;
           
           // 注意: voiceStartMs は進めるが voices には追加しない
           // これにより後続の音声付き utterance のタイミングが正しく計算される
@@ -2027,7 +2047,11 @@ export function buildProjectJson(
     }
     
     // 2. duration_ms 確定 (SSOT)
-    // 音声と動画の両方がある場合、大きい方を採用（音声切れ防止）
+    // ★ FIX: セリフ音声が途中で切れない保証
+    //    voices[] の最後の end_ms を基準にシーン尺を決定
+    //    (voicesのduration_ms合計ではなく、最後のvoiceの終了時刻を使用)
+    //    音声なしutteranceの尺も voiceStartMs に含まれているため、
+    //    最後のvoiceのend_msがシーンに必要な最小尺を正確に反映する
     let durationMs: number;
     const displayType_forDuration = scene.display_asset_type || 'image';
     const videoDurationMsCalc = (displayType_forDuration === 'video' && scene.active_video?.duration_sec)
@@ -2035,8 +2059,12 @@ export function buildProjectJson(
       : 0;
     
     if (voices.length > 0) {
-      const voicesDuration = voices.reduce((sum, v) => sum + v.duration_ms, 0);
-      const voiceRequiredMs = voicesDuration + AUDIO_PADDING_MS;
+      // ★ FIX: 最後のvoiceのend_msを使用（音声なしutteranceのgapも含む正確な値）
+      const lastVoice = voices[voices.length - 1];
+      const voiceTimelineEndMs = (lastVoice.end_ms ?? (lastVoice.start_ms ?? 0) + lastVoice.duration_ms);
+      const voiceRequiredMs = voiceTimelineEndMs + AUDIO_PADDING_MS;
+      
+      console.log(`[buildProjectJson] Scene ${scene.idx}: voices=${voices.length}, lastVoice.end_ms=${voiceTimelineEndMs}, voiceRequiredMs=${voiceRequiredMs}`);
       
       // 動画モードの場合: 音声と動画の大きい方を採用
       if (videoDurationMsCalc > 0) {

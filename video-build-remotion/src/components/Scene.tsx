@@ -66,6 +66,17 @@ export const Scene: React.FC<SceneProps> = ({
   
   const durationFrames = msToFrames(scene.timing.duration_ms, fps);
   
+  // ★ 安全検証: voices の合計尺がシーン尺を超えていないかチェック
+  // buildProjectJson側で正しく計算されるべきだが、防御的にログ出力
+  const voices_check = scene.assets?.voices || [];
+  if (voices_check.length > 0) {
+    const lastVoice = voices_check[voices_check.length - 1];
+    const voiceEndMs = (lastVoice.start_ms ?? 0) + lastVoice.duration_ms;
+    if (voiceEndMs > scene.timing.duration_ms) {
+      console.warn(`[Scene ${scene.idx}] ⚠️ VOICE OVERFLOW: lastVoice ends at ${voiceEndMs}ms but scene duration is ${scene.timing.duration_ms}ms. Audio will be clipped!`);
+    }
+  }
+  
   // ========================================
   // R2: text_render_mode による描画制御
   // ========================================

@@ -2070,7 +2070,7 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
           character_key: u.character_key,
           text: u.text,
           audio_url: u.audio_r2_url,
-          duration_ms: u.audio_duration_ms || u.duration_ms,
+          duration_ms: u.audio_duration_ms || u.duration_ms || (u.audio_r2_url ? Math.max(2000, (u.text?.length || 0) * 300) : null),
         })) || [],
         balloons: balloons?.map((b: any) => ({
           id: b.id,
@@ -2371,6 +2371,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         }
         
         // R1.5: scene_utterances から音声パーツを取得（SSOT）
+        // ★ FIX: ag.duration_ms を取得して音声の実際の長さを確実に使用
+        //    scene_utterances.duration_ms はキャッシュ値で null の場合がある
+        //    audio_generations.duration_ms が正確な音声長なので優先的に使用
         const { results: utteranceRows } = await c.env.DB.prepare(`
           SELECT 
             u.id,
@@ -2381,6 +2384,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
             u.audio_generation_id,
             u.duration_ms,
             ag.r2_url as audio_url,
+            ag.duration_ms as audio_duration_ms,
             pcm.character_name
           FROM scene_utterances u
           LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id AND ag.status = 'completed'
@@ -2396,10 +2400,13 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           audio_generation_id: number | null;
           duration_ms: number | null;
           audio_url: string | null;
+          audio_duration_ms: number | null;
           character_name: string | null;
         }>();
         
         // Convert R2 URLs to absolute URLs
+        // ★ FIX: duration_ms は audio_generations の値を優先（セリフ切れ防止の根本修正）
+        //    優先順位: ag.duration_ms > u.duration_ms > テキストからの推定値
         const utterances = utteranceRows.map(u => ({
           id: u.id,
           order_no: u.order_no,
@@ -2408,7 +2415,7 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
           character_name: u.character_name,
           text: u.text,
           audio_generation_id: u.audio_generation_id,
-          duration_ms: u.duration_ms,
+          duration_ms: u.audio_duration_ms || u.duration_ms || (u.audio_url ? Math.max(2000, (u.text?.length || 0) * 300) : null),
           audio_url: u.audio_url ? toAbsoluteUrl(u.audio_url, siteUrl) : null,
         }));
         

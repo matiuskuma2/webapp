@@ -1206,10 +1206,13 @@ async function fetchScenesWithAssets(
     `).bind(sceneId).first<{ id: number; r2_url: string; duration_sec: number; status: string }>();
 
     // Utterances（音声パーツ）
+    // ★ FIX: ag.duration_ms を取得して音声の実際の長さを確実に使用（セリフ切れ防止）
     const utteranceRows = await db.prepare(`
       SELECT 
         su.id, su.order_no, su.role, su.character_key, su.text,
-        su.audio_generation_id, su.duration_ms, ag.status as audio_status, ag.r2_url as audio_url
+        su.audio_generation_id, su.duration_ms, 
+        ag.status as audio_status, ag.r2_url as audio_url,
+        ag.duration_ms as audio_duration_ms
       FROM scene_utterances su
       LEFT JOIN audio_generations ag ON su.audio_generation_id = ag.id
       WHERE su.scene_id = ?
@@ -1368,16 +1371,37 @@ async function fetchScenesWithAssets(
     }
 
     // Utterances
-    sceneData.utterances = utteranceRows.results.map(u => ({
-      id: u.id,
-      order_no: u.order_no,
-      role: u.role,  // 'narration' | 'dialogue'
-      character_key: u.character_key,
-      text: u.text,
-      duration_ms: u.duration_ms || 0,
-      audio_status: u.audio_status,
-      audio_url: toAbsoluteUrl(u.audio_url as string | null, siteUrl),
-    }));
+    // ★ FIX: duration_ms は audio_generations の値を優先（セリフ切れ防止の根本修正）
+    sceneData.utterances = utteranceRows.results.map(u => {
+      const audioDurationMs = (u as any).audio_duration_ms as number | null;
+      const utteranceDurationMs = u.duration_ms as number | null;
+      const audioUrl = u.audio_url as string | null;
+      const text = u.text as string | null;
+      
+      // 優先順位: ag.duration_ms > u.duration_ms > テキストからの推定値
+      let effectiveDurationMs: number;
+      if (audioDurationMs && audioDurationMs > 0) {
+        effectiveDurationMs = audioDurationMs;
+      } else if (utteranceDurationMs && utteranceDurationMs > 0) {
+        effectiveDurationMs = utteranceDurationMs;
+      } else if (audioUrl) {
+        // 音声URLがあるがdurationが不明な場合はテキストから推定
+        effectiveDurationMs = Math.max(2000, (text?.length || 0) * 300);
+      } else {
+        effectiveDurationMs = 0;
+      }
+      
+      return {
+        id: u.id,
+        order_no: u.order_no,
+        role: u.role,  // 'narration' | 'dialogue'
+        character_key: u.character_key,
+        text: u.text,
+        duration_ms: effectiveDurationMs,
+        audio_status: u.audio_status,
+        audio_url: toAbsoluteUrl(audioUrl, siteUrl),
+      };
+    });
 
     // Balloons
     sceneData.balloons = balloonRows.results.map(b => ({
