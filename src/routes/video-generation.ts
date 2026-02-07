@@ -915,10 +915,29 @@ videoGeneration.get('/:sceneId/videos', async (c) => {
     ORDER BY created_at DESC
   `).bind(sceneId).all();
   
-  const activeVideo = videos?.find((v: any) => v.is_active === 1) || null;
+  // === S3 URL → presigned URL 変換（動画一覧） ===
+  // S3バケットはパブリックアクセス不可のため、常に署名付きURLを生成
+  const resolvedVideos: any[] = [];
+  for (const v of (videos || []) as any[]) {
+    if (v.status === 'completed' && v.r2_key) {
+      try {
+        const presignedUrl = await refreshS3PresignedUrl(v.r2_url || '', c.env, v.r2_key);
+        if (presignedUrl) {
+          resolvedVideos.push({ ...v, r2_url: presignedUrl });
+          continue;
+        }
+      } catch (e) {
+        console.warn(`[VideoGen] Failed to generate presigned URL for video ${v.id}:`, e);
+      }
+    }
+    // r2_keyがない完了済み動画: 既存のr2_urlをそのまま返す（presignedかもしれない）
+    resolvedVideos.push(v);
+  }
+  
+  const activeVideo = resolvedVideos.find((v: any) => v.is_active === 1) || null;
   
   return c.json({
-    video_generations: videos || [],
+    video_generations: resolvedVideos,
     active_video: activeVideo,
   });
 });
@@ -967,30 +986,26 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
             UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
           `).bind(video.scene_id).run();
           
-          // Build permanent URL from s3_bucket and s3_key (not presigned_url which expires)
-          // s3_key example: videos/126/1338/vp-abc123.mp4
+          // Store s3_key for future presigned URL generation
           const s3Key = awsStatus.job.s3_key || null;
-          const s3Bucket = awsStatus.job.s3_bucket || 'rilarc-video-results';
           
-          // Build permanent public URL (assuming bucket has public access or CloudFront)
-          // Format: https://{bucket}.s3.{region}.amazonaws.com/{key}
-          const permanentUrl = s3Key 
-            ? `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${s3Key}`
-            : awsStatus.job.presigned_url; // Fallback to presigned if no key
+          // Use the fresh presigned URL from AWS for immediate playback
+          // DB stores s3_key (r2_key) so we can always regenerate presigned URLs later
+          const freshPresignedUrl = awsStatus.job.presigned_url;
           
           // Then, set this video as active and completed
-          // Store s3_key in r2_key column for future reference
+          // Store s3_key in r2_key column for future presigned URL regeneration
           await c.env.DB.prepare(`
             UPDATE video_generations 
             SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(s3Key, permanentUrl, videoId).run();
+          `).bind(s3Key, freshPresignedUrl, videoId).run();
           
-          console.log(`[VideoGen] Video ${videoId} completed: s3_key=${s3Key}, permanent_url=${permanentUrl?.substring(0, 80)}...`);
+          console.log(`[VideoGen] Video ${videoId} completed: s3_key=${s3Key}`);
           
           return c.json({
             status: 'completed',
-            r2_url: permanentUrl,
+            r2_url: freshPresignedUrl,
             s3_key: s3Key,
             progress_stage: 'completed',
           });
@@ -1016,19 +1031,16 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
     }
   }
   
-  // === presigned URL → 永続URL 自動変換（scenes/:sceneId/videos/:videoId/status） ===
+  // === S3 URL → presigned URL 変換（scenes/:sceneId/videos/:videoId/status） ===
   let resolvedUrl2 = video.r2_url;
-  if (video.status === 'completed' && video.r2_url) {
-    const isPresigned = video.r2_url.includes('X-Amz-') || video.r2_url.includes('x-amz-');
-    if (isPresigned && video.r2_key) {
-      const s3Bucket = 'rilarc-video-results';
-      resolvedUrl2 = `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${video.r2_key}`;
-      await c.env.DB.prepare(`
-        UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `).bind(resolvedUrl2, videoId).run();
-      console.log(`[VideoGen] Video ${videoId} URL migrated (scene endpoint): presigned → permanent`);
-    } else if (isPresigned && !video.r2_key) {
-      console.warn(`[VideoGen] Video ${videoId} has expired presigned URL and no r2_key (scene endpoint).`);
+  if (video.status === 'completed' && video.r2_key) {
+    try {
+      const presignedUrl = await refreshS3PresignedUrl(video.r2_url || '', c.env, video.r2_key);
+      if (presignedUrl) {
+        resolvedUrl2 = presignedUrl;
+      }
+    } catch (e) {
+      console.warn(`[VideoGen] Failed to generate presigned URL for video ${videoId} (scene endpoint):`, e);
     }
   }
   
@@ -1082,19 +1094,16 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
             UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
           `).bind(video.scene_id).run();
           
-          // Build permanent URL from s3_bucket and s3_key
+          // Use fresh presigned URL from AWS for immediate playback
           const s3Key = awsStatus.job.s3_key || null;
-          const s3Bucket = awsStatus.job.s3_bucket || 'rilarc-video-results';
-          const permanentUrl = s3Key 
-            ? `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${s3Key}`
-            : awsStatus.job.presigned_url;
+          const freshPresignedUrl = awsStatus.job.presigned_url;
           
-          // Then, set this video as active and completed
+          // Store s3_key in r2_key for future presigned URL regeneration
           await c.env.DB.prepare(`
             UPDATE video_generations 
             SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(s3Key, permanentUrl, videoId).run();
+          `).bind(s3Key, freshPresignedUrl, videoId).run();
           
           console.log(`[VideoGen] Video ${videoId} completed (status check): s3_key=${s3Key}`);
           
@@ -1102,7 +1111,7 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
             video: {
               id: videoId,
               status: 'completed',
-              r2_url: permanentUrl,
+              r2_url: freshPresignedUrl,
               s3_key: s3Key,
               progress_stage: 'completed',
             },
@@ -1135,26 +1144,17 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
     }
   }
   
-  // === presigned URL → 永続URL 自動変換 ===
-  // r2_url が presigned URL（X-Amz- パラメータ付き）の場合、r2_key から永続URLに変換
+  // === S3 URL → presigned URL 変換（レガシーステータスエンドポイント） ===
+  // S3バケットはパブリックアクセス不可のため、r2_keyから署名付きURLを生成
   let resolvedUrl = video.r2_url;
-  if (video.status === 'completed' && video.r2_url) {
-    const isPresignedUrl = video.r2_url.includes('X-Amz-') || video.r2_url.includes('x-amz-');
-    
-    if (isPresignedUrl && video.r2_key) {
-      // r2_key（s3_key）から永続URLを構築
-      const s3Bucket = 'rilarc-video-results';
-      resolvedUrl = `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${video.r2_key}`;
-      
-      // DB上のr2_urlも永続URLで更新（次回以降はpresigned不要）
-      await c.env.DB.prepare(`
-        UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-      `).bind(resolvedUrl, videoId).run();
-      
-      console.log(`[VideoGen] Video ${videoId} URL migrated: presigned → permanent (r2_key=${video.r2_key})`);
-    } else if (isPresignedUrl && !video.r2_key) {
-      // r2_keyもない場合はURL再生成不可 → エラーログ
-      console.warn(`[VideoGen] Video ${videoId} has expired presigned URL and no r2_key. Cannot recover.`);
+  if (video.status === 'completed' && video.r2_key) {
+    try {
+      const presignedUrl = await refreshS3PresignedUrl(video.r2_url || '', c.env, video.r2_key);
+      if (presignedUrl) {
+        resolvedUrl = presignedUrl;
+      }
+    } catch (e) {
+      console.warn(`[VideoGen] Failed to generate presigned URL for video ${videoId}:`, e);
     }
   }
   

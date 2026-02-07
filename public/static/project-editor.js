@@ -4750,37 +4750,7 @@ function renderSceneAudioGuide(scene) {
         </div>
         
         <!-- P2-2: テロップタイムラインプレビュー -->
-        ${(() => {
-          const uttList = scene.utterance_list || [];
-          const hasTimings = uttList.some(u => u.duration_ms > 0);
-          if (!hasTimings || uttList.length === 0) return '';
-          
-          const totalMs = uttList.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
-          if (totalMs === 0) return '';
-          
-          const bars = uttList.map((u, i) => {
-            const pct = totalMs > 0 ? ((u.duration_ms || 0) / totalMs * 100) : 0;
-            if (pct < 1) return '';
-            const isNarr = u.role === 'narration';
-            const bg = isNarr ? 'bg-gray-400' : ['bg-blue-400', 'bg-purple-400', 'bg-green-400', 'bg-pink-400'][i % 4];
-            const speaker = isNarr ? 'ナレ' : (u.character_name || '').slice(0, 3);
-            return \`<div class="\${bg} h-full relative group cursor-default rounded-sm" style="width:\${pct.toFixed(1)}%" title="\${escapeHtml(u.character_name || 'ナレーション')}: \${(u.duration_ms / 1000).toFixed(1)}秒 — \${escapeHtml((u.text || '').slice(0, 30))}">
-              \${pct > 8 ? \`<span class="absolute inset-0 flex items-center justify-center text-white text-[9px] font-bold truncate px-0.5">\${speaker}</span>\` : ''}
-            </div>\`;
-          }).filter(Boolean).join('');
-          
-          return \`
-            <div class="mt-2">
-              <div class="text-xs text-gray-500 mb-1 flex items-center gap-1">
-                <i class="fas fa-film text-purple-400"></i>テロップタイミング
-                <span class="text-gray-400">(${(totalMs / 1000).toFixed(1)}秒)</span>
-              </div>
-              <div class="flex h-5 rounded overflow-hidden bg-gray-200 gap-px">
-                \${bars}
-              </div>
-            </div>
-          \`;
-        })()}
+        ${renderTelopTimeline(scene)}
         
         <!-- 音声タブを開くボタン -->
         <button 

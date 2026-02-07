@@ -3,6 +3,7 @@ import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
 import { logAudit } from '../utils/audit-logger'
 import { getUserFromSession, validateProjectAccess } from '../utils/auth-helper'
+import { refreshS3PresignedUrl } from '../utils/aws-video-client'
 
 const projects = new Hono<{ Bindings: Bindings }>()
 
@@ -663,7 +664,7 @@ projects.get('/:id/scenes', async (c) => {
 
           // アクティブ動画（is_active=1 または 最新の completed）
           const activeVideo = await c.env.DB.prepare(`
-            SELECT id, status, r2_url, model, duration_sec
+            SELECT id, status, r2_url, r2_key, model, duration_sec
             FROM video_generations
             WHERE scene_id = ? AND (is_active = 1 OR (status = 'completed' AND r2_url IS NOT NULL))
             ORDER BY is_active DESC, created_at DESC
@@ -854,13 +855,24 @@ projects.get('/:id/scenes', async (c) => {
               image_url: latestRecord.r2_url || (latestRecord.r2_key ? `/${latestRecord.r2_key}` : null),
               error_message: latestRecord.error_message
             } : null,
-            active_video: activeVideo ? {
-              id: activeVideo.id,
-              status: activeVideo.status,
-              r2_url: activeVideo.r2_url,
-              model: activeVideo.model,
-              duration_sec: activeVideo.duration_sec
-            } : null,
+            active_video: activeVideo ? await (async () => {
+              let videoUrl = (activeVideo as any).r2_url;
+              const r2Key = (activeVideo as any).r2_key;
+              // S3バケットはパブリックアクセス不可 → r2_keyからpresigned URLを生成
+              if ((activeVideo as any).status === 'completed' && r2Key) {
+                try {
+                  const presigned = await refreshS3PresignedUrl(videoUrl || '', c.env, r2Key);
+                  if (presigned) videoUrl = presigned;
+                } catch (e) { /* ignore */ }
+              }
+              return {
+                id: (activeVideo as any).id,
+                status: (activeVideo as any).status,
+                r2_url: videoUrl,
+                model: (activeVideo as any).model,
+                duration_sec: (activeVideo as any).duration_sec
+              };
+            })() : null,
             // キャラクター情報追加（A/B/C層の特徴含む）
             characters: characterMappings.map((c: any) => {
               const charDetail = charDetailsMap.get(c.character_key) || {}
