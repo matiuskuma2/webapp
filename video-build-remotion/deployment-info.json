@@ -1,5 +1,5 @@
 {
-  "deployedAt": "2026-02-07T11:04:08.439Z",
+  "deployedAt": "2026-02-07T11:12:24.627Z",
   "region": "ap-northeast-1",
   "serveUrl": "https://remotionlambda-apnortheast1-ucgr0eo7k7.s3.ap-northeast-1.amazonaws.com/sites/rilarc-video-build/index.html",
   "functionName": "remotion-render-4-0-404-mem2048mb-disk2048mb-240sec",
@@ -13,6 +13,7 @@
     "text_render_mode: remotion/baked/none",
     "voices[] R1.5 複数話者音声",
     "MotionWrapper R2-C カメラワーク",
+    "Video freeze at last frame when audio > video duration",
     "Voice duration safety validation (audio cutoff prevention)",
     "Video freeze at last frame when audio > video duration"
   ]
