@@ -7705,7 +7705,7 @@ function renderVideoCard(video, sceneId) {
                class="w-full h-full object-cover"
                controls
                preload="metadata"
-               onerror="this.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画URLが期限切れです。再生成してください</div>'"
+               onerror="(async(el)=>{el.onerror=null;el.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-spinner fa-spin mr-2 text-purple-500\\'></i>URL更新中...</div>';try{const r=await axios.get(API_BASE+'/videos/${video.id}/status');if(r.data?.video?.r2_url){const newUrl=r.data.video.r2_url;const v=document.createElement('video');v.src=newUrl;v.className='w-full h-full object-cover';v.controls=true;v.preload='metadata';v.onerror=()=>{v.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画を読み込めません</div>';};el.parentElement.innerHTML='';el.parentElement.appendChild(v);return;}}catch(e){}el.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画を読み込めません</div>';})(this)"
              ></video>`
           : video.status === 'generating'
             ? `<div class="w-full h-full flex items-center justify-center text-gray-400">

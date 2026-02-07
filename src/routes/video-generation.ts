@@ -935,13 +935,14 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
   }
   
   const video = await c.env.DB.prepare(`
-    SELECT id, scene_id, status, job_id, r2_url, error_message, updated_at
+    SELECT id, scene_id, status, job_id, r2_key, r2_url, error_message, updated_at
     FROM video_generations WHERE id = ?
   `).bind(videoId).first<{
     id: number;
     scene_id: number;
     status: string;
     job_id: string | null;
+    r2_key: string | null;
     r2_url: string | null;
     error_message: string | null;
     updated_at: string;
@@ -1015,9 +1016,25 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
     }
   }
   
+  // === presigned URL → 永続URL 自動変換（scenes/:sceneId/videos/:videoId/status） ===
+  let resolvedUrl2 = video.r2_url;
+  if (video.status === 'completed' && video.r2_url) {
+    const isPresigned = video.r2_url.includes('X-Amz-') || video.r2_url.includes('x-amz-');
+    if (isPresigned && video.r2_key) {
+      const s3Bucket = 'rilarc-video-results';
+      resolvedUrl2 = `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${video.r2_key}`;
+      await c.env.DB.prepare(`
+        UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(resolvedUrl2, videoId).run();
+      console.log(`[VideoGen] Video ${videoId} URL migrated (scene endpoint): presigned → permanent`);
+    } else if (isPresigned && !video.r2_key) {
+      console.warn(`[VideoGen] Video ${videoId} has expired presigned URL and no r2_key (scene endpoint).`);
+    }
+  }
+  
   return c.json({
     status: video.status,
-    r2_url: video.r2_url,
+    r2_url: resolvedUrl2,
     error: video.error_message ? { message: video.error_message } : undefined,
   });
 });
@@ -1033,13 +1050,14 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
   }
   
   const video = await c.env.DB.prepare(`
-    SELECT id, scene_id, status, job_id, r2_url, error_message, updated_at
+    SELECT id, scene_id, status, job_id, r2_key, r2_url, error_message, updated_at
     FROM video_generations WHERE id = ?
   `).bind(videoId).first<{
     id: number;
     scene_id: number;
     status: string;
     job_id: string | null;
+    r2_key: string | null;
     r2_url: string | null;
     error_message: string | null;
     updated_at: string;
@@ -1117,11 +1135,34 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
     }
   }
   
+  // === presigned URL → 永続URL 自動変換 ===
+  // r2_url が presigned URL（X-Amz- パラメータ付き）の場合、r2_key から永続URLに変換
+  let resolvedUrl = video.r2_url;
+  if (video.status === 'completed' && video.r2_url) {
+    const isPresignedUrl = video.r2_url.includes('X-Amz-') || video.r2_url.includes('x-amz-');
+    
+    if (isPresignedUrl && video.r2_key) {
+      // r2_key（s3_key）から永続URLを構築
+      const s3Bucket = 'rilarc-video-results';
+      resolvedUrl = `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${video.r2_key}`;
+      
+      // DB上のr2_urlも永続URLで更新（次回以降はpresigned不要）
+      await c.env.DB.prepare(`
+        UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(resolvedUrl, videoId).run();
+      
+      console.log(`[VideoGen] Video ${videoId} URL migrated: presigned → permanent (r2_key=${video.r2_key})`);
+    } else if (isPresignedUrl && !video.r2_key) {
+      // r2_keyもない場合はURL再生成不可 → エラーログ
+      console.warn(`[VideoGen] Video ${videoId} has expired presigned URL and no r2_key. Cannot recover.`);
+    }
+  }
+  
   return c.json({
     video: {
       id: video.id,
       status: video.status,
-      r2_url: video.r2_url,
+      r2_url: resolvedUrl,
       error_message: video.error_message,
     },
   });
