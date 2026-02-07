@@ -1,5 +1,5 @@
 {
-  "deployedAt": "2026-02-01T08:27:35.414Z",
+  "deployedAt": "2026-02-07T04:00:00.000Z",
   "region": "ap-northeast-1",
   "serveUrl": "https://remotionlambda-apnortheast1-ucgr0eo7k7.s3.ap-northeast-1.amazonaws.com/sites/rilarc-video-build/index.html",
   "functionName": "remotion-render-4-0-404-mem2048mb-disk2048mb-240sec",
@@ -12,6 +12,7 @@
     "A案 baked: BalloonOverlay",
     "text_render_mode: remotion/baked/none",
     "voices[] R1.5 複数話者音声",
-    "MotionWrapper R2-C カメラワーク"
+    "MotionWrapper R2-C カメラワーク",
+    "Video freeze at last frame when audio > video duration"
   ]
 }
