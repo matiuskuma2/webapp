@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
-import { createAwsVideoClient, refreshS3PresignedUrl, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
+import { createAwsVideoClient, toCloudFrontUrl, s3ToCloudFrontUrl, CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
@@ -82,28 +82,27 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
  * 
  * Output: https://bucket.s3.region.amazonaws.com/key (no query params)
  */
+/**
+ * [DEPRECATED] toPublicS3Url → toCloudFrontUrl に移行済み
+ * 
+ * video_builds の download_url 用に CloudFront URL を生成
+ * S3バケットは非公開のため、CloudFront OAC 経由でアクセス
+ */
 function toPublicS3Url(
   presignedUrl: string | null | undefined,
   s3Bucket?: string | null,
   s3OutputKey?: string | null
 ): string | null {
-  // If we have bucket and key, construct directly (most reliable)
-  if (s3Bucket && s3OutputKey) {
-    return `https://${s3Bucket}.s3.ap-northeast-1.amazonaws.com/${s3OutputKey}`;
+  // キーが直接分かっている場合はCloudFront URLを生成
+  if (s3OutputKey) {
+    return toCloudFrontUrl(s3OutputKey, s3Bucket || undefined);
   }
   
-  // If no presigned URL, return null
+  // presigned URL からキーを抽出してCloudFront URLに変換
   if (!presignedUrl) return null;
   
-  // Try to parse the presigned URL and strip query params
-  try {
-    const url = new URL(presignedUrl);
-    // Return just the origin + pathname (no query string)
-    return `${url.origin}${url.pathname}`;
-  } catch (e) {
-    console.warn('[toPublicS3Url] Failed to parse URL:', presignedUrl);
-    return presignedUrl; // Return as-is if parsing fails
-  }
+  const cfUrl = s3ToCloudFrontUrl(presignedUrl);
+  return cfUrl || presignedUrl;
 }
 
 const videoGeneration = new Hono<{ Bindings: Bindings }>();
@@ -915,23 +914,21 @@ videoGeneration.get('/:sceneId/videos', async (c) => {
     ORDER BY created_at DESC
   `).bind(sceneId).all();
   
-  // === S3 URL → presigned URL 変換（動画一覧） ===
-  // S3バケットはパブリックアクセス不可のため、常に署名付きURLを生成
+  // === S3 URL → CloudFront 永続URL 変換（動画一覧） ===
+  // CloudFront CDN経由で配信（期限なし、OACでS3は非公開のまま）
   const resolvedVideos: any[] = [];
   for (const v of (videos || []) as any[]) {
     if (v.status === 'completed' && v.r2_key) {
-      try {
-        const presignedUrl = await refreshS3PresignedUrl(v.r2_url || '', c.env, v.r2_key);
-        if (presignedUrl) {
-          resolvedVideos.push({ ...v, r2_url: presignedUrl });
-          continue;
-        }
-      } catch (e) {
-        console.warn(`[VideoGen] Failed to generate presigned URL for video ${v.id}:`, e);
-      }
+      // r2_keyからCloudFront永続URLを生成
+      const cfUrl = toCloudFrontUrl(v.r2_key);
+      resolvedVideos.push({ ...v, r2_url: cfUrl });
+    } else if (v.status === 'completed' && v.r2_url) {
+      // r2_keyがない場合: 既存URLをCloudFrontに変換を試みる
+      const cfUrl = s3ToCloudFrontUrl(v.r2_url);
+      resolvedVideos.push({ ...v, r2_url: cfUrl || v.r2_url });
+    } else {
+      resolvedVideos.push(v);
     }
-    // r2_keyがない完了済み動画: 既存のr2_urlをそのまま返す（presignedかもしれない）
-    resolvedVideos.push(v);
   }
   
   const activeVideo = resolvedVideos.find((v: any) => v.is_active === 1) || null;
@@ -989,23 +986,22 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
           // Store s3_key for future presigned URL generation
           const s3Key = awsStatus.job.s3_key || null;
           
-          // Use the fresh presigned URL from AWS for immediate playback
-          // DB stores s3_key (r2_key) so we can always regenerate presigned URLs later
-          const freshPresignedUrl = awsStatus.job.presigned_url;
+          // CloudFront永続URLを生成（期限なし）
+          const cfUrl = s3Key ? toCloudFrontUrl(s3Key) : s3ToCloudFrontUrl(awsStatus.job.presigned_url);
           
           // Then, set this video as active and completed
-          // Store s3_key in r2_key column for future presigned URL regeneration
+          // Store s3_key in r2_key, CloudFront URL in r2_url
           await c.env.DB.prepare(`
             UPDATE video_generations 
             SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(s3Key, freshPresignedUrl, videoId).run();
+          `).bind(s3Key, cfUrl, videoId).run();
           
-          console.log(`[VideoGen] Video ${videoId} completed: s3_key=${s3Key}`);
+          console.log(`[VideoGen] Video ${videoId} completed: s3_key=${s3Key}, cf_url=${cfUrl?.substring(0, 80)}`);
           
           return c.json({
             status: 'completed',
-            r2_url: freshPresignedUrl,
+            r2_url: cfUrl,
             s3_key: s3Key,
             progress_stage: 'completed',
           });
@@ -1031,17 +1027,12 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
     }
   }
   
-  // === S3 URL → presigned URL 変換（scenes/:sceneId/videos/:videoId/status） ===
+  // === S3 URL → CloudFront 永続URL 変換 ===
   let resolvedUrl2 = video.r2_url;
   if (video.status === 'completed' && video.r2_key) {
-    try {
-      const presignedUrl = await refreshS3PresignedUrl(video.r2_url || '', c.env, video.r2_key);
-      if (presignedUrl) {
-        resolvedUrl2 = presignedUrl;
-      }
-    } catch (e) {
-      console.warn(`[VideoGen] Failed to generate presigned URL for video ${videoId} (scene endpoint):`, e);
-    }
+    resolvedUrl2 = toCloudFrontUrl(video.r2_key);
+  } else if (video.status === 'completed' && video.r2_url) {
+    resolvedUrl2 = s3ToCloudFrontUrl(video.r2_url) || video.r2_url;
   }
   
   return c.json({
@@ -1094,24 +1085,24 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
             UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
           `).bind(video.scene_id).run();
           
-          // Use fresh presigned URL from AWS for immediate playback
+          // CloudFront永続URLを生成
           const s3Key = awsStatus.job.s3_key || null;
-          const freshPresignedUrl = awsStatus.job.presigned_url;
+          const cfUrl = s3Key ? toCloudFrontUrl(s3Key) : s3ToCloudFrontUrl(awsStatus.job.presigned_url);
           
-          // Store s3_key in r2_key for future presigned URL regeneration
+          // Store s3_key in r2_key, CloudFront URL in r2_url
           await c.env.DB.prepare(`
             UPDATE video_generations 
             SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
-          `).bind(s3Key, freshPresignedUrl, videoId).run();
+          `).bind(s3Key, cfUrl, videoId).run();
           
-          console.log(`[VideoGen] Video ${videoId} completed (status check): s3_key=${s3Key}`);
+          console.log(`[VideoGen] Video ${videoId} completed (legacy): s3_key=${s3Key}, cf_url=${cfUrl?.substring(0, 80)}`);
           
           return c.json({
             video: {
               id: videoId,
               status: 'completed',
-              r2_url: freshPresignedUrl,
+              r2_url: cfUrl,
               s3_key: s3Key,
               progress_stage: 'completed',
             },
@@ -1144,18 +1135,12 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
     }
   }
   
-  // === S3 URL → presigned URL 変換（レガシーステータスエンドポイント） ===
-  // S3バケットはパブリックアクセス不可のため、r2_keyから署名付きURLを生成
+  // === S3 URL → CloudFront 永続URL 変換（レガシーステータスエンドポイント） ===
   let resolvedUrl = video.r2_url;
   if (video.status === 'completed' && video.r2_key) {
-    try {
-      const presignedUrl = await refreshS3PresignedUrl(video.r2_url || '', c.env, video.r2_key);
-      if (presignedUrl) {
-        resolvedUrl = presignedUrl;
-      }
-    } catch (e) {
-      console.warn(`[VideoGen] Failed to generate presigned URL for video ${videoId}:`, e);
-    }
+    resolvedUrl = toCloudFrontUrl(video.r2_key);
+  } else if (video.status === 'completed' && video.r2_url) {
+    resolvedUrl = s3ToCloudFrontUrl(video.r2_url) || video.r2_url;
   }
   
   return c.json({
@@ -2023,51 +2008,21 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         duration_sec: number;
       }>();
       
-      // 署名付きURLの期限切れチェック＆リフレッシュ
-      // 改善: AWS Video Proxyに依存せず、直接S3 presigned URLを生成
-      let refreshedVideoUrl = activeVideo?.r2_url || null;
-      if (activeVideo && activeVideo.r2_url?.includes('X-Amz-Expires')) {
-        // r2_keyがある場合は直接presigned URLを生成（最も信頼性が高い）
+      // CloudFront 永続URL 変換（presigned URL の期限切れ問題を根本解消）
+      let refreshedVideoUrl: string | null = null;
+      if (activeVideo) {
         if (activeVideo.r2_key) {
-          try {
-            const newPresignedUrl = await refreshS3PresignedUrl(
-              activeVideo.r2_url,
-              c.env,
-              activeVideo.r2_key,
-              'rilarc-video-results'
-            );
-            if (newPresignedUrl) {
-              refreshedVideoUrl = newPresignedUrl;
-              // DBも更新（次回のために）
-              await c.env.DB.prepare(`
-                UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-              `).bind(refreshedVideoUrl, activeVideo.id).run();
-              console.log(`[VideoBuild] Refreshed video URL directly for scene ${scene.id}, video ${activeVideo.id}`);
-            }
-          } catch (err) {
-            console.warn(`[VideoBuild] Direct refresh failed for scene ${scene.id}:`, err);
+          // r2_keyからCloudFront永続URLを生成（最も信頼性が高い）
+          refreshedVideoUrl = toCloudFrontUrl(activeVideo.r2_key);
+          // DBのr2_urlもCloudFront URLに更新（非同期・fire-and-forget）
+          if (refreshedVideoUrl !== activeVideo.r2_url) {
+            c.env.DB.prepare(`
+              UPDATE video_generations SET r2_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(refreshedVideoUrl, activeVideo.id).run().catch(() => {});
           }
-        }
-        
-        // r2_keyがない場合、または直接生成が失敗した場合はAWS Video Proxyを試す
-        if (refreshedVideoUrl === activeVideo.r2_url && activeVideo.job_id) {
-          const awsClient = createAwsVideoClient(c.env);
-          if (awsClient) {
-            try {
-              const statusResponse = await awsClient.getStatus(activeVideo.job_id);
-              if (statusResponse.success && statusResponse.job?.presigned_url) {
-                refreshedVideoUrl = statusResponse.job.presigned_url;
-                const s3Key = statusResponse.job.s3_key || activeVideo.r2_key;
-                await c.env.DB.prepare(`
-                  UPDATE video_generations SET r2_url = ?, r2_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-                `).bind(refreshedVideoUrl, s3Key, activeVideo.id).run();
-                console.log(`[VideoBuild] Refreshed video URL via AWS Proxy for scene ${scene.id}, video ${activeVideo.id}`);
-              }
-            } catch (err) {
-              console.warn(`[VideoBuild] AWS Proxy refresh failed for scene ${scene.id}:`, err);
-              // 失敗してもビルドは続行（古いURLで試みる）
-            }
-          }
+        } else if (activeVideo.r2_url) {
+          // r2_keyがない場合: 既存URLをCloudFrontに変換を試みる
+          refreshedVideoUrl = s3ToCloudFrontUrl(activeVideo.r2_url) || activeVideo.r2_url;
         }
       }
       
@@ -3402,8 +3357,8 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
         awsResponse.output.key || build.s3_output_key
       );
       
-      console.log(`[VideoBuild Refresh] Converting presigned URL to public URL for build=${buildId}`);
-      console.log(`[VideoBuild Refresh] Public URL: ${publicDownloadUrl}`);
+      console.log(`[VideoBuild Refresh] Converting to CloudFront URL for build=${buildId}`);
+      console.log(`[VideoBuild Refresh] CloudFront URL: ${publicDownloadUrl}`);
       
       await c.env.DB.prepare(`
         UPDATE video_builds 

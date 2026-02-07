@@ -3,7 +3,7 @@ import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
 import { logAudit } from '../utils/audit-logger'
 import { getUserFromSession, validateProjectAccess } from '../utils/auth-helper'
-import { refreshS3PresignedUrl } from '../utils/aws-video-client'
+import { toCloudFrontUrl, s3ToCloudFrontUrl } from '../utils/aws-video-client'
 
 const projects = new Hono<{ Bindings: Bindings }>()
 
@@ -855,15 +855,15 @@ projects.get('/:id/scenes', async (c) => {
               image_url: latestRecord.r2_url || (latestRecord.r2_key ? `/${latestRecord.r2_key}` : null),
               error_message: latestRecord.error_message
             } : null,
-            active_video: activeVideo ? await (async () => {
-              let videoUrl = (activeVideo as any).r2_url;
+            active_video: activeVideo ? (() => {
               const r2Key = (activeVideo as any).r2_key;
-              // S3バケットはパブリックアクセス不可 → r2_keyからpresigned URLを生成
+              const r2Url = (activeVideo as any).r2_url;
+              // CloudFront永続URL生成（期限なし）
+              let videoUrl = r2Url;
               if ((activeVideo as any).status === 'completed' && r2Key) {
-                try {
-                  const presigned = await refreshS3PresignedUrl(videoUrl || '', c.env, r2Key);
-                  if (presigned) videoUrl = presigned;
-                } catch (e) { /* ignore */ }
+                videoUrl = toCloudFrontUrl(r2Key);
+              } else if ((activeVideo as any).status === 'completed' && r2Url) {
+                videoUrl = s3ToCloudFrontUrl(r2Url) || r2Url;
               }
               return {
                 id: (activeVideo as any).id,

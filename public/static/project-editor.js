@@ -4234,9 +4234,9 @@ window.switchDisplayAssetType = switchDisplayAssetType;
  * @param {number} sceneId - シーンID
  */
 window.refreshVideoUrl = async function(videoId, sceneId) {
-  console.log(`[refreshVideoUrl] Refreshing video ${videoId} for scene ${sceneId}`);
+  console.log(`[refreshVideoUrl] Refreshing video ${videoId} for scene ${sceneId} (CloudFront CDN)`);
   try {
-    // ステータスAPIを呼び出して最新のURLを取得
+    // ステータスAPIを呼び出して最新のCloudFront URLを取得
     const res = await axios.get(`${API_BASE}/videos/${videoId}/status`);
     // APIレスポンスは { video: { id, status, r2_url, ... } } 構造
     const videoData = res.data?.video || res.data;
@@ -4253,23 +4253,20 @@ window.refreshVideoUrl = async function(videoId, sceneId) {
           source.src = videoData.r2_url;
         }
         videoEl.load();
-        console.log(`[refreshVideoUrl] Updated video URL for scene ${sceneId}`);
-        showToast('動画URLを更新しました', 'success');
+        console.log(`[refreshVideoUrl] Updated video URL for scene ${sceneId} (CloudFront)`);
         
-        // 5秒後にonerrorを再設定（次回の期限切れに対応）
-        setTimeout(() => {
-          if (videoEl) {
-            videoEl.onerror = () => refreshVideoUrl(videoId, sceneId);
-          }
-        }, 5000);
+        // onerrorは再設定しない（CloudFront URLは永続なので再試行不要）
+        // ネットワークエラーの場合のみ1回リトライ
+        videoEl.onerror = () => {
+          videoEl.onerror = null;
+          console.warn(`[refreshVideoUrl] Video load failed permanently for scene ${sceneId}`);
+        };
       }
     } else if (videoData.status === 'failed') {
       showToast('動画の生成に失敗しています', 'error');
     } else if (videoData.status === 'processing' || videoData.status === 'pending' || videoData.status === 'generating') {
-      // 処理中の場合は静かに待機
       console.log(`[refreshVideoUrl] Video ${videoId} is still ${videoData.status}`);
     } else {
-      // URL取得不可の場合、リトライせずに静かに失敗
       console.warn(`[refreshVideoUrl] Video ${videoId} has no r2_url, status: ${videoData.status}`);
     }
   } catch (e) {
@@ -7741,7 +7738,7 @@ function renderVideoCard(video, sceneId) {
                class="w-full h-full object-cover"
                controls
                preload="metadata"
-               onerror="(async(el)=>{el.onerror=null;el.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-spinner fa-spin mr-2 text-purple-500\\'></i>URL更新中...</div>';try{const r=await axios.get(API_BASE+'/videos/${video.id}/status');if(r.data?.video?.r2_url){const newUrl=r.data.video.r2_url;const v=document.createElement('video');v.src=newUrl;v.className='w-full h-full object-cover';v.controls=true;v.preload='metadata';v.onerror=()=>{v.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画を読み込めません</div>';};el.parentElement.innerHTML='';el.parentElement.appendChild(v);return;}}catch(e){}el.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画を読み込めません</div>';})(this)"
+               onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'flex items-center justify-center h-full text-gray-500 text-sm\\'><i class=\\'fas fa-exclamation-triangle mr-2 text-yellow-500\\'></i>動画を読み込めません</div>';"
              ></video>`
           : video.status === 'generating'
             ? `<div class="w-full h-full flex items-center justify-center text-gray-400">
@@ -7771,8 +7768,8 @@ function renderVideoCard(video, sceneId) {
         <div class="text-xs text-gray-500 space-y-1">
           <p><i class="fas fa-clock mr-1"></i>${createdAt}</p>
           ${video.status === 'completed' ? `
-            <p class="text-orange-600">
-              <i class="fas fa-hourglass-half mr-1"></i>あと${daysLeft}日で削除
+            <p class="text-green-600">
+              <i class="fas fa-cloud mr-1"></i>CDN保存済み
             </p>
           ` : ''}
         </div>
@@ -10308,7 +10305,7 @@ function openVideoBuildPreviewModal(buildId, videoUrl) {
         errorEl.innerHTML = `
           <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-sm text-amber-800">
             <i class="fas fa-exclamation-triangle mr-1"></i>
-            動画を読み込めませんでした。URLを再取得中...
+            動画を読み込めませんでした。再読み込みを試みています...
           </div>
         `;
         errorEl.classList.remove('hidden');

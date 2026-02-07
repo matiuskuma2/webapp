@@ -317,6 +317,94 @@ export function createAwsVideoClient(env: {
 }
 
 // ====================================================================
+// ====================================================================
+// CloudFront CDN URL Generation (永続URL - presigned URL不要)
+// ====================================================================
+
+/**
+ * CloudFront CDN ドメイン定義
+ * 
+ * rilarc-video-results バケット → d24v6uq3e5v87j.cloudfront.net
+ * rilarc-remotion-renders-prod-202601 バケット → d2rvdqwe29fp3a.cloudfront.net
+ */
+const CLOUDFRONT_VIDEO_DOMAIN = 'd24v6uq3e5v87j.cloudfront.net';
+const CLOUDFRONT_RENDERS_DOMAIN = 'd2rvdqwe29fp3a.cloudfront.net';
+
+/**
+ * S3キーからCloudFront永続URLを生成
+ * 
+ * - 期限なし（永続アクセス可能）
+ * - OAC経由でS3バケットは非公開のまま
+ * - CDNキャッシュで高速配信
+ * 
+ * @param s3Key - S3オブジェクトキー (例: "videos/192/2085/vp-xxx.mp4")
+ * @param bucket - S3バケット名 (デフォルト: rilarc-video-results)
+ * @returns CloudFront永続URL
+ */
+export function toCloudFrontUrl(
+  s3Key: string,
+  bucket?: string
+): string {
+  if (!s3Key) return '';
+  
+  const domain = (bucket === 'rilarc-remotion-renders-prod-202601')
+    ? CLOUDFRONT_RENDERS_DOMAIN
+    : CLOUDFRONT_VIDEO_DOMAIN;
+  
+  // キーの先頭のスラッシュを除去
+  const cleanKey = s3Key.startsWith('/') ? s3Key.slice(1) : s3Key;
+  return `https://${domain}/${cleanKey}`;
+}
+
+/**
+ * 既存のS3 URL（永続 or presigned）をCloudFront URLに変換
+ * 
+ * 入力形式:
+ * - Presigned: https://bucket.s3.region.amazonaws.com/key?X-Amz-...
+ * - Public: https://bucket.s3.region.amazonaws.com/key
+ * - CloudFront: https://xxx.cloudfront.net/key (既にCloudFrontの場合はそのまま返す)
+ * - S3 key: videos/192/2085/vp-xxx.mp4 (キーのみ)
+ * 
+ * @param urlOrKey - S3 URL or キー
+ * @param s3Key - 直接キーが分かっている場合（より信頼性が高い）
+ * @param bucket - バケット名
+ * @returns CloudFront永続URL or 空文字
+ */
+export function s3ToCloudFrontUrl(
+  urlOrKey: string | null | undefined,
+  s3Key?: string | null,
+  bucket?: string | null
+): string {
+  // s3Key が提供されている場合はそちらを優先
+  if (s3Key) {
+    return toCloudFrontUrl(s3Key, bucket || undefined);
+  }
+  
+  if (!urlOrKey) return '';
+  
+  // 既にCloudFront URLの場合はそのまま返す
+  if (urlOrKey.includes('.cloudfront.net')) {
+    return urlOrKey;
+  }
+  
+  // S3 URL からキーを抽出
+  const parsed = parseS3Url(urlOrKey);
+  if (parsed) {
+    return toCloudFrontUrl(parsed.key, parsed.bucket);
+  }
+  
+  // URLでもなくキーだけの場合（videos/192/...）
+  if (!urlOrKey.startsWith('http') && urlOrKey.includes('/')) {
+    return toCloudFrontUrl(urlOrKey, bucket || undefined);
+  }
+  
+  // 変換できない場合はそのまま返す（画像等のR2 URL）
+  return urlOrKey;
+}
+
+// Export domains for use in other modules
+export { CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN };
+
 // S3 Presigned URL Generation (Direct, without AWS Video Proxy)
 // ====================================================================
 
