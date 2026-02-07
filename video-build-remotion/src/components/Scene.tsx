@@ -157,8 +157,21 @@ export const Scene: React.FC<SceneProps> = ({
   
   // ========================================
   // 動画クリップがある場合
+  // 修正: 動画が音声より短い場合、最後のフレームでフリーズ
   // ========================================
   if (scene.assets?.video_clip?.url) {
+    // 動画の長さ（ミリ秒）- project.jsonから取得、なければシーン長を使用
+    const videoDurationMs = scene.assets.video_clip.duration_ms || scene.timing.duration_ms;
+    const videoDurationFrames = msToFrames(videoDurationMs, fps);
+    
+    // シーンの長さが動画より長い場合、動画を最後のフレームでフリーズ
+    // Remotionの<Video>はendAtを超えると最後のフレームを表示し続ける
+    const shouldFreezeLastFrame = durationFrames > videoDurationFrames;
+    
+    if (shouldFreezeLastFrame && frame === 0) {
+      console.log(`[Scene ${scene.idx}] Video freeze mode: video=${videoDurationMs}ms, scene=${scene.timing.duration_ms}ms`);
+    }
+    
     return (
       <AbsoluteFill style={{ opacity }}>
         <Video
@@ -168,6 +181,8 @@ export const Scene: React.FC<SceneProps> = ({
             height: '100%',
             objectFit: 'cover',
           }}
+          // 動画がシーンより短い場合、endAtで最後のフレームでフリーズ
+          endAt={shouldFreezeLastFrame ? videoDurationFrames : undefined}
         />
         {/* R1.5: voices[] を再生 */}
         {effectiveVoices.map((voice) => {
