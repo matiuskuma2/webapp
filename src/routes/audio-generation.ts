@@ -8,6 +8,7 @@ import { base64ToUint8Array, generateR2Key, getR2PublicUrl } from '../utils/r2-h
 import { generateFishTTS } from '../utils/fish-audio'; // Phase X-1: Fish Audio integration
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, getElevenLabsVoiceList, ELEVENLABS_MODELS } from '../utils/elevenlabs'; // ElevenLabs TTS
 import { logAudit } from '../utils/audit-logger';
+import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration'; // MP3 duration parser
 
 const audioGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -619,15 +620,29 @@ async function generateAndUploadAudio(args: {
       `).bind(sceneId, audioId).run();
     }
 
-    // FIX: MP3ファイルサイズからdurationを計算（概算より正確）
-    // MP3 128kbps: duration_seconds = file_size_bytes / (128 * 1000 / 8) = file_size_bytes / 16000
-    // MP3 44100Hz 128kbps の場合は bytes / 16000 が秒数
-    // 安全マージンとして少し長めに計算（最低2秒保証）
+    // FIX: MP3ヘッダーを解析して正確なdurationを取得
+    // VBR/CBRの両方に対応、フォールバックとしてファイルサイズから推定
     const bytesLength = bytes.length;
-    const bitrate = format === 'wav' ? 176400 : 16000; // WAV 44.1kHz 16bit stereo or MP3 128kbps
-    const calculatedDurationMs = Math.round((bytesLength / bitrate) * 1000);
-    const estimatedDurationMs = Math.max(2000, calculatedDurationMs);
-    console.log(`[Audio] Duration calculation: ${bytesLength} bytes / ${bitrate} = ${calculatedDurationMs}ms (using ${estimatedDurationMs}ms)`);
+    let estimatedDurationMs: number;
+    
+    if (format === 'wav') {
+      // WAV: ファイルサイズから計算（44.1kHz 16bit stereo = 176400 bytes/sec）
+      const calculatedDurationMs = Math.round((bytesLength / 176400) * 1000);
+      estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+      console.log(`[Audio] WAV duration: ${bytesLength} bytes / 176400 = ${calculatedDurationMs}ms`);
+    } else {
+      // MP3: ヘッダーを解析して正確なdurationを取得
+      const parsedDurationMs = getMp3Duration(bytes.buffer);
+      if (parsedDurationMs && parsedDurationMs > 0) {
+        estimatedDurationMs = parsedDurationMs;
+        console.log(`[Audio] MP3 parsed duration: ${parsedDurationMs}ms (${(parsedDurationMs/1000).toFixed(2)}s)`);
+      } else {
+        // フォールバック: 64kbpsを仮定（ElevenLabs等のTTSは通常64-128kbps）
+        const calculatedDurationMs = estimateMp3Duration(bytesLength, 64);
+        estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+        console.log(`[Audio] MP3 fallback duration: ${bytesLength} bytes @ 64kbps = ${calculatedDurationMs}ms`);
+      }
+    }
     
     // completed 定義: r2_url 必須 + 自動でis_active = 1に設定 + duration_ms追加
     await env.DB.prepare(`

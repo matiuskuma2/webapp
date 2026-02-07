@@ -14,6 +14,7 @@ import type { Bindings } from '../types/bindings';
 import { createErrorResponse } from '../utils/error-response';
 import { generateFishTTS } from '../utils/fish-audio';
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
+import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration'; // MP3 duration parser
 
 const bulkAudio = new Hono<{ Bindings: Bindings }>();
 
@@ -257,11 +258,20 @@ async function generateSingleUtteranceAudio(
       ? `${(env as any).R2_PUBLIC_URL}/${r2Key}`
       : `/${r2Key}`;
     
-    // Calculate duration
+    // Calculate duration: MP3ヘッダーを解析して正確なdurationを取得
     const bytesLength = bytes.length;
-    const bitrate = 16000;
-    const calculatedDurationMs = Math.round((bytesLength / bitrate) * 1000);
-    const estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+    let estimatedDurationMs: number;
+    
+    const parsedDurationMs = getMp3Duration(bytes.buffer);
+    if (parsedDurationMs && parsedDurationMs > 0) {
+      estimatedDurationMs = parsedDurationMs;
+      console.log(`[BulkAudio Job ${jobId}] MP3 parsed duration: ${parsedDurationMs}ms (${(parsedDurationMs/1000).toFixed(2)}s)`);
+    } else {
+      // フォールバック: 64kbpsを仮定
+      const calculatedDurationMs = estimateMp3Duration(bytesLength, 64);
+      estimatedDurationMs = Math.max(2000, calculatedDurationMs);
+      console.log(`[BulkAudio Job ${jobId}] MP3 fallback duration: ${bytesLength} bytes @ 64kbps = ${calculatedDurationMs}ms`);
+    }
     
     // Update audio_generation to completed
     await env.DB.prepare(`
