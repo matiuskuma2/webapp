@@ -3965,7 +3965,7 @@ function renderComicAudioSection(scene) {
  * @param {object} scene 
  * @returns {string} HTML
  */
-function renderSceneTextContent(scene) {
+function renderSceneTextContent(scene, imageStatus, disableVideoGen) {
   return `
     <div class="space-y-4">
       
@@ -3981,8 +3981,8 @@ function renderSceneTextContent(scene) {
       <!-- ④ 登場キャラ（映像用） -->
       ${renderImageCharacterSection(scene)}
       
-      <!-- ⑤ 詳細（折りたたみ：参照専用） -->
-      ${renderSceneDetailsFold(scene)}
+      <!-- ⑤ プロンプト編集（画像+動画統合、折りたたみ） -->
+      ${renderSceneDetailsFold(scene, imageStatus, disableVideoGen)}
       
     </div>
   `;
@@ -4953,10 +4953,7 @@ function renderBuilderSceneCard(scene) {
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 p-6">
         <!-- Left: Text Content (includes Audio under dialogue) -->
         <div class="space-y-4">
-          ${renderSceneTextContent(scene)}
-          
-          <!-- ⑥ 動画プロンプト＆生成エリア（左カラム下部） -->
-          ${renderVideoPromptSection(scene, imageStatus, disableVideoGen)}
+          ${renderSceneTextContent(scene, imageStatus, disableVideoGen)}
         </div>
         
         <!-- Right: Image Preview & Actions -->
@@ -13707,32 +13704,119 @@ function renderAssetTypeIndicator(scene) {
  * Phase1: 詳細（折りたたみ・編集可能なプロンプト）
  * スタイル、画像プロンプト（編集可能）、要点を表示
  */
-function renderSceneDetailsFold(scene) {
+function renderSceneDetailsFold(scene, imageStatus, disableVideoGen) {
   const bullets = scene.bullets || [];
-  // style_preset_idは数値なので、スタイル名に変換（なければID表示）
   const styleLabel = scene.style_preset_name || (scene.style_preset_id ? `スタイルID: ${scene.style_preset_id}` : 'デフォルト');
   const prompt = scene.image_prompt || scene.prompt || '';
   
-  // 漫画モードかどうかの判定
   const displayAssetType = scene.display_asset_type || 'image';
   const isComicMode = displayAssetType === 'comic';
+
+  // --- 動画プロンプト用の変数 ---
+  const activeVideo = scene.active_video || null;
+  const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
+  const isGeneratingVideo = window.videoGenerating && window.videoGenerating[scene.id];
+  const existingVideoPrompt = activeVideo?.prompt || '';
+  const existingModel = activeVideo?.model || '';
+  const isVeo3 = existingModel.includes('veo-3');
+
+  // 動画プロンプトセクション（状態別）
+  let videoPromptHtml = '';
+  if (disableVideoGen) {
+    videoPromptHtml = `
+      <div class="flex items-center justify-between">
+        <div class="text-xs font-semibold text-gray-400">
+          <i class="fas fa-video mr-1"></i>動画プロンプト
+        </div>
+        <button id="videoHistoryBtn-${scene.id}" onclick="viewVideoHistory(${scene.id})"
+          class="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors" title="動画履歴">
+          <i class="fas fa-film mr-1"></i>履歴
+        </button>
+      </div>
+      <p class="text-xs text-orange-600 mt-2">
+        <i class="fas fa-lock mr-1"></i>漫画採用中は動画化できません。Remotionで動画化されます。
+      </p>
+    `;
+  } else if (imageStatus !== 'completed') {
+    videoPromptHtml = `
+      <div class="flex items-center justify-between">
+        <div class="text-xs font-semibold text-gray-400">
+          <i class="fas fa-video mr-1"></i>動画プロンプト
+        </div>
+        <button id="videoHistoryBtn-${scene.id}" onclick="viewVideoHistory(${scene.id})"
+          class="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors" title="動画履歴">
+          <i class="fas fa-film mr-1"></i>履歴
+        </button>
+      </div>
+      <p class="text-xs text-gray-500 mt-2">
+        <i class="fas fa-info-circle mr-1"></i>画像生成が完了すると、動画プロンプトを入力して動画化できます
+      </p>
+    `;
+  } else {
+    videoPromptHtml = `
+      <div class="flex items-center justify-between">
+        <div class="text-xs font-semibold text-purple-700">
+          <i class="fas fa-video mr-1"></i>動画プロンプト
+          ${hasCompletedVideo ? '<span class="ml-1 text-green-600"><i class="fas fa-check-circle"></i></span>' : ''}
+        </div>
+        <div class="flex items-center gap-2">
+          ${hasCompletedVideo ? '<span class="text-xs text-green-600 font-medium"><i class="fas fa-check mr-1"></i>動画あり</span>' : ''}
+          <button id="videoHistoryBtn-${scene.id}" onclick="viewVideoHistory(${scene.id})"
+            class="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors" title="動画履歴">
+            <i class="fas fa-film mr-1"></i>履歴
+          </button>
+        </div>
+      </div>
+      <textarea id="videoPromptInline-${scene.id}" rows="2"
+        class="w-full px-3 py-2 text-sm border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 resize-y bg-white"
+        placeholder="動きや演出の指示を入力（例: カメラがゆっくりズームイン、表情変化、光の動き）"
+        ${isGeneratingVideo ? 'disabled' : ''}
+      >${escapeHtml(existingVideoPrompt)}</textarea>
+      <p class="text-xs text-gray-500">空欄の場合はシンプルなモーションが適用されます</p>
+      <div class="flex items-center gap-2">
+        <select id="videoEngineInline-${scene.id}" 
+          class="text-xs px-2 py-2 border border-purple-300 rounded-lg bg-white focus:ring-2 focus:ring-purple-500"
+          ${isGeneratingVideo ? 'disabled' : ''}>
+          <option value="veo2" ${!isVeo3 ? 'selected' : ''}>🎬 Veo2 (5秒)</option>
+          <option value="veo3" ${isVeo3 ? 'selected' : ''}>🚀 Veo3 (8秒)</option>
+        </select>
+        <button id="videoBtn-${scene.id}" onclick="generateVideoInline(${scene.id})"
+          class="flex-1 px-3 py-2 rounded-lg font-semibold text-sm touch-manipulation ${
+            isGeneratingVideo
+              ? 'bg-yellow-500 text-white opacity-75 cursor-not-allowed'
+              : 'bg-purple-600 text-white hover:bg-purple-700 transition-colors'
+          }" ${isGeneratingVideo ? 'disabled' : ''}>
+          ${isGeneratingVideo 
+            ? '<i class="fas fa-spinner fa-spin mr-1"></i>生成中...'
+            : hasCompletedVideo 
+              ? '<i class="fas fa-redo mr-1"></i>プロンプトで再生成'
+              : '<i class="fas fa-magic mr-1"></i>動画化'
+          }
+        </button>
+      </div>
+      ${hasCompletedVideo && existingVideoPrompt ? `
+        <div class="text-xs text-purple-600 bg-purple-100 rounded px-2 py-1">
+          <i class="fas fa-info-circle mr-1"></i>現在の動画は上記プロンプトで生成されました。変更して再生成できます。
+        </div>
+      ` : ''}
+    `;
+  }
 
   return `
     <details class="bg-gray-50 rounded-lg border border-gray-200" id="details-fold-${scene.id}">
       <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-700 hover:bg-gray-100">
-        <i class="fas fa-chevron-right mr-2"></i>詳細・プロンプト編集
+        <i class="fas fa-chevron-right mr-2"></i>プロンプト編集
       </summary>
       <div class="px-4 pb-4 space-y-4 border-t border-gray-200 pt-3">
 
+        <!-- スタイル -->
         <div>
           <div class="text-xs font-semibold text-gray-600 mb-1">
             <i class="fas fa-palette mr-1 text-purple-500"></i>スタイル
           </div>
-          <select 
-            id="style-select-${scene.id}"
+          <select id="style-select-${scene.id}"
             class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            onchange="onStyleSelectChange(${scene.id}, this.value)"
-          >
+            onchange="onStyleSelectChange(${scene.id}, this.value)">
             <option value="">デフォルト</option>
             ${(window.builderStylePresets || []).map(style => `
               <option value="${style.id}" ${scene.style_preset_id === style.id ? 'selected' : ''}>
@@ -13742,56 +13826,46 @@ function renderSceneDetailsFold(scene) {
           </select>
         </div>
 
-        <!-- 編集可能なプロンプトセクション -->
-        <div>
-          <div class="flex items-center justify-between mb-2">
-            <div class="text-xs font-semibold text-gray-600">
-              <i class="fas fa-image mr-1 text-green-600"></i>画像プロンプト
+        <!-- ────── 🎨 画像プロンプト ────── -->
+        <div class="bg-green-50 rounded-lg border border-green-200 p-3 space-y-2">
+          <div class="flex items-center justify-between">
+            <div class="text-xs font-semibold text-green-700">
+              <i class="fas fa-image mr-1"></i>画像プロンプト
             </div>
             <span id="prompt-saved-indicator-${scene.id}" class="text-xs text-green-600 hidden">
               <i class="fas fa-check-circle mr-1"></i>保存済み
             </span>
           </div>
-          <textarea 
-            id="prompt-edit-${scene.id}"
-            rows="4"
-            class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-y"
+          <textarea id="prompt-edit-${scene.id}" rows="3"
+            class="w-full px-3 py-2 text-sm border border-green-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500 resize-y bg-white"
             placeholder="画像生成のプロンプトを入力してください..."
             oninput="onPromptEditInput(${scene.id})"
           >${escapeHtml(prompt)}</textarea>
-          <p class="text-xs text-amber-600 mt-1">
+          <p class="text-xs text-amber-600">
             <i class="fas fa-exclamation-triangle mr-1"></i>
-            ※画像内のテキストを日本語にしたい場合は、プロンプトに「文字は日本語で」と追記してください
+            ※画像内のテキストを日本語にしたい場合は「文字は日本語で」と追記
           </p>
-          
-          <!-- 保存 & 再生成ボタン -->
-          <div class="flex gap-2 mt-3">
-            <button 
-              id="save-prompt-btn-${scene.id}"
-              onclick="saveScenePrompt(${scene.id})"
-              class="px-4 py-2 text-sm font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
-              disabled
-            >
-              <i class="fas fa-save mr-1"></i>プロンプトを保存
+          <div class="flex gap-2">
+            <button id="save-prompt-btn-${scene.id}" onclick="saveScenePrompt(${scene.id})"
+              class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+              disabled>
+              <i class="fas fa-save mr-1"></i>保存
             </button>
-            <button 
-              id="save-and-regenerate-btn-${scene.id}"
-              onclick="savePromptAndRegenerate(${scene.id})"
-              class="px-4 py-2 text-sm font-semibold rounded-lg transition-colors ${
+            <button id="save-and-regenerate-btn-${scene.id}" onclick="savePromptAndRegenerate(${scene.id})"
+              class="px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 isComicMode 
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed' 
                   : 'bg-green-600 text-white hover:bg-green-700'
-              }"
-              ${isComicMode ? 'disabled title="漫画採用中は画像を再生成できません"' : ''}
-            >
+              }" ${isComicMode ? 'disabled title="漫画採用中は画像を再生成できません"' : ''}>
               <i class="fas fa-magic mr-1"></i>保存して再生成
             </button>
           </div>
-          ${isComicMode ? `
-            <p class="text-xs text-orange-600 mt-2">
-              <i class="fas fa-info-circle mr-1"></i>漫画採用中は画像の再生成ができません
-            </p>
-          ` : ''}
+          ${isComicMode ? '<p class="text-xs text-orange-600"><i class="fas fa-info-circle mr-1"></i>漫画採用中は画像の再生成ができません</p>' : ''}
+        </div>
+
+        <!-- ────── 🎬 動画プロンプト ────── -->
+        <div class="bg-purple-50 rounded-lg border border-purple-200 p-3 space-y-2" id="videoPromptSection-${scene.id}">
+          ${videoPromptHtml}
         </div>
 
         ${bullets.length ? `
