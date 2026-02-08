@@ -4042,6 +4042,7 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   const isGenerating = imageStatus === 'generating';
   const activeVideo = scene.active_video || null;
   const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
+  const isGeneratingVideo = window.videoGenerating && window.videoGenerating[scene.id];
   
   // Phase1.5: display_asset_type に基づく表示切替
   const displayAssetType = scene.display_asset_type || 'image';
@@ -4052,6 +4053,10 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   // Phase1.7: latest_image からもフォールバック
   const latestImage = scene.latest_image || null;
   const latestImageUrl = (latestImage?.status === 'completed') ? (latestImage?.r2_url || latestImage?.image_url) : null;
+  const imageCompleted = imageStatus === 'completed';
+  
+  // 漫画モード判定
+  const isComicMode = displayAssetType === 'comic';
   
   // 表示する画像URL（display_asset_typeに応じて切替、フォールバック付き）
   let displayUrl = null;
@@ -4063,47 +4068,70 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
     displayUrl = latestImageUrl;
   }
   const isShowingComic = displayAssetType === 'comic' && comicUrl;
+  const isShowingVideo = displayAssetType === 'video' && hasCompletedVideo;
   
   // ✅ displayUrl の有効性チェック強化（null/undefined/'null'/'undefined' を除外）
   const validDisplayUrl = displayUrl && displayUrl !== 'null' && displayUrl !== 'undefined' ? displayUrl : null;
   
+  // 採用タブ表示条件: 画像完了後は常に表示（動画化の導線を確保）
+  const showAssetTabs = imageCompleted && (hasPublishedComic || hasCompletedVideo || !isComicMode);
+  
   return `
-    <!-- 画像/漫画エリア（常に表示） -->
-    <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 ${isShowingComic ? 'border-orange-400' : 'border-gray-300'} overflow-hidden">
-      ${validDisplayUrl 
-        ? `<img 
-             id="sceneImage-${scene.id}" 
-             src="${validDisplayUrl}" 
-             alt="Scene ${scene.idx}"
-             class="w-full h-full object-cover"
-           />`
-        : `<div class="flex items-center justify-center h-full text-gray-400">
-             <i class="fas fa-image text-4xl"></i>
-             <span class="ml-2">画像未生成</span>
-           </div>`
-      }
-      
-      ${isGenerating 
-        ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-             <div class="text-white text-center">
-               <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
-               <p>画像生成中...</p>
-             </div>
-           </div>`
-        : ''
-      }
-      
-      <!-- 左上バッジ: 現在の表示モード -->
-      <div class="absolute top-2 left-2 px-2 py-1 ${isShowingComic ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs rounded-full font-semibold">
-        <i class="fas ${isShowingComic ? 'fa-comment-alt' : 'fa-image'} mr-1"></i>${isShowingComic ? '漫画' : '画像'}
+    <!-- メディアプレビューエリア -->
+    ${isShowingVideo ? `
+      <!-- 動画表示モード -->
+      <div class="scene-video-container relative aspect-video bg-gray-900 rounded-lg border-2 border-purple-400 overflow-hidden">
+        <video 
+          id="sceneVideo-${scene.id}" 
+          src="${activeVideo.r2_url}" 
+          class="w-full h-full object-contain"
+          controls
+          preload="metadata"
+          poster="${imageUrl || ''}"
+          onerror="this.onerror=null;refreshVideoUrl(${activeVideo.id}, ${scene.id})"
+        >
+          <source src="${activeVideo.r2_url}" type="video/mp4">
+        </video>
+        <div class="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
+          <i class="fas fa-video mr-1"></i>動画 (${activeVideo.duration_sec || 5}秒)
+        </div>
       </div>
-      
-    </div>
+    ` : `
+      <!-- 画像/漫画表示モード -->
+      <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 ${isShowingComic ? 'border-orange-400' : 'border-gray-300'} overflow-hidden">
+        ${validDisplayUrl 
+          ? `<img 
+               id="sceneImage-${scene.id}" 
+               src="${validDisplayUrl}" 
+               alt="Scene ${scene.idx}"
+               class="w-full h-full object-cover"
+             />`
+          : `<div class="flex items-center justify-center h-full text-gray-400">
+               <i class="fas fa-image text-4xl"></i>
+               <span class="ml-2">画像未生成</span>
+             </div>`
+        }
+        
+        ${isGenerating 
+          ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+               <div class="text-white text-center">
+                 <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
+                 <p>画像生成中...</p>
+               </div>
+             </div>`
+          : ''
+        }
+        
+        <!-- 左上バッジ: 現在の表示モード -->
+        <div class="absolute top-2 left-2 px-2 py-1 ${isShowingComic ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs rounded-full font-semibold">
+          <i class="fas ${isShowingComic ? 'fa-comment-alt' : 'fa-image'} mr-1"></i>${isShowingComic ? '漫画' : '画像'}
+        </div>
+        
+      </div>
+    `}
     
-
-    
-    <!-- Phase1.8: 採用切替ボタン（漫画または動画がある場合に表示） -->
-    ${(hasPublishedComic || hasCompletedVideo) ? `
+    <!-- 採用切替タブ（画像完了後に常に表示） -->
+    ${showAssetTabs ? `
     <div class="flex gap-2 mt-2">
       <button 
         onclick="switchDisplayAssetType(${scene.id}, 'image')"
@@ -4139,36 +4167,30 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
       >
         <i class="fas fa-video mr-1"></i>動画
       </button>
-      ` : ''}
+      ` : `
+      <button 
+        onclick="generateVideoFromTab(${scene.id})"
+        id="videoTabBtn-${scene.id}"
+        class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+          isComicMode 
+            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+            : isGeneratingVideo 
+              ? 'bg-yellow-500 text-white cursor-not-allowed'
+              : 'bg-purple-100 text-purple-700 hover:bg-purple-200 border border-purple-300'
+        }"
+        ${isComicMode || isGeneratingVideo ? 'disabled' : ''}
+        title="${isComicMode ? '漫画採用中は動画化できません' : '画像から動画を生成'}"
+      >
+        ${isGeneratingVideo 
+          ? '<i class="fas fa-spinner fa-spin mr-1"></i>動画生成中...'
+          : '<i class="fas fa-magic mr-1"></i>動画化'
+        }
+      </button>
+      `}
     </div>
     ` : ''}
-    
-    <!-- 動画エリア（completedの場合のみ表示） -->
-    <!-- Phase1.7: 動画サムネイルは常にAI画像を使用（動画は元画像から生成されたため） -->
-    ${hasCompletedVideo 
-      ? `<div class="scene-video-container relative aspect-video bg-gray-900 rounded-lg border-2 border-purple-400 overflow-hidden mt-3">
-           <video 
-             id="sceneVideo-${scene.id}" 
-             src="${activeVideo.r2_url}" 
-             class="w-full h-full object-contain"
-             controls
-             preload="metadata"
-             poster="${imageUrl || ''}"
-             onerror="this.onerror=null;refreshVideoUrl(${activeVideo.id}, ${scene.id})"
-           >
-             <source src="${activeVideo.r2_url}" type="video/mp4">
-           </video>
-           <div class="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
-             <i class="fas fa-video mr-1"></i>動画 (${activeVideo.duration_sec || 5}秒)
-           </div>
-         </div>`
-      : ''
-    }
   `;
 }
-
-/**
- * Phase1.5: 採用切替（画像 ↔ 漫画）
 
 /**
  * 動画プロンプト & 生成エリア（シーンカード内に常時表示）
@@ -4311,6 +4333,34 @@ function renderVideoPromptSection(scene, imageStatus, disableVideoGen) {
 
 // Expose globally
 window.renderVideoPromptSection = renderVideoPromptSection;
+
+/**
+ * 右カラムの「動画化」タブボタンから呼ばれる。
+ * 詳細・プロンプト編集を展開し、動画プロンプトにフォーカスしてから生成を開始する。
+ */
+async function generateVideoFromTab(sceneId) {
+  // 1. <details> 折りたたみを開く
+  const detailsEl = document.getElementById(`details-fold-${sceneId}`);
+  if (detailsEl && !detailsEl.open) {
+    detailsEl.open = true;
+  }
+  
+  // 2. 動画プロンプトセクションにスクロール
+  const videoSection = document.getElementById(`videoPromptSection-${sceneId}`);
+  if (videoSection) {
+    videoSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // テキストエリアにフォーカス
+    const promptEl = document.getElementById(`videoPromptInline-${sceneId}`);
+    if (promptEl) {
+      setTimeout(() => promptEl.focus(), 400);
+    }
+    return; // ユーザーにプロンプトを入力する機会を提供
+  }
+  
+  // フォールバック
+  showToast('動画プロンプトを開けませんでした。詳細を開いてお試しください。', 'warning');
+}
+window.generateVideoFromTab = generateVideoFromTab;
 
 /**
  * Phase1.5: 採用切替（画像 ↔ 漫画）
