@@ -3051,6 +3051,103 @@ async function deleteScene(sceneId) {
 // シーン追加機能（Scene Split用）
 // ========================================
 
+// 現在のタブ状態
+let addSceneCurrentTab = 'new';
+// コピー元シーンのキャッシュ
+let addSceneScenesCache = [];
+
+// タブ切り替え
+function switchAddSceneTab(tab) {
+  addSceneCurrentTab = tab;
+  
+  // タブボタンのスタイル
+  const newTab = document.getElementById('addSceneTab-new');
+  const copyTab = document.getElementById('addSceneTab-copy');
+  const newPanel = document.getElementById('addScenePanel-new');
+  const copyPanel = document.getElementById('addScenePanel-copy');
+  const confirmBtn = document.getElementById('addSceneConfirmBtn');
+  
+  if (tab === 'new') {
+    newTab.className = 'flex-1 px-4 py-3 text-sm font-semibold text-center border-b-2 border-green-600 text-green-700 bg-green-50 transition-colors';
+    copyTab.className = 'flex-1 px-4 py-3 text-sm font-semibold text-center border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors';
+    newPanel.classList.remove('hidden');
+    copyPanel.classList.add('hidden');
+    if (confirmBtn) {
+      confirmBtn.innerHTML = '<i class="fas fa-plus"></i>追加';
+      confirmBtn.className = 'px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold inline-flex items-center gap-2';
+    }
+  } else {
+    newTab.className = 'flex-1 px-4 py-3 text-sm font-semibold text-center border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors';
+    copyTab.className = 'flex-1 px-4 py-3 text-sm font-semibold text-center border-b-2 border-indigo-600 text-indigo-700 bg-indigo-50 transition-colors';
+    newPanel.classList.add('hidden');
+    copyPanel.classList.remove('hidden');
+    if (confirmBtn) {
+      confirmBtn.innerHTML = '<i class="fas fa-copy"></i>コピーして追加';
+      confirmBtn.className = 'px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors font-semibold inline-flex items-center gap-2';
+    }
+    // コピー元リストを更新
+    updateCopySceneSourceOptions();
+  }
+}
+
+// コピー元シーンリストを更新
+async function updateCopySceneSourceOptions() {
+  const sourceSelect = document.getElementById('copySceneSource');
+  const positionSelect = document.getElementById('copyScenePosition');
+  if (!sourceSelect) return;
+  
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+    const scenes = response.data.scenes || [];
+    addSceneScenesCache = scenes;
+    
+    // コピー元
+    let sourceOptions = '<option value="">-- コピー元シーンを選択 --</option>';
+    scenes.forEach((scene) => {
+      const titlePreview = scene.title ? scene.title.substring(0, 25) : '(無題)';
+      const dialoguePreview = scene.dialogue ? scene.dialogue.substring(0, 30).replace(/\n/g, ' ') : '';
+      sourceOptions += `<option value="${scene.id}">#${scene.idx} ${escapeHtml(titlePreview)}${dialoguePreview ? ' - ' + escapeHtml(dialoguePreview) + '...' : ''}</option>`;
+    });
+    sourceSelect.innerHTML = sourceOptions;
+    
+    // 挿入位置
+    if (positionSelect) {
+      let posOptions = '<option value="end">最後に追加</option>';
+      scenes.forEach((scene) => {
+        posOptions += `<option value="${scene.idx}">シーン #${scene.idx}「${escapeHtml(scene.title.substring(0, 20))}」の後</option>`;
+      });
+      positionSelect.innerHTML = posOptions;
+    }
+  } catch (error) {
+    console.error('Error loading scenes for copy:', error);
+  }
+}
+
+// コピー元プレビュー表示
+function onCopySceneSourceChange() {
+  const sourceSelect = document.getElementById('copySceneSource');
+  const previewBox = document.getElementById('copyScenePreview');
+  const previewContent = document.getElementById('copyScenePreviewContent');
+  if (!sourceSelect || !previewBox || !previewContent) return;
+  
+  const sceneId = parseInt(sourceSelect.value, 10);
+  const scene = addSceneScenesCache.find(s => s.id === sceneId);
+  
+  if (!scene) {
+    previewBox.classList.add('hidden');
+    return;
+  }
+  
+  previewBox.classList.remove('hidden');
+  previewContent.innerHTML = `
+    <div class="space-y-2">
+      <div><span class="font-semibold text-gray-600">タイトル:</span> ${escapeHtml(scene.title || '(なし)')}</div>
+      <div><span class="font-semibold text-gray-600">セリフ:</span> <span class="text-gray-500">${escapeHtml((scene.dialogue || '(なし)').substring(0, 100))}${(scene.dialogue || '').length > 100 ? '...' : ''}</span></div>
+      ${scene.image_prompt ? `<div><span class="font-semibold text-gray-600">画像プロンプト:</span> <span class="text-xs text-gray-400">${escapeHtml(scene.image_prompt.substring(0, 80))}...</span></div>` : ''}
+    </div>
+  `;
+}
+
 // シーン追加モーダルを表示
 function showAddSceneModal() {
   const modal = document.getElementById('addSceneModalSplit');
@@ -3064,6 +3161,20 @@ function showAddSceneModal() {
   const dialogueInput = document.getElementById('addSceneDialogue');
   if (titleInput) titleInput.value = '';
   if (dialogueInput) dialogueInput.value = '';
+  
+  // 「新規作成」タブに切り替え
+  switchAddSceneTab('new');
+  
+  // コピー元プレビューを隠す
+  const previewBox = document.getElementById('copyScenePreview');
+  if (previewBox) previewBox.classList.add('hidden');
+  
+  // コピー元セレクトのchangeイベント
+  const sourceSelect = document.getElementById('copySceneSource');
+  if (sourceSelect) {
+    sourceSelect.removeEventListener('change', onCopySceneSourceChange);
+    sourceSelect.addEventListener('change', onCopySceneSourceChange);
+  }
   
   modal.classList.remove('hidden');
 }
@@ -3094,8 +3205,14 @@ async function updateAddScenePositionOptions() {
   }
 }
 
-// シーン追加を実行
+// シーン追加を実行（新規 or コピー）
 async function confirmAddScene() {
+  // コピータブの場合
+  if (addSceneCurrentTab === 'copy') {
+    return confirmCopyScene();
+  }
+  
+  // 新規作成
   const positionSelect = document.getElementById('addScenePosition');
   const titleInput = document.getElementById('addSceneTitle');
   const dialogueInput = document.getElementById('addSceneDialogue');
@@ -3139,8 +3256,59 @@ async function confirmAddScene() {
 window.showAddSceneModal = showAddSceneModal;
 window.closeAddSceneModal = closeAddSceneModal;
 window.confirmAddScene = confirmAddScene;
+window.switchAddSceneTab = switchAddSceneTab;
 window.hideScene = hideScene;
 window.deleteScene = deleteScene; // 後方互換性
+
+// コピーして追加を実行
+async function confirmCopyScene() {
+  const sourceSelect = document.getElementById('copySceneSource');
+  const positionSelect = document.getElementById('copyScenePosition');
+  const confirmBtn = document.getElementById('addSceneConfirmBtn');
+  
+  const sourceSceneId = sourceSelect?.value;
+  if (!sourceSceneId) {
+    showToast('コピー元シーンを選択してください', 'warning');
+    return;
+  }
+  
+  const position = positionSelect?.value;
+  
+  // ボタンを無効化
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>コピー中...';
+  }
+  
+  try {
+    // duplicate APIを呼び出し（挿入位置をオプションで渡す）
+    const payload = {};
+    if (position && position !== 'end') {
+      payload.insert_after_idx = parseInt(position, 10);
+    }
+    
+    const response = await axios.post(`${API_BASE}/scenes/${sourceSceneId}/duplicate`, payload);
+    if (response.data.success) {
+      showToast('シーンをコピーしました', 'success');
+      closeAddSceneModal();
+      
+      // シーンリストを再読込
+      window.sceneSplitInitialized = false;
+      await loadScenes();
+    } else {
+      showToast('シーンのコピーに失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Error copying scene:', error);
+    const errorMsg = error.response?.data?.error?.message || 'シーンコピー中にエラーが発生しました';
+    showToast(errorMsg, 'error');
+  } finally {
+    if (confirmBtn) {
+      confirmBtn.disabled = false;
+      confirmBtn.innerHTML = '<i class="fas fa-copy"></i>コピーして追加';
+    }
+  }
+}
 
 // シーンコピー（Scene Splitタブ専用）
 async function duplicateScene(sceneId) {

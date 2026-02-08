@@ -823,11 +823,20 @@ scenes.post('/', async (c) => {
 
 // POST /api/scenes/:sceneId/duplicate - シーンをコピー（テキスト情報のみ）
 // Scene Split タブ専用。画像・動画・漫画データはコピーしない。
+// オプション: insert_after_idx で挿入位置を指定可能
 scenes.post('/:sceneId/duplicate', async (c) => {
   try {
     const sceneId = parseInt(c.req.param('sceneId'), 10);
     if (isNaN(sceneId)) {
       return c.json({ error: { code: 'INVALID_ID', message: 'Invalid scene ID' } }, 400);
+    }
+
+    // リクエストボディ（空でもOK）
+    let body: { insert_after_idx?: number } = {};
+    try {
+      body = await c.req.json();
+    } catch (e) {
+      // bodyなしでもOK
     }
 
     // 元シーンを取得
@@ -843,8 +852,9 @@ scenes.post('/:sceneId/duplicate', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404);
     }
 
-    // 元シーンの直後に挿入
-    const insertPos = await getInsertPosition(c.env.DB, original.project_id, original.idx);
+    // 挿入位置を決定: insert_after_idx が指定されればその位置の後、なければ元シーンの直後
+    const insertAfterIdx = body.insert_after_idx !== undefined ? body.insert_after_idx : original.idx;
+    const insertPos = await getInsertPosition(c.env.DB, original.project_id, insertAfterIdx);
     const newIdx = insertPos.newIdx;
 
     // テキスト情報のみコピー（画像・動画・漫画は含まない）

@@ -1141,7 +1141,19 @@ app.get('/projects/:id', (c) => {
                                     <i class="fas fa-times text-lg"></i>
                                 </button>
                             </div>
-                            <div class="p-6 space-y-4">
+                            <!-- Tab切り替え -->
+                            <div class="flex border-b border-gray-200">
+                                <button id="addSceneTab-new" onclick="switchAddSceneTab('new')"
+                                    class="flex-1 px-4 py-3 text-sm font-semibold text-center border-b-2 border-green-600 text-green-700 bg-green-50 transition-colors">
+                                    <i class="fas fa-plus mr-1"></i>新規作成
+                                </button>
+                                <button id="addSceneTab-copy" onclick="switchAddSceneTab('copy')"
+                                    class="flex-1 px-4 py-3 text-sm font-semibold text-center border-b-2 border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50 transition-colors">
+                                    <i class="fas fa-copy mr-1"></i>既存シーンからコピー
+                                </button>
+                            </div>
+                            <!-- 新規作成パネル -->
+                            <div id="addScenePanel-new" class="p-6 space-y-4">
                                 <div>
                                     <label class="block text-sm font-semibold text-gray-700 mb-2">
                                         <i class="fas fa-list-ol mr-1 text-green-600"></i>挿入位置
@@ -1168,11 +1180,40 @@ app.get('/projects/:id', (c) => {
                                         class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500"></textarea>
                                 </div>
                             </div>
+                            <!-- コピーパネル -->
+                            <div id="addScenePanel-copy" class="hidden p-6 space-y-4">
+                                <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-3 text-sm text-indigo-700">
+                                    <i class="fas fa-info-circle mr-1"></i>
+                                    コピー元のシーンを選択してください。タイトル・セリフ・要点・プロンプト・キャラクター割り当てがコピーされます。画像・動画・漫画はコピーされません。
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                        <i class="fas fa-copy mr-1 text-indigo-600"></i>コピー元シーン
+                                    </label>
+                                    <select id="copySceneSource" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <option value="">-- シーンを選択 --</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                        <i class="fas fa-list-ol mr-1 text-green-600"></i>挿入位置
+                                    </label>
+                                    <select id="copyScenePosition" class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <option value="end">最後に追加</option>
+                                    </select>
+                                </div>
+                                <!-- コピー元プレビュー -->
+                                <div id="copyScenePreview" class="hidden bg-gray-50 border border-gray-200 rounded-lg p-4">
+                                    <h4 class="text-sm font-semibold text-gray-600 mb-2"><i class="fas fa-eye mr-1"></i>プレビュー</h4>
+                                    <div id="copyScenePreviewContent" class="text-sm text-gray-700 space-y-1"></div>
+                                </div>
+                            </div>
+                            <!-- フッターボタン -->
                             <div class="px-6 py-4 bg-gray-50 border-t flex justify-end gap-3">
                                 <button onclick="closeAddSceneModal()" class="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors font-semibold">
                                     キャンセル
                                 </button>
-                                <button onclick="confirmAddScene()" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold inline-flex items-center gap-2">
+                                <button id="addSceneConfirmBtn" onclick="confirmAddScene()" class="px-6 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold inline-flex items-center gap-2">
                                     <i class="fas fa-plus"></i>追加
                                 </button>
                             </div>
