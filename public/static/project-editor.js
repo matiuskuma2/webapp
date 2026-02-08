@@ -4068,7 +4068,6 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
     displayUrl = latestImageUrl;
   }
   const isShowingComic = displayAssetType === 'comic' && comicUrl;
-  const isShowingVideo = displayAssetType === 'video' && hasCompletedVideo;
   
   // ✅ displayUrl の有効性チェック強化（null/undefined/'null'/'undefined' を除外）
   const validDisplayUrl = displayUrl && displayUrl !== 'null' && displayUrl !== 'undefined' ? displayUrl : null;
@@ -4077,83 +4076,87 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
   const showAssetTabs = imageCompleted && (hasPublishedComic || hasCompletedVideo || !isComicMode);
   
   return `
-    <!-- メディアプレビューエリア -->
-    ${isShowingVideo ? `
-      <!-- 動画表示モード -->
-      <div class="scene-video-container relative aspect-video bg-gray-900 rounded-lg border-2 border-purple-400 overflow-hidden">
-        <video 
-          id="sceneVideo-${scene.id}" 
-          src="${activeVideo.r2_url}" 
-          class="w-full h-full object-contain"
-          controls
-          preload="metadata"
-          poster="${imageUrl || ''}"
-          onerror="this.onerror=null;refreshVideoUrl(${activeVideo.id}, ${scene.id})"
-        >
-          <source src="${activeVideo.r2_url}" type="video/mp4">
-        </video>
-        <div class="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
-          <i class="fas fa-video mr-1"></i>動画 (${activeVideo.duration_sec || 5}秒)
-        </div>
+    <!-- ========================================== -->
+    <!-- メディアプレビューエリア: 画像は常に表示 -->
+    <!-- ========================================== -->
+    
+    <!-- 画像/漫画プレビュー（常時表示） -->
+    <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 ${isShowingComic ? 'border-orange-400' : 'border-gray-300'} overflow-hidden">
+      ${validDisplayUrl 
+        ? `<img 
+             id="sceneImage-${scene.id}" 
+             src="${validDisplayUrl}" 
+             alt="Scene ${scene.idx}"
+             class="w-full h-full object-cover"
+           />`
+        : `<div class="flex items-center justify-center h-full text-gray-400">
+             <i class="fas fa-image text-4xl"></i>
+             <span class="ml-2">画像未生成</span>
+           </div>`
+      }
+      
+      ${isGenerating 
+        ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
+             <div class="text-white text-center">
+               <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
+               <p>画像生成中...</p>
+             </div>
+           </div>`
+        : ''
+      }
+      
+      <!-- 左上バッジ: 現在の表示モード -->
+      <div class="absolute top-2 left-2 px-2 py-1 ${isShowingComic ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs rounded-full font-semibold">
+        <i class="fas ${isShowingComic ? 'fa-comment-alt' : 'fa-image'} mr-1"></i>${isShowingComic ? '漫画' : '画像'}
       </div>
-    ` : `
-      <!-- 画像/漫画表示モード -->
-      <div class="scene-image-container relative aspect-video bg-gray-100 rounded-lg border-2 ${isShowingComic ? 'border-orange-400' : 'border-gray-300'} overflow-hidden">
-        ${validDisplayUrl 
-          ? `<img 
-               id="sceneImage-${scene.id}" 
-               src="${validDisplayUrl}" 
-               alt="Scene ${scene.idx}"
-               class="w-full h-full object-cover"
-             />`
-          : `<div class="flex items-center justify-center h-full text-gray-400">
-               <i class="fas fa-image text-4xl"></i>
-               <span class="ml-2">画像未生成</span>
-             </div>`
-        }
-        
-        ${isGenerating 
-          ? `<div class="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center">
-               <div class="text-white text-center">
-                 <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
-                 <p>画像生成中...</p>
-               </div>
-             </div>`
-          : ''
-        }
-        
-        <!-- 左上バッジ: 現在の表示モード -->
-        <div class="absolute top-2 left-2 px-2 py-1 ${isShowingComic ? 'bg-orange-600' : 'bg-blue-600'} text-white text-xs rounded-full font-semibold">
-          <i class="fas ${isShowingComic ? 'fa-comment-alt' : 'fa-image'} mr-1"></i>${isShowingComic ? '漫画' : '画像'}
-        </div>
-        
+    </div>
+    
+    <!-- ========================================== -->
+    <!-- 動画プレビュー: 生成済み or 生成中 を画像の下に表示 -->
+    <!-- ========================================== -->
+    ${hasCompletedVideo ? `
+    <div class="scene-video-container relative aspect-video bg-gray-900 rounded-lg border-2 border-purple-400 overflow-hidden mt-2" id="videoPreview-${scene.id}">
+      <video 
+        id="sceneVideo-${scene.id}" 
+        src="${activeVideo.r2_url}" 
+        class="w-full h-full object-contain"
+        controls
+        preload="metadata"
+        poster="${imageUrl || ''}"
+        onerror="this.onerror=null;refreshVideoUrl(${activeVideo.id}, ${scene.id})"
+      >
+        <source src="${activeVideo.r2_url}" type="video/mp4">
+      </video>
+      <div class="absolute top-2 left-2 px-2 py-1 bg-purple-600 text-white text-xs rounded-full font-semibold">
+        <i class="fas fa-video mr-1"></i>動画 (${activeVideo.duration_sec || 5}秒)
       </div>
-    `}
+    </div>
+    ` : isGeneratingVideo ? `
+    <div class="relative aspect-video bg-gray-900 rounded-lg border-2 border-yellow-400 overflow-hidden mt-2 flex items-center justify-center" id="videoPreview-${scene.id}">
+      <div class="text-center text-white">
+        <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
+        <p class="text-sm font-semibold" id="videoProgress-${scene.id}">動画生成中...</p>
+        <p class="text-xs text-gray-400 mt-1">完了まで1〜3分</p>
+      </div>
+      <div class="absolute top-2 left-2 px-2 py-1 bg-yellow-500 text-white text-xs rounded-full font-semibold">
+        <i class="fas fa-video mr-1"></i>生成中
+      </div>
+    </div>
+    ` : ''}
     
     <!-- 採用切替タブ（画像完了後に常に表示） -->
     ${showAssetTabs ? `
     <div class="flex gap-2 mt-2">
-      <button 
-        onclick="switchDisplayAssetType(${scene.id}, 'image')"
-        class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-          displayAssetType === 'image' 
-            ? 'bg-blue-600 text-white' 
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-        }"
-        ${!imageUrl && !latestImageUrl ? 'disabled title="AI画像がありません"' : ''}
-      >
-        <i class="fas fa-image mr-1"></i>画像
-      </button>
       ${hasPublishedComic ? `
       <button 
-        onclick="switchDisplayAssetType(${scene.id}, 'comic')"
+        onclick="switchDisplayAssetType(${scene.id}, '${isShowingComic ? 'image' : 'comic'}')"
         class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-          displayAssetType === 'comic' 
-            ? 'bg-orange-600 text-white' 
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+          isShowingComic 
+            ? 'bg-blue-100 text-blue-700 hover:bg-blue-200 border border-blue-300'
+            : 'bg-orange-100 text-orange-700 hover:bg-orange-200 border border-orange-300'
         }"
       >
-        <i class="fas fa-comment-alt mr-1"></i>漫画
+        <i class="fas ${isShowingComic ? 'fa-image' : 'fa-comment-alt'} mr-1"></i>${isShowingComic ? '画像に切替' : '漫画に切替'}
       </button>
       ` : ''}
       ${hasCompletedVideo ? `
@@ -4162,10 +4165,10 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
         class="flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
           displayAssetType === 'video' 
             ? 'bg-purple-600 text-white' 
-            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            : 'bg-purple-100 text-purple-700 hover:bg-purple-200 border border-purple-300'
         }"
       >
-        <i class="fas fa-video mr-1"></i>動画
+        <i class="fas fa-check-circle mr-1"></i>動画を採用
       </button>
       ` : `
       <button 
@@ -7754,6 +7757,50 @@ async function generateVideoInline(sceneId) {
   
   window.videoGenerating[sceneId] = true;
   
+  // ✅ 右カラムに動画生成中プレビューを動的に追加
+  const existingVideoPreview = document.getElementById(`videoPreview-${sceneId}`);
+  if (!existingVideoPreview) {
+    // 画像コンテナの直後に挿入
+    const imageContainer = document.querySelector(`#builder-scene-${sceneId} .scene-image-container`);
+    if (imageContainer) {
+      const progressDiv = document.createElement('div');
+      progressDiv.id = `videoPreview-${sceneId}`;
+      progressDiv.className = 'relative aspect-video bg-gray-900 rounded-lg border-2 border-yellow-400 overflow-hidden mt-2 flex items-center justify-center';
+      progressDiv.innerHTML = `
+        <div class="text-center text-white">
+          <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
+          <p class="text-sm font-semibold" id="videoProgress-${sceneId}">動画生成開始中...</p>
+          <p class="text-xs text-gray-400 mt-1">完了まで1〜3分</p>
+        </div>
+        <div class="absolute top-2 left-2 px-2 py-1 bg-yellow-500 text-white text-xs rounded-full font-semibold">
+          <i class="fas fa-video mr-1"></i>生成中
+        </div>
+      `;
+      imageContainer.insertAdjacentElement('afterend', progressDiv);
+    }
+  } else {
+    // 既存のプレビューを生成中に更新
+    existingVideoPreview.className = 'relative aspect-video bg-gray-900 rounded-lg border-2 border-yellow-400 overflow-hidden mt-2 flex items-center justify-center';
+    existingVideoPreview.innerHTML = `
+      <div class="text-center text-white">
+        <i class="fas fa-spinner fa-spin text-3xl mb-2"></i>
+        <p class="text-sm font-semibold" id="videoProgress-${sceneId}">動画を再生成中...</p>
+        <p class="text-xs text-gray-400 mt-1">完了まで1〜3分</p>
+      </div>
+      <div class="absolute top-2 left-2 px-2 py-1 bg-yellow-500 text-white text-xs rounded-full font-semibold">
+        <i class="fas fa-video mr-1"></i>生成中
+      </div>
+    `;
+  }
+  
+  // 動画化タブボタンも更新
+  const tabBtn = document.getElementById(`videoTabBtn-${sceneId}`);
+  if (tabBtn) {
+    tabBtn.disabled = true;
+    tabBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>動画生成中...';
+    tabBtn.className = 'flex-1 px-2 py-1.5 rounded-lg text-xs font-semibold transition-colors bg-yellow-500 text-white cursor-not-allowed';
+  }
+  
   // Determine: regenerate (has active video) or first-time generate
   const scenes = window.lastLoadedScenes || [];
   const scene = scenes.find(s => s.id === sceneId);
@@ -7877,6 +7924,12 @@ function pollVideoGeneration(sceneId, videoId) {
       // Update button with status (not fake percentage)
       if (videoBtn) {
         videoBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${stageInfo.text} (${elapsedStr})`;
+      }
+      
+      // Update right-column video progress indicator
+      const videoProgressEl = document.getElementById(`videoProgress-${sceneId}`);
+      if (videoProgressEl) {
+        videoProgressEl.textContent = `${stageInfo.text}... (${elapsedStr})`;
       }
       
       console.log(`[VideoPoll] Video ${videoId} status: ${statusData.status}, stage: ${progressStage}, elapsed: ${elapsedStr}, attempt: ${attempts}/${maxAttempts}`);
