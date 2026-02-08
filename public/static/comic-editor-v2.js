@@ -604,31 +604,110 @@
     ctx.stroke();
   }
 
+  /**
+   * tail tipの位置から、根元をどの辺に配置するか判定
+   * @returns {'top'|'bottom'|'left'|'right'} 辺の方向
+   */
+  function getTailSide(tailTip, w, h) {
+    const cx = w / 2;
+    const cy = h / 2;
+    const tx = tailTip.x;
+    const ty = tailTip.y;
+    
+    // 吹き出し中心からtip方向を判定
+    const dx = tx - cx;
+    const dy = ty - cy;
+    
+    // 吹き出し外に出ている方向で判定（アスペクト比を考慮）
+    const absNX = Math.abs(dx) / w;
+    const absNY = Math.abs(dy) / h;
+    
+    if (absNY >= absNX) {
+      return dy > 0 ? 'bottom' : 'top';
+    } else {
+      return dx > 0 ? 'right' : 'left';
+    }
+  }
+
   function pathSpeechWithTail(ctx, w, h, r, tailTip, scale) {
     const tailBaseW = 36 * scale;
     const half = tailBaseW / 2;
+    const margin = r + 4 * scale;
     
-    // Tail根元は吹き出し下辺の中央付近
-    const tailBaseX = w * 0.5;
-    const left = Math.max(r + 4 * scale, tailBaseX - half);
-    const right = Math.min(w - r - 4 * scale, tailBaseX + half);
+    const side = getTailSide(tailTip, w, h);
     
     ctx.beginPath();
-    ctx.moveTo(r, 0);
-    ctx.lineTo(w - r, 0);
-    ctx.quadraticCurveTo(w, 0, w, r);
-    ctx.lineTo(w, h - r);
-    ctx.quadraticCurveTo(w, h, w - r, h);
     
-    // Tail
-    ctx.lineTo(right, h);
-    ctx.lineTo(tailTip.x, tailTip.y);
-    ctx.lineTo(left, h);
+    if (side === 'bottom') {
+      const baseX = Math.min(Math.max(w * 0.5, margin + half), w - margin - half);
+      const left = baseX - half;
+      const right = baseX + half;
+      
+      ctx.moveTo(r, 0);
+      ctx.lineTo(w - r, 0);
+      ctx.quadraticCurveTo(w, 0, w, r);
+      ctx.lineTo(w, h - r);
+      ctx.quadraticCurveTo(w, h, w - r, h);
+      ctx.lineTo(right, h);
+      ctx.lineTo(tailTip.x, tailTip.y);
+      ctx.lineTo(left, h);
+      ctx.lineTo(r, h);
+      ctx.quadraticCurveTo(0, h, 0, h - r);
+      ctx.lineTo(0, r);
+      ctx.quadraticCurveTo(0, 0, r, 0);
+    } else if (side === 'top') {
+      const baseX = Math.min(Math.max(w * 0.5, margin + half), w - margin - half);
+      const left = baseX - half;
+      const right = baseX + half;
+      
+      ctx.moveTo(r, 0);
+      ctx.lineTo(left, 0);
+      ctx.lineTo(tailTip.x, tailTip.y);
+      ctx.lineTo(right, 0);
+      ctx.lineTo(w - r, 0);
+      ctx.quadraticCurveTo(w, 0, w, r);
+      ctx.lineTo(w, h - r);
+      ctx.quadraticCurveTo(w, h, w - r, h);
+      ctx.lineTo(r, h);
+      ctx.quadraticCurveTo(0, h, 0, h - r);
+      ctx.lineTo(0, r);
+      ctx.quadraticCurveTo(0, 0, r, 0);
+    } else if (side === 'right') {
+      const baseY = Math.min(Math.max(h * 0.5, margin + half), h - margin - half);
+      const top = baseY - half;
+      const bot = baseY + half;
+      
+      ctx.moveTo(r, 0);
+      ctx.lineTo(w - r, 0);
+      ctx.quadraticCurveTo(w, 0, w, r);
+      ctx.lineTo(w, top);
+      ctx.lineTo(tailTip.x, tailTip.y);
+      ctx.lineTo(w, bot);
+      ctx.lineTo(w, h - r);
+      ctx.quadraticCurveTo(w, h, w - r, h);
+      ctx.lineTo(r, h);
+      ctx.quadraticCurveTo(0, h, 0, h - r);
+      ctx.lineTo(0, r);
+      ctx.quadraticCurveTo(0, 0, r, 0);
+    } else { // left
+      const baseY = Math.min(Math.max(h * 0.5, margin + half), h - margin - half);
+      const top = baseY - half;
+      const bot = baseY + half;
+      
+      ctx.moveTo(r, 0);
+      ctx.lineTo(w - r, 0);
+      ctx.quadraticCurveTo(w, 0, w, r);
+      ctx.lineTo(w, h - r);
+      ctx.quadraticCurveTo(w, h, w - r, h);
+      ctx.lineTo(r, h);
+      ctx.quadraticCurveTo(0, h, 0, h - r);
+      ctx.lineTo(0, bot);
+      ctx.lineTo(tailTip.x, tailTip.y);
+      ctx.lineTo(0, top);
+      ctx.lineTo(0, r);
+      ctx.quadraticCurveTo(0, 0, r, 0);
+    }
     
-    ctx.lineTo(r, h);
-    ctx.quadraticCurveTo(0, h, 0, h - r);
-    ctx.lineTo(0, r);
-    ctx.quadraticCurveTo(0, 0, r, 0);
     ctx.closePath();
   }
 
@@ -654,8 +733,13 @@
     
     // Tail
     if (tailEnabled && tailTip) {
-      const baseX = w * 0.5;
-      const baseY = h;
+      const side = getTailSide(tailTip, w, h);
+      let baseX, baseY;
+      if (side === 'bottom')     { baseX = w * 0.5; baseY = h; }
+      else if (side === 'top')   { baseX = w * 0.5; baseY = 0; }
+      else if (side === 'right') { baseX = w;       baseY = h * 0.5; }
+      else                       { baseX = 0;       baseY = h * 0.5; }
+      
       ctx.fillStyle = style.fill;
       ctx.strokeStyle = style.stroke;
       ctx.lineWidth = style.strokeWidth * scale;
@@ -687,8 +771,13 @@
     
     // ぽこぽこTail
     if (tailEnabled && tailTip) {
-      const sx = w * 0.5;
-      const sy = h + 2 * scale;
+      const side = getTailSide(tailTip, w, h);
+      let sx, sy;
+      if (side === 'bottom')     { sx = w * 0.5; sy = h + 2 * scale; }
+      else if (side === 'top')   { sx = w * 0.5; sy = -2 * scale; }
+      else if (side === 'right') { sx = w + 2 * scale; sy = h * 0.5; }
+      else                       { sx = -2 * scale;    sy = h * 0.5; }
+      
       const tx = tailTip.x;
       const ty = tailTip.y;
       
@@ -1378,10 +1467,10 @@
       const localX = (canvasX - containerPos.x) / bubbleWidth;
       const localY = (canvasY - containerPos.y) / bubbleHeight;
       
-      // 正規化してクランプ
+      // 正規化してクランプ（全方向均等）
       bubble.tail.tip = {
-        x: Math.min(Math.max(localX, -0.3), 1.3),
-        y: Math.min(Math.max(localY, -0.3), 1.5)
+        x: Math.min(Math.max(localX, -0.5), 1.5),
+        y: Math.min(Math.max(localY, -0.5), 1.5)
       };
       
       renderPreview();

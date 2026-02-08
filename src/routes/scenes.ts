@@ -821,6 +821,81 @@ scenes.post('/', async (c) => {
   }
 });
 
+// POST /api/scenes/:sceneId/duplicate - シーンをコピー（テキスト情報のみ）
+// Scene Split タブ専用。画像・動画・漫画データはコピーしない。
+scenes.post('/:sceneId/duplicate', async (c) => {
+  try {
+    const sceneId = parseInt(c.req.param('sceneId'), 10);
+    if (isNaN(sceneId)) {
+      return c.json({ error: { code: 'INVALID_ID', message: 'Invalid scene ID' } }, 400);
+    }
+
+    // 元シーンを取得
+    const original = await c.env.DB.prepare(`
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden
+      FROM scenes WHERE id = ? AND is_hidden = 0
+    `).bind(sceneId).first<{
+      id: number; project_id: number; idx: number; role: string;
+      title: string; dialogue: string; bullets: string; image_prompt: string; is_hidden: number;
+    }>();
+
+    if (!original) {
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Scene not found' } }, 404);
+    }
+
+    // 元シーンの直後に挿入
+    const insertPos = await getInsertPosition(c.env.DB, original.project_id, original.idx);
+    const newIdx = insertPos.newIdx;
+
+    // テキスト情報のみコピー（画像・動画・漫画は含まない）
+    const result = await c.env.DB.prepare(`
+      INSERT INTO scenes (project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+    `).bind(
+      original.project_id,
+      newIdx,
+      original.role,
+      original.title + '（コピー）',
+      original.dialogue,
+      original.bullets,
+      original.image_prompt
+    ).run();
+
+    const newSceneId = result.meta?.last_row_id;
+
+    // シーンキャラクターもコピー
+    const chars = await c.env.DB.prepare(`
+      SELECT character_key, character_name, display_order
+      FROM scene_characters WHERE scene_id = ?
+    `).bind(sceneId).all();
+
+    if (chars.results && chars.results.length > 0) {
+      for (const ch of chars.results) {
+        await c.env.DB.prepare(`
+          INSERT INTO scene_characters (scene_id, character_key, character_name, display_order)
+          VALUES (?, ?, ?, ?)
+        `).bind(newSceneId, ch.character_key, ch.character_name, ch.display_order).run();
+      }
+    }
+
+    if (insertPos.needsRenumber) {
+      await renumberVisibleScenes(c.env.DB, original.project_id);
+    }
+
+    const newScene = await c.env.DB.prepare(`
+      SELECT id, project_id, idx, role, title, dialogue, created_at
+      FROM scenes WHERE id = ?
+    `).bind(newSceneId).first();
+
+    console.log(`[Scenes] Duplicated scene ${sceneId} -> ${newSceneId}, idx=${newIdx}, project=${original.project_id}`);
+
+    return c.json({ success: true, scene: newScene }, 201);
+  } catch (error) {
+    console.error('Error duplicating scene:', error);
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to duplicate scene' } }, 500);
+  }
+});
+
 // POST /api/projects/:id/scenes/reorder - シーン並び替え
 scenes.post('/:id/scenes/reorder', async (c) => {
   try {

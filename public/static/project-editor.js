@@ -2855,6 +2855,14 @@ function renderScenes(scenes) {
           >
             <i class="fas fa-eye-slash mr-1"></i>非表示
           </button>
+          <button 
+            id="duplicateBtn-${scene.id}"
+            onclick="duplicateScene(${scene.id})"
+            class="px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors touch-manipulation"
+            title="このシーンのテキスト情報をコピーして新しいシーンを作成します"
+          >
+            <i class="fas fa-copy mr-1"></i>コピー
+          </button>
         </div>
       </div>
       
@@ -3133,6 +3141,41 @@ window.closeAddSceneModal = closeAddSceneModal;
 window.confirmAddScene = confirmAddScene;
 window.hideScene = hideScene;
 window.deleteScene = deleteScene; // 後方互換性
+
+// シーンコピー（Scene Splitタブ専用）
+async function duplicateScene(sceneId) {
+  if (!confirm('このシーンをコピーしますか？\n\nタイトル・セリフ・要点・プロンプト・キャラクター割り当てがコピーされます。\n画像・動画・漫画はコピーされません。')) {
+    return;
+  }
+
+  const btn = document.getElementById(`duplicateBtn-${sceneId}`);
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>コピー中...';
+  }
+
+  try {
+    const response = await axios.post(`${API_BASE}/scenes/${sceneId}/duplicate`);
+    if (response.data.success) {
+      showToast('シーンをコピーしました', 'success');
+      // Scene Splitを再初期化してリストを更新
+      window.sceneSplitInitialized = false;
+      await loadScenes();
+    } else {
+      showToast('シーンのコピーに失敗しました', 'error');
+    }
+  } catch (error) {
+    console.error('Error duplicating scene:', error);
+    const errorMsg = error.response?.data?.error?.message || 'シーンコピー中にエラーが発生しました';
+    showToast(errorMsg, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-copy mr-1"></i>コピー';
+    }
+  }
+}
+window.duplicateScene = duplicateScene;
 
 // Move scene up
 async function moveSceneUp(sceneId, currentIdx) {
