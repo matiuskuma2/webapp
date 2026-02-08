@@ -1960,7 +1960,9 @@ const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string | undefined): string | null {
   if (!relativeUrl) return null;
   if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://')) {
-    return relativeUrl;
+    // S3直接URLの場合はCloudFront永続URLに変換
+    // これにより、DB内に残った古いS3 URLもRemotionで再生可能になる
+    return ensureCloudFrontUrl(relativeUrl);
   }
   const baseUrl = (siteUrl || DEFAULT_SITE_URL).replace(/\/$/, '');
   const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
