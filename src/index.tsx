@@ -2161,6 +2161,16 @@ app.get('/projects/:id', (c) => {
                             <p class="text-xs text-gray-500 mt-1">
                                 画像シーンにカメラワーク的な動きを付けます
                             </p>
+                            <!-- Phase B-2: 全シーン一括適用ボタン -->
+                            <div class="mt-2 flex items-center gap-2">
+                                <button type="button" 
+                                    id="vbMotionApplyAll"
+                                    onclick="applyMotionToAllScenes()"
+                                    class="px-3 py-1.5 text-xs font-semibold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 transition-colors flex items-center gap-1">
+                                    <i class="fas fa-layer-group"></i>全シーンに適用
+                                </button>
+                                <span id="vbMotionApplyStatus" class="text-xs text-gray-500 hidden"></span>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2802,10 +2812,11 @@ app.get('/projects/:id', (c) => {
                                     </button>
                                 </div>
                             </div>
-                            <!-- Phase 2-1: モーション系 -->
+                            <!-- Phase 2-1 + A-3: モーション系（全プリセット対応） -->
                             <div class="mb-2">
                                 <div class="text-xs text-gray-500 mb-1">🎬 モーション（カメラの動き）</div>
-                                <div class="flex flex-wrap gap-1.5">
+                                <!-- ズーム＆パン基本 -->
+                                <div class="flex flex-wrap gap-1.5 mb-1">
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
                                         onclick="insertChatTemplate('シーン{scene}のモーションをゆっくりズームにして')">
@@ -2818,6 +2829,11 @@ app.get('/projects/:id', (c) => {
                                     </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションをズームアウトにして')">
+                                        ズームアウト
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
                                         onclick="insertChatTemplate('シーン{scene}のモーションを左から右にパンして')">
                                         左→右パン
                                     </button>
@@ -2826,15 +2842,36 @@ app.get('/projects/:id', (c) => {
                                         onclick="insertChatTemplate('シーン{scene}のモーションを右から左にパンして')">
                                         右→左パン
                                     </button>
+                                </div>
+                                <!-- スライド＆複合＆特殊 -->
+                                <div class="flex flex-wrap gap-1.5 mb-1">
                                     <button type="button"
-                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-                                        onclick="insertChatTemplate('シーン{scene}のモーションを上から下にパンして')">
-                                        上→下パン
+                                        class="px-2.5 py-1 text-xs rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 hover:bg-cyan-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを左から右にスライドして')">
+                                        スライド左→右
                                     </button>
                                     <button type="button"
-                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-                                        onclick="insertChatTemplate('シーン{scene}のモーションを下から上にパンして')">
-                                        下→上パン
+                                        class="px-2.5 py-1 text-xs rounded-full bg-cyan-50 text-cyan-700 border border-cyan-200 hover:bg-cyan-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを右から左にスライドして')">
+                                        スライド右→左
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-teal-50 text-teal-700 border border-teal-200 hover:bg-teal-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを静止してから右にスライドして')">
+                                        静止→右へ
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-purple-50 text-purple-700 border border-purple-200 hover:bg-purple-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションをズーム＋右パンにして')">
+                                        ズーム+右パン
+                                    </button>
+                                </div>
+                                <!-- 一括系＆自動 -->
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-yellow-50 text-yellow-700 border border-yellow-200 hover:bg-yellow-100"
+                                        onclick="insertChatTemplate('全シーンのモーションを自動（ランダム）にして')">
+                                        全シーン自動
                                     </button>
                                     <button type="button"
                                         class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"

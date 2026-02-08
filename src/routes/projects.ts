@@ -2592,4 +2592,101 @@ projects.get('/:id/narration-voice', async (c) => {
   }
 })
 
+// ====================================================================
+// Phase B-1: POST /:id/motion/bulk - 全シーン一括モーションプリセット設定
+// ====================================================================
+projects.post('/:id/motion/bulk', async (c) => {
+  try {
+    const projectId = parseInt(c.req.param('id'), 10)
+    const body = await c.req.json<{ motion_preset_id: string }>()
+    
+    if (!body.motion_preset_id) {
+      return c.json({
+        error: { code: 'VALIDATION_ERROR', message: 'motion_preset_id is required' }
+      }, 400)
+    }
+    
+    const presetId = body.motion_preset_id
+    
+    // プロジェクト存在確認
+    const project = await c.env.DB.prepare(`
+      SELECT id FROM projects WHERE id = ?
+    `).bind(projectId).first()
+    
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Project not found' }
+      }, 404)
+    }
+    
+    // プリセットID検証（MOTION_PRESETS_MAP のハードコードキーと DB 両方を許可）
+    const VALID_PRESET_IDS = [
+      'none', 'kenburns_soft', 'kenburns_strong', 'kenburns_zoom_out',
+      'pan_lr', 'pan_rl', 'pan_tb', 'pan_bt',
+      'slide_lr', 'slide_rl', 'slide_tb', 'slide_bt',
+      'hold_then_slide_lr', 'hold_then_slide_rl', 'hold_then_slide_tb', 'hold_then_slide_bt',
+      'combined_zoom_pan_lr', 'combined_zoom_pan_rl', 'auto',
+    ]
+    
+    if (!VALID_PRESET_IDS.includes(presetId)) {
+      const preset = await c.env.DB.prepare(`
+        SELECT id FROM motion_presets WHERE id = ? AND is_active = 1
+      `).bind(presetId).first()
+      
+      if (!preset) {
+        return c.json({
+          error: { code: 'NOT_FOUND', message: `Motion preset '${presetId}' not found` }
+        }, 404)
+      }
+    }
+    
+    // プロジェクト内の全シーンを取得
+    const { results: scenes } = await c.env.DB.prepare(`
+      SELECT id FROM scenes WHERE project_id = ? ORDER BY idx ASC
+    `).bind(projectId).all<{ id: number }>()
+    
+    if (!scenes || scenes.length === 0) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'No scenes found in this project' }
+      }, 404)
+    }
+    
+    // 全シーンに一括 UPSERT
+    let successCount = 0
+    let errorCount = 0
+    
+    for (const scene of scenes) {
+      try {
+        await c.env.DB.prepare(`
+          INSERT INTO scene_motion (scene_id, motion_preset_id, updated_at)
+          VALUES (?, ?, CURRENT_TIMESTAMP)
+          ON CONFLICT(scene_id) DO UPDATE SET 
+            motion_preset_id = excluded.motion_preset_id,
+            updated_at = CURRENT_TIMESTAMP
+        `).bind(scene.id, presetId).run()
+        successCount++
+      } catch (e) {
+        console.error(`[motion/bulk] Failed to update scene ${scene.id}:`, e)
+        errorCount++
+      }
+    }
+    
+    console.log(`[POST /:id/motion/bulk] Project ${projectId}: ${successCount}/${scenes.length} scenes updated to '${presetId}'`)
+    
+    return c.json({
+      success: true,
+      project_id: projectId,
+      motion_preset_id: presetId,
+      total_scenes: scenes.length,
+      success_count: successCount,
+      error_count: errorCount,
+    })
+  } catch (error) {
+    console.error(`[POST /:id/motion/bulk] Error:`, error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to bulk update motion settings' }
+    }, 500)
+  }
+})
+
 export default projects

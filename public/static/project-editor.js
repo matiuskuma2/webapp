@@ -3834,15 +3834,33 @@ function renderSceneStatusBar(scene, utteranceStatus) {
   // === モーション ===
   const motionPresetId = scene.motion_preset_id || (displayAssetType === 'comic' ? 'none' : 'kenburns_soft');
   let motionIcon, motionLabel, motionClass, motionTooltip;
-  // 主要なプリセットのみラベル化
+  // Phase A-2: 全20種類 + auto のラベル（video-build-helpers.ts MOTION_PRESETS_MAP と同期）
   const motionLabels = {
     'none': { icon: '⏸️', label: '静止', class: 'bg-gray-100 text-gray-600', tip: '動きなし' },
+    // ズーム系
     'kenburns_soft': { icon: '🎥', label: 'ゆっくりズーム', class: 'bg-purple-100 text-purple-800', tip: 'ゆっくりズーム（1.0→1.05）' },
     'kenburns_strong': { icon: '🎥', label: '強ズーム', class: 'bg-purple-100 text-purple-800', tip: '強めズーム（1.0→1.15）' },
+    'kenburns_zoom_out': { icon: '🔍', label: 'ズームアウト', class: 'bg-purple-100 text-purple-800', tip: 'ズームアウト（1.1→1.0）' },
+    // パン系
     'pan_lr': { icon: '➡️', label: '左→右', class: 'bg-blue-100 text-blue-800', tip: '左から右へパン' },
     'pan_rl': { icon: '⬅️', label: '右→左', class: 'bg-blue-100 text-blue-800', tip: '右から左へパン' },
     'pan_tb': { icon: '⬇️', label: '上→下', class: 'bg-blue-100 text-blue-800', tip: '上から下へパン' },
-    'pan_bt': { icon: '⬆️', label: '下→上', class: 'bg-blue-100 text-blue-800', tip: '下から上へパン' }
+    'pan_bt': { icon: '⬆️', label: '下→上', class: 'bg-blue-100 text-blue-800', tip: '下から上へパン' },
+    // スライド系（大きめ移動）
+    'slide_lr': { icon: '⏩', label: 'スライド左→右', class: 'bg-cyan-100 text-cyan-800', tip: 'スライド（左→右）大きめ移動' },
+    'slide_rl': { icon: '⏪', label: 'スライド右→左', class: 'bg-cyan-100 text-cyan-800', tip: 'スライド（右→左）大きめ移動' },
+    'slide_tb': { icon: '⏬', label: 'スライド上→下', class: 'bg-cyan-100 text-cyan-800', tip: 'スライド（上→下）大きめ移動' },
+    'slide_bt': { icon: '⏫', label: 'スライド下→上', class: 'bg-cyan-100 text-cyan-800', tip: 'スライド（下→上）大きめ移動' },
+    // 静止→スライド系
+    'hold_then_slide_lr': { icon: '⏸➡', label: '静止→右へ', class: 'bg-teal-100 text-teal-800', tip: '前半静止、後半右スライド' },
+    'hold_then_slide_rl': { icon: '⏸⬅', label: '静止→左へ', class: 'bg-teal-100 text-teal-800', tip: '前半静止、後半左スライド' },
+    'hold_then_slide_tb': { icon: '⏸⬇', label: '静止→下へ', class: 'bg-teal-100 text-teal-800', tip: '前半静止、後半下スライド' },
+    'hold_then_slide_bt': { icon: '⏸⬆', label: '静止→上へ', class: 'bg-teal-100 text-teal-800', tip: '前半静止、後半上スライド' },
+    // 複合系（ズーム＋パン同時）
+    'combined_zoom_pan_lr': { icon: '🎬', label: 'ズーム+右パン', class: 'bg-indigo-100 text-indigo-800', tip: 'ズームイン＋右パン同時' },
+    'combined_zoom_pan_rl': { icon: '🎬', label: 'ズーム+左パン', class: 'bg-indigo-100 text-indigo-800', tip: 'ズームイン＋左パン同時' },
+    // 自動
+    'auto': { icon: '🎲', label: '自動', class: 'bg-yellow-100 text-yellow-800', tip: 'シードに基づき8種から自動選択' }
   };
   const motionInfo = motionLabels[motionPresetId] || { icon: '🎥', label: motionPresetId, class: 'bg-gray-100 text-gray-600', tip: motionPresetId };
   motionIcon = motionInfo.icon;
@@ -11460,16 +11478,34 @@ function parseMessageToIntent(message) {
     actions.push({ action: 'telop.set_size', size_preset: 'sm' });
   }
   
-  // Phase 2-1: モーション変更パターン (e.g., "シーン3のモーションをゆっくりズームにして", "動きを止めて")
+  // Phase 2-1 + A-3: モーション変更パターン（全プリセット対応）
   {
     const motionPresetMap = {
       'なし|止め|停止|静止|none': 'none',
+      // ズーム系
       'ゆっくりズーム|kenburns.*?soft|ケンバーンズ.*?ソフト': 'kenburns_soft',
       '強め.*?ズーム|kenburns.*?strong|ケンバーンズ.*?ストロング|大きくズーム': 'kenburns_strong',
-      '左.*?右|pan.*?lr|左から右': 'pan_lr',
-      '右.*?左|pan.*?rl|右から左': 'pan_rl',
-      '上.*?下|pan.*?tb|上から下': 'pan_tb',
-      '下.*?上|pan.*?bt|下から上': 'pan_bt',
+      'ズームアウト|zoom.*?out|引き|引く': 'kenburns_zoom_out',
+      // パン系
+      '左.*?右.*?パン|pan.*?lr|左から右': 'pan_lr',
+      '右.*?左.*?パン|pan.*?rl|右から左': 'pan_rl',
+      '上.*?下.*?パン|pan.*?tb|上から下': 'pan_tb',
+      '下.*?上.*?パン|pan.*?bt|下から上': 'pan_bt',
+      // スライド系
+      '左.*?右.*?スライド|slide.*?lr|スライド.*?左.*?右': 'slide_lr',
+      '右.*?左.*?スライド|slide.*?rl|スライド.*?右.*?左': 'slide_rl',
+      '上.*?下.*?スライド|slide.*?tb|スライド.*?上.*?下': 'slide_tb',
+      '下.*?上.*?スライド|slide.*?bt|スライド.*?下.*?上': 'slide_bt',
+      // 静止→スライド系
+      '静止.*?右|hold.*?slide.*?lr|止まって.*?右|静止→右': 'hold_then_slide_lr',
+      '静止.*?左|hold.*?slide.*?rl|止まって.*?左|静止→左': 'hold_then_slide_rl',
+      '静止.*?下.*?スライド|hold.*?slide.*?tb|静止→下': 'hold_then_slide_tb',
+      '静止.*?上.*?スライド|hold.*?slide.*?bt|静止→上': 'hold_then_slide_bt',
+      // 複合系
+      'ズーム.*?右.*?パン|combined.*?lr|ズーム＋右|zoom.*?pan.*?lr': 'combined_zoom_pan_lr',
+      'ズーム.*?左.*?パン|combined.*?rl|ズーム＋左|zoom.*?pan.*?rl': 'combined_zoom_pan_rl',
+      // 自動
+      '自動|ランダム|auto|おまかせ|シード': 'auto',
     };
     
     // シーン番号の取得
@@ -11478,14 +11514,23 @@ function parseMessageToIntent(message) {
     
     for (const [patterns, presetId] of Object.entries(motionPresetMap)) {
       const regex = new RegExp(`(?:モーション|動き|カメラ|motion).*?(?:${patterns})`, 'i');
-      const regex2 = new RegExp(`(?:${patterns}).*?(?:モーション|動き|カメラ|パン|ズーム|にして|にする)`, 'i');
+      const regex2 = new RegExp(`(?:${patterns}).*?(?:モーション|動き|カメラ|パン|ズーム|スライド|にして|にする)`, 'i');
       if (regex.test(message) || regex2.test(message)) {
-        actions.push({
-          action: 'motion.set_preset',
-          scene_idx: motionSceneIdx,
-          preset_id: presetId,
-          _contextual: !motionSceneIdx,
-        });
+        // Phase B-3: 「全シーン」「全部」等が含まれていれば bulk アクション
+        const isBulk = /全シーン|全部|全て|すべて|一括|全.{0,3}シーン/i.test(message);
+        if (isBulk) {
+          actions.push({
+            action: 'motion.set_preset_bulk',
+            preset_id: presetId,
+          });
+        } else {
+          actions.push({
+            action: 'motion.set_preset',
+            scene_idx: motionSceneIdx,
+            preset_id: presetId,
+            _contextual: !motionSceneIdx,
+          });
+        }
         break;
       }
     }
@@ -13391,6 +13436,81 @@ async function saveComicTelopSettings() {
   }
 }
 window.saveComicTelopSettings = saveComicTelopSettings;
+
+// =============================================================================
+// Phase B-2: 全シーン一括モーション適用
+// =============================================================================
+
+/**
+ * Video Build UI のモーションプリセットを全シーンに一括適用
+ * POST /api/projects/:id/motion/bulk を呼ぶ
+ */
+async function applyMotionToAllScenes() {
+  const select = document.getElementById('vbMotionPreset');
+  const btn = document.getElementById('vbMotionApplyAll');
+  const status = document.getElementById('vbMotionApplyStatus');
+  
+  if (!select || !PROJECT_ID) return;
+  
+  const presetId = select.value || 'kenburns_soft';
+  const presetLabel = select.options[select.selectedIndex]?.text || presetId;
+  
+  // 確認ダイアログ
+  if (!confirm(`モーション「${presetLabel}」を全シーンに適用しますか？\n\n※ シーン個別に設定したモーションも上書きされます。`)) {
+    return;
+  }
+  
+  // ボタンを無効化
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>適用中...';
+  }
+  if (status) {
+    status.classList.remove('hidden');
+    status.textContent = '処理中...';
+    status.className = 'text-xs text-gray-500';
+  }
+  
+  try {
+    const res = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/motion/bulk`, {
+      motion_preset_id: presetId,
+    });
+    
+    const data = res.data;
+    const msg = `${data.success_count}/${data.total_scenes}シーンに「${presetLabel}」を適用しました`;
+    
+    if (status) {
+      status.textContent = msg;
+      status.className = 'text-xs text-green-600';
+    }
+    showToast(msg, 'success');
+    
+    // ビルダーシーンカードを再描画（モーションバッジ更新のため）
+    if (window.lastLoadedScenes) {
+      // scene_motion の motion_preset_id を更新
+      window.lastLoadedScenes.forEach(s => {
+        s.motion_preset_id = presetId;
+      });
+      renderBuilderScenes(window.lastLoadedScenes, window.builderPagination?.currentPage || 1);
+    }
+    
+    console.log(`[applyMotionToAllScenes] Success: ${data.success_count}/${data.total_scenes} scenes`);
+  } catch (error) {
+    console.error('[applyMotionToAllScenes] Error:', error);
+    const errMsg = error.response?.data?.error?.message || '一括適用に失敗しました';
+    if (status) {
+      status.textContent = errMsg;
+      status.className = 'text-xs text-red-600';
+    }
+    showToast(errMsg, 'error');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-layer-group mr-1"></i>全シーンに適用';
+    }
+  }
+}
+window.applyMotionToAllScenes = applyMotionToAllScenes;
 
 // =============================================================================
 // PR-Remotion-Telop-DefaultSave: Remotionテロップ設定の永続化

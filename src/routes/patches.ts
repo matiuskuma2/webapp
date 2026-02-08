@@ -1544,6 +1544,7 @@ type IntentAction =
   | TelopSetStyleAction          // Phase 1-2: 欠落修正
   | TelopSetTypographyAction     // Phase 1-2: 欠落修正
   | MotionSetPresetAction         // Phase 2-1: モーション変更
+  | MotionSetPresetBulkAction     // Phase B-3: モーション一括変更
   | TelopSetCustomStyleAction;    // Phase 2-2: カスタムスタイル
 
 interface BalloonAdjustWindowAction {
@@ -1815,6 +1816,12 @@ interface MotionSetPresetAction {
   preset_id: string;          // motion_presets.id (e.g., 'kenburns_soft', 'pan_lr', 'none')
 }
 
+// Phase B-3: モーションプリセット一括変更（全シーン）
+interface MotionSetPresetBulkAction {
+  action: 'motion.set_preset_bulk';
+  preset_id: string;          // motion_presets.id (e.g., 'auto', 'kenburns_soft', 'none')
+}
+
 // Phase 2-2: カスタムスタイル変更（Vrew風）
 interface TelopSetCustomStyleAction {
   action: 'telop.set_custom_style';
@@ -1860,6 +1867,7 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'telop.set_typography',  // PR-Remotion-Typography: 文字組み設定
   // Phase 2-1: モーション（カメラの動き）変更
   'motion.set_preset',     // シーン単位のモーションプリセット変更
+  'motion.set_preset_bulk',  // Phase B-3: 全シーン一括モーション変更
   // Phase 2-2: カスタムスタイル（Vrew風）
   'telop.set_custom_style',  // 文字色・フォント・縁取りなどのカスタム指定
 ]);
@@ -2892,6 +2900,74 @@ async function resolveIntentToOps(
             preset_id: presetId,
             preset_name: presetRow.name,
             motion_type: presetRow.motion_type,
+          },
+        });
+
+      // ====================================================================
+      // Phase B-3: motion.set_preset_bulk - 全シーン一括モーションプリセット変更
+      // ====================================================================
+      } else if (action.action === 'motion.set_preset_bulk') {
+        const bulkAction = action as MotionSetPresetBulkAction;
+        
+        const presetId = bulkAction.preset_id;
+        if (!presetId) {
+          errors.push(`${prefix}: preset_id is required`);
+          continue;
+        }
+        
+        // プリセットIDのバリデーション（DB または ハードコードリスト）
+        const VALID_PRESET_IDS = [
+          'none', 'kenburns_soft', 'kenburns_strong', 'kenburns_zoom_out',
+          'pan_lr', 'pan_rl', 'pan_tb', 'pan_bt',
+          'slide_lr', 'slide_rl', 'slide_tb', 'slide_bt',
+          'hold_then_slide_lr', 'hold_then_slide_rl', 'hold_then_slide_tb', 'hold_then_slide_bt',
+          'combined_zoom_pan_lr', 'combined_zoom_pan_rl', 'auto',
+        ];
+        
+        let presetName = presetId;
+        if (VALID_PRESET_IDS.includes(presetId)) {
+          // ハードコードプリセット → DBから名前を取得
+          const presetRow = await db.prepare(
+            `SELECT name FROM motion_presets WHERE id = ? AND is_active = 1`
+          ).bind(presetId).first<{ name: string }>();
+          if (presetRow) presetName = presetRow.name;
+        } else {
+          const presetRow = await db.prepare(
+            `SELECT id, name FROM motion_presets WHERE id = ? AND is_active = 1`
+          ).bind(presetId).first<{ id: string; name: string }>();
+          if (!presetRow) {
+            errors.push(`${prefix}: Unknown preset_id "${presetId}"`);
+            continue;
+          }
+          presetName = presetRow.name;
+        }
+        
+        // 全シーンに対して ops を生成
+        for (const sceneId of visibleSceneIds) {
+          ops.push({
+            table: 'scene_motion',
+            action: 'upsert',
+            target: { scene_id: sceneId },
+            values: {
+              scene_id: sceneId,
+              motion_preset_id: presetId,
+              updated_at: new Date().toISOString(),
+            },
+            sql: `INSERT INTO scene_motion (scene_id, motion_preset_id, updated_at)
+                  VALUES (?, ?, datetime('now'))
+                  ON CONFLICT(scene_id) DO UPDATE SET
+                    motion_preset_id = excluded.motion_preset_id,
+                    updated_at = datetime('now')`,
+            params: [sceneId, presetId],
+          });
+        }
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            preset_id: presetId,
+            preset_name: presetName,
+            total_scenes: visibleSceneIds.length,
           },
         });
 
@@ -3955,22 +4031,38 @@ function generateDiffSummary(
       }
     }
 
-    // Phase 2-1: モーション変更アクション
+    // Phase 2-1 + A-3: モーション変更アクション
     if (action.action === 'motion.set_preset') {
       const ma = action as MotionSetPresetAction;
       const presetLabels: Record<string, string> = {
-        'none': '動きなし',
-        'kenburns_soft': 'ゆっくりズーム',
-        'kenburns_strong': '強めズーム',
-        'pan_lr': '左→右パン',
-        'pan_rl': '右→左パン',
-        'pan_tb': '上→下パン',
-        'pan_bt': '下→上パン',
+        'none': '動きなし', 'kenburns_soft': 'ゆっくりズーム', 'kenburns_strong': '強めズーム',
+        'kenburns_zoom_out': 'ズームアウト',
+        'pan_lr': '左→右パン', 'pan_rl': '右→左パン', 'pan_tb': '上→下パン', 'pan_bt': '下→上パン',
+        'slide_lr': 'スライド左→右', 'slide_rl': 'スライド右→左', 'slide_tb': 'スライド上→下', 'slide_bt': 'スライド下→上',
+        'hold_then_slide_lr': '静止→右スライド', 'hold_then_slide_rl': '静止→左スライド',
+        'hold_then_slide_tb': '静止→下スライド', 'hold_then_slide_bt': '静止→上スライド',
+        'combined_zoom_pan_lr': 'ズーム+右パン', 'combined_zoom_pan_rl': 'ズーム+左パン',
+        'auto': '自動（シード基準）',
       };
       changes.push({
         type: 'motion',
         target: `シーン${ma.scene_idx}`,
         detail: `モーション: ${presetLabels[ma.preset_id] || ma.preset_id}`,
+      });
+    }
+
+    // Phase B-3: モーション一括変更アクション
+    if (action.action === 'motion.set_preset_bulk') {
+      const ba = action as MotionSetPresetBulkAction;
+      const presetLabels: Record<string, string> = {
+        'none': '動きなし', 'kenburns_soft': 'ゆっくりズーム', 'kenburns_strong': '強めズーム',
+        'kenburns_zoom_out': 'ズームアウト', 'auto': '自動（シード基準）',
+        'pan_lr': '左→右パン', 'slide_lr': 'スライド左→右',
+      };
+      changes.push({
+        type: 'motion_bulk',
+        target: '全シーン',
+        detail: `モーション一括: ${presetLabels[ba.preset_id] || ba.preset_id}`,
       });
     }
 
@@ -4082,8 +4174,12 @@ Action schemas:
   * typography is Remotion-only (scope always "remotion")
   * max_lines: 最大行数 (1-5), line_height: 行間 (100-200%), letter_spacing: 文字間 (-2 to 6px)
 - motion.set_preset: { action, scene_idx, preset_id: string }
-  * Available preset_ids: "none"(動きなし), "kenburns_soft"(ゆっくりズーム), "kenburns_strong"(強めズーム), "pan_lr"(左→右), "pan_rl"(右→左), "pan_tb"(上→下), "pan_bt"(下→上)
+  * Available preset_ids: "none"(動きなし), "kenburns_soft"(ゆっくりズーム), "kenburns_strong"(強めズーム), "kenburns_zoom_out"(ズームアウト), "pan_lr"(左→右パン), "pan_rl"(右→左パン), "pan_tb"(上→下パン), "pan_bt"(下→上パン), "slide_lr"(スライド左→右), "slide_rl"(スライド右→左), "slide_tb"(スライド上→下), "slide_bt"(スライド下→上), "hold_then_slide_lr"(静止→右スライド), "hold_then_slide_rl"(静止→左スライド), "combined_zoom_pan_lr"(ズーム+右パン), "combined_zoom_pan_rl"(ズーム+左パン), "auto"(自動・シード基準)
   * scene_idx is 1-indexed. Use context scene if not specified.
+  * "auto" assigns a deterministic random preset per scene (reproducible across rebuilds).
+- motion.set_preset_bulk: { action, preset_id: string }
+  * Apply a motion preset to ALL scenes at once. No scene_idx needed.
+  * Use when user says "全シーンのモーションを自動にして", "全部ランダムモーション", "全シーンをゆっくりズームにして", etc.
 - telop.set_custom_style: { action, text_color?: "#hex", stroke_color?: "#hex", stroke_width?: 0-6, bg_color?: "#hex", bg_opacity?: 0-1, font_family?: "noto-sans"|"noto-serif"|"rounded"|"zen-maru", font_weight?: "400"-"800" }
   * Specify only the properties to change. Omit others to keep current values.
   * Colors must be hex format: "#FFFFFF", "#000000", "#FF0000", etc.
@@ -4386,8 +4482,12 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 
 【Phase 2-1: モーション（カメラの動き）変更】
 - motion.set_preset: { action, scene_idx, preset_id: string }
-  * Available preset_ids: "none"(動きなし), "kenburns_soft"(ゆっくりズーム), "kenburns_strong"(強めズーム), "pan_lr"(左→右), "pan_rl"(右→左), "pan_tb"(上→下), "pan_bt"(下→上)
+  * Available preset_ids: "none"(動きなし), "kenburns_soft"(ゆっくりズーム), "kenburns_strong"(強めズーム), "kenburns_zoom_out"(ズームアウト), "pan_lr"(左→右パン), "pan_rl"(右→左パン), "pan_tb"(上→下パン), "pan_bt"(下→上パン), "slide_lr"(スライド左→右), "slide_rl"(スライド右→左), "slide_tb"(スライド上→下), "slide_bt"(スライド下→上), "hold_then_slide_lr"(静止→右スライド), "hold_then_slide_rl"(静止→左スライド), "combined_zoom_pan_lr"(ズーム+右パン), "combined_zoom_pan_rl"(ズーム+左パン), "auto"(自動・シード基準)
   * scene_idx は1始まり。指定がなければ文脈のシーンを使用。
+  * "auto" はシーンごとに決定論的にランダム割当（再ビルドでも同じ結果）。
+- motion.set_preset_bulk: { action, preset_id: string }
+  * 全シーンに一括でモーションプリセットを設定。scene_idx 不要。
+  * 「全シーンのモーションを自動にして」「全部ランダムモーション」等の指示に使用。
 
 【Phase 2-2: カスタムスタイル（Vrew風）テロップ変更】
 - telop.set_custom_style: { action, text_color?: "#hex", stroke_color?: "#hex", stroke_width?: 0-6, bg_color?: "#hex", bg_opacity?: 0-1, font_family?: "noto-sans"|"noto-serif"|"rounded"|"zen-maru", font_weight?: "400"-"800" }
@@ -4516,6 +4616,16 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 
 ユーザー: もっとズームを強くして
 → {"assistant_message": "シーン${ctx?.scene_idx || 1}のズームを強めにしましょうか？ダイナミックな動きになりますよ！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のモーション → 強めズーム", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset", "scene_idx": ${ctx?.scene_idx || 1}, "preset_id": "kenburns_strong"}]}}
+
+【Phase B-3: モーション一括変更の会話例】
+ユーザー: 全シーンのモーションを自動にして
+→ {"assistant_message": "全シーンのモーションを自動（シード基準ランダム）に設定しましょうか？シーンごとにバリエーション豊かな動きが付きますよ！", "has_suggestion": true, "suggestion_summary": "全シーンのモーション → 自動（ランダム）", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset_bulk", "preset_id": "auto"}]}}
+
+ユーザー: 全部の動きをゆっくりズームにして
+→ {"assistant_message": "全シーンのモーションをゆっくりズームに統一しましょうか？", "has_suggestion": true, "suggestion_summary": "全シーンのモーション → ゆっくりズーム", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset_bulk", "preset_id": "kenburns_soft"}]}}
+
+ユーザー: 全シーンの動きを止めて
+→ {"assistant_message": "全シーンのモーションを停止（静止画）にしましょうか？", "has_suggestion": true, "suggestion_summary": "全シーンのモーション → 停止", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset_bulk", "preset_id": "none"}]}}
 
 【Phase 2-2: カスタムスタイル（Vrew風）テロップ変更の会話例】
 ユーザー: テロップの文字色を黄色にして
