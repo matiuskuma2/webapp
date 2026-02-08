@@ -276,13 +276,17 @@ admin.get('/usage', async (c) => {
     // 2b. Get image generation costs from image_generation_logs
     // 運営負担 = api_key_source = 'system' (システムAPIキー使用分)
     // ユーザー自身のAPIキーで発生したコストは除外
-    let imgResult: { results: { generation_type: string; request_count: number; total_cost: number }[] | null } = { results: [] };
+    // NOTE: estimated_cost_usd が $0 で記録されているレコードが多数あるため
+    //       件数 × $0.04/画像 で補正計算する（Gemini image gen: ~$0.04/image）
+    const IMAGE_COST_PER_UNIT = 0.04; // USD per image (Gemini/Imagen pricing)
+    let imgResult: { results: { generation_type: string; request_count: number; total_cost: number; image_count: number }[] | null } = { results: [] };
     try {
       imgResult = await DB.prepare(`
         SELECT 
           generation_type,
           COUNT(*) as request_count,
-          SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
+          SUM(COALESCE(estimated_cost_usd, 0)) as total_cost,
+          SUM(COALESCE(image_count, 1)) as image_count
         FROM image_generation_logs
         WHERE created_at > datetime('now', '-30 days')
           AND api_key_source = 'system'
@@ -292,7 +296,7 @@ admin.get('/usage', async (c) => {
     } catch { /* table may not exist */ }
     
     // 2c. Get image generation costs by user (運営負担: system API key)
-    let imgUserResult: { results: { user_id: number; name: string; email: string; request_count: number; total_cost: number }[] | null } = { results: [] };
+    let imgUserResult: { results: { user_id: number; name: string; email: string; request_count: number; total_cost: number; image_count: number }[] | null } = { results: [] };
     try {
       imgUserResult = await DB.prepare(`
         SELECT 
@@ -300,7 +304,8 @@ admin.get('/usage', async (c) => {
           u.name,
           u.email,
           COUNT(*) as request_count,
-          SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost
+          SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost,
+          SUM(COALESCE(l.image_count, 1)) as image_count
         FROM image_generation_logs l
         JOIN users u ON l.user_id = u.id
         WHERE l.created_at > datetime('now', '-30 days')
@@ -311,7 +316,7 @@ admin.get('/usage', async (c) => {
     } catch { /* table may not exist */ }
     
     // 2d. Get ALL image generation costs by user (全体)
-    let imgUserAllResult: { results: { user_id: number; name: string; email: string; request_count: number; total_cost: number; sponsored_cost: number; user_cost: number }[] | null } = { results: [] };
+    let imgUserAllResult: { results: { user_id: number; name: string; email: string; request_count: number; total_cost: number; sponsored_cost: number; user_cost: number; image_count: number; system_image_count: number; user_image_count: number }[] | null } = { results: [] };
     try {
       imgUserAllResult = await DB.prepare(`
         SELECT 
@@ -321,7 +326,10 @@ admin.get('/usage', async (c) => {
           COUNT(*) as request_count,
           SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost,
           SUM(CASE WHEN l.api_key_source = 'system' THEN COALESCE(l.estimated_cost_usd, 0) ELSE 0 END) as sponsored_cost,
-          SUM(CASE WHEN l.api_key_source = 'user' THEN COALESCE(l.estimated_cost_usd, 0) ELSE 0 END) as user_cost
+          SUM(CASE WHEN l.api_key_source = 'user' THEN COALESCE(l.estimated_cost_usd, 0) ELSE 0 END) as user_cost,
+          SUM(COALESCE(l.image_count, 1)) as image_count,
+          SUM(CASE WHEN l.api_key_source = 'system' THEN COALESCE(l.image_count, 1) ELSE 0 END) as system_image_count,
+          SUM(CASE WHEN l.api_key_source = 'user' THEN COALESCE(l.image_count, 1) ELSE 0 END) as user_image_count
         FROM image_generation_logs l
         JOIN users u ON l.user_id = u.id
         WHERE l.created_at > datetime('now', '-30 days')
@@ -331,16 +339,17 @@ admin.get('/usage', async (c) => {
     } catch { /* table may not exist */ }
     
     // 2e. Get total ALL image generation cost (全体)
-    let imgTotalAllResult: { request_count: number; total_cost: number } | null = null;
+    let imgTotalAllResult: { request_count: number; total_cost: number; image_count: number } | null = null;
     try {
       imgTotalAllResult = await DB.prepare(`
         SELECT 
           COUNT(*) as request_count,
-          SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
+          SUM(COALESCE(estimated_cost_usd, 0)) as total_cost,
+          SUM(COALESCE(image_count, 1)) as image_count
         FROM image_generation_logs
         WHERE created_at > datetime('now', '-30 days')
           AND status = 'success'
-      `).first<{ request_count: number; total_cost: number }>();
+      `).first<{ request_count: number; total_cost: number; image_count: number }>();
     } catch { /* table may not exist */ }
     
     // 3. Get SPONSORED usage by user (運営負担のみ - api_usage_logs)
@@ -423,18 +432,22 @@ admin.get('/usage', async (c) => {
     }
     
     // Add image generation logs (system API key = 運営負担)
-    for (const row of (imgResult.results || []) as { generation_type: string; request_count: number; total_cost: number }[]) {
+    // Use corrected cost: MAX(recorded cost, image_count × $0.04) to handle $0 legacy records
+    for (const row of (imgResult.results || []) as { generation_type: string; request_count: number; total_cost: number; image_count: number }[]) {
       const apiType = `image_${row.generation_type}`;
+      const recordedCost = row.total_cost || 0;
+      const estimatedCost = (row.image_count || row.request_count || 0) * IMAGE_COST_PER_UNIT;
+      const correctedCost = Math.max(recordedCost, estimatedCost);
       if (byType[apiType]) {
-        byType[apiType].cost += row.total_cost || 0;
+        byType[apiType].cost += correctedCost;
         byType[apiType].count += row.request_count || 0;
       } else {
         byType[apiType] = {
-          cost: row.total_cost || 0,
+          cost: correctedCost,
           count: row.request_count || 0
         };
       }
-      totalCost += row.total_cost || 0;
+      totalCost += correctedCost;
       totalRequests += row.request_count || 0;
     }
     
@@ -455,17 +468,20 @@ admin.get('/usage', async (c) => {
     }
     
     // image_generation_logs (system key = 運営負担)
-    for (const row of (imgUserResult.results || []) as { user_id: number; name: string; email: string; request_count: number; total_cost: number }[]) {
+    for (const row of (imgUserResult.results || []) as { user_id: number; name: string; email: string; request_count: number; total_cost: number; image_count: number }[]) {
+      const recordedCost = row.total_cost || 0;
+      const estimatedCost = (row.image_count || row.request_count || 0) * IMAGE_COST_PER_UNIT;
+      const correctedCost = Math.max(recordedCost, estimatedCost);
       if (userMap[row.user_id]) {
         userMap[row.user_id].requestCount += row.request_count || 0;
-        userMap[row.user_id].totalCost += row.total_cost || 0;
+        userMap[row.user_id].totalCost += correctedCost;
       } else {
         userMap[row.user_id] = {
           userId: row.user_id,
           name: row.name,
           email: row.email,
           requestCount: row.request_count || 0,
-          totalCost: row.total_cost || 0
+          totalCost: correctedCost
         };
       }
     }
@@ -495,21 +511,34 @@ admin.get('/usage', async (c) => {
     }
     
     // image_generation_logs (all)
-    for (const row of (imgUserAllResult.results || []) as { user_id: number; name: string; email: string; request_count: number; total_cost: number; sponsored_cost: number; user_cost: number }[]) {
+    for (const row of (imgUserAllResult.results || []) as { user_id: number; name: string; email: string; request_count: number; total_cost: number; sponsored_cost: number; user_cost: number; image_count: number; system_image_count: number; user_image_count: number }[]) {
+      // Corrected costs using image_count × $0.04 for legacy $0 records
+      const recordedTotal = row.total_cost || 0;
+      const estimatedTotal = (row.image_count || row.request_count || 0) * IMAGE_COST_PER_UNIT;
+      const correctedTotal = Math.max(recordedTotal, estimatedTotal);
+      
+      const recordedSponsored = row.sponsored_cost || 0;
+      const estimatedSponsored = (row.system_image_count || 0) * IMAGE_COST_PER_UNIT;
+      const correctedSponsored = Math.max(recordedSponsored, estimatedSponsored);
+      
+      const recordedUser = row.user_cost || 0;
+      const estimatedUser = (row.user_image_count || 0) * IMAGE_COST_PER_UNIT;
+      const correctedUser = Math.max(recordedUser, estimatedUser);
+      
       if (userMapAll[row.user_id]) {
         userMapAll[row.user_id].requestCount += row.request_count || 0;
-        userMapAll[row.user_id].totalCost += row.total_cost || 0;
-        userMapAll[row.user_id].sponsoredCost += row.sponsored_cost || 0;
-        userMapAll[row.user_id].userCost += row.user_cost || 0;
+        userMapAll[row.user_id].totalCost += correctedTotal;
+        userMapAll[row.user_id].sponsoredCost += correctedSponsored;
+        userMapAll[row.user_id].userCost += correctedUser;
       } else {
         userMapAll[row.user_id] = {
           userId: row.user_id,
           name: row.name,
           email: row.email,
           requestCount: row.request_count || 0,
-          totalCost: row.total_cost || 0,
-          sponsoredCost: row.sponsored_cost || 0,
-          userCost: row.user_cost || 0
+          totalCost: correctedTotal,
+          sponsoredCost: correctedSponsored,
+          userCost: correctedUser
         };
       }
     }
@@ -517,7 +546,11 @@ admin.get('/usage', async (c) => {
     const byUserAll = Object.values(userMapAll).sort((a, b) => b.totalCost - a.totalCost).slice(0, 20);
     
     // Total ALL cost (api_usage_logs + image_generation_logs)
-    const totalCostAll = (totalAllResult?.total_cost || 0) + (imgTotalAllResult?.total_cost || 0);
+    // 画像コストは件数ベースで補正（既存$0レコード対応）
+    const imgTotalRecorded = imgTotalAllResult?.total_cost || 0;
+    const imgTotalEstimated = (imgTotalAllResult?.image_count || imgTotalAllResult?.request_count || 0) * IMAGE_COST_PER_UNIT;
+    const imgTotalCorrected = Math.max(imgTotalRecorded, imgTotalEstimated);
+    const totalCostAll = (totalAllResult?.total_cost || 0) + imgTotalCorrected;
     const totalRequestsAll = (totalAllResult?.request_count || 0) + (imgTotalAllResult?.request_count || 0);
     
     // Return camelCase format for frontend compatibility
@@ -572,12 +605,15 @@ admin.get('/usage/daily', async (c) => {
     `).bind(days).all();
     
     // Get daily totals from image_generation_logs (運営負担 = system key)
-    let imgResult: { results: { date: string; total_cost: number }[] | null } = { results: [] };
+    // 件数ベースで$0.04/件の補正を行う（既存$0レコード対応）
+    const DAILY_IMAGE_COST_PER_UNIT = 0.04;
+    let imgResult: { results: { date: string; total_cost: number; image_count: number }[] | null } = { results: [] };
     try {
       imgResult = await DB.prepare(`
         SELECT 
           date(created_at) as date,
-          SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
+          SUM(COALESCE(estimated_cost_usd, 0)) as total_cost,
+          SUM(COALESCE(image_count, 1)) as image_count
         FROM image_generation_logs
         WHERE created_at > datetime('now', '-' || ? || ' days')
           AND api_key_source = 'system'
@@ -597,8 +633,11 @@ admin.get('/usage/daily', async (c) => {
       dailyCosts[row.date] = (dailyCosts[row.date] || 0) + (row.total_cost || 0);
     }
     
-    for (const row of (imgResult.results || []) as { date: string; total_cost: number }[]) {
-      dailyCosts[row.date] = (dailyCosts[row.date] || 0) + (row.total_cost || 0);
+    for (const row of (imgResult.results || []) as { date: string; total_cost: number; image_count: number }[]) {
+      const recordedCost = row.total_cost || 0;
+      const estimatedCost = (row.image_count || 0) * DAILY_IMAGE_COST_PER_UNIT;
+      const correctedCost = Math.max(recordedCost, estimatedCost);
+      dailyCosts[row.date] = (dailyCosts[row.date] || 0) + correctedCost;
     }
     
     // Convert to array sorted by date
@@ -655,7 +694,9 @@ admin.get('/usage/sponsor', async (c) => {
       
       // Get sponsored users' image generation costs (system key usage)
       // スポンサーされているユーザーを特定して、そのユーザーのsystem key利用分を取得
-      let imgUsageResult: { results: { user_id: number; user_name: string; user_email: string; generation_type: string; request_count: number; total_cost: number }[] | null } = { results: [] };
+      // 件数ベースで$0.04/件の補正を行う（既存$0レコード対応）
+      const SPONSOR_IMAGE_COST_PER_UNIT = 0.04;
+      let imgUsageResult: { results: { user_id: number; user_name: string; user_email: string; generation_type: string; request_count: number; total_cost: number; image_count: number }[] | null } = { results: [] };
       try {
         imgUsageResult = await DB.prepare(`
           SELECT 
@@ -664,7 +705,8 @@ admin.get('/usage/sponsor', async (c) => {
             u.email as user_email,
             l.generation_type,
             COUNT(*) as request_count,
-            SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost
+            SUM(COALESCE(l.estimated_cost_usd, 0)) as total_cost,
+            SUM(COALESCE(l.image_count, 1)) as image_count
           FROM image_generation_logs l
           JOIN users u ON l.user_id = u.id
           WHERE l.api_key_source = 'system'
@@ -700,8 +742,8 @@ admin.get('/usage/sponsor', async (c) => {
         userMap[row.user_id].totalRequests += row.request_count || 0;
       }
       
-      // Add image generation costs to user map
-      for (const row of (imgUsageResult.results || []) as { user_id: number; user_name: string; user_email: string; generation_type: string; request_count: number; total_cost: number }[]) {
+      // Add image generation costs to user map (with $0 legacy record correction)
+      for (const row of (imgUsageResult.results || []) as { user_id: number; user_name: string; user_email: string; generation_type: string; request_count: number; total_cost: number; image_count: number }[]) {
         if (!userMap[row.user_id]) {
           userMap[row.user_id] = {
             user: { id: row.user_id, name: row.user_name, email: row.user_email },
@@ -712,16 +754,19 @@ admin.get('/usage/sponsor', async (c) => {
         }
         
         const apiType = `image_${row.generation_type}`;
+        const recordedCost = row.total_cost || 0;
+        const estimatedCost = (row.image_count || row.request_count || 0) * SPONSOR_IMAGE_COST_PER_UNIT;
+        const correctedCost = Math.max(recordedCost, estimatedCost);
         if (userMap[row.user_id].byType[apiType]) {
-          userMap[row.user_id].byType[apiType].cost += row.total_cost || 0;
+          userMap[row.user_id].byType[apiType].cost += correctedCost;
           userMap[row.user_id].byType[apiType].count += row.request_count || 0;
         } else {
           userMap[row.user_id].byType[apiType] = {
-            cost: row.total_cost || 0,
+            cost: correctedCost,
             count: row.request_count || 0
           };
         }
-        userMap[row.user_id].totalCost += row.total_cost || 0;
+        userMap[row.user_id].totalCost += correctedCost;
         userMap[row.user_id].totalRequests += row.request_count || 0;
       }
       

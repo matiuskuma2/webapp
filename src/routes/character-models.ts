@@ -776,18 +776,17 @@ interface ImageGenerationLogParams {
 }
 
 // コスト推定関数（画像生成）
+// 2026-02 Googleの公式レート:
+// - Gemini native image gen: ~$0.04/image (~1290 output tokens × $30/1M)
+// - Imagen 3: ~$0.04/image
 function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
-  // Gemini Imagen: ~$0.04/image, Gemini experimental: free during preview
-  // OpenAI DALL-E 3: ~$0.04/image
   if (provider === 'gemini') {
-    if (model.includes('imagen')) return 0.04 * imageCount;
-    // gemini-3-pro-image-preview is experimental/free
-    return 0;
+    return 0.04 * imageCount;
   }
   if (provider === 'openai') {
     if (model.includes('dall-e-3')) return 0.04 * imageCount;
   }
-  return 0;
+  return 0.04 * imageCount;
 }
 
 // 画像生成ログ記録

@@ -138,18 +138,25 @@ interface ImageGenerationLogParams {
 }
 
 // コスト推定関数（画像生成）
+// 2026-02 Googleの公式レート:
+// - Gemini 2.0/2.5 Flash (image output): $30/1M tokens, ~1290 tokens/image → ~$0.039/image
+// - Gemini Imagen 3: ~$0.03-$0.04/image
+// - gemini-3-pro-image-preview: Gemini native image generation → ~$0.04/image
+// - OpenAI DALL-E 3: ~$0.04/image (1024x1024)
 function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
-  // Gemini Imagen: ~$0.04/image, Gemini experimental: free during preview
-  // OpenAI DALL-E 3: ~$0.04/image
   if (provider === 'gemini') {
+    // Imagen models
     if (model.includes('imagen')) return 0.04 * imageCount;
-    // gemini-3-pro-image-preview is experimental/free
-    return 0;
+    // Gemini native image generation (gemini-2.0-flash, gemini-3-pro, etc.)
+    // Output: ~1290 tokens per image × $30/1M tokens = ~$0.039
+    // Plus input tokens cost (prompt, ~negligible for image gen)
+    return 0.04 * imageCount;
   }
   if (provider === 'openai') {
     if (model.includes('dall-e-3')) return 0.04 * imageCount;
   }
-  return 0;
+  // Unknown provider: assume ~$0.04/image as conservative estimate
+  return 0.04 * imageCount;
 }
 
 // 画像生成ログ記録
