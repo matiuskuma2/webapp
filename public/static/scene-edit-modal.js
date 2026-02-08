@@ -335,7 +335,7 @@
         lines.push({
           icon: '🔥',
           text: '文字は「焼き込み」です',
-          detail: '画像内の文字をそのまま表示（Remotion文字はOFF）',
+          detail: '画像内の文字をそのまま表示（まるっとムービー文字はOFF）',
           class: 'text-orange-700 bg-orange-50'
         });
       } else if (textRenderMode === 'none') {
@@ -348,8 +348,8 @@
       } else {
         lines.push({
           icon: '🧾',
-          text: '文字は「Remotion描画」です',
-          detail: '動画生成時にRemotionがテロップ/字幕を重ねます',
+          text: '文字は「まるっとムービー描画」です',
+          detail: '動画生成時にまるっとムービーがテロップ/字幕を重ねます',
           class: 'text-purple-700 bg-purple-50'
         });
       }
@@ -446,7 +446,7 @@
             <div class="mt-3 p-2 bg-red-100 border border-red-300 rounded-lg">
               <span class="text-red-800 text-sm font-bold">
                 <i class="fas fa-exclamation-triangle mr-1"></i>
-                注意：漫画なのにRemotionで文字を重ねると二重表示になる可能性があります
+                注意：漫画なのにまるっとムービーで文字を重ねると二重表示になる可能性があります
               </span>
             </div>
           ` : ''}

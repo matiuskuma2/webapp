@@ -1931,7 +1931,7 @@ app.get('/projects/:id', (c) => {
                                         </div>
                                     </div>
                                     
-                                    <!-- PR-Remotion-Typography: 文字組み設定 -->
+                                    <!-- まるっとムービー-Typography: 文字組み設定 -->
                                     <div class="pt-3 mt-3 border-t border-amber-200">
                                         <div class="flex items-center gap-2 mb-3">
                                             <i class="fas fa-paragraph text-amber-600"></i>
@@ -1993,7 +1993,7 @@ app.get('/projects/:id', (c) => {
                                 </div>
                             </details>
                             
-                            <!-- PR-Remotion-Telop-DefaultSave: 保存トグル -->
+                            <!-- Telop-DefaultSave: 保存トグル -->
                             <div class="mt-3 pt-3 border-t border-amber-200">
                                 <label class="flex items-center gap-2 cursor-pointer">
                                     <input type="checkbox" id="vbTelopSaveDefault" checked
@@ -2063,7 +2063,7 @@ app.get('/projects/:id', (c) => {
                             
                             <p class="text-xs text-gray-500 mt-2">
                                 <i class="fas fa-info-circle text-rose-500 mr-1"></i>
-                                上記「テロップ」はRemotion動画用。この「漫画の文字」は漫画画像に焼き込むスタイルです。
+                                上記「テロップ」はまるっとムービー動画用。この「漫画の文字」は漫画画像に焼き込むスタイルです。
                             </p>
                             
                             <!-- 保存ボタン -->
@@ -2895,55 +2895,9 @@ app.get('/projects/:id', (c) => {
                     <!-- Scene ID (hidden) -->
                     <input type="hidden" id="edit-scene-id" />
                     
-                    <!-- Basic Info Section (always visible) -->
-                    <div class="space-y-4 pb-4 border-b border-gray-200">
-                        <!-- Dialogue -->
-                        <div>
-                            <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                <i class="fas fa-comment mr-1 text-blue-600"></i>セリフ
-                            </label>
-                            <textarea 
-                                id="edit-dialogue"
-                                rows="3"
-                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                                placeholder="セリフを入力..."
-                            ></textarea>
-                        </div>
-                        
-                        <!-- Image Prompt -->
-                        <div>
-                            <label class="block text-sm font-semibold text-gray-700 mb-2">
-                                <i class="fas fa-image mr-1 text-purple-600"></i>画像プロンプト
-                            </label>
-                            <textarea 
-                                id="edit-image-prompt"
-                                rows="2"
-                                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                                placeholder="例: A beautiful forest scene."
-                            ></textarea>
-                        </div>
-                        
-                        <!-- R2-C: Rendering Result Preview (what will be output) -->
-                        <div id="rendering-preview-container">
-                            <!-- Dynamically populated by scene-edit-modal.js -->
-                        </div>
-                        
-                        <!-- R2-C: Motion Preset (dynamically populated by scene-edit-modal.js) -->
-                        <div id="motion-selector-container">
-                            <!-- Loading placeholder -->
-                            <div class="animate-pulse p-4 border border-gray-200 rounded-lg bg-gray-50">
-                                <div class="h-4 bg-gray-200 rounded w-1/4 mb-2"></div>
-                                <div class="h-10 bg-gray-200 rounded"></div>
-                            </div>
-                        </div>
-                        
-                        <!-- R3-A: Duration Override (for silent scenes) -->
-                        <div id="duration-override-container">
-                            <!-- Dynamically populated by scene-edit-modal.js -->
-                        </div>
-                    </div>
-                    
-                    <!-- Tab Navigation (SSOT: single modal, two tabs) -->
+                    <!-- ================================================ -->
+                    <!-- タブナビゲーション（最上部に配置） -->
+                    <!-- ================================================ -->
                     <div id="scene-edit-tabs">
                         <!-- Dynamically populated -->
                     </div>
@@ -2953,7 +2907,7 @@ app.get('/projects/:id', (c) => {
                         <!-- Dynamically populated -->
                     </div>
                     
-                    <!-- Tab B: Utterances (R1.5 音声タブ) -->
+                    <!-- Tab B: Utterances (音声タブ) -->
                     <div id="scene-edit-tab-utterances" class="hidden space-y-4">
                         <!-- Dynamically populated by UtterancesTab -->
                     </div>
@@ -2963,12 +2917,12 @@ app.get('/projects/:id', (c) => {
                         <!-- Dynamically populated -->
                     </div>
                     
-                    <!-- Tab D: SFX (R3-B) -->
+                    <!-- Tab D: SFX -->
                     <div id="scene-edit-tab-sfx" class="hidden space-y-4">
                         <!-- Dynamically populated by scene-edit-modal.js -->
                     </div>
                     
-                    <!-- Tab E: BGM (P3) -->
+                    <!-- Tab E: BGM -->
                     <div id="scene-edit-tab-bgm" class="hidden space-y-4">
                         <!-- BGM管理タブ -->
                         <div class="p-4 bg-amber-50 rounded-lg border border-amber-200">
@@ -3038,6 +2992,42 @@ app.get('/projects/:id', (c) => {
                         <!-- 隠しファイル入力 -->
                         <input type="file" id="scene-bgm-file-input" accept="audio/*" class="hidden">
                     </div>
+                    
+                    <!-- ================================================ -->
+                    <!-- モーション設定・シーン尺（タブの下に配置） -->
+                    <!-- ================================================ -->
+                    <div class="space-y-4 pt-4 border-t border-gray-200">
+                        <!-- モーション設定 -->
+                        <div id="motion-selector-container">
+                            <div class="animate-pulse p-4 border border-gray-200 rounded-lg bg-gray-50">
+                                <div class="h-4 bg-gray-200 rounded w-1/4 mb-2"></div>
+                                <div class="h-10 bg-gray-200 rounded"></div>
+                            </div>
+                        </div>
+                        
+                        <!-- シーン尺設定 -->
+                        <div id="duration-override-container">
+                            <!-- Dynamically populated by scene-edit-modal.js -->
+                        </div>
+                    </div>
+                    
+                    <!-- ================================================ -->
+                    <!-- 最終レンダリング結果（折りたたみ・最下部） -->
+                    <!-- ================================================ -->
+                    <details class="border border-gray-200 rounded-lg bg-gray-50">
+                        <summary class="px-4 py-3 cursor-pointer text-sm font-semibold text-gray-600 hover:bg-gray-100 select-none">
+                            <i class="fas fa-eye mr-2"></i>最終出力プレビュー（クリックで展開）
+                        </summary>
+                        <div class="px-4 pb-4">
+                            <div id="rendering-preview-container">
+                                <!-- Dynamically populated by scene-edit-modal.js -->
+                            </div>
+                        </div>
+                    </details>
+                    
+                    <!-- セリフ・画像プロンプト: ビルダーで直接編集するため非表示 -->
+                    <input type="hidden" id="edit-dialogue" />
+                    <input type="hidden" id="edit-image-prompt" />
                 </div>
                 
                 <!-- Footer -->

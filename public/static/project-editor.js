@@ -3637,9 +3637,9 @@ function renderSceneStatusBar(scene, utteranceStatus) {
       break;
     default: // 'remotion'
       textIcon = '🧾';
-      textLabel = 'Remotion';
+      textLabel = 'まるっとムービー';
       textClass = 'bg-purple-100 text-purple-800';
-      textTooltip = '文字はRemotionで動的描画';
+      textTooltip = '文字はまるっとムービーで動的描画';
   }
   
   // === 音声状態 ===
@@ -4227,7 +4227,7 @@ function renderVideoPromptSection(scene, imageStatus, disableVideoGen) {
           </button>
         </div>
         <p class="text-xs text-orange-600 mt-2">
-          <i class="fas fa-lock mr-1"></i>漫画採用中は動画化できません。Remotionで動画化されます。
+          <i class="fas fa-lock mr-1"></i>漫画採用中は動画化できません。まるっとムービーで動画化されます。
         </p>
       </div>
     `;
@@ -11961,7 +11961,7 @@ async function sendChatEditMessage() {
         scopeHtml = `
           <div class="bg-amber-100 text-amber-800 border border-amber-300 rounded-lg p-2 mb-3 text-xs font-medium flex items-center gap-2">
             <i class="fas fa-crosshairs"></i>
-            適用先：両方（Remotion字幕＋漫画焼き込み）
+            適用先：両方（まるっとムービー字幕＋漫画焼き込み）
             <span class="text-amber-600">※漫画は再生成が必要</span>
           </div>
         `;
@@ -11978,7 +11978,7 @@ async function sendChatEditMessage() {
         scopeHtml = `
           <div class="bg-blue-100 text-blue-800 border border-blue-300 rounded-lg p-2 mb-3 text-xs font-medium flex items-center gap-2">
             <i class="fas fa-crosshairs"></i>
-            適用先：Remotion字幕（即時反映）
+            適用先：まるっとムービー字幕（即時反映）
           </div>
         `;
       }
@@ -12310,7 +12310,7 @@ function showDryRunResult(result) {
       const hasBoth = comicItems.some(i => i.scope === 'both');
       
       if (hasBoth) {
-        scopeLabel = '適用先：両方（Remotion字幕＋漫画焼き込み）';
+        scopeLabel = '適用先：両方（まるっとムービー字幕＋漫画焼き込み）';
         scopeClass = 'bg-amber-100 text-amber-800 border-amber-300';
       } else if (hasComic) {
         scopeLabel = '適用先：漫画焼き込み（再生成が必要）';
@@ -12318,7 +12318,7 @@ function showDryRunResult(result) {
       }
     } else if (result.telop_settings_override) {
       // Remotion字幕のみ
-      scopeLabel = '適用先：Remotion字幕（即時反映）';
+      scopeLabel = '適用先：まるっとムービー字幕（即時反映）';
       scopeClass = 'bg-blue-100 text-blue-800 border-blue-300';
     }
     
@@ -13880,7 +13880,7 @@ function renderSceneDetailsFold(scene, imageStatus, disableVideoGen) {
         </button>
       </div>
       <p class="text-xs text-orange-600 mt-2">
-        <i class="fas fa-lock mr-1"></i>漫画採用中は動画化できません。Remotionで動画化されます。
+        <i class="fas fa-lock mr-1"></i>漫画採用中は動画化できません。まるっとムービーで動画化されます。
       </p>
     `;
   } else if (imageStatus !== 'completed') {
