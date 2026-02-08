@@ -7,7 +7,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-02-05（display_asset_type=video修正 + シーン合成ルール文書化）
+- **最終更新**: 2026-02-08（モーション全20プリセット対応 + 全シーン一括適用機能）
 
 ---
 
@@ -714,24 +714,64 @@ npx wrangler deploy
 └────────────────────────────────────────────────────────────┘
 ```
 
-### 6. モーション（Ken Burns効果）
+### 6. モーション（カメラの動き）
 
-```
-┌────────────────────────────────────────────────────────────┐
-│ モーション設定（SSOT: scene_motion）                         │
-│                                                            │
-│ motion_type:                                               │
-│   ├── 'none' ──► 静止（comic モードのデフォルト）           │
-│   ├── 'zoom' ──► ズームイン/アウト                         │
-│   ├── 'pan' ──► パン（左右移動）                           │
-│   └── 'combined' ──► ズーム + パン                         │
-│                                                            │
-│ デフォルト動作:                                             │
-│   ├── image モード ──► kenburns_soft (zoom 1.0→1.05)       │
-│   ├── comic モード ──► none                                │
-│   └── video モード ──► none（動画自体がモーションを持つ）    │
-└────────────────────────────────────────────────────────────┘
-```
+#### SSOT: `scene_motion` テーブル
+シーン単位のモーション設定は `scene_motion` テーブルに保存され、`resolveMotionPreset()` で解決される。
+
+#### motion_type 分類
+| motion_type | 説明 |
+|------------|------|
+| `none` | 静止（comic モードのデフォルト） |
+| `zoom` | ズームイン/アウト（Ken Burns系） |
+| `pan` | パン（カメラ移動） |
+| `combined` | ズーム + パン複合 |
+
+#### 全20種類のモーションプリセット
+
+| ID | 名前 | motion_type | 説明 |
+|----|------|------------|------|
+| `none` | 動きなし | none | 静止画のまま表示 |
+| `kenburns_soft` | ゆっくりズーム | zoom | 1.0→1.05 |
+| `kenburns_strong` | 強めズーム | zoom | 1.0→1.15 |
+| `kenburns_zoom_out` | ズームアウト | zoom | 1.1→1.0 |
+| `pan_lr` | 左→右パン | pan | x: -5→5 |
+| `pan_rl` | 右→左パン | pan | x: 5→-5 |
+| `pan_tb` | 上→下パン | pan | y: -5→5 |
+| `pan_bt` | 下→上パン | pan | y: 5→-5 |
+| `slide_lr` | 左→右スライド | pan | x: -10→10（大きめ移動） |
+| `slide_rl` | 右→左スライド | pan | x: 10→-10 |
+| `slide_tb` | 上→下スライド | pan | y: -10→10 |
+| `slide_bt` | 下→上スライド | pan | y: 10→-10 |
+| `hold_then_slide_lr` | 静止→左→右 | pan | 前半静止→後半移動、hold_ratio 0.3 |
+| `hold_then_slide_rl` | 静止→右→左 | pan | 前半静止→後半移動 |
+| `hold_then_slide_tb` | 静止→上→下 | pan | 前半静止→後半移動 |
+| `hold_then_slide_bt` | 静止→下→上 | pan | 前半静止→後半移動 |
+| `combined_zoom_pan_lr` | ズーム+右パン | combined | 1.0→1.08 + x: -3→3 |
+| `combined_zoom_pan_rl` | ズーム+左パン | combined | 1.0→1.08 + x: 3→-3 |
+| `auto` | 自動（ランダム） | 可変 | seed で決定的に選択（再現性あり） |
+
+> **注**: `auto` は `pickAutoMotion(seed)` で9候補から決定的に選択。seed = scene_id XOR projectId。
+
+#### デフォルト動作
+| display_asset_type | デフォルトプリセット | 理由 |
+|-------------------|-------------------|------|
+| `image` | `kenburns_soft` | 静止画に自然な動きを付与 |
+| `comic` | `none` | 漫画は静止が自然 |
+| `video` | `none` | 動画自体がモーションを持つ |
+
+#### 全シーン一括適用
+`POST /api/projects/:id/motion/bulk` で全シーンのモーションを一括設定可能。
+- `mode: 'uniform'` — 全シーンに同じプリセットを適用
+- `mode: 'random'` — 各シーンに AUTO_MOTION_CANDIDATES からランダム割当
+- `mode: 'auto'` — 各シーンに `auto` プリセットを設定（seed で再現性あり）
+
+#### 2パスのモーション適用
+1. **シーン編集（per-scene）**: `PUT /api/scenes/:id/motion` — 個別シーンのモーション設定
+2. **Video Build**: `buildProjectJson` → `resolveMotionPreset(scene, projectId)` でビルド時に解決
+   - `scene.motion` が設定済み → その設定を使用
+   - 未設定 → デフォルト（image: kenburns_soft, comic: none）
+   - `auto` → seed ベースで9候補から決定的選択
 
 ### 7. buildProjectJson 出力構造
 
@@ -2218,6 +2258,72 @@ b83b62d feat: update frontend to use bulk-audio API (Step3-PR3)
 
 ---
 
+## 2026-02-08 モーション全プリセット対応 + 全シーン一括適用
+
+### 概要
+画像100枚規模の動画で、各シーンのモーション（カメラの動き）をランダムまたは一括で設定できるよう機能を拡張。シーン編集・Video Build・チャットすべてのパスで20種類のプリセットをフルサポート。
+
+### Phase A: 全プリセット対応
+
+#### A-1: DB マイグレーション（0038_add_motion_presets_full.sql）
+- `motion_presets` テーブルに残り13種類を追加（合計20種類）
+- `motion_type` の CHECK制約に `hold_then_pan` を追加
+- slide系 / hold_then_slide系 / combined_zoom_pan系 / auto を網羅
+
+#### A-2: ビルダーUI拡張（project-editor.js）
+- シーンカードの `motionLabels` を7種 → 20種に拡張
+- 各プリセットにアイコン・日本語ラベル・ツールチップを設定
+
+#### A-3: チャット対応拡張（patches.ts, project-editor.js, index.tsx）
+- `motion.set_preset` のテンプレートボタンを全プリセット分追加（6グループ）
+- ローカルパーサーの `motionPresetMap` を全20種に拡張
+- Geminiパーサーのスキーマに全 preset_id を列挙
+- `resolveIntentToOps` の motion.set_preset ハンドラーで全ID対応
+
+### Phase B: 全シーン一括適用
+
+#### B-1: バルクAPIエンドポイント
+```
+POST /api/projects/:id/motion/bulk
+Body: {
+  "mode": "uniform" | "random" | "auto",
+  "preset_id": "kenburns_soft"  // mode=uniform の場合のみ
+}
+```
+- `uniform`: 全シーンに同じプリセットを一括適用
+- `random`: 各シーンに AUTO_MOTION_CANDIDATES（9候補）からランダム割当
+- `auto`: 各シーンに `auto` プリセットを設定（seed で再現性あり）
+- レスポンス: 更新件数、mode、各シーンの適用結果
+
+#### B-2: Video Build UI 拡張
+- モーションセレクトの下に「全シーンに適用」ボタンを追加
+- `applyMotionToAllScenes()` 関数で bulk API を呼び出し
+- 確認ダイアログ付き、進捗表示あり
+
+#### B-3: チャットコマンド対応
+- `motion.set_preset_bulk` アクション追加
+- インターフェース: `{ action, mode, preset_id? }`
+- `ALLOWED_CHAT_ACTIONS` に追加
+- ローカルパーサー: 「全シーン」「ランダム」「自動」キーワード検出
+- Geminiパーサー: スキーマ + 会話例追加
+- `generateDiffSummary` で一括変更のサマリ表示
+
+### 変更ファイル一覧
+| ファイル | 変更内容 |
+|---------|---------|
+| `migrations/0038_add_motion_presets_full.sql` | 13プリセット追加 + CHECK制約拡張 |
+| `public/static/project-editor.js` | motionLabels 20種 + applyMotionToAllScenes() |
+| `src/index.tsx` | テンプレートボタン追加 + 全シーン適用ボタン |
+| `src/routes/projects.ts` | `POST /:id/motion/bulk` エンドポイント追加 |
+| `src/routes/patches.ts` | motion.set_preset_bulk 対応 + パーサー拡張 |
+
+### Gitコミット
+```
+2919ffd Phase A+B: モーション全プリセット対応 + 全シーン一括適用
+```
+
+---
+
 ## 🔄 再開方法（サンドボックス復旧手順）
 
 ### 前提条件
@@ -2289,7 +2395,7 @@ curl http://localhost:3000
 ### 既知の課題（進行中）
 1. **音声途中切れ**: Scene 1338のduration修正済み（9888ms）、他シーンは再生成で修正
 2. **進捗時間表示**: 99%表示時の残り時間計算ロジックの改善が必要
-3. **モーション自動適用**: UIでの選択が正しくバックエンドに伝わっているか要確認
+3. ~~**モーション自動適用**~~: ✅ 解決済み（Phase A+B: 全20プリセット対応、一括適用API、チャットコマンド対応）
 
 ---
 
