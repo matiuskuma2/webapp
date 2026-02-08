@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
-import { createAwsVideoClient, toCloudFrontUrl, s3ToCloudFrontUrl, CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
+import { createAwsVideoClient, toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl, CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
@@ -3349,13 +3349,10 @@ videoGeneration.post('/video-builds/:buildId/refresh', async (c) => {
     const newStatus = statusMap[awsStatus || ''] || build.status;
     
     if (awsStatus === 'completed' && awsResponse.output?.presigned_url) {
-      // 完了: download_url を公開S3 URLに変換して更新
-      // presigned URLは期限切れするため、s3_bucket/s3_output_keyから公開URLを構築
-      const publicDownloadUrl = toPublicS3Url(
-        awsResponse.output.presigned_url,
-        awsResponse.output.bucket || build.s3_bucket,
-        awsResponse.output.key || build.s3_output_key
-      );
+      // 完了: download_url にpresigned URLを保存
+      // Remotion Lambda バケット (remotionlambda-*) はCloudFront未設定のため
+      // AWSから返されたpresigned URLをそのまま使用
+      const publicDownloadUrl = awsResponse.output.presigned_url;
       
       console.log(`[VideoBuild Refresh] Converting to CloudFront URL for build=${buildId}`);
       console.log(`[VideoBuild Refresh] CloudFront URL: ${publicDownloadUrl}`);
@@ -3584,10 +3581,39 @@ videoGeneration.get('/video-builds/:buildId', async (c) => {
     
     const build = await c.env.DB.prepare(`
       SELECT * FROM video_builds WHERE id = ?
-    `).bind(buildId).first();
+    `).bind(buildId).first<Record<string, any>>();
     
     if (!build) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Build not found' } }, 404);
+    }
+    
+    // download_url が CloudFront URL で 403 になるケース対応:
+    // Remotion Lambda バケット (remotionlambda-*) は CloudFront 未設定のため
+    // s3_output_key + s3_bucket から presigned URL を動的生成
+    if (build.status === 'completed' && build.download_url && build.s3_output_key) {
+      const dlUrl = build.download_url as string;
+      const isCloudFrontUrl = dlUrl.includes('.cloudfront.net');
+      const isRemotionBucket = (build.s3_bucket as string || '').startsWith('remotionlambda-');
+      
+      if (isCloudFrontUrl && isRemotionBucket) {
+        // CloudFront が Remotion Lambda バケットをカバーしていないため presigned URL を生成
+        try {
+          const freshUrl = await generateS3PresignedUrl(
+            build.s3_output_key as string,
+            c.env,
+            { bucket: build.s3_bucket as string, expiresIn: 86400 }
+          );
+          if (freshUrl) {
+            build.download_url = freshUrl;
+            // DB も更新（fire-and-forget）
+            c.env.DB.prepare(`
+              UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(freshUrl, buildId).run().catch(() => {});
+          }
+        } catch (e) {
+          console.error(`[VideoBuild] Presigned URL generation failed for build ${buildId}:`, e);
+        }
+      }
     }
     
     return c.json({ build });

@@ -8550,26 +8550,24 @@ function renderVideoBuildItem(build) {
   let expiryHtml = '';
   
   if (build.status === 'completed' && build.download_url) {
-    // FIX: 有効期限チェックを削除 - 常にプレビュー/修正/DLボタンを表示
-    // 動画が再生できない場合はプレビューモーダル内でエラーハンドリング
-    // PR-4-3: プレビュー → 修正 → DL の順
-    // CloudFront URLs are permanent - no refresh needed for preview/edit/download
+    // 動画ビルド完了: プレビュー/修正/DLボタン表示
+    // download_url は presigned URL の場合あり → openXxxWithRefresh で最新URL取得
     actionHtml = `
       <div class="flex items-center gap-2">
-        <button onclick="openPreviewWithRefresh(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+        <button onclick="openPreviewWithRefresh(${build.id}, '')"
           class="px-3 py-2 bg-gray-800 text-white rounded-lg hover:bg-gray-900 text-sm font-semibold flex items-center gap-2"
           title="プレビュー再生">
           <i class="fas fa-play"></i>
         </button>
-        <button onclick="openChatEditWithRefresh(${build.id}, '${build.download_url.replace(/'/g, "\\'")}')"
+        <button onclick="openChatEditWithRefresh(${build.id}, '')"
           class="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm font-semibold flex items-center gap-2"
           title="チャットで修正">
           <i class="fas fa-comments"></i>修正
         </button>
-        <a href="${build.download_url}" target="_blank"
+        <button onclick="downloadBuildVideo(${build.id})"
           class="px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm font-semibold flex items-center gap-2">
           <i class="fas fa-download"></i>DL
-        </a>
+        </button>
       </div>
     `;
     // 有効期限表示も削除（ユーザーを混乱させるため）
@@ -8739,32 +8737,56 @@ async function refreshVideoBuildDownload(buildId) {
  */
 async function openChatEditWithRefresh(buildId, videoUrl) {
   try {
-    // CloudFront URLs are permanent - open directly
-    openChatEditModal(buildId, videoUrl);
+    // 最新のdownload_urlをAPIから取得（presigned URL refresh対応）
+    const res = await axios.get(`${API_BASE}/video-builds/${buildId}`);
+    const freshUrl = res.data?.build?.download_url || videoUrl;
+    openChatEditModal(buildId, freshUrl);
   } catch (error) {
     console.error('[ChatEdit] Error:', error);
-    showToast('チャット修正モーダルを開けませんでした', 'error');
+    // フォールバック: 元のURLで開く
+    openChatEditModal(buildId, videoUrl);
   }
 }
 
 /**
- * Open preview modal (CloudFront URLs are permanent - no refresh needed)
+ * Open preview modal with fresh download URL
  * @param {number} buildId 
- * @param {string} videoUrl - CloudFront URL (permanent, no expiry)
+ * @param {string} videoUrl
  */
 async function openPreviewWithRefresh(buildId, videoUrl) {
   try {
-    // CloudFront URLs are permanent - open directly
-    openVideoBuildPreviewModal(buildId, videoUrl);
+    // 最新のdownload_urlをAPIから取得（presigned URL refresh対応）
+    const res = await axios.get(`${API_BASE}/video-builds/${buildId}`);
+    const freshUrl = res.data?.build?.download_url || videoUrl;
+    openVideoBuildPreviewModal(buildId, freshUrl);
   } catch (error) {
     console.error('[Preview] Error:', error);
-    showToast('プレビューモーダルを開けませんでした', 'error');
+    openVideoBuildPreviewModal(buildId, videoUrl);
   }
 }
 
 // Export for global access
 window.openChatEditWithRefresh = openChatEditWithRefresh;
 window.openPreviewWithRefresh = openPreviewWithRefresh;
+
+/**
+ * Download build video with fresh URL
+ */
+async function downloadBuildVideo(buildId) {
+  try {
+    const res = await axios.get(`${API_BASE}/video-builds/${buildId}`);
+    const url = res.data?.build?.download_url;
+    if (url) {
+      window.open(url, '_blank');
+    } else {
+      showToast('ダウンロードURLが取得できませんでした', 'error');
+    }
+  } catch (error) {
+    console.error('[Download] Error:', error);
+    showToast('ダウンロードURLの取得に失敗しました', 'error');
+  }
+}
+window.downloadBuildVideo = downloadBuildVideo;
 
 /**
  * Get status info (icon, label, color)
