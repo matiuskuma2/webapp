@@ -1017,14 +1017,55 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
             error: { message: awsStatus.job.error_message || 'Generation failed' },
           });
         } else {
-          // Still processing
+          // Still processing - update updated_at to keep job alive
+          await c.env.DB.prepare(`
+            UPDATE video_generations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(videoId).run();
+          
           return c.json({
             status: video.status,
             progress_stage: awsStatus.job.progress_stage || 'processing',
           });
         }
+      } else {
+        // AWS returned error or no job data - log it and check age
+        console.warn(`[VideoGen] AWS status check failed for video ${videoId}, job ${video.job_id}: success=${awsStatus.success}, hasJob=${!!awsStatus.job}, error=${awsStatus.error?.message || 'unknown'}`);
       }
+    } else {
+      console.warn(`[VideoGen] AWS client not available for status check, video ${videoId}`);
     }
+  }
+  
+  // === Server-side timeout check for generating videos ===
+  // If the video has been generating for too long AND we couldn't get a positive AWS status,
+  // mark it as failed so the frontend stops polling forever
+  if (video.status === 'generating') {
+    const updatedAt = new Date(video.updated_at + 'Z').getTime();
+    const elapsedMinutes = (Date.now() - updatedAt) / 60000;
+    
+    if (elapsedMinutes > STUCK_JOB_THRESHOLD_MINUTES) {
+      await c.env.DB.prepare(`
+        UPDATE video_generations 
+        SET status = 'failed', 
+            error_message = 'Generation timed out (exceeded ${STUCK_JOB_THRESHOLD_MINUTES} minutes)',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(videoId).run();
+      
+      console.log(`[VideoGen] Video ${videoId} timed out after ${Math.round(elapsedMinutes)} minutes`);
+      
+      return c.json({
+        status: 'failed',
+        error: { message: `Generation timed out (exceeded ${STUCK_JOB_THRESHOLD_MINUTES} minutes)` },
+      });
+    }
+    
+    // Still within timeout - return generating with elapsed info
+    return c.json({
+      status: 'generating',
+      progress_stage: 'generating',
+      elapsed_minutes: Math.round(elapsedMinutes * 10) / 10,
+    });
   }
   
   // === S3 URL → CloudFront 永続URL 変換 ===
@@ -1122,7 +1163,11 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
             },
           });
         } else {
-          // Still processing
+          // Still processing - update updated_at to keep job alive
+          await c.env.DB.prepare(`
+            UPDATE video_generations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(videoId).run();
+          
           return c.json({
             video: {
               id: videoId,
@@ -1131,8 +1176,45 @@ videoGeneration.get('/videos/:videoId/status', async (c) => {
             },
           });
         }
+      } else {
+        // AWS returned error - log it
+        console.warn(`[VideoGen] Legacy: AWS status failed for video ${videoId}, job ${video.job_id}: success=${awsStatus.success}, hasJob=${!!awsStatus.job}`);
       }
+    } else {
+      console.warn(`[VideoGen] Legacy: AWS client not available for video ${videoId}`);
     }
+  }
+  
+  // === Server-side timeout check for generating videos (legacy) ===
+  if (video.status === 'generating') {
+    const updatedAt = new Date(video.updated_at + 'Z').getTime();
+    const elapsedMinutes = (Date.now() - updatedAt) / 60000;
+    
+    if (elapsedMinutes > STUCK_JOB_THRESHOLD_MINUTES) {
+      await c.env.DB.prepare(`
+        UPDATE video_generations 
+        SET status = 'failed', 
+            error_message = 'Generation timed out (exceeded ${STUCK_JOB_THRESHOLD_MINUTES} minutes)',
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(videoId).run();
+      
+      return c.json({
+        video: {
+          id: video.id,
+          status: 'failed',
+          error_message: `Generation timed out (exceeded ${STUCK_JOB_THRESHOLD_MINUTES} minutes)`,
+        },
+      });
+    }
+    
+    return c.json({
+      video: {
+        id: video.id,
+        status: 'generating',
+        progress_stage: 'generating',
+      },
+    });
   }
   
   // === S3 URL → CloudFront 永続URL 変換（レガシーステータスエンドポイント） ===
@@ -1462,6 +1544,29 @@ videoGeneration.get('/video-builds/usage', async (c) => {
     console.error('[VideoBuild] Usage error:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to get usage' } }, 500);
   }
+});
+
+/**
+ * GET /api/projects/:projectId/generating-videos
+ * Return all currently generating videos for auto-resume polling after page reload
+ */
+videoGeneration.get('/projects/:projectId/generating-videos', async (c) => {
+  const projectId = parseInt(c.req.param('projectId'), 10);
+  if (isNaN(projectId)) {
+    return c.json({ generating_videos: [] });
+  }
+  
+  const { results } = await c.env.DB.prepare(`
+    SELECT vg.id, vg.scene_id, vg.status, vg.job_id, vg.created_at, vg.updated_at
+    FROM video_generations vg
+    JOIN scenes s ON s.id = vg.scene_id
+    WHERE s.project_id = ? AND vg.status = 'generating'
+    ORDER BY vg.created_at DESC
+  `).bind(projectId).all();
+  
+  return c.json({
+    generating_videos: results || [],
+  });
 });
 
 /**

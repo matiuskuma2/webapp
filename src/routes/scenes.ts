@@ -154,6 +154,14 @@ scenes.get('/:id', async (c) => {
         WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_url IS NOT NULL
         LIMIT 1
       `).bind(sceneId).first()
+      
+      // Also fetch the latest generating video (for auto-resume polling after page reload)
+      const generatingVideo = await c.env.DB.prepare(`
+        SELECT id, scene_id, status, created_at
+        FROM video_generations
+        WHERE scene_id = ? AND status = 'generating'
+        ORDER BY created_at DESC LIMIT 1
+      `).bind(sceneId).first()
 
       // Phase1.7: 漫画編集用の元画像を取得（base_image_generation_id から）
       // 漫画編集時は吹き出し付き画像ではなく、元のAI画像をベースにする必要がある
@@ -296,6 +304,13 @@ scenes.get('/:id', async (c) => {
           model: activeVideo.model,
           duration_sec: activeVideo.duration_sec,
           created_at: activeVideo.created_at
+        } : null,
+        // Auto-resume: generating video info (for polling restart after page reload)
+        generating_video: generatingVideo ? {
+          id: generatingVideo.id,
+          scene_id: generatingVideo.scene_id,
+          status: generatingVideo.status,
+          created_at: generatingVideo.created_at
         } : null,
         // Phase1.7: 漫画編集用の元画像（吹き出しなしのAI画像）
         base_image: baseImage ? {

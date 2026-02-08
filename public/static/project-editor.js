@@ -7538,16 +7538,61 @@ function pollSceneImageGeneration(sceneId) {
 // Auto-resume generating scenes (called from initBuilderTab)
 function autoResumeGeneratingScenes(scenes) {
   scenes.forEach(scene => {
+    // AUTO-RESUME: Image generation polling
     const imageStatus = scene.latest_image?.status;
     if (imageStatus === 'generating') {
       // Check if already watching
       if (!window.generatingSceneWatch[scene.id]) {
-        console.log(`[AutoResume] Resuming polling for scene ${scene.id}`);
+        console.log(`[AutoResume] Resuming image polling for scene ${scene.id}`);
         startGenerationWatch(scene.id);
         pollSceneImageGeneration(scene.id);
       }
     }
+    
+    // AUTO-RESUME: Video generation polling
+    // Check if there's a generating video for this scene (from scene data or generating_video field)
+    const generatingVideo = scene.generating_video || 
+      (scene.active_video?.status === 'generating' ? scene.active_video : null) ||
+      (scene.latest_video?.status === 'generating' ? scene.latest_video : null);
+    
+    if (generatingVideo && generatingVideo.id) {
+      // Only resume if not already polling
+      if (!window.videoGenerating[scene.id]) {
+        console.log(`[AutoResume] Resuming video polling for scene ${scene.id}, video ${generatingVideo.id}`);
+        window.videoGenerating[scene.id] = true;
+        pollVideoGeneration(scene.id, generatingVideo.id);
+      }
+    }
   });
+  
+  // Also check via API for any generating videos we may have missed
+  autoResumeVideoPollingFromApi();
+}
+
+/**
+ * AUTO-RESUME: Check API for any generating videos and restart polling.
+ * This catches cases where scene data didn't include video status.
+ */
+async function autoResumeVideoPollingFromApi() {
+  try {
+    const response = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/generating-videos`);
+    const generatingVideos = response.data.generating_videos || [];
+    
+    generatingVideos.forEach(v => {
+      if (v.scene_id && v.id && !window.videoGenerating[v.scene_id]) {
+        console.log(`[AutoResume/API] Resuming video polling for scene ${v.scene_id}, video ${v.id}`);
+        window.videoGenerating[v.scene_id] = true;
+        pollVideoGeneration(v.scene_id, v.id);
+      }
+    });
+    
+    if (generatingVideos.length > 0) {
+      console.log(`[AutoResume/API] Resumed ${generatingVideos.length} video polling(s)`);
+    }
+  } catch (err) {
+    // Non-critical - silently fail
+    console.debug('[AutoResume/API] Failed to check generating videos:', err?.message);
+  }
 }
 
 /**
