@@ -43,6 +43,7 @@ export interface UsageLogParams {
   status: 'success' | 'failed';
   estimatedCostUsd?: number;
   metadata?: Record<string, unknown>;
+  sponsoredByUserId?: number | null;
 }
 
 /**
@@ -59,8 +60,8 @@ export async function logUsageEvent(
     await db.prepare(`
       INSERT INTO api_usage_logs (
         user_id, project_id, api_type, provider, model,
-        estimated_cost_usd, metadata_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        estimated_cost_usd, sponsored_by_user_id, metadata_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       params.userId,
       params.projectId || null,
@@ -68,6 +69,7 @@ export async function logUsageEvent(
       params.provider,
       params.model || null,
       params.estimatedCostUsd ?? 0,
+      params.sponsoredByUserId ?? null,
       params.metadata ? JSON.stringify(params.metadata) : null
     ).run();
     
