@@ -4126,6 +4126,151 @@ function renderSceneImageSection(scene, imageUrl, imageStatus) {
 
 /**
  * Phase1.5: 採用切替（画像 ↔ 漫画）
+
+/**
+ * 動画プロンプト & 生成エリア（シーンカード内に常時表示）
+ * - 画像完了時: プロンプト入力 + エンジン選択 + 生成/再生成ボタン
+ * - 漫画採用中: 無効化表示
+ * - 画像未完了: 「画像生成完了後に利用可能」メッセージ
+ */
+function renderVideoPromptSection(scene, imageStatus, disableVideoGen) {
+  const activeVideo = scene.active_video || null;
+  const hasCompletedVideo = activeVideo && activeVideo.status === 'completed' && activeVideo.r2_url;
+  const isGeneratingVideo = window.videoGenerating && window.videoGenerating[scene.id];
+  const existingPrompt = activeVideo?.prompt || '';
+  const existingModel = activeVideo?.model || '';
+  const isVeo3 = existingModel.includes('veo-3');
+  
+  // 漫画モード → 無効化メッセージ
+  if (disableVideoGen) {
+    return `
+      <div class="bg-gray-50 rounded-lg border border-gray-200 p-3">
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold text-gray-400">
+            <i class="fas fa-video mr-1"></i>動画プロンプト
+          </div>
+          <button 
+            id="videoHistoryBtn-${scene.id}"
+            onclick="viewVideoHistory(${scene.id})"
+            class="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+            title="動画履歴"
+          >
+            <i class="fas fa-film mr-1"></i>履歴
+          </button>
+        </div>
+        <p class="text-xs text-orange-600 mt-2">
+          <i class="fas fa-lock mr-1"></i>漫画採用中は動画化できません。Remotionで動画化されます。
+        </p>
+      </div>
+    `;
+  }
+  
+  // 画像未完了 → 「画像生成完了後に利用可能」
+  if (imageStatus !== 'completed') {
+    return `
+      <div class="bg-gray-50 rounded-lg border border-gray-200 p-3">
+        <div class="flex items-center justify-between">
+          <div class="text-xs font-semibold text-gray-400">
+            <i class="fas fa-video mr-1"></i>動画プロンプト
+          </div>
+          <button 
+            id="videoHistoryBtn-${scene.id}"
+            onclick="viewVideoHistory(${scene.id})"
+            class="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+            title="動画履歴"
+          >
+            <i class="fas fa-film mr-1"></i>履歴
+          </button>
+        </div>
+        <p class="text-xs text-gray-500 mt-2">
+          <i class="fas fa-info-circle mr-1"></i>画像生成が完了すると、動画プロンプトを入力して動画化できます
+        </p>
+      </div>
+    `;
+  }
+  
+  // 画像完了 → プロンプト入力 + 生成ボタン
+  return `
+    <div class="bg-purple-50 rounded-lg border border-purple-200 p-3 space-y-3" id="videoPromptSection-${scene.id}">
+      <!-- ヘッダー -->
+      <div class="flex items-center justify-between">
+        <div class="text-xs font-semibold text-purple-700">
+          <i class="fas fa-video mr-1"></i>動画プロンプト
+          ${hasCompletedVideo ? '<span class="ml-1 text-green-600"><i class="fas fa-check-circle"></i></span>' : ''}
+        </div>
+        <div class="flex items-center gap-2">
+          ${hasCompletedVideo ? `
+            <span class="text-xs text-green-600 font-medium">
+              <i class="fas fa-check mr-1"></i>動画あり
+            </span>
+          ` : ''}
+          <button 
+            id="videoHistoryBtn-${scene.id}"
+            onclick="viewVideoHistory(${scene.id})"
+            class="text-xs px-2 py-1 bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+            title="動画履歴"
+          >
+            <i class="fas fa-film mr-1"></i>履歴
+          </button>
+        </div>
+      </div>
+      
+      <!-- プロンプト入力 -->
+      <textarea 
+        id="videoPromptInline-${scene.id}"
+        rows="2"
+        class="w-full px-3 py-2 text-sm border border-purple-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 resize-y bg-white"
+        placeholder="動きや演出の指示を入力（例: カメラがゆっくりズームイン、表情変化、光の動き）"
+        ${isGeneratingVideo ? 'disabled' : ''}
+      >${escapeHtml(existingPrompt)}</textarea>
+      <p class="text-xs text-gray-500">空欄の場合はシンプルなモーションが適用されます</p>
+      
+      <!-- エンジン選択 + 生成ボタン（横並び） -->
+      <div class="flex items-center gap-2">
+        <!-- エンジン選択（コンパクト） -->
+        <select 
+          id="videoEngineInline-${scene.id}" 
+          class="text-xs px-2 py-2 border border-purple-300 rounded-lg bg-white focus:ring-2 focus:ring-purple-500"
+          ${isGeneratingVideo ? 'disabled' : ''}
+        >
+          <option value="veo2" ${!isVeo3 ? 'selected' : ''}>🎬 Veo2 (5秒)</option>
+          <option value="veo3" ${isVeo3 ? 'selected' : ''}>🚀 Veo3 (8秒)</option>
+        </select>
+        
+        <!-- 生成/再生成ボタン -->
+        <button 
+          id="videoBtn-${scene.id}"
+          onclick="generateVideoInline(${scene.id})"
+          class="flex-1 px-3 py-2 rounded-lg font-semibold text-sm touch-manipulation ${
+            isGeneratingVideo
+              ? 'bg-yellow-500 text-white opacity-75 cursor-not-allowed'
+              : 'bg-purple-600 text-white hover:bg-purple-700 transition-colors'
+          }"
+          ${isGeneratingVideo ? 'disabled' : ''}
+        >
+          ${isGeneratingVideo 
+            ? '<i class="fas fa-spinner fa-spin mr-1"></i>生成中...'
+            : hasCompletedVideo 
+              ? '<i class="fas fa-redo mr-1"></i>プロンプトで再生成'
+              : '<i class="fas fa-magic mr-1"></i>動画化'
+          }
+        </button>
+      </div>
+      
+      ${hasCompletedVideo && existingPrompt ? `
+        <div class="text-xs text-purple-600 bg-purple-100 rounded px-2 py-1">
+          <i class="fas fa-info-circle mr-1"></i>現在の動画は上記プロンプトで生成されました。変更して再生成できます。
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+// Expose globally
+window.renderVideoPromptSection = renderVideoPromptSection;
+
+/**
+ * Phase1.5: 採用切替（画像 ↔ 漫画）
  * Phase1.7: リアルタイムUI更新（スクロール位置を維持）
  */
 async function switchDisplayAssetType(sceneId, newType) {
@@ -4841,40 +4986,8 @@ function renderBuilderSceneCard(scene) {
           </p>
           ` : ''}
           
-          <!-- 動画エリア（completedの場合のみ表示）の後に動画化ボタン -->
-          <div class="flex gap-2">
-            <button 
-              id="videoBtn-${scene.id}"
-              onclick="openVideoModal(${scene.id})"
-              class="flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation ${
-                disableVideoGen
-                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                  : (window.videoGenerating && window.videoGenerating[scene.id])
-                    ? 'bg-yellow-500 text-white opacity-75 cursor-not-allowed'
-                    : (imageStatus === 'completed' 
-                      ? 'bg-purple-600 text-white hover:bg-purple-700 transition-colors' 
-                      : 'bg-gray-300 text-gray-500 cursor-not-allowed')
-              }"
-              ${disableVideoGen || (imageStatus !== 'completed') || (window.videoGenerating && window.videoGenerating[scene.id]) ? 'disabled' : ''}
-              title="${
-                disableVideoGen 
-                  ? '漫画採用中は動画化できません。漫画の動画化はRemotionで行います。'
-                  : (window.videoGenerating && window.videoGenerating[scene.id]) 
-                    ? '動画生成中...' 
-                    : (imageStatus !== 'completed' ? '画像生成完了後に利用可能' : '動画を生成')
-              }"
-            >
-              <i class="fas fa-video mr-2"></i>${disableVideoGen ? '動画化不可' : '動画化'}
-            </button>
-            <button 
-              id="videoHistoryBtn-${scene.id}"
-              onclick="viewVideoHistory(${scene.id})"
-              class="px-4 py-2 rounded-lg font-semibold touch-manipulation bg-gray-600 text-white hover:bg-gray-700 transition-colors"
-              title="動画履歴"
-            >
-              <i class="fas fa-film"></i>
-            </button>
-          </div>
+          <!-- 動画プロンプト＆生成エリア -->
+          ${renderVideoPromptSection(scene, imageStatus, disableVideoGen)}
           
           ${isFailed && errorMessage && !activeImage ? `
           <div class="bg-red-50 border-2 border-red-200 rounded-lg p-4">
@@ -5169,13 +5282,17 @@ function setPrimaryButtonState(sceneId, state, percent = 0) {
       primaryBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>生成中... ${percent}%`;
       console.log(`[Progress] Scene ${sceneId}: ${percent}%`);
       
-      // ✅ Also disable video button during image generation
+      // ✅ Also disable video button and prompt during image generation
       const videoBtn = document.getElementById(`videoBtn-${sceneId}`);
       if (videoBtn) {
         videoBtn.disabled = true;
         videoBtn.classList.remove('bg-purple-600', 'hover:bg-purple-700');
         videoBtn.classList.add('bg-gray-300', 'text-gray-500', 'cursor-not-allowed');
       }
+      const vpEl = document.getElementById(`videoPromptInline-${sceneId}`);
+      const veEl = document.getElementById(`videoEngineInline-${sceneId}`);
+      if (vpEl) vpEl.disabled = true;
+      if (veEl) veEl.disabled = true;
       break;
 
     case 'completed':
@@ -5186,13 +5303,17 @@ function setPrimaryButtonState(sceneId, state, percent = 0) {
       primaryBtn.onclick = () => regenerateSceneImage(sceneId);
       primaryBtn.innerHTML = `<i class="fas fa-redo mr-2"></i>再生成`;
       
-      // ✅ Enable video button when image is completed
+      // ✅ Enable video button and prompt when image is completed
       const videoBtnDone = document.getElementById(`videoBtn-${sceneId}`);
       if (videoBtnDone) {
         videoBtnDone.disabled = false;
         videoBtnDone.classList.remove('bg-gray-300', 'text-gray-500', 'cursor-not-allowed');
         videoBtnDone.classList.add('bg-purple-600', 'text-white', 'hover:bg-purple-700');
       }
+      const vpElDone = document.getElementById(`videoPromptInline-${sceneId}`);
+      const veElDone = document.getElementById(`videoEngineInline-${sceneId}`);
+      if (vpElDone) vpElDone.disabled = false;
+      if (veElDone) veElDone.disabled = false;
       break;
 
     case 'failed':
@@ -7497,6 +7618,117 @@ async function generateVideo(sceneId) {
 }
 
 /**
+ * Generate video from inline prompt section (no modal)
+ * Uses video-regenerate API if video already exists, generate-video otherwise
+ * @param {number} sceneId 
+ */
+async function generateVideoInline(sceneId) {
+  const btn = document.getElementById(`videoBtn-${sceneId}`);
+  const promptEl = document.getElementById(`videoPromptInline-${sceneId}`);
+  const engineEl = document.getElementById(`videoEngineInline-${sceneId}`);
+  
+  const prompt = promptEl?.value?.trim() || '';
+  const videoEngine = engineEl?.value || 'veo2';
+  const duration = videoEngine === 'veo3' ? 8 : 5;
+  
+  // Prevent double click
+  if (window.videoGenerating[sceneId] || (btn && btn.disabled)) {
+    showToast('動画生成中です', 'warning');
+    return;
+  }
+  
+  // Check API key
+  const hasApiKey = await checkVideoApiKey();
+  if (!hasApiKey) {
+    showToast('動画生成には Google AI Studio のAPIキー設定が必要です', 'warning');
+    if (confirm('設定画面でAPIキーを登録しますか？\n\n※ Google AI Studio で無料取得できます')) {
+      window.location.href = '/settings';
+    }
+    return;
+  }
+  
+  // Check if image generation is in progress
+  if (window.sceneProcessing && window.sceneProcessing[sceneId]) {
+    showToast('このシーンは画像生成中です。完了後にお試しください', 'warning');
+    return;
+  }
+  
+  // Disable UI elements
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>生成開始中...';
+  }
+  if (promptEl) promptEl.disabled = true;
+  if (engineEl) engineEl.disabled = true;
+  
+  window.videoGenerating[sceneId] = true;
+  
+  // Determine: regenerate (has active video) or first-time generate
+  const scenes = window.lastLoadedScenes || [];
+  const scene = scenes.find(s => s.id === sceneId);
+  const hasActiveVideo = scene?.active_video && scene.active_video.status === 'completed';
+  
+  try {
+    let response;
+    if (hasActiveVideo) {
+      // Regenerate with updated prompt
+      response = await axios.post(`${API_BASE}/scenes/${sceneId}/video-regenerate`, {
+        prompt: prompt || undefined,
+        duration_sec: duration,
+        model: videoEngine === 'veo3' ? 'veo-3.0-generate-preview' : 'veo-2.0-generate-001',
+      });
+    } else {
+      // First-time generation
+      response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-video`, {
+        duration_sec: duration,
+        prompt: prompt,
+        provider: 'google',
+        video_engine: videoEngine,
+      });
+    }
+    
+    if (response.data.success || response.data.video_id || response.data.video_generation) {
+      const videoId = response.data.video_id || response.data.video_generation?.id;
+      showToast('動画生成を開始しました。完了まで1-3分お待ちください', 'success');
+      
+      // Start polling
+      if (videoId) {
+        pollVideoGeneration(sceneId, videoId);
+      }
+    } else {
+      throw new Error(response.data.error?.message || '動画生成の開始に失敗しました');
+    }
+    
+  } catch (error) {
+    console.error('[VideoInline] Generation error:', error);
+    
+    if (error.response?.status === 409) {
+      showToast('このシーンは既に動画生成中です', 'warning');
+      return;
+    }
+    
+    const errorMsg = error.response?.data?.error?.message || error.message || '動画生成中にエラーが発生しました';
+    showToast(errorMsg, 'error');
+    
+    window.videoGenerating[sceneId] = false;
+    
+    // Reset UI
+    if (btn) {
+      btn.disabled = false;
+      const hasVideo = scene?.active_video?.status === 'completed';
+      btn.innerHTML = hasVideo 
+        ? '<i class="fas fa-redo mr-1"></i>プロンプトで再生成'
+        : '<i class="fas fa-magic mr-1"></i>動画化';
+    }
+    if (promptEl) promptEl.disabled = false;
+    if (engineEl) engineEl.disabled = false;
+  }
+}
+
+// Expose globally
+window.generateVideoInline = generateVideoInline;
+
+/**
  * Poll for video generation completion (To-Be: AWS status API使用)
  * @param {number} sceneId 
  * @param {number} videoId 
@@ -7528,8 +7760,8 @@ function pollVideoGeneration(sceneId, videoId) {
   
   if (videoBtn) {
     videoBtn.disabled = true;
-    videoBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>キュー待ち...';
-    videoBtn.className = 'flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation bg-yellow-500 text-white opacity-75 cursor-not-allowed';
+    videoBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>キュー待ち...';
+    videoBtn.className = 'flex-1 px-3 py-2 rounded-lg font-semibold text-sm touch-manipulation bg-yellow-500 text-white opacity-75 cursor-not-allowed';
   }
   
   const pollInterval = setInterval(async () => {
@@ -7553,7 +7785,7 @@ function pollVideoGeneration(sceneId, videoId) {
       
       // Update button with status (not fake percentage)
       if (videoBtn) {
-        videoBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${stageInfo.text} (${elapsedStr})`;
+        videoBtn.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${stageInfo.text} (${elapsedStr})`;
       }
       
       console.log(`[VideoPoll] Video ${videoId} status: ${statusData.status}, stage: ${progressStage}, elapsed: ${elapsedStr}, attempt: ${attempts}/${maxAttempts}`);
@@ -7573,19 +7805,43 @@ function pollVideoGeneration(sceneId, videoId) {
         clearInterval(pollInterval);
         window.videoGenerating[sceneId] = false;
         
-        showToast('動画生成が完了しました！履歴ボタンから確認できます', 'success');
+        showToast('動画生成が完了しました！', 'success');
         
-        // Update button
+        // Update button to show "再生成" state
         if (videoBtn) {
           videoBtn.disabled = false;
-          videoBtn.innerHTML = '<i class="fas fa-video mr-2"></i>動画化';
-          videoBtn.className = 'flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation bg-purple-600 text-white hover:bg-purple-700 transition-colors';
+          videoBtn.innerHTML = '<i class="fas fa-redo mr-1"></i>プロンプトで再生成';
+          videoBtn.className = 'flex-1 px-3 py-2 rounded-lg font-semibold text-sm touch-manipulation bg-purple-600 text-white hover:bg-purple-700 transition-colors';
         }
+        
+        // Re-enable inline prompt controls
+        const promptEl = document.getElementById(`videoPromptInline-${sceneId}`);
+        const engineEl = document.getElementById(`videoEngineInline-${sceneId}`);
+        if (promptEl) promptEl.disabled = false;
+        if (engineEl) engineEl.disabled = false;
         
         restorePrimaryBtn();
         
-        // NOTE: Do NOT auto-open video history modal - it's disruptive
-        // User can click the history button to view completed video
+        // Refresh the scene card to show the new video preview
+        try {
+          const sceneRes = await axios.get(`${API_BASE}/scenes/${sceneId}?view=board`);
+          const updatedScene = sceneRes.data;
+          if (window.lastLoadedScenes) {
+            const idx = window.lastLoadedScenes.findIndex(s => s.id === sceneId);
+            if (idx !== -1) window.lastLoadedScenes[idx] = updatedScene;
+          }
+          const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
+          if (sceneCard) {
+            const scrollY = window.scrollY;
+            sceneCard.outerHTML = renderBuilderSceneCard(updatedScene);
+            window.scrollTo(0, scrollY);
+            const newCard = document.getElementById(`builder-scene-${sceneId}`);
+            if (newCard) initializeSceneCardButtons(updatedScene, newCard);
+          }
+        } catch (refreshErr) {
+          console.warn('[VideoPoll] Scene refresh failed:', refreshErr);
+        }
+        
         return;
       }
       
@@ -7599,9 +7855,20 @@ function pollVideoGeneration(sceneId, videoId) {
         // Update button
         if (videoBtn) {
           videoBtn.disabled = false;
-          videoBtn.innerHTML = '<i class="fas fa-video mr-2"></i>動画化';
-          videoBtn.className = 'flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation bg-purple-600 text-white hover:bg-purple-700 transition-colors';
+          const scenes = window.lastLoadedScenes || [];
+          const sc = scenes.find(s => s.id === sceneId);
+          const hasVideo = sc?.active_video?.status === 'completed';
+          videoBtn.innerHTML = hasVideo 
+            ? '<i class="fas fa-redo mr-1"></i>プロンプトで再生成'
+            : '<i class="fas fa-magic mr-1"></i>動画化';
+          videoBtn.className = 'flex-1 px-3 py-2 rounded-lg font-semibold text-sm touch-manipulation bg-purple-600 text-white hover:bg-purple-700 transition-colors';
         }
+        
+        // Re-enable inline prompt controls
+        const promptElFail = document.getElementById(`videoPromptInline-${sceneId}`);
+        const engineElFail = document.getElementById(`videoEngineInline-${sceneId}`);
+        if (promptElFail) promptElFail.disabled = false;
+        if (engineElFail) engineElFail.disabled = false;
         
         restorePrimaryBtn();
         return;
@@ -7617,9 +7884,20 @@ function pollVideoGeneration(sceneId, videoId) {
         // Reset button
         if (videoBtn) {
           videoBtn.disabled = false;
-          videoBtn.innerHTML = '<i class="fas fa-video mr-2"></i>動画化';
-          videoBtn.className = 'flex-1 px-4 py-2 rounded-lg font-semibold touch-manipulation bg-purple-600 text-white hover:bg-purple-700 transition-colors';
+          const scenes = window.lastLoadedScenes || [];
+          const sc = scenes.find(s => s.id === sceneId);
+          const hasVideo = sc?.active_video?.status === 'completed';
+          videoBtn.innerHTML = hasVideo 
+            ? '<i class="fas fa-redo mr-1"></i>プロンプトで再生成'
+            : '<i class="fas fa-magic mr-1"></i>動画化';
+          videoBtn.className = 'flex-1 px-3 py-2 rounded-lg font-semibold text-sm touch-manipulation bg-purple-600 text-white hover:bg-purple-700 transition-colors';
         }
+        
+        // Re-enable inline prompt controls
+        const promptElTimeout = document.getElementById(`videoPromptInline-${sceneId}`);
+        const engineElTimeout = document.getElementById(`videoEngineInline-${sceneId}`);
+        if (promptElTimeout) promptElTimeout.disabled = false;
+        if (engineElTimeout) engineElTimeout.disabled = false;
         
         restorePrimaryBtn();
       }
@@ -7762,9 +8040,28 @@ function renderVideoCard(video, sceneId) {
           </span>
           <span class="text-xs text-gray-500">${video.duration_sec}秒</span>
         </div>
+        
+        <!-- プロンプト表示 & コピーボタン -->
         ${video.prompt ? `
-          <p class="text-xs text-gray-600 line-clamp-2">${escapeHtml(video.prompt)}</p>
-        ` : ''}
+          <div class="bg-gray-50 rounded p-2 border border-gray-200">
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs font-semibold text-gray-600">
+                <i class="fas fa-edit mr-1"></i>プロンプト
+              </span>
+              <button 
+                onclick="useVideoPromptForRegeneration(${sceneId}, '${escapeHtml(video.prompt).replace(/'/g, "\\'").replace(/\n/g, "\\n")}')"
+                class="text-xs px-2 py-0.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition-colors"
+                title="このプロンプトをシーンカードにコピー"
+              >
+                <i class="fas fa-copy mr-1"></i>使う
+              </button>
+            </div>
+            <p class="text-xs text-gray-600">${escapeHtml(video.prompt)}</p>
+          </div>
+        ` : `
+          <div class="text-xs text-gray-400 italic">プロンプト未設定（デフォルトモーション）</div>
+        `}
+        
         <div class="text-xs text-gray-500 space-y-1">
           <p><i class="fas fa-clock mr-1"></i>${createdAt}</p>
           ${video.status === 'completed' ? `
@@ -7823,6 +8120,37 @@ function closeVideoHistoryModal() {
     modal.innerHTML = '';
   }
 }
+
+/**
+ * Use a video's prompt for regeneration - copies to inline prompt field
+ * @param {number} sceneId 
+ * @param {string} prompt 
+ */
+function useVideoPromptForRegeneration(sceneId, prompt) {
+  // Close the history modal
+  closeVideoHistoryModal();
+  
+  // Set the prompt in the inline field
+  const promptEl = document.getElementById(`videoPromptInline-${sceneId}`);
+  if (promptEl) {
+    promptEl.value = prompt;
+    promptEl.focus();
+    // Scroll to the prompt section
+    const section = document.getElementById(`videoPromptSection-${sceneId}`);
+    if (section) {
+      section.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Flash effect to draw attention
+      section.classList.add('ring-2', 'ring-purple-500');
+      setTimeout(() => section.classList.remove('ring-2', 'ring-purple-500'), 2000);
+    }
+    showToast('プロンプトをコピーしました。必要に応じて編集して「再生成」を押してください', 'success');
+  } else {
+    showToast('プロンプトフィールドが見つかりません', 'warning');
+  }
+}
+
+// Expose globally
+window.useVideoPromptForRegeneration = useVideoPromptForRegeneration;
 
 /**
  * Activate a video
