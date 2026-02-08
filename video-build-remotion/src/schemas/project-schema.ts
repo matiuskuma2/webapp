@@ -19,6 +19,8 @@ export const VoiceAssetSchema = z.object({
   duration_ms: z.number(),
   text: z.string(),
   start_ms: z.number().optional(),
+  end_ms: z.number().optional(),  // ★ テロップ表示区間の正確な終了時刻
+  utterance_id: z.number().optional(),  // R2: balloon 連動用
   format: z.enum(['mp3', 'wav']).default('mp3'),
 });
 
@@ -200,6 +202,7 @@ export const ProjectSceneSchema = z.object({
     video_clip: z.object({
       url: z.string(),
       duration_ms: z.number(),
+      thumbnail_url: z.string().optional().nullable(),  // 動画終了後に表示するサムネイル画像
     }).optional(),
   }),
   characters: z.object({

@@ -156,12 +156,42 @@ export const Scene: React.FC<SceneProps> = ({
   // ========================================
   // 現在再生中の voice を特定（字幕表示用）
   // ========================================
+  // ★ FIX: テロップ途中切れ防止
+  // 音声は <Audio> + remainingFrames で実際のMP3長まで再生されるが、
+  // テロップは voice.duration_ms (DB値) で判定すると短すぎて途中で消える。
+  // 
+  // 対策:
+  //   1. voice.end_ms があればそれを使用（buildProjectJson の正確な計算値）
+  //   2. 最後の voice は次の voice が来るまで（=シーン終了まで）テロップを維持
+  //   3. voice 間のギャップでは直前の voice のテロップを維持（隙間でテロップが消えない）
   const currentMs = (frame / fps) * 1000;
-  const currentVoice = effectiveVoices.find((voice) => {
-    const startMs = voice.start_ms ?? 0;
-    const endMs = startMs + voice.duration_ms;
-    return currentMs >= startMs && currentMs < endMs;
-  });
+  const sceneDurationMs = scene.timing.duration_ms;
+  
+  const currentVoice = (() => {
+    if (effectiveVoices.length === 0) return undefined;
+    
+    // 各 voice のテロップ表示区間を計算
+    // key: voice の start_ms から「次の voice の start_ms - 1」までテロップ表示
+    // 最後の voice はシーン終了まで表示
+    for (let i = 0; i < effectiveVoices.length; i++) {
+      const voice = effectiveVoices[i];
+      const voiceStartMs = voice.start_ms ?? 0;
+      
+      // テロップの終了時刻:
+      //   - 次の voice がある場合: 次の voice の start_ms（隙間なく次のテロップに繋がる）
+      //   - 最後の voice の場合: シーン終了まで
+      const nextVoice = effectiveVoices[i + 1];
+      const telopEndMs = nextVoice 
+        ? (nextVoice.start_ms ?? 0)
+        : sceneDurationMs;
+      
+      if (currentMs >= voiceStartMs && currentMs < telopEndMs) {
+        return voice;
+      }
+    }
+    
+    return undefined;
+  })();
   
   // 字幕テキスト: currentVoice があればそのtext、なければ dialogue
   const subtitleText = currentVoice?.text || (showSubtitle && !hasVoices ? scene.dialogue : '');
