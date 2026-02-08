@@ -2055,7 +2055,8 @@ app.get('/projects/:id', (c) => {
                         </div>
 
                         <!-- Phase2-1: 漫画の文字（焼き込み）設定 ※保存のみ、反映は再生成が必要 -->
-                        <div class="p-4 bg-rose-50/50 rounded-lg border border-rose-200">
+                        <!-- Phase1-1: display_asset_type !== 'comic' のシーンのみの場合は非表示 -->
+                        <div id="comicTelopSection" class="p-4 bg-rose-50/50 rounded-lg border border-rose-200" style="display: none;">
                             <div class="flex items-center justify-between mb-3">
                                 <label class="text-sm font-semibold text-gray-700 flex items-center gap-2">
                                     <i class="fas fa-image text-rose-600"></i>漫画の文字（焼き込み）
@@ -2798,6 +2799,83 @@ app.get('/projects/:id', (c) => {
                                         class="px-2.5 py-1 text-xs rounded-full bg-orange-50 text-orange-700 border border-orange-200 hover:bg-orange-100"
                                         onclick="insertChatTemplate('テロップサイズを大に')">
                                         サイズ：大
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- Phase 2-1: モーション系 -->
+                            <div class="mb-2">
+                                <div class="text-xs text-gray-500 mb-1">🎬 モーション（カメラの動き）</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションをゆっくりズームにして')">
+                                        ゆっくりズーム
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを強めズームにして')">
+                                        強めズーム
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを左から右にパンして')">
+                                        左→右パン
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを右から左にパンして')">
+                                        右→左パン
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを上から下にパンして')">
+                                        上→下パン
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}のモーションを下から上にパンして')">
+                                        下→上パン
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                                        onclick="insertChatTemplate('シーン{scene}の動きを止めて')">
+                                        動きなし
+                                    </button>
+                                </div>
+                            </div>
+                            <!-- Phase 2-2: カスタムスタイル系 -->
+                            <div class="mb-2">
+                                <div class="text-xs text-gray-500 mb-1">🎨 カスタムスタイル（Vrew風）</div>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-pink-50 text-pink-700 border border-pink-200 hover:bg-pink-100"
+                                        onclick="insertChatTemplate('テロップの文字色を黄色にして')">
+                                        文字色：黄色
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-pink-50 text-pink-700 border border-pink-200 hover:bg-pink-100"
+                                        onclick="insertChatTemplate('テロップを白文字に黒い縁取りにして')">
+                                        白文字＋黒縁取り
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-pink-50 text-pink-700 border border-pink-200 hover:bg-pink-100"
+                                        onclick="insertChatTemplate('フォントを明朝体に変えて')">
+                                        明朝体
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-pink-50 text-pink-700 border border-pink-200 hover:bg-pink-100"
+                                        onclick="insertChatTemplate('フォントを丸ゴシックに変えて')">
+                                        丸ゴシック
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-pink-50 text-pink-700 border border-pink-200 hover:bg-pink-100"
+                                        onclick="insertChatTemplate('テロップをもっと太くして')">
+                                        文字を太く
+                                    </button>
+                                    <button type="button"
+                                        class="px-2.5 py-1 text-xs rounded-full bg-pink-50 text-pink-700 border border-pink-200 hover:bg-pink-100"
+                                        onclick="insertChatTemplate('テロップの縁取りを消して')">
+                                        縁取りなし
                                     </button>
                                 </div>
                             </div>

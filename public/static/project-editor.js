@@ -4583,6 +4583,11 @@ async function switchDisplayAssetType(sceneId, newType) {
           }
           
           console.log(`[switchDisplayAssetType] Scene ${sceneId} UI updated to ${newType}`);
+          
+          // Phase 1-1: 漫画の文字セクションの表示/非表示を更新
+          if (typeof updateComicTelopVisibility === 'function') {
+            updateComicTelopVisibility();
+          }
         }
       } catch (renderErr) {
         console.warn('[switchDisplayAssetType] Partial update failed, falling back to full reload:', renderErr);
@@ -5277,6 +5282,11 @@ function renderBuilderScenes(scenes, page = 1) {
 
   // Cache scenes for re-rendering during bulk generation
   window.lastLoadedScenes = scenes;
+  
+  // Phase 1-1: シーン読み込み後に漫画の文字セクションの表示/非表示を更新
+  if (typeof updateComicTelopVisibility === 'function') {
+    updateComicTelopVisibility();
+  }
   
   const container = document.getElementById('builderScenesList');
   
@@ -11450,6 +11460,37 @@ function parseMessageToIntent(message) {
     actions.push({ action: 'telop.set_size', size_preset: 'sm' });
   }
   
+  // Phase 2-1: モーション変更パターン (e.g., "シーン3のモーションをゆっくりズームにして", "動きを止めて")
+  {
+    const motionPresetMap = {
+      'なし|止め|停止|静止|none': 'none',
+      'ゆっくりズーム|kenburns.*?soft|ケンバーンズ.*?ソフト': 'kenburns_soft',
+      '強め.*?ズーム|kenburns.*?strong|ケンバーンズ.*?ストロング|大きくズーム': 'kenburns_strong',
+      '左.*?右|pan.*?lr|左から右': 'pan_lr',
+      '右.*?左|pan.*?rl|右から左': 'pan_rl',
+      '上.*?下|pan.*?tb|上から下': 'pan_tb',
+      '下.*?上|pan.*?bt|下から上': 'pan_bt',
+    };
+    
+    // シーン番号の取得
+    const motionSceneMatch = message.match(/(?:シーン|scene)\s*(\d+)/i);
+    const motionSceneIdx = motionSceneMatch ? parseInt(motionSceneMatch[1]) : null;
+    
+    for (const [patterns, presetId] of Object.entries(motionPresetMap)) {
+      const regex = new RegExp(`(?:モーション|動き|カメラ|motion).*?(?:${patterns})`, 'i');
+      const regex2 = new RegExp(`(?:${patterns}).*?(?:モーション|動き|カメラ|パン|ズーム|にして|にする)`, 'i');
+      if (regex.test(message) || regex2.test(message)) {
+        actions.push({
+          action: 'motion.set_preset',
+          scene_idx: motionSceneIdx,
+          preset_id: presetId,
+          _contextual: !motionSceneIdx,
+        });
+        break;
+      }
+    }
+  }
+  
   // Phase A3: エラーUX改善 - より具体的なエラーメッセージ
   if (actions.length === 0 && errors.length === 0) {
     // 入力内容に基づいて具体的なヒントを提供
@@ -13280,10 +13321,29 @@ async function saveNarrationVoice() {
 window.saveNarrationVoice = saveNarrationVoice;
 
 /**
+ * Phase 1-1: 漫画の文字セクションを漫画モードシーンの有無で表示/非表示制御
+ * プロジェクト内に display_asset_type === 'comic' のシーンが1つでもあれば表示、なければ非表示
+ */
+function updateComicTelopVisibility() {
+  const section = document.getElementById('comicTelopSection');
+  if (!section) return;
+  
+  const scenes = window.lastLoadedScenes || [];
+  const hasComicScene = scenes.some(s => s.display_asset_type === 'comic');
+  
+  section.style.display = hasComicScene ? '' : 'none';
+  console.log(`[Phase1-1] Comic telop section visibility: ${hasComicScene ? 'shown' : 'hidden'} (${scenes.filter(s => s.display_asset_type === 'comic').length}/${scenes.length} comic scenes)`);
+}
+window.updateComicTelopVisibility = updateComicTelopVisibility;
+
+/**
  * Phase 2-1: Load comic telop settings from project.settings
  */
 async function loadComicTelopSettings() {
   try {
+    // Phase 1-1: 漫画モード判定で表示/非表示を更新
+    updateComicTelopVisibility();
+    
     // currentProject.settings は GET /api/projects/:id から返される
     const settings = currentProject?.settings || {};
     const telopComic = settings.telops_comic || {};

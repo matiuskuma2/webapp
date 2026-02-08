@@ -1538,8 +1538,13 @@ type IntentAction =
   | TimelineSfxCopyAction
   // PR-5-3b: テロップ設定（Build単位の上書き）
   | TelopSetEnabledAction
+  | TelopSetEnabledSceneAction   // Phase 1-2: 欠落修正
   | TelopSetPositionAction
-  | TelopSetSizeAction;
+  | TelopSetSizeAction
+  | TelopSetStyleAction          // Phase 1-2: 欠落修正
+  | TelopSetTypographyAction     // Phase 1-2: 欠落修正
+  | MotionSetPresetAction         // Phase 2-1: モーション変更
+  | TelopSetCustomStyleAction;    // Phase 2-2: カスタムスタイル
 
 interface BalloonAdjustWindowAction {
   action: 'balloon.adjust_window';
@@ -1803,6 +1808,25 @@ interface TelopSetTypographyAction {
   scope?: TelopScope;          // デフォルト 'remotion'
 }
 
+// Phase 2-1: モーションプリセット変更
+interface MotionSetPresetAction {
+  action: 'motion.set_preset';
+  scene_idx: number;          // 1-indexed シーン番号
+  preset_id: string;          // motion_presets.id (e.g., 'kenburns_soft', 'pan_lr', 'none')
+}
+
+// Phase 2-2: カスタムスタイル変更（Vrew風）
+interface TelopSetCustomStyleAction {
+  action: 'telop.set_custom_style';
+  text_color?: string;      // hex color e.g. '#FFFFFF'
+  stroke_color?: string;    // hex color e.g. '#000000'
+  stroke_width?: number;    // 0-6
+  bg_color?: string;        // hex color e.g. '#000000'
+  bg_opacity?: number;      // 0-1
+  font_family?: string;     // 'noto-sans' | 'noto-serif' | 'rounded' | 'zen-maru'
+  font_weight?: string;     // '400' | '500' | '600' | '700' | '800'
+}
+
 // 許可されるアクションのホワイトリスト
 const ALLOWED_CHAT_ACTIONS = new Set([
   'balloon.adjust_window',
@@ -1834,6 +1858,10 @@ const ALLOWED_CHAT_ACTIONS = new Set([
   'telop.set_size',
   'telop.set_style',  // Phase 1: スタイルプリセット変更
   'telop.set_typography',  // PR-Remotion-Typography: 文字組み設定
+  // Phase 2-1: モーション（カメラの動き）変更
+  'motion.set_preset',     // シーン単位のモーションプリセット変更
+  // Phase 2-2: カスタムスタイル（Vrew風）
+  'telop.set_custom_style',  // 文字色・フォント・縁取りなどのカスタム指定
 ]);
 
 /**
@@ -1857,6 +1885,16 @@ interface TelopSettingsOverride {
     line_height?: number;
     letter_spacing?: number;
   };
+  // Phase 2-2: カスタムスタイル（Vrew風）
+  custom_style?: {
+    text_color?: string;      // hex color e.g. '#FFFFFF'
+    stroke_color?: string;    // hex color e.g. '#000000'
+    stroke_width?: number;    // 0-6
+    bg_color?: string;        // hex color e.g. '#000000'
+    bg_opacity?: number;      // 0-1
+    font_family?: string;     // 'noto-sans' | 'noto-serif' | 'rounded' | 'zen-maru'
+    font_weight?: string;     // '400' | '500' | '600' | '700' | '800'
+  } | null;
   // Phase 3-A: scope（Remotionのみ即時反映、comic/bothは再生成が必要なので警告）
   // 注意: scopeは設定保存ではなく、dry-run時の警告生成に使用
 }
@@ -2785,6 +2823,168 @@ async function resolveIntentToOps(
         resolutionLog.push({
           action: action.action,
           resolved: { typography, scope: 'remotion' },
+        });
+
+      // ====================================================================
+      // Phase 2-1: motion.set_preset - シーン単位のモーションプリセット変更
+      // ====================================================================
+      } else if (action.action === 'motion.set_preset') {
+        const motionAction = action as MotionSetPresetAction;
+        
+        // シーンIDの解決
+        const sceneIdx = motionAction.scene_idx;
+        if (!sceneIdx || sceneIdx < 1) {
+          errors.push(`${prefix}: scene_idx must be >= 1`);
+          continue;
+        }
+        
+        const sceneId = visibleSceneIds[sceneIdx - 1];
+        if (!sceneId) {
+          errors.push(`${prefix}: Scene #${sceneIdx} not found (total visible: ${visibleSceneIds.length})`);
+          continue;
+        }
+        
+        // プリセットID のバリデーション
+        const presetId = motionAction.preset_id;
+        if (!presetId) {
+          errors.push(`${prefix}: preset_id is required`);
+          continue;
+        }
+        
+        // motion_presets テーブルからプリセットを検索
+        const presetRow = await db.prepare(
+          `SELECT id, name, motion_type, params FROM motion_presets WHERE id = ? AND is_active = 1`
+        ).bind(presetId).first<{ id: string; name: string; motion_type: string; params: string }>();
+        
+        if (!presetRow) {
+          // 利用可能なプリセット一覧を取得してエラーメッセージに含める
+          const availablePresets = await db.prepare(
+            `SELECT id, name FROM motion_presets WHERE is_active = 1 ORDER BY sort_order`
+          ).all<{ id: string; name: string }>();
+          const presetList = availablePresets.results.map(p => `${p.id}(${p.name})`).join(', ');
+          errors.push(`${prefix}: Unknown preset_id "${presetId}". Available: ${presetList}`);
+          continue;
+        }
+        
+        // scene_motion テーブルを更新する PatchOp を生成
+        ops.push({
+          table: 'scene_motion',
+          action: 'upsert',
+          target: { scene_id: sceneId },
+          values: {
+            scene_id: sceneId,
+            motion_preset_id: presetId,
+            updated_at: new Date().toISOString(),
+          },
+          sql: `INSERT INTO scene_motion (scene_id, motion_preset_id, updated_at)
+                VALUES (?, ?, datetime('now'))
+                ON CONFLICT(scene_id) DO UPDATE SET
+                  motion_preset_id = excluded.motion_preset_id,
+                  updated_at = datetime('now')`,
+          params: [sceneId, presetId],
+        });
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: {
+            scene_idx: sceneIdx,
+            scene_id: sceneId,
+            preset_id: presetId,
+            preset_name: presetRow.name,
+            motion_type: presetRow.motion_type,
+          },
+        });
+
+      // ====================================================================
+      // Phase 2-2: telop.set_custom_style - カスタムスタイル変更（Vrew風）
+      // ====================================================================
+      } else if (action.action === 'telop.set_custom_style') {
+        const customAction = action as TelopSetCustomStyleAction;
+        
+        const validFonts = ['noto-sans', 'noto-serif', 'rounded', 'zen-maru'];
+        const validWeights = ['400', '500', '600', '700', '800'];
+        const hexColorRegex = /^#[0-9a-fA-F]{6}$/;
+        
+        const customStyle: NonNullable<TelopSettingsOverride['custom_style']> = {};
+        
+        // バリデーション: text_color
+        if (customAction.text_color !== undefined) {
+          if (!hexColorRegex.test(customAction.text_color)) {
+            errors.push(`${prefix}: text_color must be a hex color (e.g., '#FFFFFF')`);
+            continue;
+          }
+          customStyle.text_color = customAction.text_color;
+        }
+        
+        // バリデーション: stroke_color
+        if (customAction.stroke_color !== undefined) {
+          if (!hexColorRegex.test(customAction.stroke_color)) {
+            errors.push(`${prefix}: stroke_color must be a hex color (e.g., '#000000')`);
+            continue;
+          }
+          customStyle.stroke_color = customAction.stroke_color;
+        }
+        
+        // バリデーション: stroke_width (0-6)
+        if (customAction.stroke_width !== undefined) {
+          if (customAction.stroke_width < 0 || customAction.stroke_width > 6) {
+            errors.push(`${prefix}: stroke_width must be between 0 and 6`);
+            continue;
+          }
+          customStyle.stroke_width = customAction.stroke_width;
+        }
+        
+        // バリデーション: bg_color
+        if (customAction.bg_color !== undefined) {
+          if (!hexColorRegex.test(customAction.bg_color)) {
+            errors.push(`${prefix}: bg_color must be a hex color (e.g., '#000000')`);
+            continue;
+          }
+          customStyle.bg_color = customAction.bg_color;
+        }
+        
+        // バリデーション: bg_opacity (0-1)
+        if (customAction.bg_opacity !== undefined) {
+          if (customAction.bg_opacity < 0 || customAction.bg_opacity > 1) {
+            errors.push(`${prefix}: bg_opacity must be between 0 and 1`);
+            continue;
+          }
+          customStyle.bg_opacity = customAction.bg_opacity;
+        }
+        
+        // バリデーション: font_family
+        if (customAction.font_family !== undefined) {
+          if (!validFonts.includes(customAction.font_family)) {
+            errors.push(`${prefix}: font_family must be one of: ${validFonts.join(', ')}`);
+            continue;
+          }
+          customStyle.font_family = customAction.font_family;
+        }
+        
+        // バリデーション: font_weight
+        if (customAction.font_weight !== undefined) {
+          if (!validWeights.includes(customAction.font_weight)) {
+            errors.push(`${prefix}: font_weight must be one of: ${validWeights.join(', ')}`);
+            continue;
+          }
+          customStyle.font_weight = customAction.font_weight;
+        }
+        
+        // 少なくとも1つの変更が必要
+        if (Object.keys(customStyle).length === 0) {
+          warnings.push(`${prefix}: No custom style properties specified, skipping`);
+          continue;
+        }
+        
+        // 既存の custom_style 設定とマージ
+        telopSettingsOverride.custom_style = {
+          ...(telopSettingsOverride.custom_style || {}),
+          ...customStyle,
+        };
+        
+        resolutionLog.push({
+          action: action.action,
+          resolved: { custom_style: customStyle },
         });
 
       // ====================================================================
@@ -3754,6 +3954,46 @@ function generateDiffSummary(
         });
       }
     }
+
+    // Phase 2-1: モーション変更アクション
+    if (action.action === 'motion.set_preset') {
+      const ma = action as MotionSetPresetAction;
+      const presetLabels: Record<string, string> = {
+        'none': '動きなし',
+        'kenburns_soft': 'ゆっくりズーム',
+        'kenburns_strong': '強めズーム',
+        'pan_lr': '左→右パン',
+        'pan_rl': '右→左パン',
+        'pan_tb': '上→下パン',
+        'pan_bt': '下→上パン',
+      };
+      changes.push({
+        type: 'motion',
+        target: `シーン${ma.scene_idx}`,
+        detail: `モーション: ${presetLabels[ma.preset_id] || ma.preset_id}`,
+      });
+    }
+
+    // Phase 2-2: カスタムスタイル変更アクション
+    if (action.action === 'telop.set_custom_style') {
+      const ca = action as TelopSetCustomStyleAction;
+      const details: string[] = [];
+      if (ca.text_color) details.push(`文字色: ${ca.text_color}`);
+      if (ca.stroke_color) details.push(`縁取り色: ${ca.stroke_color}`);
+      if (ca.stroke_width !== undefined) details.push(`縁取り幅: ${ca.stroke_width}`);
+      if (ca.bg_color) details.push(`背景色: ${ca.bg_color}`);
+      if (ca.bg_opacity !== undefined) details.push(`背景不透明度: ${Math.round(ca.bg_opacity * 100)}%`);
+      const fontLabels: Record<string, string> = {
+        'noto-sans': 'ゴシック', 'noto-serif': '明朝', 'rounded': '丸ゴシック', 'zen-maru': 'やわらか丸ゴシック'
+      };
+      if (ca.font_family) details.push(`フォント: ${fontLabels[ca.font_family] || ca.font_family}`);
+      if (ca.font_weight) details.push(`太さ: ${ca.font_weight}`);
+      changes.push({
+        type: 'telop_custom',
+        target: 'テロップ（カスタムスタイル）',
+        detail: details.join(', ') || '変更なし',
+      });
+    }
   }
 
   // PR-5-3b: テロップ設定オーバーライドから追加のサマリー
@@ -3841,6 +4081,12 @@ Action schemas:
 - telop.set_typography: { action, max_lines?: 1-5, line_height?: 100-200, letter_spacing?: -2 to 6 }
   * typography is Remotion-only (scope always "remotion")
   * max_lines: 最大行数 (1-5), line_height: 行間 (100-200%), letter_spacing: 文字間 (-2 to 6px)
+- motion.set_preset: { action, scene_idx, preset_id: string }
+  * Available preset_ids: "none"(動きなし), "kenburns_soft"(ゆっくりズーム), "kenburns_strong"(強めズーム), "pan_lr"(左→右), "pan_rl"(右→左), "pan_tb"(上→下), "pan_bt"(下→上)
+  * scene_idx is 1-indexed. Use context scene if not specified.
+- telop.set_custom_style: { action, text_color?: "#hex", stroke_color?: "#hex", stroke_width?: 0-6, bg_color?: "#hex", bg_opacity?: 0-1, font_family?: "noto-sans"|"noto-serif"|"rounded"|"zen-maru", font_weight?: "400"-"800" }
+  * Specify only the properties to change. Omit others to keep current values.
+  * Colors must be hex format: "#FFFFFF", "#000000", "#FF0000", etc.
 
 Rules:
 1) Output JSON only.
@@ -4138,6 +4384,18 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 - telop.set_position: { action, position_preset: "bottom"|"center"|"top" }
 - telop.set_size: { action, size_preset: "sm"|"md"|"lg" }
 
+【Phase 2-1: モーション（カメラの動き）変更】
+- motion.set_preset: { action, scene_idx, preset_id: string }
+  * Available preset_ids: "none"(動きなし), "kenburns_soft"(ゆっくりズーム), "kenburns_strong"(強めズーム), "pan_lr"(左→右), "pan_rl"(右→左), "pan_tb"(上→下), "pan_bt"(下→上)
+  * scene_idx は1始まり。指定がなければ文脈のシーンを使用。
+
+【Phase 2-2: カスタムスタイル（Vrew風）テロップ変更】
+- telop.set_custom_style: { action, text_color?: "#hex", stroke_color?: "#hex", stroke_width?: 0-6, bg_color?: "#hex", bg_opacity?: 0-1, font_family?: "noto-sans"|"noto-serif"|"rounded"|"zen-maru", font_weight?: "400"-"800" }
+  * 変更したい項目のみ指定。他は既存値を維持。
+  * 色はhex形式: "#FFFFFF", "#000000", "#FF0000"
+  * フォント: noto-sans(ゴシック), noto-serif(明朝), rounded(丸ゴシック), zen-maru(やわらかい丸ゴシック)
+  * 太さ: 400(通常), 500(やや太), 600(セミボールド), 700(ボールド), 800(エクストラボールド)
+
 【P7: シーン別BGM/SFX操作】
 - scene_bgm.set_volume: { action, scene_idx, volume: 0-1 }  ※特定シーンのBGM音量
 - scene_bgm.set_timing: { action, scene_idx, start_ms?, end_ms?, delta_start_ms?, delta_end_ms? }  ※BGMのフェードイン/アウトタイミング
@@ -4245,6 +4503,32 @@ ${allowedList.map(x => `- ${x}`).join('\n')}
 
 ユーザー: 30秒の効果音を1:10でもう一回
 → {"assistant_message": "30秒付近の効果音を1分10秒にもコピーしましょうか？", "has_suggestion": true, "suggestion_summary": "SFX: 0:30をコピー → 1:10にも配置", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "timeline_sfx.copy", "source_time_ms": 30000, "new_start_ms": 70000}]}}
+
+【Phase 2-1: モーション（カメラの動き）変更の会話例】
+ユーザー: このシーンの動きをゆっくりズームにして
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のモーションをゆっくりズーム（Ken Burns）に設定しましょうか？自然な動きが加わりますよ！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のモーション → ゆっくりズーム", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset", "scene_idx": ${ctx?.scene_idx || 1}, "preset_id": "kenburns_soft"}]}}
+
+ユーザー: シーン3を左から右にパンして
+→ {"assistant_message": "シーン3のモーションを左→右パンに設定しましょうか？横方向の動きが加わります！", "has_suggestion": true, "suggestion_summary": "シーン3のモーション → 左→右パン", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset", "scene_idx": 3, "preset_id": "pan_lr"}]}}
+
+ユーザー: このシーンの動きを止めて
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のモーションを停止（静止画）にしましょうか？", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のモーション → 停止", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset", "scene_idx": ${ctx?.scene_idx || 1}, "preset_id": "none"}]}}
+
+ユーザー: もっとズームを強くして
+→ {"assistant_message": "シーン${ctx?.scene_idx || 1}のズームを強めにしましょうか？ダイナミックな動きになりますよ！", "has_suggestion": true, "suggestion_summary": "シーン${ctx?.scene_idx || 1}のモーション → 強めズーム", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "motion.set_preset", "scene_idx": ${ctx?.scene_idx || 1}, "preset_id": "kenburns_strong"}]}}
+
+【Phase 2-2: カスタムスタイル（Vrew風）テロップ変更の会話例】
+ユーザー: テロップの文字色を黄色にして
+→ {"assistant_message": "テロップの文字色を黄色に変更しましょうか？鮮やかで目立つようになりますよ！", "has_suggestion": true, "suggestion_summary": "テロップ文字色 → 黄色(#FFD700)", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_custom_style", "text_color": "#FFD700"}]}}
+
+ユーザー: テロップを白文字に黒い縁取りにして
+→ {"assistant_message": "白文字＋黒い縁取りに設定しましょうか？視認性が高くなりますよ！", "has_suggestion": true, "suggestion_summary": "テロップ → 白文字(#FFFFFF) + 黒縁取り(#000000)", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_custom_style", "text_color": "#FFFFFF", "stroke_color": "#000000", "stroke_width": 3}]}}
+
+ユーザー: フォントを明朝体に変えて
+→ {"assistant_message": "テロップのフォントを明朝体に変更しましょうか？上品な雰囲気になりますよ！", "has_suggestion": true, "suggestion_summary": "テロップフォント → 明朝体", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_custom_style", "font_family": "noto-serif"}]}}
+
+ユーザー: テロップをもっと太くして
+→ {"assistant_message": "テロップの文字を太くしましょうか？ボールド(700)に設定しますね！", "has_suggestion": true, "suggestion_summary": "テロップ太さ → ボールド(700)", "intent": {"schema": "rilarc_intent_v1", "actions": [{"action": "telop.set_custom_style", "font_weight": "700"}]}}
 
 【文脈情報】
 ${ctxText}
