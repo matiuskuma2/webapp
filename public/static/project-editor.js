@@ -4954,6 +4954,9 @@ function renderBuilderSceneCard(scene) {
         <!-- Left: Text Content (includes Audio under dialogue) -->
         <div class="space-y-4">
           ${renderSceneTextContent(scene)}
+          
+          <!-- ⑥ 動画プロンプト＆生成エリア（左カラム下部） -->
+          ${renderVideoPromptSection(scene, imageStatus, disableVideoGen)}
         </div>
         
         <!-- Right: Image Preview & Actions -->
@@ -4986,8 +4989,6 @@ function renderBuilderSceneCard(scene) {
           </p>
           ` : ''}
           
-          <!-- 動画プロンプト＆生成エリア -->
-          ${renderVideoPromptSection(scene, imageStatus, disableVideoGen)}
           
           ${isFailed && errorMessage && !activeImage ? `
           <div class="bg-red-50 border-2 border-red-200 rounded-lg p-4">
