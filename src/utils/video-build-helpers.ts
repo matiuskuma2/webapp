@@ -694,6 +694,7 @@ export interface BuildBubbleV1 {
 // ====================================================================
 
 import type { ProjectJson, ProjectJsonScene, VideoBuildSettings } from './aws-video-build-client';
+import { s3ToCloudFrontUrl } from './aws-video-client';
 
 export interface AssetValidationResult {
   ready_count: number;
@@ -859,6 +860,23 @@ export interface SceneVisual {
 }
 
 /**
+ * URL を CloudFront 永続URLに変換（S3 URL の場合のみ）
+ * 既にCloudFront URLやR2 URLの場合はそのまま返す
+ */
+function ensureCloudFrontUrl(url: string): string {
+  if (!url) return url;
+  // S3直接URLの場合はCloudFrontに変換
+  if (url.includes('.s3.') && url.includes('amazonaws.com')) {
+    const converted = s3ToCloudFrontUrl(url);
+    if (converted && converted !== url) {
+      console.log(`[video-build-helpers] S3 URL → CloudFront: ${url.substring(0, 60)}... → ${converted.substring(0, 60)}...`);
+      return converted;
+    }
+  }
+  return url;
+}
+
+/**
  * display_asset_type に基づいて visual を選択
  * SSOT: この関数が素材選択の唯一の判定ロジック
  * 
@@ -877,7 +895,7 @@ export function selectSceneVisual(
       }
       return {
         type: 'comic',
-        source: { image_url: scene.active_comic.r2_url },
+        source: { image_url: ensureCloudFrontUrl(scene.active_comic.r2_url) },
         effect: { type: 'none', zoom: 1.0, pan: 'center' },  // comic は Ken Burns 無効
       };
       
@@ -887,7 +905,7 @@ export function selectSceneVisual(
       }
       return {
         type: 'video',
-        source: { video_url: scene.active_video.r2_url },
+        source: { video_url: ensureCloudFrontUrl(scene.active_video.r2_url) },
         effect: { type: 'none', zoom: 1.0, pan: 'center' },  // video は Ken Burns 無効
       };
       
@@ -897,7 +915,7 @@ export function selectSceneVisual(
       }
       return {
         type: 'image',
-        source: { image_url: scene.active_image.r2_url },
+        source: { image_url: ensureCloudFrontUrl(scene.active_image.r2_url) },
         effect: {
           type: enableKenBurns ? 'kenburns' : 'none',
           zoom: enableKenBurns ? 1.05 : 1.0,
