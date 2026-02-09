@@ -1,13 +1,35 @@
-# RILARC Scenario Generator - webapp
+# MARUMUVI（まるむび） - webapp
 
 ## プロジェクト概要
 音声・テキスト入力から、YouTube/TikTok向けの構造化シナリオ（タイトル・セリフ・画像・漫画・動画）を自動生成するWebアプリケーション。
 
+- **サービス名**: MARUMUVI（旧: RILARC Scenario Generator）
 - **プロジェクト名**: webapp
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-02-08（モーション全20プリセット対応 + 全シーン一括適用機能）
+- **最終更新**: 2026-02-09（サービス名 MARUMUVI へリブランド + TOP 2動線化 + 丸投げチャット準備中ページ）
+
+---
+
+## 動画作成フロー（2系統）
+
+### フロー1: プロジェクト作成（既存・稼働中）
+シーンを一つずつ作り込む詳細コントロール型。
+1. シナリオ入力（音声/テキスト）
+2. シーン分割（preserve / AI モード）
+3. 画像生成（Gemini API）
+4. 動画化（Veo2/Veo3）
+5. 合成・エクスポート
+
+### フロー2: 丸投げチャット（Coming Soon・工事中）
+チャットだけで動画完成する全自動型。
+1. チャットでシナリオを伝える
+2. シーン画像を全自動生成
+3. 画像から動画を自動生成
+4. 全シーンを合算して完成
+
+> `/marunage-chat` で工事中ページを確認可能。既存プロジェクト機能とは完全に切り離して開発予定。
 
 ---
 
