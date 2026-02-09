@@ -113,6 +113,12 @@ function extractDialogueText(rawText: string): string {
 
 /**
  * キャラ名からキャラクターキーを検索
+ * 
+ * マッチング優先順位:
+ * 1. character_name / aliases の完全一致
+ * 2. character_name / aliases の部分一致（「恵さん」→「とわの恵」）
+ * 3. character_key の完全一致（大文字小文字無視）
+ * 4. あいまいマッチ（ひらがな/カタカナ統一、敬称除去）
  */
 function findCharacterKey(
   speakerName: string,
@@ -120,27 +126,71 @@ function findCharacterKey(
 ): { character_key: string; character_name: string } | null {
   const normalizedSpeaker = normalizeForMatching(speakerName);
   
+  // Pass 1: 完全一致（character_name, aliases, character_key）
   for (const char of characterMappings) {
-    // character_name で完全一致
     if (normalizeForMatching(char.character_name) === normalizedSpeaker) {
-      return {
-        character_key: char.character_key,
-        character_name: char.character_name
-      };
+      return { character_key: char.character_key, character_name: char.character_name };
     }
-    
-    // aliases で完全一致
     for (const alias of char.aliases) {
       if (normalizeForMatching(alias) === normalizedSpeaker) {
-        return {
-          character_key: char.character_key,
-          character_name: char.character_name
-        };
+        return { character_key: char.character_key, character_name: char.character_name };
+      }
+    }
+    // character_key 一致（例: "pinkboo_sub" → "pinkboo_sub"）
+    if (normalizeForMatching(char.character_key) === normalizedSpeaker) {
+      return { character_key: char.character_key, character_name: char.character_name };
+    }
+  }
+  
+  // Pass 2: 部分一致（どちらかが含まれる）
+  // 例: シナリオ「恵さん」↔ DB「とわの恵」→「恵」が共通
+  // 例: シナリオ「ぴんくぶ〜」↔ DB alias「でびるぶー」→ 一致しない
+  const speakerClean = removeSuffix(normalizedSpeaker);
+  
+  for (const char of characterMappings) {
+    const nameClean = removeSuffix(normalizeForMatching(char.character_name));
+    const nameKana = toHiragana(nameClean);
+    const speakerKana = toHiragana(speakerClean);
+    
+    // 名前の一部が含まれるか（2文字以上の部分一致）
+    if (speakerKana.length >= 2 && nameKana.length >= 2) {
+      if (nameKana.includes(speakerKana) || speakerKana.includes(nameKana)) {
+        return { character_key: char.character_key, character_name: char.character_name };
+      }
+    }
+    
+    // aliasesの部分一致
+    for (const alias of char.aliases) {
+      const aliasClean = removeSuffix(normalizeForMatching(alias));
+      const aliasKana = toHiragana(aliasClean);
+      if (speakerKana.length >= 2 && aliasKana.length >= 2) {
+        if (aliasKana.includes(speakerKana) || speakerKana.includes(aliasKana)) {
+          return { character_key: char.character_key, character_name: char.character_name };
+        }
       }
     }
   }
   
   return null;
+}
+
+/**
+ * 敬称・呼称サフィックスを除去
+ * 例: "恵さん" → "恵", "太郎くん" → "太郎"
+ */
+function removeSuffix(name: string): string {
+  return name.replace(/(さん|くん|ちゃん|様|さま|先生|先輩|後輩|殿|氏)$/g, '');
+}
+
+/**
+ * カタカナをひらがなに変換（マッチング用）
+ * 「〜」「～」も正規化
+ */
+function toHiragana(str: string): string {
+  return str
+    .replace(/[\u30A1-\u30F6]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0x60))
+    .replace(/[〜～ー]/g, '')  // 長音・波ダッシュを除去
+    .replace(/[\s\u3000]/g, '');  // スペース除去
 }
 
 // =============================================================================
@@ -205,15 +255,17 @@ export function parseDialogueToUtterances(
           original_line: trimmedLine
         });
       } else {
-        // キャラクターが見つからない場合 → narration（セリフ全体を含む）
-        // ただし、キャラ名らしきものがある場合は警告ログ
-        console.warn(`[DialogueParser] Unknown speaker: "${speakerName}" - treating as narration`);
+        // キャラクターが見つからない場合でも「名前：セリフ」形式なら
+        // dialogue扱いにして、テキストからキャラ名を除去する
+        // → 音声生成時にキャラ名を読み上げないようにする
+        const dialogueText = extractDialogueText(rawText);
+        console.warn(`[DialogueParser] Unknown speaker: "${speakerName}" - treating as dialogue (unmatched character)`);
         utterances.push({
           order_no: orderNo++,
-          role: 'narration',
-          character_key: null,
-          character_name: null,
-          text: trimmedLine,  // 元の行全体（キャラ名：含む）
+          role: 'dialogue',
+          character_key: null,  // 未マッチだがdialogue扱い
+          character_name: speakerName,  // シナリオ上の名前は保持
+          text: dialogueText,  // キャラ名を除いたセリフ本文のみ
           original_line: trimmedLine
         });
       }
