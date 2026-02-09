@@ -917,16 +917,47 @@ export const adminHtml = `
                     </div>
                     
                     <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-1">ファイルURL <span class="text-red-500">*</span></label>
-                        <div class="flex gap-2">
-                            <input type="text" id="audioFileUrl" class="flex-1 border rounded-lg px-3 py-2" placeholder="https://...">
-                            <label class="px-4 py-2 bg-blue-600 text-white rounded-lg cursor-pointer hover:bg-blue-700">
-                                <i class="fas fa-upload mr-1"></i>アップロード
-                                <input type="file" id="audioFileInput" accept="audio/*" class="hidden" onchange="handleAudioUpload(this)">
-                            </label>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">ファイル <span class="text-red-500">*</span></label>
+                        <!-- ドラッグ&ドロップゾーン -->
+                        <div id="audioDropZone" 
+                            class="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center cursor-pointer hover:border-purple-400 hover:bg-purple-50 transition-all"
+                            onclick="document.getElementById('audioFileInput').click()"
+                        >
+                            <div id="audioDropContent">
+                                <i class="fas fa-cloud-upload-alt text-4xl text-gray-400 mb-2"></i>
+                                <p class="text-sm text-gray-600 font-semibold">ファイルをドラッグ&ドロップ</p>
+                                <p class="text-xs text-gray-400 mt-1">またはクリックして選択</p>
+                                <p class="text-xs text-gray-400 mt-1">対応: MP3, WAV, M4A, OGG, AAC</p>
+                            </div>
+                            <!-- アップロード済み表示 -->
+                            <div id="audioDropUploaded" class="hidden">
+                                <i class="fas fa-check-circle text-3xl text-green-500 mb-2"></i>
+                                <p id="audioDropFileName" class="text-sm font-semibold text-gray-700"></p>
+                                <p id="audioDropFileInfo" class="text-xs text-gray-500 mt-1"></p>
+                                <div class="flex items-center justify-center gap-2 mt-2">
+                                    <button type="button" id="audioPreviewBtn" onclick="event.stopPropagation(); toggleAudioPreview()" 
+                                        class="px-3 py-1 bg-purple-100 text-purple-700 rounded-full text-xs hover:bg-purple-200">
+                                        <i class="fas fa-play mr-1"></i>試聴
+                                    </button>
+                                    <button type="button" onclick="event.stopPropagation(); resetAudioDrop()" 
+                                        class="px-3 py-1 bg-red-100 text-red-600 rounded-full text-xs hover:bg-red-200">
+                                        <i class="fas fa-times mr-1"></i>削除
+                                    </button>
+                                </div>
+                                <audio id="audioPreviewPlayer" class="hidden"></audio>
+                            </div>
                         </div>
-                        <div id="audioUploadProgress" class="hidden mt-2 text-sm text-blue-600">
-                            <i class="fas fa-spinner fa-spin mr-1"></i>アップロード中...
+                        <input type="file" id="audioFileInput" accept="audio/*" class="hidden" onchange="handleAudioDrop(this.files)">
+                        <input type="hidden" id="audioFileUrl">
+                        <!-- プログレスバー -->
+                        <div id="audioUploadProgress" class="hidden mt-2">
+                            <div class="flex items-center gap-2 text-sm text-blue-600">
+                                <i class="fas fa-spinner fa-spin"></i>
+                                <span id="audioUploadProgressText">アップロード中...</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2 mt-1">
+                                <div id="audioUploadProgressBar" class="bg-blue-600 h-2 rounded-full transition-all" style="width: 0%"></div>
+                            </div>
                         </div>
                     </div>
                     
@@ -2628,6 +2659,8 @@ export const adminHtml = `
             document.getElementById('audioDuration').value = '';
             document.getElementById('audioSource').value = 'suno_ai';
             document.getElementById('audioSortOrder').value = '0';
+            // ドロップゾーンリセット
+            resetAudioDrop();
             document.getElementById('addAudioModal').classList.remove('hidden');
         }
         
@@ -2653,6 +2686,23 @@ export const adminHtml = `
                 document.getElementById('audioDuration').value = a.duration_ms || '';
                 document.getElementById('audioSource').value = a.source || 'manual';
                 document.getElementById('audioSortOrder').value = a.sort_order || 0;
+                
+                // ドロップゾーンにアップロード済みファイル表示
+                if (a.file_url) {
+                    document.getElementById('audioDropContent').classList.add('hidden');
+                    document.getElementById('audioDropUploaded').classList.remove('hidden');
+                    document.getElementById('audioDropFileName').textContent = a.name || 'ファイル';
+                    const sizeStr = a.file_size ? ((a.file_size / 1024 / 1024).toFixed(1) + ' MB') : '';
+                    const durStr = a.duration_ms ? (Math.round(a.duration_ms / 1000) + '秒') : '';
+                    document.getElementById('audioDropFileInfo').textContent = [sizeStr, durStr].filter(Boolean).join(' / ');
+                    document.getElementById('audioPreviewPlayer').src = a.file_url;
+                    const dropZone = document.getElementById('audioDropZone');
+                    dropZone.classList.remove('border-gray-300');
+                    dropZone.classList.add('border-green-400', 'bg-green-50');
+                } else {
+                    resetAudioDrop();
+                }
+                
                 document.getElementById('addAudioModal').classList.remove('hidden');
                 
             } catch (err) {
@@ -2702,35 +2752,199 @@ export const adminHtml = `
             }
         }
         
-        async function handleAudioUpload(input) {
-            const file = input.files[0];
-            if (!file) return;
+        async function handleAudioDrop(files) {
+            if (!files || files.length === 0) return;
+            
+            const file = files[0];
+            const allowedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/ogg', 'audio/aac', 'audio/x-wav'];
+            const allowedExts = ['.mp3', '.wav', '.m4a', '.ogg', '.aac'];
+            const fileName = file.name.toLowerCase();
+            const hasValidExt = allowedExts.some(ext => fileName.endsWith(ext));
+            
+            if (!hasValidExt && !allowedTypes.includes(file.type)) {
+                alert('対応していないファイル形式です。\\n対応: MP3, WAV, M4A, OGG, AAC');
+                return;
+            }
             
             const progressEl = document.getElementById('audioUploadProgress');
+            const progressBar = document.getElementById('audioUploadProgressBar');
+            const progressText = document.getElementById('audioUploadProgressText');
             progressEl.classList.remove('hidden');
+            progressBar.style.width = '10%';
+            progressText.textContent = 'アップロード中...';
             
             try {
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('audio_type', document.getElementById('audioType').value);
                 
+                progressBar.style.width = '30%';
+                
                 const res = await axios.post('/api/admin/audio-library/upload', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' }
+                    headers: { 'Content-Type': 'multipart/form-data' },
+                    onUploadProgress: (e) => {
+                        if (e.total) {
+                            const pct = Math.round((e.loaded / e.total) * 70) + 30;
+                            progressBar.style.width = pct + '%';
+                        }
+                    }
                 });
                 
+                progressBar.style.width = '100%';
+                progressText.textContent = '完了！';
+                
+                // フォームにデータをセット
                 document.getElementById('audioFileUrl').value = res.data.file_url;
                 document.getElementById('audioFileSize').value = res.data.file_size || '';
-                progressEl.classList.add('hidden');
-                alert('アップロード完了！');
+                
+                // 名前が空なら拡張子なしのファイル名を自動入力
+                const nameField = document.getElementById('audioName');
+                if (!nameField.value.trim()) {
+                    nameField.value = file.name.replace(/\\.[^.]+$/, '');
+                }
+                
+                // 音声の長さを自動取得
+                try {
+                    const audio = new Audio();
+                    audio.preload = 'metadata';
+                    const objectUrl = URL.createObjectURL(file);
+                    audio.src = objectUrl;
+                    audio.onloadedmetadata = () => {
+                        const durationMs = Math.round(audio.duration * 1000);
+                        document.getElementById('audioDuration').value = durationMs;
+                        URL.revokeObjectURL(objectUrl);
+                    };
+                } catch (e) { /* duration取得失敗は無視 */ }
+                
+                // ドロップゾーンをアップロード済み表示に切り替え
+                document.getElementById('audioDropContent').classList.add('hidden');
+                document.getElementById('audioDropUploaded').classList.remove('hidden');
+                document.getElementById('audioDropFileName').textContent = file.name;
+                const sizeKB = (file.size / 1024).toFixed(0);
+                const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+                document.getElementById('audioDropFileInfo').textContent = 
+                    file.size > 1024 * 1024 ? sizeMB + ' MB' : sizeKB + ' KB';
+                
+                // プレビュー用URLセット
+                document.getElementById('audioPreviewPlayer').src = res.data.file_url;
+                
+                // ドロップゾーンのスタイル変更
+                const dropZone = document.getElementById('audioDropZone');
+                dropZone.classList.remove('border-gray-300');
+                dropZone.classList.add('border-green-400', 'bg-green-50');
+                
+                setTimeout(() => { progressEl.classList.add('hidden'); }, 1500);
                 
             } catch (err) {
                 console.error('Failed to upload audio:', err);
+                progressBar.style.width = '0%';
                 progressEl.classList.add('hidden');
                 alert('アップロードに失敗しました: ' + (err.response?.data?.error || err.message));
             }
             
-            input.value = '';
+            // input リセット
+            document.getElementById('audioFileInput').value = '';
         }
+        
+        function resetAudioDrop() {
+            document.getElementById('audioFileUrl').value = '';
+            document.getElementById('audioFileSize').value = '';
+            document.getElementById('audioDuration').value = '';
+            document.getElementById('audioDropContent').classList.remove('hidden');
+            document.getElementById('audioDropUploaded').classList.add('hidden');
+            const dropZone = document.getElementById('audioDropZone');
+            dropZone.classList.remove('border-green-400', 'bg-green-50');
+            dropZone.classList.add('border-gray-300');
+            // 試聴停止
+            const player = document.getElementById('audioPreviewPlayer');
+            player.pause();
+            player.src = '';
+        }
+        
+        function toggleAudioPreview() {
+            const player = document.getElementById('audioPreviewPlayer');
+            const btn = document.getElementById('audioPreviewBtn');
+            if (player.paused) {
+                player.play();
+                btn.innerHTML = '<i class="fas fa-stop mr-1"></i>停止';
+            } else {
+                player.pause();
+                player.currentTime = 0;
+                btn.innerHTML = '<i class="fas fa-play mr-1"></i>試聴';
+            }
+            player.onended = () => {
+                btn.innerHTML = '<i class="fas fa-play mr-1"></i>試聴';
+            };
+        }
+        
+        // ドラッグ&ドロップイベントの初期化
+        (function initDragDrop() {
+            document.addEventListener('DOMContentLoaded', () => {
+                const zone = document.getElementById('audioDropZone');
+                if (!zone) return;
+                
+                ['dragenter', 'dragover'].forEach(evt => {
+                    zone.addEventListener(evt, (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        zone.classList.add('border-purple-500', 'bg-purple-50');
+                        zone.classList.remove('border-gray-300');
+                    });
+                });
+                
+                ['dragleave', 'drop'].forEach(evt => {
+                    zone.addEventListener(evt, (e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        zone.classList.remove('border-purple-500', 'bg-purple-50');
+                        if (!zone.classList.contains('border-green-400')) {
+                            zone.classList.add('border-gray-300');
+                        }
+                    });
+                });
+                
+                zone.addEventListener('drop', (e) => {
+                    const files = e.dataTransfer?.files;
+                    if (files?.length) handleAudioDrop(files);
+                });
+            });
+            
+            // モーダル表示時にもイベント再バインド（動的DOM対応）
+            const origOpen = window.openAddAudioModal;
+            window.openAddAudioModal = function() {
+                origOpen?.();
+                setTimeout(() => {
+                    const zone = document.getElementById('audioDropZone');
+                    if (!zone || zone._dndBound) return;
+                    zone._dndBound = true;
+                    
+                    ['dragenter', 'dragover'].forEach(evt => {
+                        zone.addEventListener(evt, (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            zone.classList.add('border-purple-500', 'bg-purple-50');
+                            zone.classList.remove('border-gray-300');
+                        });
+                    });
+                    
+                    ['dragleave', 'drop'].forEach(evt => {
+                        zone.addEventListener(evt, (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            zone.classList.remove('border-purple-500', 'bg-purple-50');
+                            if (!zone.classList.contains('border-green-400')) {
+                                zone.classList.add('border-gray-300');
+                            }
+                        });
+                    });
+                    
+                    zone.addEventListener('drop', (e) => {
+                        const files = e.dataTransfer?.files;
+                        if (files?.length) handleAudioDrop(files);
+                    });
+                }, 100);
+            };
+        })();
         
         async function deactivateAudio(id, name) {
             if (!confirm('「' + name + '」を無効化しますか？')) return;
