@@ -1620,7 +1620,12 @@ app.get('/projects/:id', (c) => {
                                     <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (女性・自然)</option>
                                     <option value="google:ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・低音)</option>
                                 </optgroup>
+                                <!-- プロジェクトキャラクターの音声はJSで動的に追加 -->
                             </select>
+                            <p class="text-xs text-gray-500 mt-1">
+                                <i class="fas fa-info-circle mr-1"></i>
+                                キャラクター音声を使いたい場合は、発話を「キャラセリフ」に設定してください。キャラの声は自動で適用されます。
+                            </p>
                             <div class="flex items-center justify-between mt-2">
                                 <span id="narrationVoiceCurrent" class="text-xs text-gray-500">現在: ja-JP-Neural2-B（フォールバック）</span>
                                 <button id="narrationVoiceSaveBtn" onclick="saveNarrationVoice()" 

@@ -140,7 +140,8 @@ utterances.get('/scenes/:sceneId/utterances', async (c) => {
     `).bind(scene.project_id, sceneId).all<any>();
 
     // Get assigned characters for this scene
-    const { results: characterRows } = await c.env.DB.prepare(`
+    // FIX: Fallback to project_character_models if scene_character_map is empty
+    let { results: characterRows } = await c.env.DB.prepare(`
       SELECT 
         scm.character_key,
         pcm.character_name as name,
@@ -150,6 +151,21 @@ utterances.get('/scenes/:sceneId/utterances', async (c) => {
         ON scm.character_key = pcm.character_key AND pcm.project_id = ?
       WHERE scm.scene_id = ?
     `).bind(scene.project_id, sceneId).all<any>();
+
+    // FIX: If no scene-level character assignments, fall back to all project characters
+    // This ensures users can always select キャラセリフ if the project has any characters
+    if (!characterRows || characterRows.length === 0) {
+      const { results: projectCharRows } = await c.env.DB.prepare(`
+        SELECT 
+          character_key,
+          character_name as name,
+          voice_preset_id
+        FROM project_character_models
+        WHERE project_id = ?
+        ORDER BY character_name ASC
+      `).bind(scene.project_id).all<any>();
+      characterRows = projectCharRows || [];
+    }
 
     const utterancesList: Utterance[] = utteranceRows.map(row => ({
       id: row.id,
@@ -226,17 +242,31 @@ utterances.post('/scenes/:sceneId/utterances', async (c) => {
         return c.json(createErrorResponse('INVALID_REQUEST', 'character_key must be null for narration'), 400);
       }
     } else if (role === 'dialogue') {
-      // dialogue must have character_key that exists in scene_character_map
+      // dialogue must have character_key that exists in scene_character_map OR project_character_models
       if (!character_key) {
         return c.json(createErrorResponse('INVALID_REQUEST', 'character_key is required for dialogue'), 400);
       }
 
+      // FIX: Check both scene_character_map AND project_character_models
       const charExists = await c.env.DB.prepare(`
         SELECT 1 FROM scene_character_map WHERE scene_id = ? AND character_key = ?
       `).bind(sceneId, character_key).first();
 
       if (!charExists) {
-        return c.json(createErrorResponse('INVALID_REQUEST', `character_key "${character_key}" is not assigned to this scene`), 400);
+        // Fallback: check project_character_models
+        const projectCharExists = await c.env.DB.prepare(`
+          SELECT 1 FROM project_character_models WHERE project_id = ? AND character_key = ?
+        `).bind(scene.project_id, character_key).first();
+
+        if (!projectCharExists) {
+          return c.json(createErrorResponse('INVALID_REQUEST', `character_key "${character_key}" not found in project characters`), 400);
+        }
+
+        // Auto-assign character to scene (so future queries work)
+        await c.env.DB.prepare(`
+          INSERT OR IGNORE INTO scene_character_map (scene_id, character_key) VALUES (?, ?)
+        `).bind(sceneId, character_key).run();
+        console.log(`[Utterance] Auto-assigned character "${character_key}" to scene ${sceneId}`);
       }
     }
 
@@ -355,13 +385,26 @@ utterances.put('/utterances/:utteranceId', async (c) => {
       }
     } else if (finalRole === 'dialogue') {
       if (character_key !== undefined) {
-        // Validate character exists in scene
+        // FIX: Validate character exists in scene_character_map OR project_character_models
         const charExists = await c.env.DB.prepare(`
           SELECT 1 FROM scene_character_map WHERE scene_id = ? AND character_key = ?
         `).bind(existing.scene_id, character_key).first();
 
         if (!charExists) {
-          return c.json(createErrorResponse('INVALID_REQUEST', `character_key "${character_key}" is not assigned to this scene`), 400);
+          // Fallback: check project_character_models
+          const projectCharExists = await c.env.DB.prepare(`
+            SELECT 1 FROM project_character_models WHERE project_id = ? AND character_key = ?
+          `).bind(existing.project_id, character_key).first();
+
+          if (!projectCharExists) {
+            return c.json(createErrorResponse('INVALID_REQUEST', `character_key "${character_key}" not found in project characters`), 400);
+          }
+
+          // Auto-assign character to scene
+          await c.env.DB.prepare(`
+            INSERT OR IGNORE INTO scene_character_map (scene_id, character_key) VALUES (?, ?)
+          `).bind(existing.scene_id, character_key).run();
+          console.log(`[Utterance] Auto-assigned character "${character_key}" to scene ${existing.scene_id} via PUT`);
         }
         updates.push('character_key = ?');
         values.push(character_key);

@@ -264,9 +264,12 @@
      */
     renderInlineEditForm(utterance, idx) {
       const isNarration = utterance.role === 'narration';
-      const characterOptions = this.assignedCharacters.map(c => 
-        `<option value="${this.escapeHtml(c.character_key)}" ${utterance.character_key === c.character_key ? 'selected' : ''}>${this.escapeHtml(c.name)}</option>`
-      ).join('');
+      const characterOptions = this.assignedCharacters.map(c => {
+        const voiceLabel = c.voice_preset_id 
+          ? (c.voice_preset_id.startsWith('fish:') ? ' 🎤Fish' : c.voice_preset_id.startsWith('el-') || c.voice_preset_id.startsWith('elevenlabs:') ? ' 🎤EL' : ` 🔊${c.voice_preset_id}`)
+          : ' (音声未設定)';
+        return `<option value="${this.escapeHtml(c.character_key)}" ${utterance.character_key === c.character_key ? 'selected' : ''}>${this.escapeHtml(c.name)}${voiceLabel}</option>`;
+      }).join('');
       
       return `
         <div class="utterance-card p-4 bg-blue-50 border-2 border-blue-400 rounded-lg shadow-md" data-utterance-id="${utterance.id}">
@@ -335,9 +338,12 @@
      * Phase2-PR2c: Render inline form for new utterance
      */
     renderNewUtteranceForm() {
-      const characterOptions = this.assignedCharacters.map(c => 
-        `<option value="${this.escapeHtml(c.character_key)}">${this.escapeHtml(c.name)}</option>`
-      ).join('');
+      const characterOptions = this.assignedCharacters.map(c => {
+        const voiceLabel = c.voice_preset_id 
+          ? (c.voice_preset_id.startsWith('fish:') ? ' 🎤Fish' : c.voice_preset_id.startsWith('el-') || c.voice_preset_id.startsWith('elevenlabs:') ? ' 🎤EL' : ` 🔊${c.voice_preset_id}`)
+          : ' (音声未設定)';
+        return `<option value="${this.escapeHtml(c.character_key)}">${this.escapeHtml(c.name)}${voiceLabel}</option>`;
+      }).join('');
       
       return `
         <div class="utterance-card p-4 bg-green-50 border-2 border-green-400 rounded-lg shadow-md">
