@@ -155,7 +155,7 @@ app.get('/', (c) => {
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>RILARC Scenario Generator</title>
+    <title>MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link href="/static/styles.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
@@ -254,7 +254,7 @@ app.get('/', (c) => {
             <div class="container mx-auto px-4 py-4 flex items-center justify-between">
                 <h1 class="text-xl font-bold">
                     <i class="fas fa-video mr-2"></i>
-                    RILARC Scenario Generator
+                    MARUMUVI
                 </h1>
                 <div class="flex items-center gap-4">
                     <!-- Admin Link (superadmin only) -->
@@ -288,8 +288,66 @@ app.get('/', (c) => {
         </header>
         
         <div class="container mx-auto px-4 py-8">
-            <!-- Phase 1: プロジェクト作成 -->
-            <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <!-- 動画を作る: 2つの動線 -->
+            <div class="mb-8">
+                <h2 class="text-lg font-semibold text-gray-700 mb-4">
+                    <i class="fas fa-film mr-2 text-blue-600"></i>
+                    動画を作る
+                </h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <!-- 動線1: プロジェクト作成（既存フロー） -->
+                    <div id="createFlowCard" class="bg-white rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer border-2 border-transparent hover:border-blue-400 group" onclick="document.getElementById('projectCreateSection').classList.toggle('hidden')">
+                        <div class="p-6">
+                            <div class="flex items-center mb-3">
+                                <div class="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center mr-4 group-hover:bg-blue-200 transition-colors">
+                                    <i class="fas fa-layer-group text-blue-600 text-xl"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-bold text-gray-800">プロジェクト作成</h3>
+                                    <p class="text-sm text-gray-500">シーンを一つずつ作り込む</p>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600 leading-relaxed">
+                                シナリオ入力 → シーン分割 → 画像生成 → 動画化 → 合成まで、各ステップを細かくコントロールしながら動画を作成できます。
+                            </p>
+                            <div class="mt-4 flex items-center text-blue-600 text-sm font-medium">
+                                <span>はじめる</span>
+                                <i class="fas fa-chevron-right ml-1 text-xs"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 動線2: 丸投げチャット（工事中） -->
+                    <div class="bg-white rounded-xl shadow-md border-2 border-dashed border-gray-300 opacity-75 relative overflow-hidden">
+                        <div class="p-6">
+                            <div class="flex items-center mb-3">
+                                <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mr-4">
+                                    <i class="fas fa-comments text-purple-600 text-xl"></i>
+                                </div>
+                                <div>
+                                    <h3 class="text-lg font-bold text-gray-800">丸投げチャット</h3>
+                                    <p class="text-sm text-gray-500">チャットだけで動画完成</p>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600 leading-relaxed">
+                                チャットでシナリオを伝えるだけで、シーン画像生成 → 動画化 → 合成まで全自動。左のボードと右のチャットだけで完結します。
+                            </p>
+                            <div class="mt-4 flex items-center text-gray-400 text-sm font-medium">
+                                <span>準備中...</span>
+                            </div>
+                        </div>
+                        <!-- 工事中オーバーレイ -->
+                        <div class="absolute top-3 right-3">
+                            <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">
+                                <i class="fas fa-hard-hat mr-1"></i>Coming Soon
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- プロジェクト作成セクション（トグル表示） -->
+            <div id="projectCreateSection" class="bg-white rounded-lg shadow-md p-6 mb-6">
                 <h2 class="text-xl font-semibold text-gray-700 mb-4">
                     <i class="fas fa-folder-plus mr-2 text-blue-600"></i>
                     新規プロジェクト作成
@@ -485,7 +543,7 @@ app.get('/projects/:id', (c) => {
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Project Editor - RILARC</title>
+    <title>Project Editor - MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -3494,7 +3552,7 @@ app.get('/login', (c) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ログイン - RILARC</title>
+    <title>ログイン - MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
@@ -3503,7 +3561,7 @@ app.get('/login', (c) => {
     <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
         <div class="text-center mb-8">
             <i class="fas fa-video text-5xl text-blue-600 mb-4"></i>
-            <h1 class="text-2xl font-bold text-gray-800">RILARC</h1>
+            <h1 class="text-2xl font-bold text-gray-800">MARUMUVI</h1>
             <p class="text-gray-600 mt-2">アカウントにログイン</p>
         </div>
         
@@ -3599,7 +3657,7 @@ app.get('/register', (c) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>新規登録 - RILARC</title>
+    <title>新規登録 - MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
@@ -3608,7 +3666,7 @@ app.get('/register', (c) => {
     <div class="bg-white rounded-2xl shadow-xl max-w-md w-full p-8">
         <div class="text-center mb-8">
             <i class="fas fa-video text-5xl text-blue-600 mb-4"></i>
-            <h1 class="text-2xl font-bold text-gray-800">RILARC</h1>
+            <h1 class="text-2xl font-bold text-gray-800">MARUMUVI</h1>
             <p class="text-gray-600 mt-2">新規アカウント登録</p>
         </div>
         
@@ -3740,7 +3798,7 @@ app.get('/forgot-password', (c) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>パスワードリセット - RILARC</title>
+    <title>パスワードリセット - MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
@@ -3821,7 +3879,7 @@ app.get('/reset-password', (c) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>新しいパスワード設定 - RILARC</title>
+    <title>新しいパスワード設定 - MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
@@ -3933,6 +3991,149 @@ app.get('/reset-password', (c) => {
   `)
 })
 
+// Marunage Chat route (工事中)
+app.get('/marunage-chat', (c) => {
+  const ASSET_VERSION = getAssetVersion(c.env)
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>丸投げチャット - MARUMUVI</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link href="/static/styles.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .construction-bg {
+            background: repeating-linear-gradient(
+                45deg,
+                #fef3c7,
+                #fef3c7 10px,
+                #fde68a 10px,
+                #fde68a 20px
+            );
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Loading / Auth Check -->
+    <div id="authLoading" class="flex items-center justify-center min-h-screen">
+        <div class="text-center">
+            <i class="fas fa-spinner fa-spin text-4xl text-purple-600 mb-4"></i>
+            <p class="text-gray-600">認証を確認中...</p>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" class="hidden">
+        <!-- Header -->
+        <header class="bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-lg">
+            <div class="container mx-auto px-4 py-4 flex items-center justify-between">
+                <div class="flex items-center gap-4">
+                    <a href="/" class="text-white/80 hover:text-white transition-colors">
+                        <i class="fas fa-arrow-left"></i>
+                    </a>
+                    <h1 class="text-xl font-bold">
+                        <i class="fas fa-comments mr-2"></i>
+                        丸投げチャット
+                    </h1>
+                </div>
+                <a href="/" class="text-white/80 hover:text-white text-sm">
+                    <i class="fas fa-home mr-1"></i>TOP
+                </a>
+            </div>
+        </header>
+
+        <!-- 工事中コンテンツ -->
+        <div class="container mx-auto px-4 py-12">
+            <div class="max-w-2xl mx-auto text-center">
+                <!-- 工事中アイコン -->
+                <div class="mb-8">
+                    <div class="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-6 border-4 border-yellow-300">
+                        <i class="fas fa-hard-hat text-4xl text-yellow-600"></i>
+                    </div>
+                    <h2 class="text-3xl font-bold text-gray-800 mb-3">準備中です</h2>
+                    <p class="text-gray-600 text-lg">この機能は現在開発中です</p>
+                </div>
+
+                <!-- 予告コンテンツ -->
+                <div class="bg-white rounded-2xl shadow-lg p-8 mb-8 text-left">
+                    <h3 class="text-xl font-bold text-purple-700 mb-4">
+                        <i class="fas fa-magic mr-2"></i>丸投げチャットとは？
+                    </h3>
+                    <div class="space-y-4 text-gray-700">
+                        <div class="flex items-start gap-3">
+                            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                                <span class="text-purple-600 font-bold text-sm">1</span>
+                            </div>
+                            <div>
+                                <p class="font-semibold">チャットでシナリオを伝える</p>
+                                <p class="text-sm text-gray-500">「〇〇のシーンで△△が起きる話を作って」と伝えるだけ</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                                <span class="text-purple-600 font-bold text-sm">2</span>
+                            </div>
+                            <div>
+                                <p class="font-semibold">シーン画像を全自動生成</p>
+                                <p class="text-sm text-gray-500">AIがシナリオを解釈して各シーンの画像を一括生成</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                                <span class="text-purple-600 font-bold text-sm">3</span>
+                            </div>
+                            <div>
+                                <p class="font-semibold">画像から動画を自動生成</p>
+                                <p class="text-sm text-gray-500">生成された画像を動画化し、音声・BGMも自動付与</p>
+                            </div>
+                        </div>
+                        <div class="flex items-start gap-3">
+                            <div class="w-8 h-8 bg-purple-100 rounded-lg flex items-center justify-center flex-shrink-0 mt-0.5">
+                                <span class="text-purple-600 font-bold text-sm">4</span>
+                            </div>
+                            <div>
+                                <p class="font-semibold">全シーンを合算して完成</p>
+                                <p class="text-sm text-gray-500">左のボードで確認しながら、チャットだけで完結</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TOPに戻る -->
+                <a href="/" class="inline-flex items-center px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-medium">
+                    <i class="fas fa-arrow-left mr-2"></i>
+                    TOPに戻る
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+        axios.defaults.withCredentials = true;
+        async function checkAuth() {
+            try {
+                const res = await axios.get('/api/auth/me');
+                if (!res.data.authenticated) {
+                    window.location.href = '/login';
+                    return;
+                }
+                document.getElementById('authLoading').classList.add('hidden');
+                document.getElementById('mainContent').classList.remove('hidden');
+            } catch (err) {
+                window.location.href = '/login';
+            }
+        }
+        checkAuth();
+    </script>
+</body>
+</html>
+  `)
+})
+
 // Admin route
 app.get('/admin', (c) => {
   return c.html(adminHtml)
@@ -3951,7 +4152,7 @@ app.get('/signup', (c) => {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>新規登録 - RILARC Scenario Generator</title>
+    <title>新規登録 - MARUMUVI</title>
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
@@ -3961,7 +4162,7 @@ app.get('/signup', (c) => {
         <div class="text-center mb-8">
             <h1 class="text-2xl font-bold text-gray-800">
                 <i class="fas fa-film text-green-600 mr-2"></i>
-                RILARC
+                MARUMUVI
             </h1>
             <p class="text-gray-600 mt-2">新規アカウント登録</p>
         </div>
