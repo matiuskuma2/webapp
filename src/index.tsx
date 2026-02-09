@@ -4141,6 +4141,9 @@ app.get('/marunage-chat', (c) => {
 
 // Admin route
 app.get('/admin', (c) => {
+  c.header('Cache-Control', 'no-cache, no-store, must-revalidate')
+  c.header('Pragma', 'no-cache')
+  c.header('Expires', '0')
   return c.html(adminHtml)
 })
 
