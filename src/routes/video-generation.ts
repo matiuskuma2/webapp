@@ -4930,7 +4930,7 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
     ? sponsorUserId 
     : executorUserId;
   
-  console.log(`[VideoRegenerate] Starting: scene_id=${sceneId}, prompt="${finalPrompt.substring(0, 50)}...", model=${model}, billing=${billingSource}`);
+  console.log(`[VideoRegenerate] Starting: scene_id=${sceneId}, prompt="${finalPrompt.substring(0, 50)}...", model=${model}, billing=${billingSource}, executor=${executorUserId}, billingUser=${billingUserId}`);
   
   // 新しい video_generation を作成（is_active=0）
   const insertResult = await c.env.DB.prepare(`
@@ -4948,9 +4948,9 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
   ).run();
   
   const newVideoId = insertResult.meta.last_row_id as number;
+  console.log(`[VideoRegenerate] Inserted video_generation id=${newVideoId}, scene_id=${sceneId}`);
   
   // Veo API 呼び出し（既存のgenerate-videoと同じロジック）
-  // ここでは簡略化のため、generate-video エンドポイントを内部呼び出しするのではなく
   // 直接 AWS Video Proxy を呼び出す
   
   // APIキー取得（generate-video と同一ロジック - SSOT）
@@ -5058,6 +5058,8 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
     vertexLocation = await getSystemSetting(c.env.DB, 'vertex_default_location') || 'us-central1';
   }
   
+  console.log(`[VideoRegenerate] API key resolved: veo2=${!!apiKey}, vertexSaJson=${!!vertexSaJson}, vertexProjectId=${vertexProjectId || 'null'}, vertexLocation=${vertexLocation || 'null'}`);
+  
   // AWS Video Client (generate-video と同じパターン)
   const awsClient = createAwsVideoClient(c.env);
   if (!awsClient) {
@@ -5086,6 +5088,7 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
   
   const origin = new URL(c.req.url).origin;
   const signedImageUrl = await buildSignedImageUrl(activeImage.r2_key, origin, signingSecret);
+  console.log(`[VideoRegenerate] Signed image URL generated, calling AWS startVideo...`);
   
   try {
     const awsResponse = await awsClient.startVideo({
@@ -5106,6 +5109,8 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
       vertex_project_id: vertexProjectId || undefined,
       vertex_location: vertexLocation || undefined,
     });
+    
+    console.log(`[VideoRegenerate] AWS response: success=${awsResponse.success}, job_id=${awsResponse.job_id || 'null'}, error=${JSON.stringify(awsResponse.error || null)}`);
     
     if (!awsResponse.success || !awsResponse.job_id) {
       const errMsg = awsResponse.error?.message || 'AWS call failed';
