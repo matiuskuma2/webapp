@@ -105,28 +105,112 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
 
     const body = await c.req.json().catch(() => ({} as any));
     // Phase1.7: voice_preset_id もサポート（フロントエンド互換性）
-    const voiceId = (body.voice_id || body.voice_preset_id) as string | undefined;
-    // Auto-detect provider from voice_id if not explicitly set
+    let voiceId = (body.voice_id || body.voice_preset_id) as string | undefined;
     let provider = body.provider as string | undefined;
-    if (!provider) {
-      if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-        provider = 'elevenlabs';
-      } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-        provider = 'fish';
-      } else {
-        provider = 'google';
+    // Phase1.7: text_override で任意のテキストを指定可能（漫画音声パーツ用）
+    const textOverride = body.text_override as string | undefined;
+
+    // 1) scene 取得（idx, project_id, dialogue）— voice解決より先に必要
+    const scene = await c.env.DB.prepare(`
+      SELECT id, project_id, idx, dialogue
+      FROM scenes
+      WHERE id = ?
+    `).bind(sceneId).first<any>();
+
+    if (!scene) {
+      return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'), 404);
+    }
+
+    // ========================================
+    // FIX: Character Voice Auto-Resolution
+    // ========================================
+    // フロントから voice_id が送られなかった場合、
+    // utterance-level と同じ SSOT ロジックでキャラクター音声を自動解決する
+    // Priority:
+    //   1. dialogue + character_key → project_character_models.voice_preset_id
+    //   2. projects.settings_json.default_narration_voice
+    //   3. fallback → ja-JP-Neural2-B
+    // ========================================
+    if (!voiceId) {
+      let voiceSource = 'fallback';
+      voiceId = 'ja-JP-Neural2-B'; // Ultimate fallback
+      provider = 'google';
+
+      // Check utterances for character voice info
+      const firstUtterance = await c.env.DB.prepare(`
+        SELECT role, character_key FROM scene_utterances
+        WHERE scene_id = ?
+        ORDER BY order_no ASC
+        LIMIT 1
+      `).bind(sceneId).first<{ role: string; character_key: string | null }>();
+
+      if (firstUtterance?.role === 'dialogue' && firstUtterance.character_key) {
+        // Priority 1: Character voice
+        const character = await c.env.DB.prepare(`
+          SELECT voice_preset_id FROM project_character_models
+          WHERE project_id = ? AND character_key = ?
+        `).bind(scene.project_id, firstUtterance.character_key).first<{ voice_preset_id: string | null }>();
+
+        if (character?.voice_preset_id) {
+          voiceId = character.voice_preset_id;
+          voiceSource = 'character';
+          // Detect provider from voice_preset_id
+          if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
+            provider = 'elevenlabs';
+          } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
+            provider = 'fish';
+          } else {
+            provider = 'google';
+          }
+        }
+      }
+
+      // Priority 2: Project default narration voice
+      if (voiceSource === 'fallback') {
+        const project = await c.env.DB.prepare(`
+          SELECT settings_json FROM projects WHERE id = ?
+        `).bind(scene.project_id).first<{ settings_json: string | null }>();
+
+        if (project?.settings_json) {
+          try {
+            const settings = JSON.parse(project.settings_json);
+            if (settings.default_narration_voice?.voice_id) {
+              voiceId = settings.default_narration_voice.voice_id;
+              provider = settings.default_narration_voice.provider || 'google';
+              voiceSource = 'project_default';
+              // Re-detect provider if not explicitly set
+              if (!settings.default_narration_voice.provider) {
+                if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
+                  provider = 'elevenlabs';
+                } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
+                  provider = 'fish';
+                }
+              }
+            }
+          } catch (e) {
+            console.warn(`[Audio] Failed to parse settings_json for project ${scene.project_id}:`, e);
+          }
+        }
+      }
+
+      console.log(`[Audio] Scene ${sceneId}: Voice auto-resolved: source=${voiceSource}, provider=${provider}, voiceId=${voiceId}`);
+    } else {
+      // Auto-detect provider from explicit voice_id if not set
+      if (!provider) {
+        if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
+          provider = 'elevenlabs';
+        } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
+          provider = 'fish';
+        } else {
+          provider = 'google';
+        }
       }
     }
+
     const format = (body.format as string | undefined) ?? 'mp3';
     // Fish Audio requires 32000 or 44100 Hz for mp3, Google TTS uses 24000 Hz
     const defaultSampleRate = provider === 'fish' ? 44100 : 24000;
     const sampleRate = Number(body.sample_rate ?? defaultSampleRate);
-    // Phase1.7: text_override で任意のテキストを指定可能（漫画音声パーツ用）
-    const textOverride = body.text_override as string | undefined;
-
-    if (!voiceId) {
-      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'voice_id is required'), 400);
-    }
 
     // Phase X-1: Provider-specific API key validation
     if (provider === 'fish' && !c.env.FISH_AUDIO_API_TOKEN) {
@@ -140,17 +224,6 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     // ElevenLabs API key validation
     if (provider === 'elevenlabs' && !c.env.ELEVENLABS_API_KEY) {
       return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'ELEVENLABS_API_KEY is not set'), 500);
-    }
-
-    // 1) scene 取得（idx, project_id, dialogue）
-    const scene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, dialogue
-      FROM scenes
-      WHERE id = ?
-    `).bind(sceneId).first<any>();
-
-    if (!scene) {
-      return c.json(createErrorResponse(ERROR_CODES.NOT_FOUND, 'Scene not found'), 404);
     }
     
     // R1.6+: scene_utterances のテキストを優先（ユーザーが編集した最新テキスト）
