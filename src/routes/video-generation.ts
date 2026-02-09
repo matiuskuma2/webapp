@@ -4953,6 +4953,8 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
   // ここでは簡略化のため、generate-video エンドポイントを内部呼び出しするのではなく
   // 直接 AWS Video Proxy を呼び出す
   
+  // APIキー取得（generate-video と同一ロジック - SSOT）
+  // Key-Ring: [現行鍵, 旧鍵1, 旧鍵2]
   const keyRing = [
     c.env.ENCRYPTION_KEY,
     c.env.ENCRYPTION_KEY_OLD_1,
@@ -4965,40 +4967,95 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
   let vertexLocation: string | null = null;
   
   if (videoEngine === 'veo2') {
+    // === Veo2: Gemini API Key ===
     if (isSuperadmin || billingSource === 'sponsor') {
-      apiKey = c.env.GEMINI_API_KEY || null;
-    } else {
-      const keyResult = await getUserApiKeyWithKeyRing(
-        c.env.DB, billingUserId, 'google_gemini', keyRing
-      );
-      if (keyResult.key) {
-        apiKey = keyResult.key;
+      // Priority 1: System GEMINI_API_KEY
+      if (c.env.GEMINI_API_KEY) {
+        apiKey = c.env.GEMINI_API_KEY;
+      } else {
+        // Fallback: superadmin自身のユーザーキーを試す
+        if (isSuperadmin) {
+          const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'google', keyRing);
+          if ('key' in keyResult) {
+            apiKey = keyResult.key;
+          }
+        }
+        if (!apiKey) {
+          return c.json({
+            error: {
+              code: 'SPONSOR_KEY_NOT_CONFIGURED',
+              message: isSuperadmin 
+                ? 'システムAPIキーが設定されていません。設定画面でGoogle APIキーを設定してください。'
+                : 'Sponsor API key not configured on server.',
+            },
+          }, 500);
+        }
       }
+    } else {
+      // User mode: ユーザー自身のキー (provider='google')
+      const keyResult = await getUserApiKey(c.env.DB, billingUserId, 'google', keyRing);
+      if ('error' in keyResult) {
+        return c.json({
+          error: {
+            code: 'USER_KEY_ERROR',
+            message: keyResult.error,
+            redirect: '/settings?focus=google',
+          },
+        }, 400);
+      }
+      apiKey = keyResult.key;
     }
   } else {
-    // veo3: Vertex AI
+    // === Veo3: Vertex AI API Key ===
+    let vertexApiKey: string | null = null;
+    
     if (isSuperadmin || billingSource === 'sponsor') {
-      vertexSaJson = c.env.VERTEX_SA_JSON || null;
-      vertexProjectId = c.env.VERTEX_PROJECT_ID || null;
-      vertexLocation = c.env.VERTEX_LOCATION || 'us-central1';
+      // Superadmin/Sponsor: Try user's own Vertex key first
+      if (isSuperadmin) {
+        const keyResult = await getUserApiKey(c.env.DB, executorUserId, 'vertex', keyRing);
+        if ('key' in keyResult) {
+          vertexApiKey = keyResult.key;
+        }
+      }
+      // If superadmin has no key, try sponsor's key
+      if (!vertexApiKey && sponsorUserId) {
+        const keyResult = await getUserApiKey(c.env.DB, sponsorUserId, 'vertex', keyRing);
+        if ('key' in keyResult) {
+          vertexApiKey = keyResult.key;
+        }
+      }
+      if (!vertexApiKey) {
+        return c.json({
+          error: {
+            code: 'SPONSOR_VERTEX_NOT_CONFIGURED',
+            message: isSuperadmin
+              ? 'Vertex APIキーが設定されていません。設定画面でVertex APIキーを設定してください。'
+              : 'スポンサーのVertex APIキーが設定されていません。',
+            redirect: '/settings?focus=vertex',
+          },
+        }, 400);
+      }
     } else {
-      const saResult = await getUserApiKeyWithKeyRing(
-        c.env.DB, billingUserId, 'google_vertex_sa', keyRing
-      );
-      if (saResult.key) {
-        try {
-          const parsed = JSON.parse(saResult.key);
-          vertexSaJson = saResult.key;
-          vertexProjectId = parsed.project_id;
-        } catch {}
+      // User mode: user's own Vertex API key required
+      const keyResult = await getUserApiKey(c.env.DB, billingUserId, 'vertex', keyRing);
+      if ('error' in keyResult) {
+        return c.json({
+          error: {
+            code: 'USER_KEY_ERROR',
+            message: keyResult.error,
+            redirect: '/settings?focus=vertex',
+          },
+        }, 400);
       }
-      const locationResult = await getUserApiKeyWithKeyRing(
-        c.env.DB, billingUserId, 'google_vertex_location', keyRing
-      );
-      if (locationResult.key) {
-        vertexLocation = locationResult.key;
-      }
+      vertexApiKey = keyResult.key;
     }
+    
+    // Store Vertex API key for AWS Worker (backward compatibility)
+    vertexSaJson = vertexApiKey;
+    
+    // Project ID and Location from system settings
+    vertexProjectId = await getSystemSetting(c.env.DB, 'vertex_project_id') || null;
+    vertexLocation = await getSystemSetting(c.env.DB, 'vertex_default_location') || 'us-central1';
   }
   
   // AWS Video Client (generate-video と同じパターン)
