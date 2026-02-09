@@ -3033,28 +3033,102 @@ export const adminHtml = `
                     progressBar.style.width = '30%';
                 }
                 
-                const formData = new FormData();
-                formData.append('file', file);
-                formData.append('audio_type', document.getElementById('audioType').value);
-                
+                // === チャンク分割アップロード（R2 Multipart） ===
+                const CHUNK_SIZE = 5 * 1024 * 1024; // 5MB per chunk
                 const uploadStartPct = isWav ? 50 : 30;
+                const audioType = document.getElementById('audioType').value;
                 
-                const res = await axios.post('/api/admin/audio-library/upload', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                    onUploadProgress: (e) => {
-                        if (e.total) {
-                            const pct = uploadStartPct + Math.round((e.loaded / e.total) * (100 - uploadStartPct));
-                            progressBar.style.width = pct + '%';
+                let fileUrl = '';
+                let fileSize = 0;
+                
+                if (file.size <= CHUNK_SIZE) {
+                    // 小ファイル: 従来の単一リクエストアップロード
+                    progressText.textContent = 'アップロード中...';
+                    const formData = new FormData();
+                    formData.append('file', file);
+                    formData.append('audio_type', audioType);
+                    
+                    const res = await axios.post('/api/admin/audio-library/upload', formData, {
+                        headers: { 'Content-Type': 'multipart/form-data' },
+                        onUploadProgress: (e) => {
+                            if (e.total) {
+                                const pct = uploadStartPct + Math.round((e.loaded / e.total) * (100 - uploadStartPct));
+                                progressBar.style.width = pct + '%';
+                            }
                         }
+                    });
+                    fileUrl = res.data.file_url;
+                    fileSize = res.data.file_size || file.size;
+                } else {
+                    // 大ファイル: チャンク分割マルチパートアップロード
+                    progressText.textContent = 'アップロード準備中...';
+                    
+                    // Step 1: Init
+                    const initRes = await axios.post('/api/admin/audio-library/upload/init', {
+                        file_name: file.name,
+                        audio_type: audioType,
+                        content_type: file.type || 'audio/mpeg',
+                        file_size: file.size,
+                    });
+                    
+                    const { upload_id, r2_key } = initRes.data;
+                    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+                    const parts = [];
+                    
+                    try {
+                        // Step 2: Upload parts
+                        for (let i = 0; i < totalChunks; i++) {
+                            const start = i * CHUNK_SIZE;
+                            const end = Math.min(start + CHUNK_SIZE, file.size);
+                            const chunk = file.slice(start, end);
+                            const chunkBuffer = await chunk.arrayBuffer();
+                            
+                            progressText.textContent = 'アップロード中... (' + (i + 1) + '/' + totalChunks + ')';
+                            const pct = uploadStartPct + Math.round(((i + 1) / totalChunks) * (100 - uploadStartPct - 5));
+                            progressBar.style.width = pct + '%';
+                            
+                            const partRes = await axios.put('/api/admin/audio-library/upload/part', chunkBuffer, {
+                                headers: {
+                                    'Content-Type': 'application/octet-stream',
+                                    'x-r2-key': r2_key,
+                                    'x-upload-id': upload_id,
+                                    'x-part-number': String(i + 1),
+                                },
+                            });
+                            
+                            parts.push({
+                                partNumber: i + 1,
+                                etag: partRes.data.etag,
+                            });
+                        }
+                        
+                        // Step 3: Complete
+                        progressText.textContent = 'アップロード完了処理中...';
+                        progressBar.style.width = '95%';
+                        
+                        const completeRes = await axios.post('/api/admin/audio-library/upload/complete', {
+                            r2_key,
+                            upload_id,
+                            parts,
+                        });
+                        
+                        fileUrl = completeRes.data.file_url;
+                        fileSize = completeRes.data.file_size || file.size;
+                    } catch (uploadErr) {
+                        // アップロード失敗: クリーンアップ
+                        try {
+                            await axios.post('/api/admin/audio-library/upload/abort', { r2_key, upload_id });
+                        } catch (e) { /* ignore abort error */ }
+                        throw uploadErr;
                     }
-                });
+                }
                 
                 progressBar.style.width = '100%';
                 progressText.textContent = '完了！';
                 
                 // フォームにデータをセット
-                document.getElementById('audioFileUrl').value = res.data.file_url;
-                document.getElementById('audioFileSize').value = res.data.file_size || '';
+                document.getElementById('audioFileUrl').value = fileUrl;
+                document.getElementById('audioFileSize').value = fileSize || '';
                 
                 // 名前が空なら拡張子なしの元ファイル名を自動入力
                 const nameField = document.getElementById('audioName');
@@ -3083,14 +3157,13 @@ export const adminHtml = `
                 document.getElementById('audioDropUploaded').classList.remove('hidden');
                 const displayName = isWav ? originalName + ' → MP3 (64kbps mono)' : originalName;
                 document.getElementById('audioDropFileName').textContent = displayName;
-                const uploadedSize = res.data.file_size || file.size;
-                const sizeKB = (uploadedSize / 1024).toFixed(0);
-                const sizeMB = (uploadedSize / 1024 / 1024).toFixed(1);
+                const sizeKB = (fileSize / 1024).toFixed(0);
+                const sizeMB = (fileSize / 1024 / 1024).toFixed(1);
                 document.getElementById('audioDropFileInfo').textContent = 
-                    uploadedSize > 1024 * 1024 ? sizeMB + ' MB' : sizeKB + ' KB';
+                    fileSize > 1024 * 1024 ? sizeMB + ' MB' : sizeKB + ' KB';
                 
                 // プレビュー用URLセット
-                document.getElementById('audioPreviewPlayer').src = res.data.file_url;
+                document.getElementById('audioPreviewPlayer').src = fileUrl;
                 
                 // ドロップゾーンのスタイル変更
                 const dropZone = document.getElementById('audioDropZone');

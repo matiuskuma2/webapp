@@ -2313,6 +2313,143 @@ admin.post('/audio-library/upload', async (c) => {
 });
 
 // ====================================================================
+// チャンク分割アップロード（大容量ファイル対応 - R2 Multipart Upload）
+// ====================================================================
+// フロー: init → part × N → complete
+// 各リクエストは5MB以下なのでCloudflare 100MB制限を回避
+
+// Step 1: マルチパートアップロード初期化
+admin.post('/audio-library/upload/init', async (c) => {
+  const { R2 } = c.env;
+  try {
+    const { file_name, audio_type, content_type, file_size } = await c.req.json();
+    
+    if (!file_name) {
+      return c.json({ success: false, error: 'file_name is required' }, 400);
+    }
+    
+    const type = audio_type === 'sfx' ? 'sfx' : 'bgm';
+    const ext = file_name.split('.').pop()?.toLowerCase() || 'mp3';
+    const allowedExts = ['mp3', 'wav', 'm4a', 'ogg', 'aac'];
+    if (!allowedExts.includes(ext)) {
+      return c.json({ success: false, error: `Invalid file type: .${ext}` }, 400);
+    }
+    
+    const timestamp = Date.now();
+    const r2Key = `audio/library/system/${type}/${timestamp}.${ext}`;
+    
+    const multipartUpload = await R2.createMultipartUpload(r2Key, {
+      httpMetadata: {
+        contentType: content_type || 'audio/mpeg',
+      },
+    });
+    
+    console.log(`[Admin] Multipart upload init: ${r2Key}, uploadId=${multipartUpload.uploadId}, expectedSize=${file_size}`);
+    
+    return c.json({
+      success: true,
+      upload_id: multipartUpload.uploadId,
+      r2_key: r2Key,
+    });
+  } catch (error) {
+    console.error('[Admin] Multipart init error:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'Failed to init upload' }, 500);
+  }
+});
+
+// Step 2: パートアップロード（1チャンク = 最大10MB）
+admin.put('/audio-library/upload/part', async (c) => {
+  const { R2 } = c.env;
+  try {
+    const r2Key = c.req.header('x-r2-key');
+    const uploadId = c.req.header('x-upload-id');
+    const partNumberStr = c.req.header('x-part-number');
+    
+    if (!r2Key || !uploadId || !partNumberStr) {
+      return c.json({ success: false, error: 'Missing headers: x-r2-key, x-upload-id, x-part-number' }, 400);
+    }
+    
+    const partNumber = parseInt(partNumberStr);
+    if (isNaN(partNumber) || partNumber < 1) {
+      return c.json({ success: false, error: 'Invalid part number' }, 400);
+    }
+    
+    // リクエストボディをそのままR2に転送（arrayBuffer経由）
+    const body = await c.req.arrayBuffer();
+    
+    const multipartUpload = R2.resumeMultipartUpload(r2Key, uploadId);
+    const uploadedPart = await multipartUpload.uploadPart(partNumber, body);
+    
+    console.log(`[Admin] Part ${partNumber} uploaded: ${r2Key}, size=${body.byteLength}`);
+    
+    return c.json({
+      success: true,
+      part_number: partNumber,
+      etag: uploadedPart.etag,
+    });
+  } catch (error) {
+    console.error('[Admin] Part upload error:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'Failed to upload part' }, 500);
+  }
+});
+
+// Step 3: アップロード完了
+admin.post('/audio-library/upload/complete', async (c) => {
+  const { R2, SITE_URL } = c.env;
+  try {
+    const { r2_key, upload_id, parts } = await c.req.json();
+    
+    if (!r2_key || !upload_id || !parts || !Array.isArray(parts)) {
+      return c.json({ success: false, error: 'Missing r2_key, upload_id, or parts' }, 400);
+    }
+    
+    // parts: [{ partNumber: 1, etag: "..." }, ...]
+    const multipartUpload = R2.resumeMultipartUpload(r2_key, upload_id);
+    const uploadedParts = parts.map((p: { partNumber: number; etag: string }) => ({
+      partNumber: p.partNumber,
+      etag: p.etag,
+    }));
+    
+    const object = await multipartUpload.complete(uploadedParts);
+    
+    const siteUrl = SITE_URL || 'https://webapp-c7n.pages.dev';
+    const fileUrl = `${siteUrl}/${r2_key}`;
+    
+    console.log(`[Admin] Multipart upload complete: ${r2_key}, size=${object.size}`);
+    
+    return c.json({
+      success: true,
+      file_url: fileUrl,
+      file_size: object.size,
+      r2_key: r2_key,
+      message: 'File uploaded successfully via multipart.',
+    });
+  } catch (error) {
+    console.error('[Admin] Multipart complete error:', error);
+    return c.json({ success: false, error: error instanceof Error ? error.message : 'Failed to complete upload' }, 500);
+  }
+});
+
+// Step: アップロード中止（エラー時のクリーンアップ）
+admin.post('/audio-library/upload/abort', async (c) => {
+  const { R2 } = c.env;
+  try {
+    const { r2_key, upload_id } = await c.req.json();
+    if (!r2_key || !upload_id) {
+      return c.json({ success: false, error: 'Missing r2_key or upload_id' }, 400);
+    }
+    
+    const multipartUpload = R2.resumeMultipartUpload(r2_key, upload_id);
+    await multipartUpload.abort();
+    
+    console.log(`[Admin] Multipart upload aborted: ${r2_key}`);
+    return c.json({ success: true });
+  } catch (error) {
+    return c.json({ success: false, error: 'Failed to abort' }, 500);
+  }
+});
+
+// ====================================================================
 // PUT /api/admin/audio-library/:id - システムオーディオ更新
 // ====================================================================
 
