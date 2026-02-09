@@ -9,6 +9,7 @@ export const adminHtml = `
     <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
 </head>
 <body class="bg-gray-100 min-h-screen">
     <!-- Header -->
@@ -2752,10 +2753,77 @@ export const adminHtml = `
             }
         }
         
+        // WAV→MP3変換ユーティリティ（ブラウザ内でlame.jsを使用）
+        async function convertWavToMp3(file, onProgress) {
+            return new Promise(async (resolve, reject) => {
+                try {
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const arrayBuffer = await file.arrayBuffer();
+                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                    
+                    const numChannels = audioBuffer.numberOfChannels;
+                    const sampleRate = audioBuffer.sampleRate;
+                    const mp3encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, 192); // 192kbps
+                    
+                    const mp3Data = [];
+                    const sampleBlockSize = 1152;
+                    
+                    // チャンネルデータ取得
+                    const left = audioBuffer.getChannelData(0);
+                    const right = numChannels > 1 ? audioBuffer.getChannelData(1) : null;
+                    
+                    const totalSamples = left.length;
+                    let samplesProcessed = 0;
+                    
+                    for (let i = 0; i < totalSamples; i += sampleBlockSize) {
+                        const leftChunk = new Int16Array(sampleBlockSize);
+                        const rightChunk = right ? new Int16Array(sampleBlockSize) : null;
+                        
+                        for (let j = 0; j < sampleBlockSize && (i + j) < totalSamples; j++) {
+                            leftChunk[j] = Math.max(-32768, Math.min(32767, left[i + j] * 32767));
+                            if (rightChunk && right) {
+                                rightChunk[j] = Math.max(-32768, Math.min(32767, right[i + j] * 32767));
+                            }
+                        }
+                        
+                        let mp3buf;
+                        if (numChannels > 1 && rightChunk) {
+                            mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+                        } else {
+                            mp3buf = mp3encoder.encodeBuffer(leftChunk);
+                        }
+                        if (mp3buf.length > 0) {
+                            mp3Data.push(mp3buf);
+                        }
+                        
+                        samplesProcessed += sampleBlockSize;
+                        if (onProgress && samplesProcessed % (sampleBlockSize * 50) === 0) {
+                            onProgress(Math.min(samplesProcessed / totalSamples, 1));
+                        }
+                    }
+                    
+                    const endBuf = mp3encoder.flush();
+                    if (endBuf.length > 0) {
+                        mp3Data.push(endBuf);
+                    }
+                    
+                    const blob = new Blob(mp3Data, { type: 'audio/mpeg' });
+                    const mp3FileName = file.name.replace(/\\.wav$/i, '.mp3');
+                    const mp3File = new File([blob], mp3FileName, { type: 'audio/mpeg' });
+                    
+                    audioContext.close();
+                    resolve({ mp3File, durationMs: Math.round(audioBuffer.duration * 1000) });
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        }
+
         async function handleAudioDrop(files) {
             if (!files || files.length === 0) return;
             
-            const file = files[0];
+            let file = files[0];
+            const originalName = file.name;
             const allowedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/ogg', 'audio/aac', 'audio/x-wav'];
             const allowedExts = ['.mp3', '.wav', '.m4a', '.ogg', '.aac'];
             const fileName = file.name.toLowerCase();
@@ -2770,21 +2838,51 @@ export const adminHtml = `
             const progressBar = document.getElementById('audioUploadProgressBar');
             const progressText = document.getElementById('audioUploadProgressText');
             progressEl.classList.remove('hidden');
-            progressBar.style.width = '10%';
-            progressText.textContent = 'アップロード中...';
+            progressBar.style.width = '5%';
+            
+            let durationMs = null;
             
             try {
+                // WAVファイルの場合はMP3に変換（サイズ削減のため）
+                const isWav = fileName.endsWith('.wav') || file.type === 'audio/wav' || file.type === 'audio/x-wav';
+                
+                if (isWav) {
+                    const origSizeMB = (file.size / 1024 / 1024).toFixed(1);
+                    progressText.textContent = 'WAV→MP3変換中... (元: ' + origSizeMB + ' MB)';
+                    progressBar.style.width = '10%';
+                    
+                    try {
+                        const result = await convertWavToMp3(file, (pct) => {
+                            const barPct = 10 + Math.round(pct * 40);
+                            progressBar.style.width = barPct + '%';
+                        });
+                        
+                        const newSizeMB = (result.mp3File.size / 1024 / 1024).toFixed(1);
+                        progressText.textContent = '変換完了 (' + origSizeMB + ' MB → ' + newSizeMB + ' MB) アップロード中...';
+                        progressBar.style.width = '50%';
+                        file = result.mp3File;
+                        durationMs = result.durationMs;
+                    } catch (convertErr) {
+                        console.error('WAV→MP3 conversion failed:', convertErr);
+                        // 変換失敗時はそのままWAVをアップロード試行
+                        progressText.textContent = '変換失敗 - WAVのままアップロード中...';
+                    }
+                } else {
+                    progressText.textContent = 'アップロード中...';
+                    progressBar.style.width = '30%';
+                }
+                
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('audio_type', document.getElementById('audioType').value);
                 
-                progressBar.style.width = '30%';
+                const uploadStartPct = isWav ? 50 : 30;
                 
                 const res = await axios.post('/api/admin/audio-library/upload', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
                     onUploadProgress: (e) => {
                         if (e.total) {
-                            const pct = Math.round((e.loaded / e.total) * 70) + 30;
+                            const pct = uploadStartPct + Math.round((e.loaded / e.total) * (100 - uploadStartPct));
                             progressBar.style.width = pct + '%';
                         }
                     }
@@ -2797,33 +2895,38 @@ export const adminHtml = `
                 document.getElementById('audioFileUrl').value = res.data.file_url;
                 document.getElementById('audioFileSize').value = res.data.file_size || '';
                 
-                // 名前が空なら拡張子なしのファイル名を自動入力
+                // 名前が空なら拡張子なしの元ファイル名を自動入力
                 const nameField = document.getElementById('audioName');
                 if (!nameField.value.trim()) {
-                    nameField.value = file.name.replace(/\\.[^.]+$/, '');
+                    nameField.value = originalName.replace(/\\.[^.]+$/, '');
                 }
                 
                 // 音声の長さを自動取得
-                try {
-                    const audio = new Audio();
-                    audio.preload = 'metadata';
-                    const objectUrl = URL.createObjectURL(file);
-                    audio.src = objectUrl;
-                    audio.onloadedmetadata = () => {
-                        const durationMs = Math.round(audio.duration * 1000);
-                        document.getElementById('audioDuration').value = durationMs;
-                        URL.revokeObjectURL(objectUrl);
-                    };
-                } catch (e) { /* duration取得失敗は無視 */ }
+                if (durationMs) {
+                    document.getElementById('audioDuration').value = durationMs;
+                } else {
+                    try {
+                        const audio = new Audio();
+                        audio.preload = 'metadata';
+                        const objectUrl = URL.createObjectURL(file);
+                        audio.src = objectUrl;
+                        audio.onloadedmetadata = () => {
+                            document.getElementById('audioDuration').value = Math.round(audio.duration * 1000);
+                            URL.revokeObjectURL(objectUrl);
+                        };
+                    } catch (e) { /* duration取得失敗は無視 */ }
+                }
                 
                 // ドロップゾーンをアップロード済み表示に切り替え
                 document.getElementById('audioDropContent').classList.add('hidden');
                 document.getElementById('audioDropUploaded').classList.remove('hidden');
-                document.getElementById('audioDropFileName').textContent = file.name;
-                const sizeKB = (file.size / 1024).toFixed(0);
-                const sizeMB = (file.size / 1024 / 1024).toFixed(1);
+                const displayName = isWav ? originalName + ' → MP3' : originalName;
+                document.getElementById('audioDropFileName').textContent = displayName;
+                const uploadedSize = res.data.file_size || file.size;
+                const sizeKB = (uploadedSize / 1024).toFixed(0);
+                const sizeMB = (uploadedSize / 1024 / 1024).toFixed(1);
                 document.getElementById('audioDropFileInfo').textContent = 
-                    file.size > 1024 * 1024 ? sizeMB + ' MB' : sizeKB + ' KB';
+                    uploadedSize > 1024 * 1024 ? sizeMB + ' MB' : sizeKB + ' KB';
                 
                 // プレビュー用URLセット
                 document.getElementById('audioPreviewPlayer').src = res.data.file_url;
