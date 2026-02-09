@@ -5001,65 +5001,73 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
     }
   }
   
-  // API呼び出し
-  const awsVideoProxyUrl = c.env.AWS_VIDEO_PROXY_URL;
-  if (!awsVideoProxyUrl) {
+  // AWS Video Client (generate-video と同じパターン)
+  const awsClient = createAwsVideoClient(c.env);
+  if (!awsClient) {
     await c.env.DB.prepare(`
-      UPDATE video_generations SET status = 'failed', error_message = 'AWS Video Proxy URL not configured'
+      UPDATE video_generations SET status = 'failed', error_message = 'AWS credentials not configured'
       WHERE id = ?
     `).bind(newVideoId).run();
     
     return c.json({
-      error: { code: 'CONFIG_ERROR', message: 'Video generation service not configured' }
+      error: { code: 'AWS_CONFIG_ERROR', message: 'AWS credentials not configured' }
     }, 500);
   }
   
-  // Signed URL for source image
-  const signedImageUrl = await generateSignedImageUrl(
-    c.env.R2, activeImage.r2_key, c.env.IMAGE_SIGNING_KEY, 3600
-  );
-  
-  if (!signedImageUrl) {
+  // Signed URL for source image (generate-video と同じパターン)
+  const signingSecret = c.env.IMAGE_URL_SIGNING_SECRET;
+  if (!signingSecret) {
     await c.env.DB.prepare(`
-      UPDATE video_generations SET status = 'failed', error_message = 'Failed to generate signed URL for source image'
+      UPDATE video_generations SET status = 'failed', error_message = 'IMAGE_URL_SIGNING_SECRET not configured'
       WHERE id = ?
     `).bind(newVideoId).run();
     
     return c.json({
-      error: { code: 'IMAGE_ERROR', message: 'Failed to access source image' }
+      error: { code: 'SERVER_CONFIG_ERROR', message: 'Image signing not configured' }
     }, 500);
   }
   
-  // AWS Video Proxy Client
-  const awsClient = createAwsVideoClient({
-    baseUrl: awsVideoProxyUrl,
-    apiKey: apiKey || undefined,
-    vertexSaJson: vertexSaJson || undefined,
-    vertexProjectId: vertexProjectId || undefined,
-    vertexLocation: vertexLocation || undefined,
-    accessKeyId: c.env.AWS_ACCESS_KEY_ID || '',
-    secretAccessKey: c.env.AWS_SECRET_ACCESS_KEY || '',
-  });
+  const origin = new URL(c.req.url).origin;
+  const signedImageUrl = await buildSignedImageUrl(activeImage.r2_key, origin, signingSecret);
   
   try {
-    const result = await awsClient.generateVideo({
-      image_url: signedImageUrl,
-      prompt: finalPrompt,
-      duration_sec: durationSec,
-      video_engine: videoEngine,
+    const awsResponse = await awsClient.startVideo({
+      project_id: scene.project_id,
+      scene_id: sceneId,
+      owner_user_id: scene.owner_user_id,
+      executor_user_id: executorUserId,
+      billing_user_id: billingUserId,
+      billing_source: billingSource,
+      provider: 'google',
       model: model,
+      duration_sec: durationSec,
+      prompt: finalPrompt,
+      image_url: signedImageUrl,
+      video_engine: videoEngine,
+      api_key: apiKey || undefined,
+      vertex_sa_json: vertexSaJson || undefined,
+      vertex_project_id: vertexProjectId || undefined,
+      vertex_location: vertexLocation || undefined,
     });
     
-    if (!result.job_id) {
-      throw new Error('No job_id returned from video generation service');
+    if (!awsResponse.success || !awsResponse.job_id) {
+      const errMsg = awsResponse.error?.message || 'AWS call failed';
+      await c.env.DB.prepare(`
+        UPDATE video_generations SET status = 'failed', error_message = ?
+        WHERE id = ?
+      `).bind(errMsg, newVideoId).run();
+      
+      return c.json({
+        error: awsResponse.error || { code: 'AWS_START_FAILED', message: 'Failed to start video generation' },
+      }, 500);
     }
     
     // job_id を保存
     await c.env.DB.prepare(`
       UPDATE video_generations SET job_id = ? WHERE id = ?
-    `).bind(result.job_id, newVideoId).run();
+    `).bind(awsResponse.job_id, newVideoId).run();
     
-    console.log(`[VideoRegenerate] Started: video_id=${newVideoId}, job_id=${result.job_id}`);
+    console.log(`[VideoRegenerate] Started: video_id=${newVideoId}, job_id=${awsResponse.job_id}`);
     
     return c.json({
       success: true,
@@ -5069,7 +5077,7 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
         prompt: finalPrompt,
         model: model,
         status: 'generating',
-        job_id: result.job_id,
+        job_id: awsResponse.job_id,
       },
       message: '動画生成を開始しました（完了後に自動でアクティブになります）'
     }, 201);
