@@ -2753,68 +2753,219 @@ export const adminHtml = `
             }
         }
         
-        // WAV→MP3変換ユーティリティ（ブラウザ内でlame.jsを使用）
+        // WAV→MP3変換ユーティリティ（大容量ファイル対応版）
+        // 方針: WAVヘッダーを直接パース → ステレオはモノラルにダウンミックス → 64kbps MP3
+        // decodeAudioDataを使わずチャンク処理でメモリ効率化（1GB+ WAV対応）
+        
+        function parseWavHeader(buffer) {
+            const view = new DataView(buffer.slice(0, 44));
+            // 'RIFF' + size + 'WAVE'
+            const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+            const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+            if (riff !== 'RIFF' || wave !== 'WAVE') return null;
+            
+            // fmtチャンクを探す
+            let offset = 12;
+            const headerView = new DataView(buffer);
+            let fmt = null;
+            let dataOffset = 0;
+            let dataSize = 0;
+            
+            while (offset < Math.min(buffer.byteLength, 10000)) {
+                const chunkId = String.fromCharCode(
+                    headerView.getUint8(offset), headerView.getUint8(offset+1),
+                    headerView.getUint8(offset+2), headerView.getUint8(offset+3)
+                );
+                const chunkSize = headerView.getUint32(offset + 4, true);
+                
+                if (chunkId === 'fmt ') {
+                    fmt = {
+                        audioFormat: headerView.getUint16(offset + 8, true),
+                        numChannels: headerView.getUint16(offset + 10, true),
+                        sampleRate: headerView.getUint32(offset + 12, true),
+                        byteRate: headerView.getUint32(offset + 16, true),
+                        blockAlign: headerView.getUint16(offset + 20, true),
+                        bitsPerSample: headerView.getUint16(offset + 22, true),
+                    };
+                } else if (chunkId === 'data') {
+                    dataOffset = offset + 8;
+                    dataSize = chunkSize;
+                    break;
+                }
+                offset += 8 + chunkSize;
+                if (chunkSize % 2 !== 0) offset++; // padding
+            }
+            
+            if (!fmt || !dataOffset) return null;
+            return { ...fmt, dataOffset, dataSize };
+        }
+        
         async function convertWavToMp3(file, onProgress) {
+            const MAX_FILE_SIZE = 2 * 1024 * 1024 * 1024; // 2GB
+            if (file.size > MAX_FILE_SIZE) {
+                throw new Error('ファイルサイズが2GBを超えています。2GB以下のファイルを使用してください。');
+            }
+            
             return new Promise(async (resolve, reject) => {
                 try {
-                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                    const arrayBuffer = await file.arrayBuffer();
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                    if (onProgress) onProgress(0);
                     
-                    const numChannels = audioBuffer.numberOfChannels;
-                    const sampleRate = audioBuffer.sampleRate;
-                    const mp3encoder = new lamejs.Mp3Encoder(numChannels, sampleRate, 192); // 192kbps
+                    // Step 1: WAVヘッダーを最小限だけ読む（最初の10KBのみ）
+                    const headerSlice = file.slice(0, 10000);
+                    const headerBuf = await headerSlice.arrayBuffer();
+                    const wav = parseWavHeader(headerBuf);
+                    
+                    if (!wav || wav.audioFormat !== 1) {
+                        // PCMでない場合はWeb Audio APIにフォールバック
+                        throw new Error('FALLBACK_TO_WEBAUDIO');
+                    }
+                    
+                    const { numChannels, sampleRate, bitsPerSample, dataOffset, dataSize } = wav;
+                    const bytesPerSample = bitsPerSample / 8;
+                    const totalSamples = Math.floor(dataSize / (bytesPerSample * numChannels));
+                    const durationMs = Math.round((totalSamples / sampleRate) * 1000);
+                    
+                    // BGM/SFX用途: モノラル 64kbps で十分な音質
+                    // ステレオでも常にモノラルにダウンミックスして圧縮率を上げる
+                    const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 64);
                     
                     const mp3Data = [];
+                    let totalMp3Bytes = 0;
                     const sampleBlockSize = 1152;
                     
-                    // チャンネルデータ取得
-                    const left = audioBuffer.getChannelData(0);
-                    const right = numChannels > 1 ? audioBuffer.getChannelData(1) : null;
-                    
-                    const totalSamples = left.length;
+                    // Step 2: ファイルをチャンク単位で読み込み（メモリ効率化）
+                    // 1チャンク = 約4MB分のPCMデータ
+                    const CHUNK_SAMPLES = 1024 * 1024; // ~4MB for 16bit stereo
                     let samplesProcessed = 0;
                     
-                    for (let i = 0; i < totalSamples; i += sampleBlockSize) {
-                        const leftChunk = new Int16Array(sampleBlockSize);
-                        const rightChunk = right ? new Int16Array(sampleBlockSize) : null;
+                    for (let samplePos = 0; samplePos < totalSamples; samplePos += CHUNK_SAMPLES) {
+                        const chunkSamples = Math.min(CHUNK_SAMPLES, totalSamples - samplePos);
+                        const byteStart = dataOffset + samplePos * bytesPerSample * numChannels;
+                        const byteEnd = byteStart + chunkSamples * bytesPerSample * numChannels;
                         
-                        for (let j = 0; j < sampleBlockSize && (i + j) < totalSamples; j++) {
-                            leftChunk[j] = Math.max(-32768, Math.min(32767, left[i + j] * 32767));
-                            if (rightChunk && right) {
-                                rightChunk[j] = Math.max(-32768, Math.min(32767, right[i + j] * 32767));
+                        // ファイルから必要な部分だけ読む
+                        const chunkSlice = file.slice(byteStart, byteEnd);
+                        const chunkBuf = await chunkSlice.arrayBuffer();
+                        const chunkView = new DataView(chunkBuf);
+                        
+                        // PCM → Int16 モノラルに変換
+                        for (let i = 0; i < chunkSamples; i += sampleBlockSize) {
+                            const blockLen = Math.min(sampleBlockSize, chunkSamples - i);
+                            const monoBlock = new Int16Array(blockLen);
+                            
+                            for (let j = 0; j < blockLen; j++) {
+                                const sampleIdx = i + j;
+                                const bytePos = sampleIdx * bytesPerSample * numChannels;
+                                
+                                if (bytePos + bytesPerSample * numChannels > chunkBuf.byteLength) break;
+                                
+                                let sample;
+                                if (bitsPerSample === 16) {
+                                    if (numChannels === 1) {
+                                        sample = chunkView.getInt16(bytePos, true);
+                                    } else {
+                                        // ステレオ→モノラルにダウンミックス
+                                        const left = chunkView.getInt16(bytePos, true);
+                                        const right = chunkView.getInt16(bytePos + 2, true);
+                                        sample = Math.round((left + right) / 2);
+                                    }
+                                } else if (bitsPerSample === 24) {
+                                    // 24bit: 上位16bitを使用
+                                    if (numChannels === 1) {
+                                        sample = (chunkView.getUint8(bytePos + 2) << 8) | chunkView.getUint8(bytePos + 1);
+                                        if (sample > 32767) sample -= 65536;
+                                    } else {
+                                        const l = (chunkView.getUint8(bytePos + 2) << 8) | chunkView.getUint8(bytePos + 1);
+                                        const r = (chunkView.getUint8(bytePos + 5) << 8) | chunkView.getUint8(bytePos + 4);
+                                        const lv = l > 32767 ? l - 65536 : l;
+                                        const rv = r > 32767 ? r - 65536 : r;
+                                        sample = Math.round((lv + rv) / 2);
+                                    }
+                                } else if (bitsPerSample === 32) {
+                                    // 32bit int: 上位16bitを使用
+                                    if (numChannels === 1) {
+                                        sample = chunkView.getInt16(bytePos + 2, true);
+                                    } else {
+                                        const left = chunkView.getInt16(bytePos + 2, true);
+                                        const right = chunkView.getInt16(bytePos + 6, true);
+                                        sample = Math.round((left + right) / 2);
+                                    }
+                                } else {
+                                    // 8bit unsigned → signed 16bit
+                                    if (numChannels === 1) {
+                                        sample = (chunkView.getUint8(bytePos) - 128) * 256;
+                                    } else {
+                                        const left = (chunkView.getUint8(bytePos) - 128) * 256;
+                                        const right = (chunkView.getUint8(bytePos + 1) - 128) * 256;
+                                        sample = Math.round((left + right) / 2);
+                                    }
+                                }
+                                
+                                monoBlock[j] = Math.max(-32768, Math.min(32767, sample));
+                            }
+                            
+                            const mp3buf = mp3encoder.encodeBuffer(monoBlock);
+                            if (mp3buf.length > 0) {
+                                mp3Data.push(mp3buf);
+                                totalMp3Bytes += mp3buf.length;
                             }
                         }
                         
-                        let mp3buf;
-                        if (numChannels > 1 && rightChunk) {
-                            mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
-                        } else {
-                            mp3buf = mp3encoder.encodeBuffer(leftChunk);
-                        }
-                        if (mp3buf.length > 0) {
-                            mp3Data.push(mp3buf);
+                        samplesProcessed += chunkSamples;
+                        if (onProgress) {
+                            onProgress(Math.min(samplesProcessed / totalSamples, 0.99));
                         }
                         
-                        samplesProcessed += sampleBlockSize;
-                        if (onProgress && samplesProcessed % (sampleBlockSize * 50) === 0) {
-                            onProgress(Math.min(samplesProcessed / totalSamples, 1));
-                        }
+                        // UIスレッドに処理を返す（フリーズ防止）
+                        await new Promise(r => setTimeout(r, 0));
                     }
                     
                     const endBuf = mp3encoder.flush();
                     if (endBuf.length > 0) {
                         mp3Data.push(endBuf);
+                        totalMp3Bytes += endBuf.length;
                     }
+                    
+                    if (onProgress) onProgress(1);
                     
                     const blob = new Blob(mp3Data, { type: 'audio/mpeg' });
                     const mp3FileName = file.name.replace(/\\.wav$/i, '.mp3');
                     const mp3File = new File([blob], mp3FileName, { type: 'audio/mpeg' });
                     
-                    audioContext.close();
-                    resolve({ mp3File, durationMs: Math.round(audioBuffer.duration * 1000) });
+                    resolve({ mp3File, durationMs });
                 } catch (err) {
-                    reject(err);
+                    if (err.message === 'FALLBACK_TO_WEBAUDIO') {
+                        // 非PCM WAV → Web Audio APIで処理（小ファイル想定）
+                        try {
+                            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                            const arrayBuffer = await file.arrayBuffer();
+                            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                            const left = audioBuffer.getChannelData(0);
+                            const mp3enc = new lamejs.Mp3Encoder(1, audioBuffer.sampleRate, 64);
+                            const mp3Parts = [];
+                            const blockSize = 1152;
+                            for (let i = 0; i < left.length; i += blockSize) {
+                                const block = new Int16Array(Math.min(blockSize, left.length - i));
+                                for (let j = 0; j < block.length; j++) {
+                                    block[j] = Math.max(-32768, Math.min(32767, left[i + j] * 32767));
+                                }
+                                const buf = mp3enc.encodeBuffer(block);
+                                if (buf.length > 0) mp3Parts.push(buf);
+                                if (onProgress && i % (blockSize * 100) === 0) onProgress(i / left.length);
+                            }
+                            const end = mp3enc.flush();
+                            if (end.length > 0) mp3Parts.push(end);
+                            const blob = new Blob(mp3Parts, { type: 'audio/mpeg' });
+                            const mp3FileName = file.name.replace(/\\.wav$/i, '.mp3');
+                            const mp3File = new File([blob], mp3FileName, { type: 'audio/mpeg' });
+                            audioContext.close();
+                            resolve({ mp3File, durationMs: Math.round(audioBuffer.duration * 1000) });
+                        } catch (fallbackErr) {
+                            reject(fallbackErr);
+                        }
+                    } else {
+                        reject(err);
+                    }
                 }
             });
         }
@@ -2847,23 +2998,33 @@ export const adminHtml = `
                 const isWav = fileName.endsWith('.wav') || file.type === 'audio/wav' || file.type === 'audio/x-wav';
                 
                 if (isWav) {
-                    const origSizeMB = (file.size / 1024 / 1024).toFixed(1);
-                    progressText.textContent = 'WAV→MP3変換中... (元: ' + origSizeMB + ' MB)';
+                    const origSizeGB = file.size / 1024 / 1024 / 1024;
+                    const origSizeStr = origSizeGB >= 1 
+                        ? origSizeGB.toFixed(2) + ' GB' 
+                        : (file.size / 1024 / 1024).toFixed(1) + ' MB';
+                    progressText.textContent = 'WAV→MP3変換中 (元: ' + origSizeStr + ', モノラル64kbps圧縮)...';
                     progressBar.style.width = '10%';
                     
                     try {
                         const result = await convertWavToMp3(file, (pct) => {
                             const barPct = 10 + Math.round(pct * 40);
                             progressBar.style.width = barPct + '%';
+                            progressText.textContent = 'WAV→MP3変換中... ' + Math.round(pct * 100) + '%';
                         });
                         
                         const newSizeMB = (result.mp3File.size / 1024 / 1024).toFixed(1);
-                        progressText.textContent = '変換完了 (' + origSizeMB + ' MB → ' + newSizeMB + ' MB) アップロード中...';
+                        const ratio = ((1 - result.mp3File.size / file.size) * 100).toFixed(0);
+                        progressText.textContent = '変換完了！ ' + origSizeStr + ' → ' + newSizeMB + ' MB (' + ratio + '%削減) アップロード中...';
                         progressBar.style.width = '50%';
                         file = result.mp3File;
                         durationMs = result.durationMs;
                     } catch (convertErr) {
                         console.error('WAV→MP3 conversion failed:', convertErr);
+                        if (convertErr.message && convertErr.message.includes('2GB')) {
+                            alert(convertErr.message);
+                            progressEl.classList.add('hidden');
+                            return;
+                        }
                         // 変換失敗時はそのままWAVをアップロード試行
                         progressText.textContent = '変換失敗 - WAVのままアップロード中...';
                     }
@@ -2920,7 +3081,7 @@ export const adminHtml = `
                 // ドロップゾーンをアップロード済み表示に切り替え
                 document.getElementById('audioDropContent').classList.add('hidden');
                 document.getElementById('audioDropUploaded').classList.remove('hidden');
-                const displayName = isWav ? originalName + ' → MP3' : originalName;
+                const displayName = isWav ? originalName + ' → MP3 (64kbps mono)' : originalName;
                 document.getElementById('audioDropFileName').textContent = displayName;
                 const uploadedSize = res.data.file_size || file.size;
                 const sizeKB = (uploadedSize / 1024).toFixed(0);
