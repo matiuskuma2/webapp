@@ -32,7 +32,89 @@ const MC = {
   
   // Auth
   currentUser: null,
+
+  // Progress tracking (for chat dedup)
+  _lastProgressMsg: '',
+  _progressBubble: null,
 };
+
+// ============================================================
+// Live Progress Ticker — updates both board detail + chat bubble
+// ============================================================
+
+function mcUpdateLiveProgress(data) {
+  const phase = data.phase;
+  const p = data.progress;
+  const detailEl = document.getElementById('mcPhaseDetail');
+  let msg = '';
+
+  switch (phase) {
+    case 'formatting': {
+      const c = p.format.chunks;
+      if (c.total > 0) {
+        msg = `\u6574\u5f62\u4e2d: ${c.done}/${c.total} \u30c1\u30e3\u30f3\u30af\u5b8c\u4e86`;
+      } else {
+        msg = '\u6574\u5f62\u958b\u59cb\u4e2d...';
+      }
+      break;
+    }
+    case 'awaiting_ready': {
+      const sr = p.scenes_ready;
+      msg = `${sr.visible_count} \u30b7\u30fc\u30f3\u78ba\u8a8d\u4e2d`;
+      if (sr.utterances_ready) msg += ' \u2014 \u6e96\u5099OK';
+      break;
+    }
+    case 'generating_images': {
+      const im = p.images;
+      const parts = [`\u753b\u50cf: ${im.completed}/${im.total}\u679a\u5b8c\u4e86`];
+      if (im.generating > 0) parts.push(`${im.generating}\u679a\u751f\u6210\u4e2d`);
+      if (im.failed > 0) parts.push(`${im.failed}\u679a\u5931\u6557`);
+      if (im.pending > 0) parts.push(`${im.pending}\u679a\u5f85\u6a5f`);
+      msg = parts.join(' / ');
+      break;
+    }
+    case 'generating_audio': {
+      const au = p.audio;
+      if (au.total_utterances > 0) {
+        const done = au.completed || 0;
+        msg = `\u97f3\u58f0: ${done}/${au.total_utterances}\u500b\u5b8c\u4e86`;
+        if (au.failed > 0) msg += ` (${au.failed}\u5931\u6557)`;
+      } else {
+        msg = au.job_id ? '\u97f3\u58f0\u751f\u6210\u958b\u59cb\u4e2d...' : '\u97f3\u58f0\u30b8\u30e7\u30d6\u6e96\u5099\u4e2d...';
+      }
+      break;
+    }
+    case 'ready':
+      msg = '\u2705 \u5b8c\u6210\u3057\u307e\u3057\u305f\uff01';
+      break;
+    case 'failed':
+      msg = '\u274c \u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f';
+      break;
+  }
+
+  // Update board detail text
+  if (detailEl) {
+    if (msg) {
+      detailEl.textContent = msg;
+      detailEl.classList.remove('hidden');
+    } else {
+      detailEl.classList.add('hidden');
+    }
+  }
+
+  // Update or create a single live-progress chat bubble (no duplication)
+  if (msg && msg !== MC._lastProgressMsg && phase !== 'ready' && phase !== 'failed') {
+    MC._lastProgressMsg = msg;
+    if (!MC._progressBubble || !MC._progressBubble.isConnected) {
+      MC._progressBubble = mcAddSystemMessage(msg);
+      MC._progressBubble.setAttribute('data-live-progress', 'true');
+    } else {
+      // Update existing bubble in-place
+      const inner = MC._progressBubble.querySelector('.chat-bubble');
+      if (inner) inner.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${msg}`;
+    }
+  }
+}
 
 // ============================================================
 // Axios config
@@ -261,6 +343,10 @@ async function mcAdvance() {
     
     MC.phase = data.new_phase;
     
+    // Reset live progress bubble on phase transition
+    MC._lastProgressMsg = '';
+    MC._progressBubble = null;
+    
     // Phase transition messages
     switch (data.action) {
       case 'scenes_confirmed':
@@ -308,6 +394,9 @@ function mcUpdateFromStatus(data) {
   
   // Update progress bar
   mcUpdateProgress(data);
+  
+  // Update live progress text (board + chat)
+  mcUpdateLiveProgress(data);
   
   // Update scene cards
   mcUpdateSceneCards(p.scenes_ready.scenes, p.images, p.audio);
@@ -461,16 +550,38 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
   container.classList.remove('hidden');
   
   container.innerHTML = scenes.map((scene, idx) => {
-    const imgStatus = scene.has_image ? 'done' : 'pending';
-    const imgBadgeClass = imgStatus === 'done' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500';
-    const imgBadgeText = imgStatus === 'done' ? '画像OK' : '画像待ち';
+    // Determine image badge
+    let imgBadgeClass, imgBadgeText, imgBadgeIcon;
+    if (scene.has_image) {
+      imgBadgeClass = 'bg-green-100 text-green-700';
+      imgBadgeText = '\u753b\u50cfOK';
+      imgBadgeIcon = 'fa-check-circle';
+    } else if (scene.image_status === 'generating') {
+      imgBadgeClass = 'bg-yellow-100 text-yellow-700 animate-pulse';
+      imgBadgeText = '\u751f\u6210\u4e2d';
+      imgBadgeIcon = 'fa-spinner fa-spin';
+    } else if (scene.image_status === 'failed') {
+      imgBadgeClass = 'bg-red-100 text-red-700';
+      imgBadgeText = '\u5931\u6557';
+      imgBadgeIcon = 'fa-exclamation-circle';
+    } else {
+      imgBadgeClass = 'bg-gray-100 text-gray-500';
+      imgBadgeText = '\u5f85\u6a5f\u4e2d';
+      imgBadgeIcon = 'fa-clock';
+    }
+    
+    // Determine audio badge
+    let audioBadge = '';
+    if (scene.has_audio) {
+      audioBadge = '<span class="scene-badge bg-green-100 text-green-700 ml-1"><i class="fas fa-check-circle mr-0.5"></i>\u97f3\u58f0OK</span>';
+    }
     
     const imgContent = scene.image_url
       ? `<img src="${scene.image_url}" alt="Scene ${idx + 1}" class="w-full aspect-video object-cover" loading="lazy">`
       : `<div class="scene-card-img text-gray-400">
            <div class="text-center">
-             <i class="fas fa-image text-3xl mb-1"></i>
-             <p class="text-xs">生成中...</p>
+             <i class="fas ${scene.image_status === 'generating' ? 'fa-spinner fa-spin' : 'fa-image'} text-3xl mb-1"></i>
+             <p class="text-xs">${imgBadgeText}</p>
            </div>
          </div>`;
     
@@ -480,11 +591,14 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
         <div class="p-3">
           <div class="flex items-center justify-between mb-1">
             <span class="text-xs font-bold text-gray-500">Scene ${idx + 1}</span>
-            <span class="scene-badge ${imgBadgeClass}">${imgBadgeText}</span>
+            <div class="flex items-center">
+              <span class="scene-badge ${imgBadgeClass}"><i class="fas ${imgBadgeIcon} mr-0.5"></i>${imgBadgeText}</span>
+              ${audioBadge}
+            </div>
           </div>
-          <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || `シーン ${idx + 1}`}</p>
+          <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || `\u30b7\u30fc\u30f3 ${idx + 1}`}</p>
           <p class="text-xs text-gray-500 mt-1">
-            <i class="fas fa-comment mr-1"></i>${scene.utterance_count} 発話
+            <i class="fas fa-comment mr-1"></i>${scene.utterance_count} \u767a\u8a71
           </p>
         </div>
       </div>
@@ -684,6 +798,8 @@ function mcStartNew() {
   MC.phase = null;
   MC.config = null;
   MC._retryShown = false;
+  MC._lastProgressMsg = '';
+  MC._progressBubble = null;
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
@@ -704,6 +820,8 @@ function mcStartNew() {
   mcUpdatePhaseBadge('idle');
   document.getElementById('mcProgressFill').style.width = '0%';
   document.getElementById('mcProgressPercent').textContent = '0%';
+  const phaseDetail = document.getElementById('mcPhaseDetail');
+  if (phaseDetail) { phaseDetail.textContent = ''; phaseDetail.classList.add('hidden'); }
   
   mcSetUIState('idle');
 }

@@ -1207,6 +1207,7 @@ marunage.get('/:projectId/status', async (c) => {
           idx: s.idx,
           title: s.title,
           has_image: s.image_status === 'completed',
+          image_status: s.image_status || 'pending', // pending | generating | completed | failed
           image_url: s.image_r2_key ? `/images/${s.image_r2_key}` : null,
           has_audio: (s.audio_completed_count || 0) > 0,
           utterance_count: s.utterance_count,

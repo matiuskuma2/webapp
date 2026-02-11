@@ -4280,6 +4280,8 @@ app.get('/marunage-chat', (c) => {
                     <span id="mcStep4" class="text-[10px] text-gray-400"><i class="fas fa-volume-up"></i> 音声</span>
                     <span id="mcStep5" class="text-[10px] text-gray-400"><i class="fas fa-flag-checkered"></i> 完了</span>
                 </div>
+                <!-- Phase detail text (e.g. 画像: 2/5枚完了) -->
+                <p id="mcPhaseDetail" class="text-xs text-gray-500 mt-1.5 text-center hidden"></p>
             </div>
             
             <!-- Board Content (scenes) -->
