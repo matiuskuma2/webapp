@@ -244,7 +244,22 @@ async function marunageFormatStartup(
 
       // Check if formatting is complete
       if (body.status === 'formatted') {
-        console.log(`[Marunage:Format] ✅ Project ${projectId} formatted successfully (${body.total_scenes || 0} scenes)`)
+        // Issue-2.5: FORMAT_EMPTY — formatted だが可視シーンが0件なら failed に落とす
+        const sceneCount = await db.prepare(
+          `SELECT COUNT(*) as cnt FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)`
+        ).bind(projectId).first<{ cnt: number }>()
+
+        if (!sceneCount || sceneCount.cnt === 0) {
+          console.error(`[Marunage:Format] Project ${projectId} formatted but 0 visible scenes — marking as failed`)
+          await transitionPhase(db, runId, 'formatting', 'failed', {
+            error_code: 'FORMAT_EMPTY',
+            error_message: 'Format completed but no scenes were generated. Text may be too short or unstructured.',
+            error_phase: 'formatting',
+          })
+          return
+        }
+
+        console.log(`[Marunage:Format] ✅ Project ${projectId} formatted successfully (${sceneCount.cnt} visible scenes)`)
         // Phase transition is handled by advance — we just log and exit
         return
       }
@@ -266,7 +281,19 @@ async function marunageFormatStartup(
     ).bind(projectId).first<{ status: string }>()
 
     if (proj?.status === 'formatted') {
-      console.log(`[Marunage:Format] Project ${projectId} is formatted (detected after polling exhausted)`)
+      // Issue-2.5: same FORMAT_EMPTY check
+      const sceneCount = await db.prepare(
+        `SELECT COUNT(*) as cnt FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)`
+      ).bind(projectId).first<{ cnt: number }>()
+      if (!sceneCount || sceneCount.cnt === 0) {
+        await transitionPhase(db, runId, 'formatting', 'failed', {
+          error_code: 'FORMAT_EMPTY',
+          error_message: 'Format completed but no scenes were generated',
+          error_phase: 'formatting',
+        })
+        return
+      }
+      console.log(`[Marunage:Format] Project ${projectId} is formatted (${sceneCount.cnt} scenes, detected after polling exhausted)`)
       return
     }
 
@@ -312,36 +339,92 @@ const IMAGE_GEN_RETRY = 3          // 個別画像のリトライ回数
 const IMAGE_GEN_DELAY = 4500       // 画像間の待機 (ms) — Gemini 15 RPM に対応
 const MAX_R2_RETRIES = 3
 
-async function resolveGeminiApiKey(
-  db: D1Database,
-  userId: number | null,
-  systemKey: string | undefined,
-  encryptionKey: string | undefined
-): Promise<{ apiKey: string; source: 'user' | 'system' } | null> {
-  // Step 1: ユーザーキー
-  if (userId && encryptionKey) {
-    try {
-      const keyRecord = await db.prepare(`
-        SELECT encrypted_key FROM user_api_keys
-        WHERE user_id = ? AND provider = 'google' AND is_active = 1
-      `).bind(userId).first<{ encrypted_key: string }>()
+// ============================================================
+// Issue-2.6: Billing context & API key resolution (SSOT)
+// ============================================================
+// 
+// スポンサー判定SSOT: users.api_sponsor_id (video-generation.ts と同一ルール)
+// - api_sponsor_id が設定されている → sponsor課金（api_sponsor_idのユーザーのキーを使用）
+// - api_sponsor_id が NULL → user課金（本人のキーを使用）
+// - どちらもキーが無い → system key にフォールバック
+// - system key も無い → 失敗 (NO_API_KEY)
+//
+// 画像 (Gemini) と音声 (TTS) で同一の関数を使う。
 
-      if (keyRecord?.encrypted_key) {
-        // Dynamic import to avoid bundling issues
-        const { decryptApiKey } = await import('../utils/crypto')
-        const apiKey = await decryptApiKey(keyRecord.encrypted_key, encryptionKey)
-        return { apiKey, source: 'user' }
-      }
-    } catch (e) {
-      console.warn('[Marunage:Image] User key decrypt failed:', e)
+type BillingSource = 'user' | 'sponsor' | 'system'
+
+interface BillingContext {
+  billingSource: BillingSource
+  effectiveUserId: number | null  // キーを探すユーザー (sponsor時はsponsorのID)
+  sponsorUserId: number | null    // スポンサーのユーザーID (sponsor時のみ非null)
+}
+
+async function resolveBillingContext(
+  db: D1Database,
+  userId: number
+): Promise<BillingContext> {
+  const user = await db.prepare(
+    `SELECT api_sponsor_id FROM users WHERE id = ?`
+  ).bind(userId).first<{ api_sponsor_id: number | null }>()
+
+  if (user?.api_sponsor_id) {
+    console.log(`[Marunage:Billing] User ${userId} is sponsored by user ${user.api_sponsor_id}`)
+    return {
+      billingSource: 'sponsor',
+      effectiveUserId: user.api_sponsor_id,
+      sponsorUserId: user.api_sponsor_id,
     }
   }
 
-  // Step 2: システムキー
-  if (systemKey) {
-    return { apiKey: systemKey, source: 'system' }
+  return {
+    billingSource: 'user',
+    effectiveUserId: userId,
+    sponsorUserId: null,
+  }
+}
+
+/**
+ * プロバイダーキーを解決する。
+ * 優先順: effectiveUser のキー → system key → null
+ * 
+ * @param providerKind 'gemini' | 'tts_google' | 'tts_eleven' | 'tts_fish'
+ */
+async function resolveProviderKey(
+  db: D1Database,
+  billing: BillingContext,
+  providerKind: string,
+  systemKey: string | undefined,
+  encryptionKey: string | undefined
+): Promise<{ apiKey: string; keySource: BillingSource } | null> {
+  // Map providerKind to DB provider name
+  const dbProvider = providerKind === 'gemini' ? 'google' : providerKind.replace('tts_', '')
+
+  // Step 1: effectiveUser (user or sponsor) のキーを試行
+  if (billing.effectiveUserId && encryptionKey) {
+    try {
+      const keyRecord = await db.prepare(`
+        SELECT encrypted_key FROM user_api_keys
+        WHERE user_id = ? AND provider = ? AND is_active = 1
+      `).bind(billing.effectiveUserId, dbProvider).first<{ encrypted_key: string }>()
+
+      if (keyRecord?.encrypted_key) {
+        const { decryptApiKey } = await import('../utils/crypto')
+        const apiKey = await decryptApiKey(keyRecord.encrypted_key, encryptionKey)
+        console.log(`[Marunage:Key] Using ${billing.billingSource} key (user_id=${billing.effectiveUserId}, provider=${dbProvider})`)
+        return { apiKey, keySource: billing.billingSource }
+      }
+    } catch (e) {
+      console.warn(`[Marunage:Key] Decrypt failed for user ${billing.effectiveUserId}:`, e)
+    }
   }
 
+  // Step 2: System key fallback
+  if (systemKey) {
+    console.log(`[Marunage:Key] Falling back to system key for ${providerKind}`)
+    return { apiKey: systemKey, keySource: 'system' }
+  }
+
+  console.error(`[Marunage:Key] No key available for ${providerKind} (billing=${billing.billingSource}, effectiveUser=${billing.effectiveUserId})`)
   return null
 }
 
@@ -390,11 +473,26 @@ async function generateSingleImage(
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({})) as any
-        lastError = errData?.error?.message || `API error: ${response.status}`
+        // Issue-2.7: Capture detailed error info for debugging
+        const errorInfo = {
+          status: response.status,
+          code: errData?.error?.code || 'UNKNOWN',
+          message: errData?.error?.message || `API error: ${response.status}`,
+        }
+        lastError = JSON.stringify(errorInfo).substring(0, 1000)
+        console.error(`[Marunage:Image] Gemini error:`, errorInfo)
         break
       }
 
       const result = await response.json() as any
+
+      // Issue-2.7: Capture response structure for debugging on failure
+      const candidateCount = result.candidates?.length || 0
+      const finishReason = result.candidates?.[0]?.finishReason || 'N/A'
+      const partTypes = result.candidates?.[0]?.content?.parts?.map((p: any) =>
+        p.inlineData ? 'image' : p.text ? 'text' : 'unknown'
+      ) || []
+
       if (result.candidates?.[0]?.content?.parts) {
         for (const part of result.candidates[0].content.parts) {
           if (part.inlineData?.data) {
@@ -406,11 +504,22 @@ async function generateSingleImage(
             return { success: true, imageData: bytes.buffer }
           }
         }
-        lastError = 'No inline data in response'
+        // Has candidates but no image data
+        lastError = JSON.stringify({
+          type: 'NO_IMAGE_DATA',
+          candidates: candidateCount,
+          finishReason,
+          partTypes,
+        }).substring(0, 1000)
         break
       }
 
-      lastError = 'No candidates in Gemini response'
+      lastError = JSON.stringify({
+        type: 'NO_CANDIDATES',
+        candidates: candidateCount,
+        finishReason,
+        partTypes,
+      }).substring(0, 1000)
       break
 
     } catch (error) {
@@ -468,17 +577,22 @@ async function marunageGenerateImages(
 
   const aspectRatio = config.output_preset === 'short_vertical' ? '9:16' : '16:9'
 
-  // Resolve API key
-  const keyResult = await resolveGeminiApiKey(db, userId, env.GEMINI_API_KEY, env.ENCRYPTION_KEY)
+  // Issue-2.6: Billing-aware key resolution
+  const billing = userId
+    ? await resolveBillingContext(db, userId)
+    : { billingSource: 'system' as BillingSource, effectiveUserId: null, sponsorUserId: null }
+
+  const keyResult = await resolveProviderKey(db, billing, 'gemini', env.GEMINI_API_KEY, env.ENCRYPTION_KEY)
   if (!keyResult) {
-    console.error(`[Marunage:Image] No Gemini API key available`)
+    console.error(`[Marunage:Image] No Gemini API key available (billing=${billing.billingSource})`)
     await transitionPhase(db, runId, 'generating_images', 'failed', {
       error_code: 'NO_API_KEY',
-      error_message: 'No Gemini API key configured (user or system)',
+      error_message: `No Gemini API key configured (billing=${billing.billingSource}, effective_user=${billing.effectiveUserId})`,
       error_phase: 'generating_images',
     })
     return
   }
+  console.log(`[Marunage:Image] Key resolved: billing=${billing.billingSource}, keySource=${keyResult.keySource}`)
 
   // Get visible scenes
   const { results: scenes } = await db.prepare(`
