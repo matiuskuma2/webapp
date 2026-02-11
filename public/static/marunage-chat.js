@@ -52,24 +52,24 @@ function mcUpdateLiveProgress(data) {
     case 'formatting': {
       const c = p.format.chunks;
       if (c.total > 0) {
-        msg = `\u6574\u5f62\u4e2d: ${c.done}/${c.total} \u30c1\u30e3\u30f3\u30af\u5b8c\u4e86`;
+        msg = '整形中: ' + c.done + '/' + c.total + ' チャンク完了';
       } else {
-        msg = '\u6574\u5f62\u958b\u59cb\u4e2d...';
+        msg = '整形開始中...';
       }
       break;
     }
     case 'awaiting_ready': {
       const sr = p.scenes_ready;
-      msg = `${sr.visible_count} \u30b7\u30fc\u30f3\u78ba\u8a8d\u4e2d`;
-      if (sr.utterances_ready) msg += ' \u2014 \u6e96\u5099OK';
+      msg = sr.visible_count + ' シーン確認中';
+      if (sr.utterances_ready) msg += ' — 準備OK';
       break;
     }
     case 'generating_images': {
       const im = p.images;
-      const parts = [`\u753b\u50cf: ${im.completed}/${im.total}\u679a\u5b8c\u4e86`];
-      if (im.generating > 0) parts.push(`${im.generating}\u679a\u751f\u6210\u4e2d`);
-      if (im.failed > 0) parts.push(`${im.failed}\u679a\u5931\u6557`);
-      if (im.pending > 0) parts.push(`${im.pending}\u679a\u5f85\u6a5f`);
+      const parts = ['画像: ' + im.completed + '/' + im.total + '枚完了'];
+      if (im.generating > 0) parts.push(im.generating + '枚生成中');
+      if (im.failed > 0) parts.push(im.failed + '枚失敗');
+      if (im.pending > 0) parts.push(im.pending + '枚待機');
       msg = parts.join(' / ');
       break;
     }
@@ -77,19 +77,24 @@ function mcUpdateLiveProgress(data) {
       const au = p.audio;
       if (au.total_utterances > 0) {
         const done = au.completed || 0;
-        msg = `\u97f3\u58f0: ${done}/${au.total_utterances}\u500b\u5b8c\u4e86`;
-        if (au.failed > 0) msg += ` (${au.failed}\u5931\u6557)`;
+        msg = '音声: ' + done + '/' + au.total_utterances + '個完了';
+        if (au.failed > 0) msg += ' (' + au.failed + '失敗)';
       } else {
-        msg = au.job_id ? '\u97f3\u58f0\u751f\u6210\u958b\u59cb\u4e2d...' : '\u97f3\u58f0\u30b8\u30e7\u30d6\u6e96\u5099\u4e2d...';
+        msg = au.job_id ? '音声生成開始中...' : '音声ジョブ準備中...';
       }
       break;
     }
     case 'ready':
-      msg = '\u2705 \u5b8c\u6210\u3057\u307e\u3057\u305f\uff01';
+      msg = '完成しました！';
       break;
     case 'failed':
-      msg = '\u274c \u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f';
+      msg = 'エラーが発生しました';
       break;
+  }
+
+  // Debug log for progress visibility
+  if (msg) {
+    console.log('[Marunage Progress]', phase, msg, JSON.stringify(p.images || {}));
   }
 
   // Update board detail text
@@ -111,7 +116,7 @@ function mcUpdateLiveProgress(data) {
     } else {
       // Update existing bubble in-place
       const inner = MC._progressBubble.querySelector('.chat-bubble');
-      if (inner) inner.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>${msg}`;
+      if (inner) inner.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>' + msg;
     }
   }
 }
@@ -554,26 +559,26 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
     let imgBadgeClass, imgBadgeText, imgBadgeIcon;
     if (scene.has_image) {
       imgBadgeClass = 'bg-green-100 text-green-700';
-      imgBadgeText = '\u753b\u50cfOK';
+      imgBadgeText = '画像OK';
       imgBadgeIcon = 'fa-check-circle';
     } else if (scene.image_status === 'generating') {
       imgBadgeClass = 'bg-yellow-100 text-yellow-700 animate-pulse';
-      imgBadgeText = '\u751f\u6210\u4e2d';
+      imgBadgeText = '生成中';
       imgBadgeIcon = 'fa-spinner fa-spin';
     } else if (scene.image_status === 'failed') {
       imgBadgeClass = 'bg-red-100 text-red-700';
-      imgBadgeText = '\u5931\u6557';
+      imgBadgeText = '失敗';
       imgBadgeIcon = 'fa-exclamation-circle';
     } else {
       imgBadgeClass = 'bg-gray-100 text-gray-500';
-      imgBadgeText = '\u5f85\u6a5f\u4e2d';
+      imgBadgeText = '待機中';
       imgBadgeIcon = 'fa-clock';
     }
     
     // Determine audio badge
     let audioBadge = '';
     if (scene.has_audio) {
-      audioBadge = '<span class="scene-badge bg-green-100 text-green-700 ml-1"><i class="fas fa-check-circle mr-0.5"></i>\u97f3\u58f0OK</span>';
+      audioBadge = '<span class="scene-badge bg-green-100 text-green-700 ml-1"><i class="fas fa-check-circle mr-0.5"></i>音声OK</span>';
     }
     
     const imgContent = scene.image_url
@@ -596,9 +601,9 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
               ${audioBadge}
             </div>
           </div>
-          <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || `\u30b7\u30fc\u30f3 ${idx + 1}`}</p>
+          <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || 'シーン ' + (idx + 1)}</p>
           <p class="text-xs text-gray-500 mt-1">
-            <i class="fas fa-comment mr-1"></i>${scene.utterance_count} \u767a\u8a71
+            <i class="fas fa-comment mr-1"></i>${scene.utterance_count} 発話
           </p>
         </div>
       </div>
