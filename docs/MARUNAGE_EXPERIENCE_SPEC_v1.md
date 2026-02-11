@@ -185,7 +185,19 @@
 | **右チャット** | 入力フォーム表示 |
 | **左ボード** | ウェルカム表示：「台本を貼り付けて、丸投げ開始を押してください。5シーンの動画素材を自動で作成します。」 |
 | **SSOT** | marunage_runs なし（or 前回 run が terminal） |
-| **API** | なし（ページ読み込み時に `GET /status` で確認） |
+| **API** | `GET /api/marunage/active` でアクティブ run を検索。あれば processing 状態に復帰。なければ idle 表示。 |
+
+**復帰フロー（再訪問時）:**
+1. ページ読み込み時に `GET /api/marunage/active` を呼ぶ
+2. 200 + アクティブ run あり → `run_id`, `project_id` を取得 → processing 状態に復帰 → ポーリング開始
+3. 404（アクティブ run なし）→ idle 表示（新規入力フォーム）
+4. `GET /api/marunage/active` は session cookie のユーザー ID からアクティブ run を検索
+
+**`GET /api/marunage/active` 仕様（v3 計画書への追記事項）:**
+- session cookie 必須
+- `marunage_runs WHERE started_by_user_id = ? AND phase NOT IN ('ready', 'failed', 'canceled')` で検索
+- ヒット → 200 `{ run_id, project_id, phase }` を返却
+- なし → 404
 
 **入力フォーム詳細:**
 
@@ -286,12 +298,29 @@
 | completed | 画像サムネイル表示 |
 | failed | 赤枠＋エラーアイコン＋「再試行待ち」テキスト |
 
-**shouldAdvance 条件:** `progress.images.generating === 0 && progress.images.completed > 0`
+**shouldAdvance 条件（精密版）:**
 
-**部分失敗時の挙動:**
-- `completed + failed === 5 && failed > 0 && retry_count < 3` → 自動リトライ
-- `retry_count >= 3` → error 状態に遷移（手動リトライ導線へ）
-- `completed === 5` → 次フェーズ（音声生成）へ advance
+```javascript
+// generating_images の advance 判定
+case 'generating_images': {
+  const img = p.images;
+  if (img.generating > 0) return false;            // まだ生成中 → 待機
+  if (img.completed === img.total_scenes) return true; // 全成功 → 次へ
+  if (img.failed > 0) return true;                 // 失敗あり → advance に判断委譲
+  return false;
+}
+```
+
+**advance 側の画像失敗ハンドリング（バックエンド）:**
+
+| 状況 | advance の動作 | UI 影響 |
+|---|---|---|
+| `completed === 5` | phase → `generating_audio`（次フェーズ） | 右: 「全ての画像が完成しました！」 |
+| `failed > 0 && retry_count < 3` | `retry_count++` → 失敗画像を再生成起動 → phase はそのまま `generating_images` | 右: 「シーン{idx}を再試行中... ({retry}/3)」 |
+| `failed > 0 && retry_count >= 3` | phase → `failed`, error_phase=`generating_images` | 右: エラーメッセージ + [リトライ][キャンセル] |
+| `completed === 0`（全滅） | phase → `failed`, error_phase=`generating_images` | 右: 「画像生成に失敗しました」 |
+
+**重要**: 自動リトライは **advance API 内（バックエンド）** で実行する。フロント側は shouldAdvance=true を検知して advance を POST するだけ。リトライ判断はバックエンドに閉じる。
 
 ---
 
@@ -568,7 +597,12 @@ function shouldAdvance(data) {
     case 'awaiting_ready':
       return p.scenes_ready.utterances_ready === true;
     case 'generating_images':
-      return p.images.generating === 0 && p.images.completed > 0;
+      // generating > 0 → まだ生成中、待機
+      if (p.images.generating > 0) return false;
+      // 全成功 OR 失敗あり → advance に判断委譲
+      // （advance 側で自動リトライ or failed 遷移を決定）
+      if (p.images.completed > 0 || p.images.failed > 0) return true;
+      return false;
     case 'generating_audio':
       return p.audio.job_status === 'completed';
     default:
@@ -576,6 +610,10 @@ function shouldAdvance(data) {
   }
 }
 ```
+
+> **重要**: `generating_images` の shouldAdvance は「生成が止まった（generating=0）」を検知するだけ。
+> 成功/失敗の判断と自動リトライは **advance API（バックエンド）** に閉じる。
+> フロントは「advance を呼ぶかどうか」だけを決める。
 
 ### 11-3. チャットメッセージ更新ロジック
 
