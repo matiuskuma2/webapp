@@ -753,6 +753,117 @@ function sleep(ms: number): Promise<void> {
 }
 
 // ============================================================
+// Issue-3: 音声生成起動ヘルパー
+// bulk-audio API を HTTP 経由で呼び出し、audio_job_id を保存
+// ============================================================
+
+async function marunageStartAudioGeneration(
+  db: D1Database,
+  runId: number,
+  projectId: number,
+  config: MarunageConfig,
+  requestUrl: string,
+  sessionCookie: string
+): Promise<void> {
+  const origin = new URL(requestUrl).origin
+  const bulkUrl = `${origin}/api/projects/${projectId}/audio/bulk-generate`
+
+  console.log(`[Marunage:Audio] Starting audio generation for project ${projectId} (run ${runId})`)
+
+  try {
+    // Determine narration voice from config
+    const provider = config.narration_voice?.provider || 'google'
+    const voiceId = config.narration_voice?.voice_id || 'ja-JP-Neural2-B'
+
+    // Update project settings with narration voice before calling bulk-audio
+    // (bulk-audio reads from project.settings_json for voice resolution)
+    try {
+      const project = await db.prepare(
+        `SELECT settings_json FROM projects WHERE id = ?`
+      ).bind(projectId).first<{ settings_json: string | null }>()
+
+      const settings = project?.settings_json ? JSON.parse(project.settings_json) : {}
+      settings.default_narration_voice = { provider, voice_id: voiceId }
+
+      await db.prepare(
+        `UPDATE projects SET settings_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+      ).bind(JSON.stringify(settings), projectId).run()
+
+      console.log(`[Marunage:Audio] Updated project ${projectId} narration voice: ${provider}/${voiceId}`)
+    } catch (settingsError) {
+      console.warn(`[Marunage:Audio] Failed to update project settings (non-fatal):`, settingsError)
+    }
+
+    // Call bulk-audio API via HTTP
+    const response = await fetch(bulkUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': `session=${sessionCookie}`,
+      },
+      body: JSON.stringify({
+        mode: 'missing',           // Generate only missing utterances
+        force_regenerate: false,
+      }),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => 'Unknown error')
+      console.error(`[Marunage:Audio] bulk-generate API returned ${response.status}: ${errorBody}`)
+
+      // If 409 (job already running), try to extract existing job_id
+      if (response.status === 409) {
+        try {
+          const conflict = JSON.parse(errorBody)
+          if (conflict.existing_job_id) {
+            console.log(`[Marunage:Audio] Job already exists (${conflict.existing_job_id}), saving to run`)
+            await db.prepare(`
+              UPDATE marunage_runs SET audio_job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(conflict.existing_job_id, runId).run()
+            return
+          }
+        } catch (_) {}
+      }
+
+      // Mark run as failed
+      await transitionPhase(db, runId, 'generating_audio', 'failed', {
+        error_code: 'AUDIO_START_FAILED',
+        error_message: `Bulk audio API error: HTTP ${response.status} — ${errorBody.substring(0, 500)}`,
+        error_phase: 'generating_audio',
+      })
+      return
+    }
+
+    const result = await response.json<{ job_id: number; status: string }>()
+    const jobId = result.job_id
+
+    console.log(`[Marunage:Audio] Bulk audio job ${jobId} created for project ${projectId}`)
+
+    // Save audio_job_id to marunage_runs
+    await db.prepare(`
+      UPDATE marunage_runs SET audio_job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(jobId, runId).run()
+
+    console.log(`[Marunage:Audio] Saved audio_job_id=${jobId} to run ${runId}`)
+
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.error(`[Marunage:Audio] Critical error starting audio for run ${runId}:`, errorMsg)
+
+    // Mark run as failed
+    try {
+      await transitionPhase(db, runId, 'generating_audio', 'failed', {
+        error_code: 'AUDIO_START_FAILED',
+        error_message: `Audio startup error: ${errorMsg.substring(0, 500)}`,
+        error_phase: 'generating_audio',
+      })
+    } catch (failError) {
+      console.error(`[Marunage:Audio] Failed to mark run as failed:`, failError)
+    }
+  }
+}
+
+// ============================================================
 // 5-1. GET /active - ユーザーのアクティブ run を検索
 // ============================================================
 
@@ -968,11 +1079,14 @@ marunage.get('/:projectId/status', async (c) => {
                      projectStatus?.status === 'generating_images' ||
                      projectStatus?.status === 'completed'
 
-  // 2. Scenes + utterance counts
+  // 2. Scenes + utterance counts + audio completion status
   const { results: scenesData } = await c.env.DB.prepare(`
     SELECT
       s.id, s.idx, s.title,
       (SELECT COUNT(*) FROM scene_utterances su WHERE su.scene_id = s.id) AS utterance_count,
+      (SELECT COUNT(*) FROM scene_utterances su
+       JOIN audio_generations ag ON ag.id = su.audio_generation_id AND ag.status = 'completed'
+       WHERE su.scene_id = s.id) AS audio_completed_count,
       ig.status AS image_status,
       ig.r2_key AS image_r2_key
     FROM scenes s
@@ -1070,7 +1184,7 @@ marunage.get('/:projectId/status', async (c) => {
           title: s.title,
           has_image: s.image_status === 'completed',
           image_url: s.image_r2_key ? `/images/${s.image_r2_key}` : null,
-          has_audio: false, // TODO: Issue-3 で拡充
+          has_audio: (s.audio_completed_count || 0) > 0,
           utterance_count: s.utterance_count,
         })),
       },
@@ -1287,9 +1401,7 @@ marunage.post('/:projectId/advance', async (c) => {
 
         // All completed → transition to generating_audio
         if (completed > 0 && failed === 0) {
-          // Issue-1: Transition only. No audio generation start.
-          // Issue-3: ここで音声生成を waitUntil で起動する予定。
-          const lockUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+          const lockUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10min lock for audio
           const ok = await transitionPhaseWithLock(c.env.DB, run.id, 'generating_images', 'generating_audio', lockUntil)
           if (!ok) {
             return c.json({
@@ -1301,12 +1413,23 @@ marunage.post('/:projectId/advance', async (c) => {
             })
           }
 
+          // Issue-3: Start audio generation via waitUntil
+          const sessionCookie = getCookie(c, 'session') || ''
+          const config: MarunageConfig = run.config_json ? JSON.parse(run.config_json) : DEFAULT_CONFIG
+
+          c.executionCtx.waitUntil(
+            marunageStartAudioGeneration(
+              c.env.DB, run.id, projectId, config,
+              c.req.url, sessionCookie
+            ).catch(err => console.error(`[Marunage:Audio] waitUntil error:`, err))
+          )
+
           return c.json({
             run_id: run.id,
             previous_phase: 'generating_images',
             new_phase: 'generating_audio',
-            action: 'transitioned',
-            message: '音声生成フェーズに遷移しました (Issue-3で起動実装予定)',
+            action: 'audio_started',
+            message: '音声生成を開始しました',
           })
         }
 
@@ -1372,12 +1495,60 @@ marunage.post('/:projectId/advance', async (c) => {
       // ---- generating_audio → ready ----
       case 'generating_audio': {
         if (!run.audio_job_id) {
+          // Issue-3: audio_job_id が未設定 — waitUntil が遅延/失敗した可能性
+          // bulk-audio API に既存ジョブがないか確認し、なければ再起動
+          const sessionCookie = getCookie(c, 'session') || ''
+          const config: MarunageConfig = run.config_json ? JSON.parse(run.config_json) : DEFAULT_CONFIG
+
+          // Check if there's already a job for this project
+          const existingJob = await c.env.DB.prepare(`
+            SELECT id, status FROM project_audio_jobs
+            WHERE project_id = ? AND status IN ('queued', 'running', 'completed')
+            ORDER BY created_at DESC LIMIT 1
+          `).bind(projectId).first<{ id: number; status: string }>()
+
+          if (existingJob) {
+            // Found an existing job — save it and proceed
+            await c.env.DB.prepare(`
+              UPDATE marunage_runs SET audio_job_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(existingJob.id, run.id).run()
+            console.log(`[Marunage:Audio] Found existing job ${existingJob.id} (${existingJob.status}), saved to run ${run.id}`)
+
+            if (existingJob.status === 'completed') {
+              const ok = await transitionPhase(c.env.DB, run.id, 'generating_audio', 'ready')
+              return c.json({
+                run_id: run.id,
+                previous_phase: 'generating_audio',
+                new_phase: ok ? 'ready' : 'generating_audio',
+                action: ok ? 'completed' : 'already_advanced',
+                message: ok ? '完成しました！' : 'Already transitioned',
+              })
+            }
+
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'waiting',
+              message: `Audio job found (${existingJob.status}), waiting for completion`,
+            })
+          }
+
+          // No existing job — re-trigger audio generation
+          console.log(`[Marunage:Audio] No audio_job_id for run ${run.id}, re-triggering audio generation`)
+          c.executionCtx.waitUntil(
+            marunageStartAudioGeneration(
+              c.env.DB, run.id, projectId, config,
+              c.req.url, sessionCookie
+            ).catch(err => console.error(`[Marunage:Audio] Re-trigger error:`, err))
+          )
+
           return c.json({
             run_id: run.id,
             previous_phase: currentPhase,
             new_phase: currentPhase,
-            action: 'waiting',
-            message: 'Audio job not started yet',
+            action: 'audio_retrigger',
+            message: '音声生成を再起動しました',
           })
         }
 
