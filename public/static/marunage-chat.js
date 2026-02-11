@@ -266,11 +266,14 @@ async function mcAdvance() {
       case 'scenes_confirmed':
         mcAddSystemMessage(`${data.message}`);
         break;
-      case 'started_images':
+      case 'images_started':
         mcAddSystemMessage('画像生成を開始しました...');
         break;
-      case 'started_audio':
+      case 'audio_started':
         mcAddSystemMessage('ナレーション音声を生成中...');
+        break;
+      case 'audio_retrigger':
+        mcAddSystemMessage('音声生成を再起動しました...');
         break;
       case 'completed':
         mcAddSystemMessage('完成しました！左のボードで結果を確認してください。', 'success');
@@ -281,8 +284,9 @@ async function mcAdvance() {
         mcAddSystemMessage(`エラー: ${data.message}`, 'error');
         mcSetUIState('error');
         break;
+      case 'retrying':
       case 'auto_retry':
-        mcAddSystemMessage(data.message);
+        mcAddSystemMessage(data.message || '自動リトライ中...');
         break;
     }
     
