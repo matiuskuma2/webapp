@@ -152,7 +152,7 @@ export async function validateProjectAccess(
     console.log(`[AuthHelper] Validating project access: projectId=${projectId}, userId=${user.id}, role=${user.role}`);
     
     const project = await c.env.DB.prepare(`
-      SELECT id, user_id FROM projects WHERE id = ?
+      SELECT id, user_id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ id: number; user_id: number | null }>();
     
     if (!project) {

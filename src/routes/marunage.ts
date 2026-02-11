@@ -55,25 +55,31 @@ function errorJson(c: any, err: { code: string; status: number }, message: strin
 
 async function getActiveRunForUser(db: D1Database, userId: number): Promise<MarunageRunRow | null> {
   return await db.prepare(`
-    SELECT * FROM marunage_runs
-    WHERE started_by_user_id = ? AND phase NOT IN ('ready', 'failed', 'canceled')
-    ORDER BY created_at DESC LIMIT 1
+    SELECT mr.* FROM marunage_runs mr
+    JOIN projects p ON p.id = mr.project_id
+    WHERE mr.started_by_user_id = ? AND mr.phase NOT IN ('ready', 'failed', 'canceled')
+      AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
+    ORDER BY mr.created_at DESC LIMIT 1
   `).bind(userId).first<MarunageRunRow>() || null
 }
 
 async function getActiveRunForProject(db: D1Database, projectId: number): Promise<MarunageRunRow | null> {
   return await db.prepare(`
-    SELECT * FROM marunage_runs
-    WHERE project_id = ? AND phase NOT IN ('ready', 'failed', 'canceled')
-    ORDER BY created_at DESC LIMIT 1
+    SELECT mr.* FROM marunage_runs mr
+    JOIN projects p ON p.id = mr.project_id
+    WHERE mr.project_id = ? AND mr.phase NOT IN ('ready', 'failed', 'canceled')
+      AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
+    ORDER BY mr.created_at DESC LIMIT 1
   `).bind(projectId).first<MarunageRunRow>() || null
 }
 
 async function getLatestRunForProject(db: D1Database, projectId: number): Promise<MarunageRunRow | null> {
   return await db.prepare(`
-    SELECT * FROM marunage_runs
-    WHERE project_id = ?
-    ORDER BY created_at DESC LIMIT 1
+    SELECT mr.* FROM marunage_runs mr
+    JOIN projects p ON p.id = mr.project_id
+    WHERE mr.project_id = ?
+      AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
+    ORDER BY mr.created_at DESC LIMIT 1
   `).bind(projectId).first<MarunageRunRow>() || null
 }
 

@@ -307,9 +307,9 @@ async function bulkDeleteProjects() {
       await axios.delete(`${API_BASE}/projects/${projectId}`);
       successCount++;
     } catch (error) {
-      // 404 = 既に削除済み → 成功としてカウント
-      if (error.response?.status === 404) {
-        console.warn(`Project ${projectId} already deleted (404)`);
+      // 404 = 見つからない, 409 = 既に削除済み → 成功としてカウント
+      if (error.response?.status === 404 || error.response?.status === 409) {
+        console.warn(`Project ${projectId} already deleted (${error.response?.status})`);
         successCount++;
       } else {
         console.error(`Failed to delete project ${projectId}:`, error);
@@ -341,9 +341,9 @@ async function deleteProjectDirect(projectId) {
     showToast('プロジェクトを削除しました', 'success');
     loadProjects();
   } catch (error) {
-    // 404 = 既に削除済み → 成功として処理
-    if (error.response?.status === 404) {
-      console.warn(`Project ${projectId} already deleted (404)`);
+    // 404 = 見つからない, 409 = 既に削除済み → 成功として処理
+    if (error.response?.status === 404 || error.response?.status === 409) {
+      console.warn(`Project ${projectId} already deleted (${error.response?.status})`);
       showToast('プロジェクトを削除しました（既に削除済み）', 'success');
       loadProjects();
     } else {

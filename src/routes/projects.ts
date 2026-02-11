@@ -315,6 +315,7 @@ projects.get('/', async (c) => {
     const { results } = await c.env.DB.prepare(`
       SELECT id, title, status, audio_filename, audio_r2_key, audio_size_bytes, created_at, updated_at
       FROM projects
+      WHERE (is_deleted = 0 OR is_deleted IS NULL)
       ORDER BY created_at DESC
     `).all()
 
@@ -355,7 +356,7 @@ projects.get('/:id', async (c) => {
         p.updated_at,
         p.source_updated_at
       FROM projects p
-      WHERE p.id = ?
+      WHERE p.id = ? AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
     `).bind(projectId).first<{
       id: number;
       title: string;
@@ -1199,16 +1200,24 @@ projects.get('/:id/scenes/hidden', async (c) => {
   }
 })
 
-// DELETE /api/projects/:id - プロジェクト削除（堅牢版 v2：全子テーブル明示削除）
-// D1 では PRAGMA foreign_keys が確実に ON とは限らないため、CASCADE に依存せず
-// 全ての子テーブルを正しい依存順で明示的に削除する。
+// DELETE /api/projects/:id - プロジェクト削除（ソフトデリート v3）
+// 
+// ■ 方針（2026-02-11 改定）
+//   ハードデリートは30以上の子テーブルへのカスケード削除を伴い、
+//   キャラクターモデル、BGM、効果音などプロジェクト横断リソースに
+//   予期しない影響が発生するリスクがある。
+//   監査ログ（audit_logs）も失われインシデント追跡ができなくなる。
+//   → is_deleted フラグ + deleted_at タイムスタンプによるソフトデリートに変更。
+//   → 子テーブルのデータは一切触れない。R2のファイルも維持する。
+//   → 一覧取得時に WHERE is_deleted = 0 でフィルタリング。
+//
 projects.delete('/:id', async (c) => {
   try {
     const projectId = c.req.param('id')
 
-    // プロジェクト存在確認
+    // プロジェクト存在確認（未削除のものだけ対象）
     const project = await c.env.DB.prepare(`
-      SELECT id, audio_r2_key FROM projects WHERE id = ?
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1220,196 +1229,25 @@ projects.delete('/:id', async (c) => {
       }, 404)
     }
 
-    // ===== R2削除（ベストエフォート） =====
-    
-    // R2から音声ファイル削除
-    if (project.audio_r2_key) {
-      try {
-        await c.env.R2.delete(project.audio_r2_key as string)
-        console.log(`[Delete] R2 audio: ${project.audio_r2_key}`)
-      } catch (error) {
-        console.error('[Delete] R2 audio error:', error)
-      }
-    }
+    // ソフトデリート: フラグを立てるだけ。子テーブル・R2は一切触れない。
+    const result = await c.env.DB.prepare(`
+      UPDATE projects
+      SET is_deleted = 1, deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
+    `).bind(projectId).run()
 
-    // R2から画像ファイル削除
-    try {
-      const { results: imageR2Keys } = await c.env.DB.prepare(`
-        SELECT DISTINCT r2_key FROM image_generations 
-        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
-        AND r2_key IS NOT NULL
-      `).bind(projectId).all()
-
-      for (const img of imageR2Keys) {
-        try { await c.env.R2.delete(img.r2_key as string) } catch (_) {}
-      }
-      console.log(`[Delete] R2 images: ${imageR2Keys.length} files`)
-    } catch (error) {
-      console.error('[Delete] R2 images error:', error)
-    }
-
-    // R2から音声生成ファイル削除
-    try {
-      const { results: audioR2Keys } = await c.env.DB.prepare(`
-        SELECT DISTINCT r2_key FROM audio_generations 
-        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
-        AND r2_key IS NOT NULL
-      `).bind(projectId).all()
-
-      for (const audio of audioR2Keys) {
-        try { await c.env.R2.delete(audio.r2_key as string) } catch (_) {}
-      }
-      console.log(`[Delete] R2 audio_generations: ${audioR2Keys.length} files`)
-    } catch (error) {
-      console.error('[Delete] R2 audio_generations error:', error)
-    }
-
-    // R2から動画ファイル削除
-    try {
-      const { results: videoR2Keys } = await c.env.DB.prepare(`
-        SELECT DISTINCT r2_key FROM video_generations 
-        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
-        AND r2_key IS NOT NULL
-      `).bind(projectId).all()
-
-      for (const vid of videoR2Keys) {
-        try { await c.env.R2.delete(vid.r2_key as string) } catch (_) {}
-      }
-      console.log(`[Delete] R2 video_generations: ${videoR2Keys.length} files`)
-    } catch (error) {
-      console.error('[Delete] R2 video_generations error:', error)
-    }
-
-    // ===== DB削除（全子テーブル明示削除、依存順） =====
-    // D1の foreign_keys = OFF でも安全に削除できるよう、
-    // 孫テーブル → 子テーブル → 親テーブル の順序で削除する。
-    // 各DELETE は個別にベストエフォートで実行（1テーブル失敗でも続行）。
-    
-    const sceneSubquery = `(SELECT id FROM scenes WHERE project_id = ?)`
-    const deletionLog: string[] = []
-    
-    // Helper: 安全に DELETE を実行し結果をログ
-    async function safeDelete(label: string, sql: string, binds: any[]) {
-      try {
-        let stmt = c.env.DB.prepare(sql)
-        for (const b of binds) {
-          stmt = stmt.bind(b)
-        }
-        const result = await stmt.run()
-        const count = result.meta?.changes ?? 0
-        if (count > 0) deletionLog.push(`${label}: ${count}`)
-      } catch (err) {
-        console.error(`[Delete] ${label} error:`, err)
-        deletionLog.push(`${label}: ERROR`)
-      }
-    }
-
-    // ---- Layer 4: 最深の孫テーブル（scene_utterances の子） ----
-    await safeDelete('scene_balloons',
-      `DELETE FROM scene_balloons WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_telops',
-      `DELETE FROM scene_telops WHERE scene_id IN ${sceneSubquery}`, [projectId])
-
-    // ---- Layer 3: scenes の子テーブル ----
-    await safeDelete('scene_utterances',
-      `DELETE FROM scene_utterances WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_audio_assignments',
-      `DELETE FROM scene_audio_assignments WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_audio_cues',
-      `DELETE FROM scene_audio_cues WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_motion',
-      `DELETE FROM scene_motion WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_character_map',
-      `DELETE FROM scene_character_map WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_character_traits',
-      `DELETE FROM scene_character_traits WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('scene_style_settings',
-      `DELETE FROM scene_style_settings WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('image_generations',
-      `DELETE FROM image_generations WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('audio_generations',
-      `DELETE FROM audio_generations WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('video_generations',
-      `DELETE FROM video_generations WHERE scene_id IN ${sceneSubquery}`, [projectId])
-    await safeDelete('image_generation_logs',
-      `DELETE FROM image_generation_logs WHERE scene_id IN ${sceneSubquery}`, [projectId])
-
-    // ---- Layer 2: projects の直接子テーブル ----
-    await safeDelete('scenes',
-      `DELETE FROM scenes WHERE project_id = ?`, [projectId])
-    await safeDelete('transcriptions',
-      `DELETE FROM transcriptions WHERE project_id = ?`, [projectId])
-    await safeDelete('runs',
-      `DELETE FROM runs WHERE project_id = ?`, [projectId])
-    await safeDelete('text_chunks',
-      `DELETE FROM text_chunks WHERE project_id = ?`, [projectId])
-    await safeDelete('scene_split_settings',
-      `DELETE FROM scene_split_settings WHERE project_id = ?`, [projectId])
-    await safeDelete('project_character_models',
-      `DELETE FROM project_character_models WHERE project_id = ?`, [projectId])
-    await safeDelete('project_character_instances',
-      `DELETE FROM project_character_instances WHERE project_id = ?`, [projectId])
-    await safeDelete('world_settings',
-      `DELETE FROM world_settings WHERE project_id = ?`, [projectId])
-    await safeDelete('project_style_settings',
-      `DELETE FROM project_style_settings WHERE project_id = ?`, [projectId])
-    await safeDelete('project_audio_tracks',
-      `DELETE FROM project_audio_tracks WHERE project_id = ?`, [projectId])
-    await safeDelete('project_audio_jobs',
-      `DELETE FROM project_audio_jobs WHERE project_id = ?`, [projectId])
-    await safeDelete('video_builds',
-      `DELETE FROM video_builds WHERE project_id = ?`, [projectId])
-    await safeDelete('patch_effects',
-      `DELETE FROM patch_effects WHERE patch_request_id IN (SELECT id FROM patch_requests WHERE project_id = ?)`, [projectId])
-    await safeDelete('patch_requests',
-      `DELETE FROM patch_requests WHERE project_id = ?`, [projectId])
-    await safeDelete('api_usage_logs (project)',
-      `DELETE FROM api_usage_logs WHERE project_id = ?`, [projectId])
-    await safeDelete('image_generation_logs (project)',
-      `DELETE FROM image_generation_logs WHERE project_id = ?`, [projectId])
-    // ---- 漏れていたテーブル（FK RESTRICT でブロック原因） ----
-    await safeDelete('tts_usage_logs',
-      `DELETE FROM tts_usage_logs WHERE project_id = ?`, [projectId])
-    await safeDelete('audit_logs',
-      `DELETE FROM audit_logs WHERE project_id = ?`, [projectId])
-    await safeDelete('api_error_logs',
-      `DELETE FROM api_error_logs WHERE project_id = ?`, [projectId])
-    await safeDelete('marunage_runs',
-      `DELETE FROM marunage_runs WHERE project_id = ?`, [projectId])
-
-    // ---- Layer 1: projects 本体 ----
-    // projects の削除は成否を明示的にチェック（FK制約違反で失敗する場合がある）
-    try {
-      const deleteResult = await c.env.DB.prepare(
-        `DELETE FROM projects WHERE id = ?`
-      ).bind(projectId).run()
-      const deletedCount = deleteResult.meta?.changes ?? 0
-      if (deletedCount === 0) {
-        // 削除が0行 = FK制約違反 or 既に削除済み
-        console.error(`[Delete] Project ${projectId} DELETE returned 0 changes - possible FK constraint violation`)
-        deletionLog.push('projects: FAILED (0 changes)')
-        return c.json({
-          error: {
-            code: 'DELETE_FAILED',
-            message: 'プロジェクトの削除に失敗しました。関連データが残っている可能性があります。',
-            details: deletionLog.join(', ')
-          }
-        }, 500)
-      }
-      deletionLog.push(`projects: ${deletedCount}`)
-    } catch (err) {
-      console.error(`[Delete] projects error:`, err)
-      deletionLog.push(`projects: ERROR - ${err instanceof Error ? err.message : String(err)}`)
+    const changes = result.meta?.changes ?? 0
+    if (changes === 0) {
+      // 既に削除済み or 楽観ロック失敗
       return c.json({
         error: {
-          code: 'DELETE_FAILED',
-          message: 'プロジェクトの削除に失敗しました。',
-          details: deletionLog.join(', ')
+          code: 'ALREADY_DELETED',
+          message: 'プロジェクトは既に削除されています'
         }
-      }, 500)
+      }, 409)
     }
 
-    console.log(`[Delete] Project ${projectId} completed. Details: ${deletionLog.join(', ')}`)
+    console.log(`[SoftDelete] Project ${projectId} marked as deleted`)
 
     return c.json({
       success: true,
@@ -1417,7 +1255,7 @@ projects.delete('/:id', async (c) => {
       deleted_project_id: parseInt(projectId)
     })
   } catch (error) {
-    console.error('[Delete] Project error:', error)
+    console.error('[SoftDelete] Project error:', error)
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
