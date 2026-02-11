@@ -185,7 +185,7 @@ projects.post('/:id/upload', async (c) => {
 
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
+      SELECT id, status FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -331,6 +331,38 @@ projects.get('/', async (c) => {
   }
 })
 
+// GET /api/projects/deleted - ソフトデリート済みプロジェクト一覧（superadmin専用）
+// ⚠️ IMPORTANT: このルートは /:id より前に定義すること（'deleted' が :id にマッチするのを防ぐ）
+projects.get('/deleted', async (c) => {
+  try {
+    // セッション認証 + superadmin チェック
+    const sessionCookie = c.req.header('Cookie')?.match(/session=([^;]+)/)?.[1]
+    if (!sessionCookie) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+    }
+    const session = await c.env.DB.prepare(
+      `SELECT u.id, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.session_token = ? AND s.expires_at > datetime('now')`
+    ).bind(sessionCookie).first<{ id: number; role: string }>()
+    if (!session || session.role !== 'superadmin') {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Superadmin access required' } }, 403)
+    }
+
+    const { results } = await c.env.DB.prepare(`
+      SELECT id, title, status, is_deleted, deleted_at, created_at, updated_at
+      FROM projects
+      WHERE is_deleted = 1
+      ORDER BY deleted_at DESC
+    `).all()
+
+    return c.json({ projects: results })
+  } catch (error) {
+    console.error('Error fetching deleted projects:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to fetch deleted projects' }
+    }, 500)
+  }
+})
+
 // GET /api/projects/:id - プロジェクト詳細
 // SSOT: split_mode / target_scene_count を含める（Scene Split UI用）
 projects.get('/:id', async (c) => {
@@ -461,7 +493,7 @@ projects.post('/:id/source/text', async (c) => {
 
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
-      SELECT id FROM projects WHERE id = ?
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1217,7 +1249,7 @@ projects.delete('/:id', async (c) => {
 
     // プロジェクト存在確認（未削除のものだけ対象）
     const project = await c.env.DB.prepare(`
-      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL) AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1266,16 +1298,258 @@ projects.delete('/:id', async (c) => {
   }
 })
 
+// ============================================================
+// 管理画面用: ソフトデリート管理エンドポイント群
+// ============================================================
+// ■ 認可: superadmin ロール限定
+// ■ 目的: 削除済みプロジェクトの一覧・復元・完全削除
+// ============================================================
+
+// POST /api/projects/:id/restore - ソフトデリート済みプロジェクトを復元（superadmin専用）
+projects.post('/:id/restore', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // セッション認証 + superadmin チェック
+    const sessionCookie = c.req.header('Cookie')?.match(/session=([^;]+)/)?.[1]
+    if (!sessionCookie) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+    }
+    const session = await c.env.DB.prepare(
+      `SELECT u.id, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.session_token = ? AND s.expires_at > datetime('now')`
+    ).bind(sessionCookie).first<{ id: number; role: string }>()
+    if (!session || session.role !== 'superadmin') {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Superadmin access required' } }, 403)
+    }
+
+    // 削除済みプロジェクトの確認
+    const project = await c.env.DB.prepare(`
+      SELECT id, title FROM projects WHERE id = ? AND is_deleted = 1
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Deleted project not found (either does not exist or is not deleted)' }
+      }, 404)
+    }
+
+    // 復元: is_deleted = 0, deleted_at = NULL
+    await c.env.DB.prepare(`
+      UPDATE projects
+      SET is_deleted = 0, deleted_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ? AND is_deleted = 1
+    `).bind(projectId).run()
+
+    console.log(`[Restore] Project ${projectId} restored by superadmin (user_id=${session.id})`)
+
+    return c.json({
+      success: true,
+      message: 'Project restored successfully',
+      project_id: parseInt(projectId),
+      title: project.title
+    })
+  } catch (error) {
+    console.error('[Restore] Project error:', error)
+    return c.json({
+      error: { code: 'INTERNAL_ERROR', message: 'Failed to restore project' }
+    }, 500)
+  }
+})
+
+// DELETE /api/projects/:id/purge - プロジェクトを完全削除（superadmin専用）
+// ■ 注意: この操作は取り消せない。R2ファイルと全子テーブルデータが物理削除される。
+// ■ 対象: is_deleted = 1 のプロジェクトのみ（未削除プロジェクトは対象外）
+projects.delete('/:id/purge', async (c) => {
+  try {
+    const projectId = c.req.param('id')
+
+    // セッション認証 + superadmin チェック
+    const sessionCookie = c.req.header('Cookie')?.match(/session=([^;]+)/)?.[1]
+    if (!sessionCookie) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+    }
+    const session = await c.env.DB.prepare(
+      `SELECT u.id, u.role FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.session_token = ? AND s.expires_at > datetime('now')`
+    ).bind(sessionCookie).first<{ id: number; role: string }>()
+    if (!session || session.role !== 'superadmin') {
+      return c.json({ error: { code: 'FORBIDDEN', message: 'Superadmin access required' } }, 403)
+    }
+
+    // ソフトデリート済みのプロジェクトのみ対象
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, audio_r2_key FROM projects WHERE id = ? AND is_deleted = 1
+    `).bind(projectId).first()
+
+    if (!project) {
+      return c.json({
+        error: { code: 'NOT_FOUND', message: 'Deleted project not found. Only soft-deleted projects can be purged.' }
+      }, 404)
+    }
+
+    const purgeLog: string[] = []
+
+    // Helper: 安全に DELETE を実行し結果をログ
+    async function safePurge(label: string, sql: string, ...binds: any[]) {
+      try {
+        let stmt = c.env.DB.prepare(sql)
+        for (const b of binds) {
+          stmt = stmt.bind(b)
+        }
+        const result = await stmt.run()
+        const count = result.meta?.changes ?? 0
+        if (count > 0) purgeLog.push(`${label}: ${count}`)
+      } catch (err) {
+        console.error(`[Purge] ${label} error:`, err)
+        purgeLog.push(`${label}: ERROR`)
+      }
+    }
+
+    // ===== R2削除（ベストエフォート） =====
+    if (project.audio_r2_key) {
+      try {
+        await c.env.R2.delete(project.audio_r2_key as string)
+        purgeLog.push('R2 audio: 1')
+      } catch (_) { purgeLog.push('R2 audio: ERROR') }
+    }
+
+    // 画像R2削除
+    try {
+      const { results: imageR2Keys } = await c.env.DB.prepare(`
+        SELECT DISTINCT r2_key FROM image_generations
+        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?) AND r2_key IS NOT NULL
+      `).bind(projectId).all()
+      for (const img of imageR2Keys || []) {
+        try { await c.env.R2.delete(img.r2_key as string) } catch (_) {}
+      }
+      if (imageR2Keys?.length) purgeLog.push(`R2 images: ${imageR2Keys.length}`)
+    } catch (_) { purgeLog.push('R2 images: ERROR') }
+
+    // 音声R2削除
+    try {
+      const { results: audioR2Keys } = await c.env.DB.prepare(`
+        SELECT DISTINCT r2_key FROM audio_generations
+        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?) AND r2_key IS NOT NULL
+      `).bind(projectId).all()
+      for (const a of audioR2Keys || []) {
+        try { await c.env.R2.delete(a.r2_key as string) } catch (_) {}
+      }
+      if (audioR2Keys?.length) purgeLog.push(`R2 audio_gen: ${audioR2Keys.length}`)
+    } catch (_) { purgeLog.push('R2 audio_gen: ERROR') }
+
+    // 動画R2削除
+    try {
+      const { results: videoR2Keys } = await c.env.DB.prepare(`
+        SELECT DISTINCT r2_key FROM video_generations
+        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?) AND r2_key IS NOT NULL
+      `).bind(projectId).all()
+      for (const v of videoR2Keys || []) {
+        try { await c.env.R2.delete(v.r2_key as string) } catch (_) {}
+      }
+      if (videoR2Keys?.length) purgeLog.push(`R2 video: ${videoR2Keys.length}`)
+    } catch (_) { purgeLog.push('R2 video: ERROR') }
+
+    // ===== DB削除（全子テーブル明示削除、依存順） =====
+    const sceneSubquery = `(SELECT id FROM scenes WHERE project_id = ?)`
+
+    // Layer 4: 最深の孫テーブル
+    await safePurge('scene_balloons', `DELETE FROM scene_balloons WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_telops', `DELETE FROM scene_telops WHERE scene_id IN ${sceneSubquery}`, projectId)
+
+    // Layer 3: scenes の子テーブル
+    await safePurge('scene_utterances', `DELETE FROM scene_utterances WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_audio_assignments', `DELETE FROM scene_audio_assignments WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_audio_cues', `DELETE FROM scene_audio_cues WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_motion', `DELETE FROM scene_motion WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_character_map', `DELETE FROM scene_character_map WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_character_traits', `DELETE FROM scene_character_traits WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('scene_style_settings', `DELETE FROM scene_style_settings WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('image_generations', `DELETE FROM image_generations WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('audio_generations', `DELETE FROM audio_generations WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('video_generations', `DELETE FROM video_generations WHERE scene_id IN ${sceneSubquery}`, projectId)
+    await safePurge('image_generation_logs (scene)', `DELETE FROM image_generation_logs WHERE scene_id IN ${sceneSubquery}`, projectId)
+
+    // Layer 2: projects の直接子テーブル
+    await safePurge('scenes', `DELETE FROM scenes WHERE project_id = ?`, projectId)
+    await safePurge('transcriptions', `DELETE FROM transcriptions WHERE project_id = ?`, projectId)
+    await safePurge('runs', `DELETE FROM runs WHERE project_id = ?`, projectId)
+    await safePurge('text_chunks', `DELETE FROM text_chunks WHERE project_id = ?`, projectId)
+    await safePurge('scene_split_settings', `DELETE FROM scene_split_settings WHERE project_id = ?`, projectId)
+    await safePurge('project_character_models', `DELETE FROM project_character_models WHERE project_id = ?`, projectId)
+    await safePurge('project_character_instances', `DELETE FROM project_character_instances WHERE project_id = ?`, projectId)
+    await safePurge('world_settings', `DELETE FROM world_settings WHERE project_id = ?`, projectId)
+    await safePurge('project_style_settings', `DELETE FROM project_style_settings WHERE project_id = ?`, projectId)
+    await safePurge('project_audio_tracks', `DELETE FROM project_audio_tracks WHERE project_id = ?`, projectId)
+    await safePurge('project_audio_jobs', `DELETE FROM project_audio_jobs WHERE project_id = ?`, projectId)
+    await safePurge('video_builds', `DELETE FROM video_builds WHERE project_id = ?`, projectId)
+    await safePurge('patch_effects', `DELETE FROM patch_effects WHERE patch_request_id IN (SELECT id FROM patch_requests WHERE project_id = ?)`, projectId)
+    await safePurge('patch_requests', `DELETE FROM patch_requests WHERE project_id = ?`, projectId)
+    await safePurge('api_usage_logs', `DELETE FROM api_usage_logs WHERE project_id = ?`, projectId)
+    await safePurge('image_generation_logs (project)', `DELETE FROM image_generation_logs WHERE project_id = ?`, projectId)
+    await safePurge('tts_usage_logs', `DELETE FROM tts_usage_logs WHERE project_id = ?`, projectId)
+    await safePurge('audit_logs', `DELETE FROM audit_logs WHERE project_id = ?`, projectId)
+    await safePurge('api_error_logs', `DELETE FROM api_error_logs WHERE project_id = ?`, projectId)
+    await safePurge('marunage_runs', `DELETE FROM marunage_runs WHERE project_id = ?`, projectId)
+
+    // Layer 1: projects 本体（PRAGMA foreign_keys 対策で最後）
+    try {
+      const deleteResult = await c.env.DB.prepare(
+        `DELETE FROM projects WHERE id = ? AND is_deleted = 1`
+      ).bind(projectId).run()
+      const deletedCount = deleteResult.meta?.changes ?? 0
+      if (deletedCount === 0) {
+        console.error(`[Purge] Project ${projectId} DELETE returned 0 changes`)
+        purgeLog.push('projects: FAILED (0 changes)')
+        return c.json({
+          error: {
+            code: 'PURGE_FAILED',
+            message: 'プロジェクトの完全削除に失敗しました。FK制約違反の可能性があります。',
+            details: purgeLog.join(', ')
+          }
+        }, 500)
+      }
+      purgeLog.push(`projects: ${deletedCount}`)
+    } catch (err) {
+      console.error(`[Purge] projects error:`, err)
+      purgeLog.push(`projects: ERROR - ${err instanceof Error ? err.message : String(err)}`)
+      return c.json({
+        error: {
+          code: 'PURGE_FAILED',
+          message: 'プロジェクトの完全削除に失敗しました。',
+          details: purgeLog.join(', ')
+        }
+      }, 500)
+    }
+
+    console.log(`[Purge] Project ${projectId} permanently deleted by superadmin (user_id=${session.id}). Details: ${purgeLog.join(', ')}`)
+
+    return c.json({
+      success: true,
+      message: 'Project permanently deleted',
+      project_id: parseInt(projectId),
+      details: purgeLog.join(', ')
+    })
+  } catch (error) {
+    console.error('[Purge] Project error:', error)
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: 'Failed to purge project',
+        details: error instanceof Error ? error.message : String(error)
+      }
+    }, 500)
+  }
+})
+
 // POST /api/projects/:id/reset - プロジェクトを失敗状態からリセット
 projects.post('/:id/reset', async (c) => {
   try {
     const projectId = c.req.param('id')
 
-    // プロジェクト存在確認
+    // プロジェクト存在確認（ソフトデリート済みは対象外）
     const project = await c.env.DB.prepare(`
       SELECT id, status, source_type, source_text, audio_r2_key
       FROM projects
-      WHERE id = ?
+      WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1352,11 +1626,11 @@ projects.get('/:id/reset-to-input/preview', async (c) => {
   try {
     const projectId = c.req.param('id')
 
-    // プロジェクト存在確認
+    // プロジェクト存在確認（ソフトデリート済みは対象外）
     const project = await c.env.DB.prepare(`
       SELECT id, title, status, source_type, source_text, audio_r2_key
       FROM projects
-      WHERE id = ?
+      WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1445,11 +1719,11 @@ projects.post('/:id/reset-to-input', async (c) => {
   try {
     const projectId = c.req.param('id')
 
-    // プロジェクト存在確認
+    // プロジェクト存在確認（ソフトデリート済みは対象外）
     const project = await c.env.DB.prepare(`
       SELECT id, title, status, source_type, source_text, audio_r2_key
       FROM projects
-      WHERE id = ?
+      WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1666,7 +1940,7 @@ projects.get('/:id/chunks', async (c) => {
 
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
-      SELECT id FROM projects WHERE id = ?
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1829,7 +2103,7 @@ projects.get('/:id/output-preset', async (c) => {
     }
 
     const project = await c.env.DB.prepare(`
-      SELECT output_preset FROM projects WHERE id = ?
+      SELECT output_preset FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ output_preset: string | null }>()
 
     if (!project) {
@@ -1876,7 +2150,7 @@ projects.put('/:id/output-preset', async (c) => {
 
     // Check project exists
     const project = await c.env.DB.prepare(`
-      SELECT id FROM projects WHERE id = ?
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {
@@ -1944,7 +2218,7 @@ projects.put('/:id/comic-telop-settings', async (c) => {
 
     // Get existing project and settings
     const project = await c.env.DB.prepare(`
-      SELECT id, settings_json FROM projects WHERE id = ?
+      SELECT id, settings_json FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ id: number; settings_json: string | null }>()
 
     if (!project) {
@@ -2081,7 +2355,7 @@ projects.put('/:id/telop-settings', async (c) => {
 
     // Get existing project and settings
     const project = await c.env.DB.prepare(`
-      SELECT id, settings_json FROM projects WHERE id = ?
+      SELECT id, settings_json FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ id: number; settings_json: string | null }>()
 
     if (!project) {
@@ -2190,7 +2464,7 @@ projects.post('/:id/comic/rebake', async (c) => {
 
     // プロジェクト取得
     const project = await c.env.DB.prepare(`
-      SELECT id, user_id, settings_json FROM projects WHERE id = ?
+      SELECT id, user_id, settings_json FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{
       id: number
       user_id: number | null
@@ -2335,7 +2609,7 @@ projects.get('/:id/comic/rebake-status', async (c) => {
 
     // プロジェクトの telops_comic 設定を取得
     const project = await c.env.DB.prepare(`
-      SELECT settings_json FROM projects WHERE id = ?
+      SELECT settings_json FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ settings_json: string | null }>()
 
     if (!project) {
@@ -2458,7 +2732,7 @@ projects.put('/:id/narration-voice', async (c) => {
     
     // Get current project settings
     const project = await c.env.DB.prepare(`
-      SELECT settings_json FROM projects WHERE id = ?
+      SELECT settings_json FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ settings_json: string | null }>()
     
     if (!project) {
@@ -2514,7 +2788,7 @@ projects.get('/:id/narration-voice', async (c) => {
   
   try {
     const project = await c.env.DB.prepare(`
-      SELECT settings_json FROM projects WHERE id = ?
+      SELECT settings_json FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first<{ settings_json: string | null }>()
     
     if (!project) {
@@ -2570,7 +2844,7 @@ projects.post('/:id/motion/bulk', async (c) => {
     
     // プロジェクト存在確認
     const project = await c.env.DB.prepare(`
-      SELECT id FROM projects WHERE id = ?
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
     
     if (!project) {
