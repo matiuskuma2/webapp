@@ -62,6 +62,7 @@ import { sceneAudioAssignments } from './routes/scene-audio-assignments' // P2: 
 import webhooks from './routes/webhooks' // AWS Orchestrator webhooks
 import patches from './routes/patches' // R4: SSOT Patch API (chat edit)
 import bulkAudio from './routes/bulk-audio' // Step3: Bulk audio generation
+import marunage from './routes/marunage' // Marunage Chat MVP
 import { adminHtml } from './pages/admin' // Admin page HTML
 import { settingsHtml } from './pages/settings' // Settings page HTML
 
@@ -141,6 +142,9 @@ app.route('/api/admin', admin) // For /api/admin/* (superadmin only)
 
 // Bulk audio generation routes
 app.route('/api', bulkAudio) // For /api/projects/:projectId/audio/bulk-*
+
+// Marunage Chat MVP routes
+app.route('/api/marunage', marunage) // For /api/marunage/*
 
 // Root route - serve HTML
 // Root route - with authentication check
@@ -317,32 +321,33 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
-                    <!-- 動線2: 丸投げチャット（工事中） -->
-                    <div class="bg-white rounded-xl shadow-md border-2 border-dashed border-gray-300 opacity-75 relative overflow-hidden">
+                    <!-- 動線2: 丸投げチャット（MVP v1） -->
+                    <a href="/marunage-chat" class="bg-white rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer border-2 border-transparent hover:border-purple-400 group block relative overflow-hidden">
                         <div class="p-6">
                             <div class="flex items-center mb-3">
-                                <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mr-4">
+                                <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mr-4 group-hover:bg-purple-200 transition-colors">
                                     <i class="fas fa-comments text-purple-600 text-xl"></i>
                                 </div>
                                 <div>
                                     <h3 class="text-lg font-bold text-gray-800">丸投げチャット</h3>
-                                    <p class="text-sm text-gray-500">チャットだけで動画完成</p>
+                                    <p class="text-sm text-gray-500">チャットだけで動画素材完成</p>
                                 </div>
                             </div>
                             <p class="text-sm text-gray-600 leading-relaxed">
-                                チャットでシナリオを伝えるだけで、シーン画像生成 → 動画化 → 合成まで全自動。左のボードと右のチャットだけで完結します。
+                                シナリオを貼り付けるだけで、5シーン画像生成 → ナレーション音声まで全自動。左のボードと右のチャットだけで完結します。
                             </p>
-                            <div class="mt-4 flex items-center text-gray-400 text-sm font-medium">
-                                <span>準備中...</span>
+                            <div class="mt-4 flex items-center text-purple-600 text-sm font-medium">
+                                <span>はじめる</span>
+                                <i class="fas fa-chevron-right ml-1 text-xs"></i>
                             </div>
                         </div>
-                        <!-- 工事中オーバーレイ -->
+                        <!-- MVP v1 バッジ -->
                         <div class="absolute top-3 right-3">
-                            <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-100 text-yellow-800 border border-yellow-300">
-                                <i class="fas fa-hard-hat mr-1"></i>Coming Soon
+                            <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                                <i class="fas fa-flask mr-1"></i>MVP v1
                             </span>
                         </div>
-                    </div>
+                    </a>
                 </div>
             </div>
 
@@ -4296,6 +4301,256 @@ app.get('/signup', (c) => {
             }
         });
     </script>
+</body>
+</html>
+  `)
+})
+
+// ============================================================
+// Marunage Chat MVP - 体験C 専用エントリ
+// Ref: docs/MARUNAGE_EXPERIENCE_SPEC_v1.md
+// ============================================================
+app.get('/marunage-chat', (c) => {
+  const ASSET_VERSION = getAssetVersion(c.env)
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>丸投げチャット - MARUMUVI</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        * { -webkit-tap-highlight-color: rgba(0,0,0,0); box-sizing: border-box; }
+        body { overscroll-behavior: none; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+        
+        /* ===== 2-column layout ===== */
+        .mc-shell { display: flex; height: 100vh; overflow: hidden; }
+        .mc-left  { flex: 1; min-width: 0; display: flex; flex-direction: column; border-right: 1px solid #e5e7eb; background: #f9fafb; }
+        .mc-right { width: 420px; min-width: 360px; display: flex; flex-direction: column; background: #fff; }
+        
+        /* Mobile: stacked with toggle */
+        @media (max-width: 768px) {
+            .mc-shell { flex-direction: column; }
+            .mc-left  { border-right: none; border-bottom: 1px solid #e5e7eb; height: 50vh; }
+            .mc-right { width: 100%; height: 50vh; min-width: unset; }
+            .mc-left.mc-expanded  { height: 85vh; }
+            .mc-right.mc-expanded { height: 85vh; }
+        }
+        
+        /* ===== Chat bubbles ===== */
+        .chat-bubble { max-width: 85%; padding: 0.75rem 1rem; border-radius: 1rem; line-height: 1.6; font-size: 0.9rem; word-break: break-word; }
+        .chat-system { background: #f3f0ff; color: #4c1d95; border-bottom-left-radius: 0.25rem; }
+        .chat-user   { background: #3b82f6; color: #fff; margin-left: auto; border-bottom-right-radius: 0.25rem; }
+        
+        /* ===== Scene cards ===== */
+        .scene-card { background: #fff; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; transition: all 0.3s; }
+        .scene-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .scene-card-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #e5e7eb; display: flex; align-items: center; justify-content: center; }
+        .scene-badge { display: inline-flex; align-items: center; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.65rem; font-weight: 700; }
+        
+        /* ===== Progress bar ===== */
+        .mc-progress-bar { height: 6px; border-radius: 3px; background: #e5e7eb; overflow: hidden; }
+        .mc-progress-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+        
+        /* ===== Typing animation ===== */
+        @keyframes mc-dot { 0%,80%,100% { transform: scale(0) } 40% { transform: scale(1) } }
+        .mc-typing-dot { width: 8px; height: 8px; border-radius: 50%; background: #a78bfa; display: inline-block; animation: mc-dot 1.4s infinite ease-in-out both; }
+        .mc-typing-dot:nth-child(2) { animation-delay: 0.16s; }
+        .mc-typing-dot:nth-child(3) { animation-delay: 0.32s; }
+        
+        /* ===== Scrollbar ===== */
+        .mc-scroll::-webkit-scrollbar { width: 6px; }
+        .mc-scroll::-webkit-scrollbar-track { background: transparent; }
+        .mc-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+        
+        /* Voice select chip */
+        .voice-chip { padding: 0.35rem 0.75rem; border-radius: 0.5rem; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; border: 2px solid #e5e7eb; }
+        .voice-chip.active { border-color: #7c3aed; background: #ede9fe; color: #5b21b6; }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Auth Loading -->
+    <div id="mcAuthLoading" class="flex items-center justify-center h-screen">
+        <div class="text-center">
+            <i class="fas fa-spinner fa-spin text-4xl text-purple-600 mb-4"></i>
+            <p class="text-gray-600">認証を確認中...</p>
+        </div>
+    </div>
+
+    <!-- Main Shell (hidden until authed) -->
+    <div id="mcShell" class="mc-shell hidden">
+        <!-- ===== LEFT BOARD ===== -->
+        <div id="mcLeft" class="mc-left">
+            <!-- Left Header -->
+            <div class="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
+                <div class="flex items-center gap-3">
+                    <a href="/" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></a>
+                    <div>
+                        <h1 class="text-sm font-bold text-gray-800">
+                            <i class="fas fa-comments text-purple-600 mr-1"></i>丸投げチャット
+                        </h1>
+                        <p id="mcProjectTitle" class="text-xs text-gray-500">新しい動画素材を作成</p>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <span id="mcPhaseBadge" class="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600">idle</span>
+                    <!-- Mobile toggle -->
+                    <button id="mcToggleView" class="md:hidden text-gray-500 hover:text-purple-600 p-1">
+                        <i class="fas fa-columns"></i>
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Phase Progress -->
+            <div class="px-4 py-2 bg-white border-b border-gray-100">
+                <div class="flex items-center justify-between mb-1">
+                    <span class="text-xs font-semibold text-gray-600">進捗</span>
+                    <span id="mcProgressPercent" class="text-xs font-bold text-purple-600">0%</span>
+                </div>
+                <div class="mc-progress-bar">
+                    <div id="mcProgressFill" class="mc-progress-fill bg-gradient-to-r from-purple-500 to-pink-500" style="width: 0%"></div>
+                </div>
+                <div class="flex justify-between mt-1">
+                    <span id="mcStep1" class="text-[10px] text-gray-400"><i class="fas fa-edit"></i> 整形</span>
+                    <span id="mcStep2" class="text-[10px] text-gray-400"><i class="fas fa-check"></i> 確認</span>
+                    <span id="mcStep3" class="text-[10px] text-gray-400"><i class="fas fa-image"></i> 画像</span>
+                    <span id="mcStep4" class="text-[10px] text-gray-400"><i class="fas fa-volume-up"></i> 音声</span>
+                    <span id="mcStep5" class="text-[10px] text-gray-400"><i class="fas fa-flag-checkered"></i> 完了</span>
+                </div>
+            </div>
+            
+            <!-- Board Content (scenes) -->
+            <div id="mcBoardContent" class="flex-1 overflow-y-auto mc-scroll p-4">
+                <!-- Idle state -->
+                <div id="mcBoardIdle" class="flex flex-col items-center justify-center h-full text-center px-6">
+                    <div class="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center mb-4">
+                        <i class="fas fa-film text-purple-500 text-3xl"></i>
+                    </div>
+                    <h3 class="text-lg font-bold text-gray-700 mb-2">動画素材を自動生成</h3>
+                    <p class="text-sm text-gray-500 leading-relaxed mb-4">
+                        右のチャットにシナリオを貼り付けると、<br>
+                        5シーンの画像 + ナレーション音声を自動生成します。
+                    </p>
+                    <p class="text-xs text-purple-500 bg-purple-50 px-3 py-1.5 rounded-lg">
+                        <i class="fas fa-info-circle mr-1"></i>
+                        今後、画像だけ/動画だけの個別生成も追加予定です（v2以降）
+                    </p>
+                </div>
+                
+                <!-- Scene cards (populated dynamically) -->
+                <div id="mcSceneCards" class="space-y-4 hidden">
+                    <!-- Rendered by JS -->
+                </div>
+            </div>
+            
+            <!-- Left Footer -->
+            <div class="px-4 py-2 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+                <span class="text-[10px] text-gray-400 font-mono">exp: marunage_chat_v1</span>
+                <span id="mcUpdatedAt" class="text-[10px] text-gray-400"></span>
+            </div>
+        </div>
+        
+        <!-- ===== RIGHT CHAT ===== -->
+        <div id="mcRight" class="mc-right">
+            <!-- Chat Header -->
+            <div class="flex items-center justify-between px-4 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white">
+                <div class="flex items-center gap-2">
+                    <i class="fas fa-robot text-lg"></i>
+                    <span class="font-bold text-sm">アシスタント</span>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button id="mcCancelBtn" class="hidden text-white/80 hover:text-white text-xs px-2 py-1 rounded border border-white/30 hover:bg-white/10">
+                        <i class="fas fa-stop mr-1"></i>中断
+                    </button>
+                    <a href="/" class="text-white/80 hover:text-white">
+                        <i class="fas fa-home"></i>
+                    </a>
+                </div>
+            </div>
+            
+            <!-- Chat Messages -->
+            <div id="mcChatMessages" class="flex-1 overflow-y-auto mc-scroll p-4 space-y-3">
+                <!-- Welcome message -->
+                <div class="flex justify-start">
+                    <div class="chat-bubble chat-system">
+                        <p class="font-semibold mb-1"><i class="fas fa-hand-sparkles mr-1"></i>丸投げチャットへようこそ！</p>
+                        <p class="text-sm">シナリオテキストを貼り付けてください。<br>5シーンの画像とナレーション音声を自動で生成します。</p>
+                        <p class="text-xs mt-2 text-purple-400">
+                            <i class="fas fa-info-circle mr-1"></i>100文字以上のテキストが必要です
+                        </p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Voice Selection (shown before start) -->
+            <div id="mcVoiceSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                <label class="text-xs font-semibold text-gray-600 mb-1 block">
+                    <i class="fas fa-microphone-alt mr-1 text-purple-500"></i>ナレーション音声
+                </label>
+                <div class="flex flex-wrap gap-1.5">
+                    <button class="voice-chip active" data-voice="google:ja-JP-Neural2-B" onclick="selectVoice(this)">
+                        <i class="fas fa-male mr-1"></i>男性（落ち着き）
+                    </button>
+                    <button class="voice-chip" data-voice="google:ja-JP-Neural2-C" onclick="selectVoice(this)">
+                        <i class="fas fa-female mr-1"></i>女性（明るい）
+                    </button>
+                    <button class="voice-chip" data-voice="google:ja-JP-Neural2-D" onclick="selectVoice(this)">
+                        <i class="fas fa-male mr-1"></i>男性（若い）
+                    </button>
+                    <button class="voice-chip" data-voice="google:ja-JP-Wavenet-C" onclick="selectVoice(this)">
+                        <i class="fas fa-female mr-1"></i>女性（自然）
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Output Preset (shown before start) -->
+            <div id="mcOutputPreset" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                <label class="text-xs font-semibold text-gray-600 mb-1 block">
+                    <i class="fas fa-tv mr-1 text-purple-500"></i>出力プリセット
+                </label>
+                <div class="flex gap-1.5">
+                    <button class="voice-chip active" data-preset="yt_long" onclick="selectPreset(this)">
+                        <i class="fas fa-desktop mr-1"></i>YouTube横型
+                    </button>
+                    <button class="voice-chip" data-preset="short_vertical" onclick="selectPreset(this)">
+                        <i class="fas fa-mobile-alt mr-1"></i>縦型ショート
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Chat Input -->
+            <div class="px-4 py-3 bg-white border-t border-gray-200">
+                <div class="flex items-end gap-2">
+                    <textarea 
+                        id="mcChatInput" 
+                        rows="3"
+                        placeholder="シナリオテキストを貼り付けてください..."
+                        class="flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm resize-none"
+                    ></textarea>
+                    <button 
+                        id="mcSendBtn"
+                        onclick="mcSendMessage()"
+                        class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
+                <div class="flex items-center justify-between mt-1">
+                    <span id="mcCharCount" class="text-xs text-gray-400">0文字</span>
+                    <span id="mcInputHint" class="text-xs text-gray-400">Ctrl+Enter で送信</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script src="/static/marunage-chat.js?v=\${ASSET_VERSION}"></script>
 </body>
 </html>
   `)

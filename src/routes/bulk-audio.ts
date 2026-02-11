@@ -876,4 +876,5 @@ bulkAudio.get('/projects/:projectId/audio/bulk-history', async (c) => {
   }
 });
 
+export { runBulkGenerationJob };
 export default bulkAudio;

@@ -2199,4 +2199,5 @@ ${brokenJson}`
   }
 }
 
+export { processTextChunks }
 export default formatting
