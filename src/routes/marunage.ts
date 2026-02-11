@@ -186,12 +186,36 @@ async function marunageFormatStartup(
   sessionCookie: string
 ): Promise<void> {
   const origin = new URL(requestUrl).origin
+  const parseUrl = `${origin}/api/projects/${projectId}/parse`
   const formatUrl = `${origin}/api/projects/${projectId}/format`
   const cookieHeader = `session=${sessionCookie}`
 
   console.log(`[Marunage:Format] Starting format for project ${projectId}, run ${runId}`)
 
   try {
+    // Step 0: Parse API — テキストをチャンクに分割（format の前提条件）
+    console.log(`[Marunage:Format] Calling parse API for project ${projectId}`)
+    const parseRes = await fetch(parseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cookie': cookieHeader },
+    })
+
+    if (!parseRes.ok) {
+      const parseErr = await parseRes.text().catch(() => 'Unknown')
+      console.error(`[Marunage:Format] Parse API failed HTTP ${parseRes.status}: ${parseErr.substring(0, 300)}`)
+      // Parse failure is fatal — cannot proceed without chunks
+      await transitionPhase(db, runId, 'formatting', 'failed', {
+        error_code: 'PARSE_FAILED',
+        error_message: `Parse API returned ${parseRes.status}: ${parseErr.substring(0, 500)}`,
+        error_phase: 'formatting',
+      })
+      return
+    }
+
+    const parseResult = await parseRes.json().catch(() => null) as any
+    console.log(`[Marunage:Format] Parse completed: ${parseResult?.total_chunks || 0} chunks created`)
+
+    // Step 1: Polling loop for format API
     for (let poll = 0; poll < MAX_FORMAT_POLLS; poll++) {
       // Check if run is still active (not canceled/failed externally)
       const currentRun = await db.prepare(
