@@ -1367,10 +1367,47 @@ projects.delete('/:id', async (c) => {
       `DELETE FROM api_usage_logs WHERE project_id = ?`, [projectId])
     await safeDelete('image_generation_logs (project)',
       `DELETE FROM image_generation_logs WHERE project_id = ?`, [projectId])
+    // ---- 漏れていたテーブル（FK RESTRICT でブロック原因） ----
+    await safeDelete('tts_usage_logs',
+      `DELETE FROM tts_usage_logs WHERE project_id = ?`, [projectId])
+    await safeDelete('audit_logs',
+      `DELETE FROM audit_logs WHERE project_id = ?`, [projectId])
+    await safeDelete('api_error_logs',
+      `DELETE FROM api_error_logs WHERE project_id = ?`, [projectId])
+    await safeDelete('marunage_runs',
+      `DELETE FROM marunage_runs WHERE project_id = ?`, [projectId])
 
     // ---- Layer 1: projects 本体 ----
-    await safeDelete('projects',
-      `DELETE FROM projects WHERE id = ?`, [projectId])
+    // projects の削除は成否を明示的にチェック（FK制約違反で失敗する場合がある）
+    try {
+      const deleteResult = await c.env.DB.prepare(
+        `DELETE FROM projects WHERE id = ?`
+      ).bind(projectId).run()
+      const deletedCount = deleteResult.meta?.changes ?? 0
+      if (deletedCount === 0) {
+        // 削除が0行 = FK制約違反 or 既に削除済み
+        console.error(`[Delete] Project ${projectId} DELETE returned 0 changes - possible FK constraint violation`)
+        deletionLog.push('projects: FAILED (0 changes)')
+        return c.json({
+          error: {
+            code: 'DELETE_FAILED',
+            message: 'プロジェクトの削除に失敗しました。関連データが残っている可能性があります。',
+            details: deletionLog.join(', ')
+          }
+        }, 500)
+      }
+      deletionLog.push(`projects: ${deletedCount}`)
+    } catch (err) {
+      console.error(`[Delete] projects error:`, err)
+      deletionLog.push(`projects: ERROR - ${err instanceof Error ? err.message : String(err)}`)
+      return c.json({
+        error: {
+          code: 'DELETE_FAILED',
+          message: 'プロジェクトの削除に失敗しました。',
+          details: deletionLog.join(', ')
+        }
+      }, 500)
+    }
 
     console.log(`[Delete] Project ${projectId} completed. Details: ${deletionLog.join(', ')}`)
 
