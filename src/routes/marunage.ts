@@ -1,23 +1,29 @@
 /**
- * Marunage Chat MVP - API Routes (Issue-1: API Foundation)
+ * Marunage Chat MVP - API Routes (Issue-1: API Foundation + Issue-2: Format & Image Generation)
  * 
  * === Non-Impact Protocol ===
  * 1) 既存 route ファイルを変更しない
- * 2) 既存内部関数を直接呼び出さない (HTTP経由のみ — Issue-2以降で実装)
- * 3) 書き込み対象は marunage_runs のみ (プロジェクト作成は既存テーブルへの書き込みだが新規プロジェクトのみ)
- * 4) Issue-1 は API 基盤のみ (Issue-5 で UI)
+ * 2) 既存の route ハンドラ関数を import しない
+ *    - utils (image-prompt-builder, audit-logger) の再利用は許可
+ *    - 既存 format API は HTTP 経由でのみ消費
+ * 3) 書き込み対象は marunage_runs + 丸投げ新規プロジェクト配下のみ
+ * 4) Issue-1: API 基盤 / Issue-2: Format 起動 + 画像生成 / Issue-5: UI
  * 
- * === Issue-1 Scope ===
+ * === Issue-1 Scope (API Foundation) ===
  * - GET  /active           — ユーザーのアクティブ run を検索
- * - POST /start            — テキスト→プロジェクト作成→run作成 (フォーマット起動なし)
+ * - POST /start            — テキスト→プロジェクト作成→run作成
  * - GET  /:projectId/status — 統合進捗 (読み取りのみ)
- * - POST /:projectId/advance — フェーズ遷移のみ (外部処理起動なし)
+ * - POST /:projectId/advance — フェーズ遷移 + 処理起動
  * - POST /:projectId/retry  — 失敗 run の再開
  * - POST /:projectId/cancel — アクティブ run の中断
  * 
- * === Deferred to Issue-2/3 ===
- * - フォーマット起動 (processTextChunks)
- * - 画像生成 (marunageGenerateImages)
+ * === Issue-2 Scope (Format & Image Generation) ===
+ * - POST /start 後 → waitUntil で format 起動 (HTTP 経由)
+ * - 5シーン収束 (advance formatting→awaiting_ready で超過シーン非表示)
+ * - advance awaiting_ready→generating_images → waitUntil で画像生成起動
+ * - generating_images の自動リトライ (最大3回、失敗画像のみ再生成)
+ * 
+ * === Deferred to Issue-3 ===
  * - 音声生成 (marunageGenerateAudio)
  * 
  * Ref: docs/MARUNAGE_CHAT_MVP_PLAN_v3.md §5
@@ -41,6 +47,7 @@ import {
   MARUNAGE_ERRORS,
 } from '../types/marunage'
 import { logAudit } from '../utils/audit-logger'
+import { composeStyledPrompt, buildR2Key } from '../utils/image-prompt-builder'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -149,6 +156,486 @@ async function transitionPhaseWithLock(
   `).bind(to, lockUntil, runId, from).run()
 
   return (result.meta?.changes ?? 0) > 0
+}
+
+// ============================================================
+// Issue-2: Format startup helper (HTTP経由で既存 format API を消費)
+// ============================================================
+
+/**
+ * フォーマット起動 — waitUntil 内で非同期実行
+ * 既存の POST /api/projects/:id/format を HTTP 経由でポーリングする。
+ * 
+ * フロー:
+ * 1. POST /api/projects/:id/format を呼ぶ（バッチ処理開始）
+ * 2. 全チャンク完了まで繰り返し（最大 MAX_FORMAT_POLLS 回）
+ * 3. formatted になったら marunage_runs の phase は advance で遷移される
+ * 4. 失敗したら marunage_runs を 'failed' に遷移
+ * 
+ * ⚠️ 既存 route ファイルを変更しない。HTTP 消費者として既存 API を使う。
+ */
+const MAX_FORMAT_POLLS = 30      // 最大ポーリング回数（30回 × 3-5秒 ≈ 90-150秒）
+const FORMAT_POLL_INTERVAL = 3000  // ポーリング間隔 (ms)
+
+async function marunageFormatStartup(
+  db: D1Database,
+  runId: number,
+  projectId: number,
+  config: MarunageConfig,
+  requestUrl: string,
+  sessionCookie: string
+): Promise<void> {
+  const origin = new URL(requestUrl).origin
+  const formatUrl = `${origin}/api/projects/${projectId}/format`
+  const cookieHeader = `session=${sessionCookie}`
+
+  console.log(`[Marunage:Format] Starting format for project ${projectId}, run ${runId}`)
+
+  try {
+    for (let poll = 0; poll < MAX_FORMAT_POLLS; poll++) {
+      // Check if run is still active (not canceled/failed externally)
+      const currentRun = await db.prepare(
+        `SELECT phase FROM marunage_runs WHERE id = ? AND phase = 'formatting'`
+      ).bind(runId).first<{ phase: string }>()
+
+      if (!currentRun) {
+        console.log(`[Marunage:Format] Run ${runId} is no longer in 'formatting' phase, stopping`)
+        return
+      }
+
+      // Call existing format API via HTTP
+      const res = await fetch(formatUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': cookieHeader,
+        },
+        body: JSON.stringify({
+          split_mode: config.split_mode || 'ai',
+          target_scene_count: config.target_scene_count || 5,
+        }),
+      })
+
+      if (!res.ok) {
+        const errBody = await res.text().catch(() => 'Unknown')
+        console.error(`[Marunage:Format] HTTP ${res.status}: ${errBody.substring(0, 200)}`)
+
+        // 4xx = permanent error
+        if (res.status >= 400 && res.status < 500) {
+          await transitionPhase(db, runId, 'formatting', 'failed', {
+            error_code: 'FORMAT_API_ERROR',
+            error_message: `Format API returned ${res.status}: ${errBody.substring(0, 500)}`,
+            error_phase: 'formatting',
+          })
+          return
+        }
+        // 5xx = temporary, retry
+        await sleep(FORMAT_POLL_INTERVAL)
+        continue
+      }
+
+      const body = await res.json().catch(() => null) as any
+      if (!body) {
+        await sleep(FORMAT_POLL_INTERVAL)
+        continue
+      }
+
+      console.log(`[Marunage:Format] Poll ${poll + 1}/${MAX_FORMAT_POLLS}: status=${body.status}, chunks=${body.total_chunks || 0}, done=${body.processed || 0}`)
+
+      // Check if formatting is complete
+      if (body.status === 'formatted') {
+        console.log(`[Marunage:Format] ✅ Project ${projectId} formatted successfully (${body.total_scenes || 0} scenes)`)
+        // Phase transition is handled by advance — we just log and exit
+        return
+      }
+
+      // If there are pending/processing chunks, wait and retry
+      if (body.status === 'formatting') {
+        await sleep(FORMAT_POLL_INTERVAL)
+        continue
+      }
+
+      // Unexpected status
+      console.warn(`[Marunage:Format] Unexpected status: ${body.status}`)
+      await sleep(FORMAT_POLL_INTERVAL)
+    }
+
+    // Polling exhausted — check if format actually completed
+    const proj = await db.prepare(
+      `SELECT status FROM projects WHERE id = ?`
+    ).bind(projectId).first<{ status: string }>()
+
+    if (proj?.status === 'formatted') {
+      console.log(`[Marunage:Format] Project ${projectId} is formatted (detected after polling exhausted)`)
+      return
+    }
+
+    // Still not formatted after max polls
+    console.error(`[Marunage:Format] Polling exhausted for project ${projectId}`)
+    await transitionPhase(db, runId, 'formatting', 'failed', {
+      error_code: 'FORMAT_TIMEOUT',
+      error_message: `Format did not complete after ${MAX_FORMAT_POLLS} polls`,
+      error_phase: 'formatting',
+    })
+
+  } catch (error) {
+    console.error(`[Marunage:Format] Fatal error for run ${runId}:`, error)
+    try {
+      await transitionPhase(db, runId, 'formatting', 'failed', {
+        error_code: 'FORMAT_CRASH',
+        error_message: error instanceof Error ? error.message : String(error),
+        error_phase: 'formatting',
+      })
+    } catch (_) {}
+  }
+}
+
+// ============================================================
+// Issue-2: Image generation orchestrator (丸投げ独自の Gemini 直接呼び出し)
+// ============================================================
+
+/**
+ * 丸投げ専用の画像生成オーケストレーター
+ * 既存の image-generation.ts をインポートしない。Gemini API を直接呼び出す。
+ * 
+ * フロー:
+ * 1. 可視シーン(is_hidden=0)を取得
+ * 2. 各シーンの image_prompt → スタイル適用 → Gemini API で生成
+ * 3. R2 にアップロード → image_generations に記録
+ * 4. 全完了後、ロック解除（advance が generating_audio への遷移を判定）
+ * 
+ * リトライ: 呼び出し元（advance）が retry_count を管理。この関数は1回分の生成のみ。
+ */
+const GEMINI_MODEL = 'gemini-3-pro-image-preview'
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
+const IMAGE_GEN_RETRY = 3          // 個別画像のリトライ回数
+const IMAGE_GEN_DELAY = 4500       // 画像間の待機 (ms) — Gemini 15 RPM に対応
+const MAX_R2_RETRIES = 3
+
+async function resolveGeminiApiKey(
+  db: D1Database,
+  userId: number | null,
+  systemKey: string | undefined,
+  encryptionKey: string | undefined
+): Promise<{ apiKey: string; source: 'user' | 'system' } | null> {
+  // Step 1: ユーザーキー
+  if (userId && encryptionKey) {
+    try {
+      const keyRecord = await db.prepare(`
+        SELECT encrypted_key FROM user_api_keys
+        WHERE user_id = ? AND provider = 'google' AND is_active = 1
+      `).bind(userId).first<{ encrypted_key: string }>()
+
+      if (keyRecord?.encrypted_key) {
+        // Dynamic import to avoid bundling issues
+        const { decryptApiKey } = await import('../utils/crypto')
+        const apiKey = await decryptApiKey(keyRecord.encrypted_key, encryptionKey)
+        return { apiKey, source: 'user' }
+      }
+    } catch (e) {
+      console.warn('[Marunage:Image] User key decrypt failed:', e)
+    }
+  }
+
+  // Step 2: システムキー
+  if (systemKey) {
+    return { apiKey: systemKey, source: 'system' }
+  }
+
+  return null
+}
+
+/**
+ * Gemini API で画像を1枚生成 (リトライ付き)
+ */
+async function generateSingleImage(
+  apiKey: string,
+  prompt: string,
+  aspectRatio: '16:9' | '9:16' | '1:1'
+): Promise<{ success: boolean; imageData?: ArrayBuffer; error?: string }> {
+  const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
+  const characterTraitInstruction = 'NOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually. Do NOT render these descriptions as text in the image.'
+  const enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\n${prompt}`
+
+  let lastError = ''
+
+  for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
+    try {
+      const response = await fetch(GEMINI_ENDPOINT, {
+        method: 'POST',
+        headers: {
+          'x-goog-api-key': apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: enhancedPrompt }] }],
+          generationConfig: {
+            responseModalities: ['Image'],
+            imageConfig: { aspectRatio, imageSize: '2K' },
+          },
+        }),
+      })
+
+      // Rate limit → retry with backoff
+      if (response.status === 429) {
+        const waitTime = Math.min(Math.pow(2, attempt + 1) * 2500, 60000)
+        console.warn(`[Marunage:Image] 429 rate limit, waiting ${waitTime}ms (attempt ${attempt + 1}/${IMAGE_GEN_RETRY})`)
+        if (attempt < IMAGE_GEN_RETRY - 1) {
+          await sleep(waitTime)
+          continue
+        }
+        lastError = 'RATE_LIMIT_429: Gemini API rate limit exceeded'
+        break
+      }
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({})) as any
+        lastError = errData?.error?.message || `API error: ${response.status}`
+        break
+      }
+
+      const result = await response.json() as any
+      if (result.candidates?.[0]?.content?.parts) {
+        for (const part of result.candidates[0].content.parts) {
+          if (part.inlineData?.data) {
+            const binaryString = atob(part.inlineData.data)
+            const bytes = new Uint8Array(binaryString.length)
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i)
+            }
+            return { success: true, imageData: bytes.buffer }
+          }
+        }
+        lastError = 'No inline data in response'
+        break
+      }
+
+      lastError = 'No candidates in Gemini response'
+      break
+
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
+      if (attempt < IMAGE_GEN_RETRY - 1) {
+        await sleep(2000 * (attempt + 1))
+        continue
+      }
+    }
+  }
+
+  return { success: false, error: lastError }
+}
+
+/**
+ * R2 アップロード (リトライ付き)
+ */
+async function uploadToR2(
+  r2: R2Bucket,
+  key: string,
+  data: ArrayBuffer
+): Promise<{ success: boolean; error?: string }> {
+  for (let attempt = 0; attempt < MAX_R2_RETRIES; attempt++) {
+    try {
+      await r2.put(key, data)
+      return { success: true }
+    } catch (error) {
+      if (attempt < MAX_R2_RETRIES - 1) {
+        await sleep(1000 * Math.pow(2, attempt))
+        continue
+      }
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  }
+  return { success: false, error: 'R2 upload exhausted' }
+}
+
+/**
+ * 丸投げ画像生成メインループ
+ * 可視シーンの中で画像が未生成のものを順次生成する。
+ * 
+ * @param mode 'full' = 全シーン生成, 'retry' = 失敗のみ再生成
+ */
+async function marunageGenerateImages(
+  db: D1Database,
+  r2: R2Bucket,
+  runId: number,
+  projectId: number,
+  config: MarunageConfig,
+  userId: number | null,
+  env: Bindings,
+  mode: 'full' | 'retry' = 'full'
+): Promise<void> {
+  console.log(`[Marunage:Image] Starting image generation for project ${projectId}, run ${runId}, mode=${mode}`)
+
+  const aspectRatio = config.output_preset === 'short_vertical' ? '9:16' : '16:9'
+
+  // Resolve API key
+  const keyResult = await resolveGeminiApiKey(db, userId, env.GEMINI_API_KEY, env.ENCRYPTION_KEY)
+  if (!keyResult) {
+    console.error(`[Marunage:Image] No Gemini API key available`)
+    await transitionPhase(db, runId, 'generating_images', 'failed', {
+      error_code: 'NO_API_KEY',
+      error_message: 'No Gemini API key configured (user or system)',
+      error_phase: 'generating_images',
+    })
+    return
+  }
+
+  // Get visible scenes
+  const { results: scenes } = await db.prepare(`
+    SELECT s.id, s.idx, s.image_prompt
+    FROM scenes s
+    WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+    ORDER BY s.idx ASC
+  `).bind(projectId).all()
+
+  if (!scenes || scenes.length === 0) {
+    console.error(`[Marunage:Image] No visible scenes for project ${projectId}`)
+    await transitionPhase(db, runId, 'generating_images', 'failed', {
+      error_code: 'NO_SCENES',
+      error_message: 'No visible scenes found',
+      error_phase: 'generating_images',
+    })
+    return
+  }
+
+  let generated = 0
+  let failed = 0
+
+  for (const scene of scenes as any[]) {
+    // Check if run is still in generating_images (not canceled)
+    const currentRun = await db.prepare(
+      `SELECT phase FROM marunage_runs WHERE id = ? AND phase = 'generating_images'`
+    ).bind(runId).first<{ phase: string }>()
+    if (!currentRun) {
+      console.log(`[Marunage:Image] Run ${runId} no longer in generating_images, stopping`)
+      return
+    }
+
+    // Check existing image for this scene
+    const existingImage = await db.prepare(`
+      SELECT id, status FROM image_generations
+      WHERE scene_id = ? AND is_active = 1
+    `).bind(scene.id).first<{ id: number; status: string }>()
+
+    // In 'full' mode: skip completed images
+    // In 'retry' mode: only process failed images
+    if (mode === 'full' && existingImage?.status === 'completed') {
+      generated++
+      continue
+    }
+    if (mode === 'retry' && (!existingImage || existingImage.status === 'completed')) {
+      if (existingImage?.status === 'completed') generated++
+      continue
+    }
+
+    // Build styled prompt (uses utils, not route handlers)
+    let prompt = scene.image_prompt as string || ''
+    try {
+      prompt = await composeStyledPrompt(db, projectId, scene.id as number, prompt)
+    } catch (e) {
+      console.warn(`[Marunage:Image] Style composition failed for scene ${scene.id}:`, e)
+    }
+
+    if (!prompt) {
+      prompt = `A scene from a video presentation. Scene index: ${scene.idx}`
+    }
+
+    // Create or update image_generations record
+    let genId: number
+    if (existingImage) {
+      // Update existing failed record to 'generating'
+      await db.prepare(`
+        UPDATE image_generations
+        SET status = 'generating', error_message = NULL, r2_key = NULL,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(existingImage.id).run()
+      genId = existingImage.id
+    } else {
+      // Create new record
+      const insertResult = await db.prepare(`
+        INSERT INTO image_generations (scene_id, project_id, status, provider, model, is_active)
+        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+      `).bind(scene.id, projectId).run()
+      genId = insertResult.meta.last_row_id as number
+    }
+
+    // Generate image
+    console.log(`[Marunage:Image] Generating image for scene ${scene.id} (idx=${scene.idx}), genId=${genId}`)
+    const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any)
+
+    if (!imageResult.success || !imageResult.imageData) {
+      console.error(`[Marunage:Image] Failed for scene ${scene.id}: ${imageResult.error}`)
+      await db.prepare(`
+        UPDATE image_generations
+        SET status = 'failed', error_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind((imageResult.error || 'Unknown error').substring(0, 1000), genId).run()
+      failed++
+
+      // Add delay between attempts even on failure
+      await sleep(IMAGE_GEN_DELAY)
+      continue
+    }
+
+    // Upload to R2
+    const r2Key = buildR2Key(projectId, scene.idx as number, genId)
+    const uploadResult = await uploadToR2(r2, r2Key, imageResult.imageData)
+
+    if (!uploadResult.success) {
+      console.error(`[Marunage:Image] R2 upload failed for scene ${scene.id}: ${uploadResult.error}`)
+      await db.prepare(`
+        UPDATE image_generations
+        SET status = 'failed', error_message = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(`R2 upload failed: ${uploadResult.error}`, genId).run()
+      failed++
+      await sleep(IMAGE_GEN_DELAY)
+      continue
+    }
+
+    // Mark completed
+    await db.prepare(`
+      UPDATE image_generations
+      SET status = 'completed', r2_key = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(r2Key, genId).run()
+
+    generated++
+    console.log(`[Marunage:Image] ✅ Scene ${scene.id} completed (${generated}/${scenes.length})`)
+
+    // Delay between generations to respect Gemini rate limits
+    await sleep(IMAGE_GEN_DELAY)
+  }
+
+  console.log(`[Marunage:Image] Finished: generated=${generated}, failed=${failed}, total=${scenes.length}`)
+
+  // Unlock the run so advance can check completion
+  await db.prepare(`
+    UPDATE marunage_runs
+    SET locked_at = NULL, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(runId).run()
+
+  // If all failed, transition to failed immediately
+  if (generated === 0 && failed > 0) {
+    await transitionPhase(db, runId, 'generating_images', 'failed', {
+      error_code: 'ALL_IMAGES_FAILED',
+      error_message: `All ${failed} image(s) failed to generate`,
+      error_phase: 'generating_images',
+    })
+  }
+}
+
+// ============================================================
+// Helper: sleep
+// ============================================================
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 // ============================================================
@@ -280,9 +767,16 @@ marunage.post('/start', async (c) => {
     const runId = runResult.meta.last_row_id as number
 
     // ===== Step 3: Transition init → formatting =====
-    // Issue-1: フェーズ遷移のみ。フォーマット処理は起動しない。
-    // Issue-2: ここで format-startup pathway を追加予定。
+    // Issue-2: フェーズ遷移 + waitUntil で format 起動
     await transitionPhase(c.env.DB, runId, 'init', 'formatting')
+
+    // Issue-2: Format startup — 非同期でフォーマット処理を開始
+    const sessionCookie = getCookie(c, 'session') || ''
+    const requestUrl = c.req.url
+    c.executionCtx.waitUntil(
+      marunageFormatStartup(c.env.DB, runId, projectId, config, requestUrl, sessionCookie)
+        .catch(err => console.error(`[Marunage:Format] waitUntil error:`, err))
+    )
 
     // Audit log
     try {
@@ -294,7 +788,7 @@ marunage.post('/start', async (c) => {
         entityId: projectId,
         projectId,
         action: 'marunage.run_started',
-        details: { run_id: runId, config, note: 'Issue-1: phase transition only, no format start' },
+        details: { run_id: runId, config, note: 'Issue-2: format startup triggered via waitUntil' },
       })
     } catch (e) {
       console.warn('[Marunage] Audit log failed:', e)
@@ -620,9 +1114,8 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
-        // Issue-1: Set lock + transition only. No image generation start.
-        // Issue-2: ここで画像生成を waitUntil で起動する予定。
-        const lockUntil = new Date(Date.now() + 5 * 60 * 1000).toISOString()
+        // Issue-2: Set lock + transition + start image generation
+        const lockUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString()  // 10 min for image gen
         const ok = await transitionPhaseWithLock(c.env.DB, run.id, 'awaiting_ready', 'generating_images', lockUntil)
         if (!ok) {
           return c.json({
@@ -634,16 +1127,24 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
+        // Issue-2: Start image generation via waitUntil
+        c.executionCtx.waitUntil(
+          marunageGenerateImages(
+            c.env.DB, c.env.R2, run.id, projectId, config,
+            user.id, c.env, 'full'
+          ).catch(err => console.error(`[Marunage:Image] waitUntil error:`, err))
+        )
+
         return c.json({
           run_id: run.id,
           previous_phase: 'awaiting_ready',
           new_phase: 'generating_images',
-          action: 'transitioned',
-          message: '画像生成フェーズに遷移しました (Issue-2で起動実装予定)',
+          action: 'images_started',
+          message: '画像生成を開始しました',
         })
       }
 
-      // ---- generating_images → generating_audio ----
+      // ---- generating_images → generating_audio (or retry failed) ----
       case 'generating_images': {
         // Check image completion status
         const imgStats = await c.env.DB.prepare(`
@@ -666,7 +1167,7 @@ marunage.post('/:projectId/advance', async (c) => {
             previous_phase: currentPhase,
             new_phase: currentPhase,
             action: 'waiting',
-            message: 'Images still generating',
+            message: `Images still generating (${completed} completed, ${generating} in progress)`,
           })
         }
 
@@ -695,27 +1196,44 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
-        // Failed images
+        // Failed images — Issue-2: Auto-retry (max 3 times)
         if (failed > 0) {
-          if (run.retry_count < 3) {
-            // Issue-1: increment retry count only, no actual retry execution
+          const MAX_IMAGE_RETRIES = 3
+          if (run.retry_count < MAX_IMAGE_RETRIES) {
+            // Increment retry count
             await c.env.DB.prepare(`
-              UPDATE marunage_runs SET retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).bind(run.id).run()
+              UPDATE marunage_runs
+              SET retry_count = retry_count + 1,
+                  locked_at = CURRENT_TIMESTAMP,
+                  locked_until = ?,
+                  updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(
+              new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+              run.id
+            ).run()
+
+            // Start retry generation (only failed images)
+            c.executionCtx.waitUntil(
+              marunageGenerateImages(
+                c.env.DB, c.env.R2, run.id, projectId, config,
+                user.id, c.env, 'retry'
+              ).catch(err => console.error(`[Marunage:Image] retry waitUntil error:`, err))
+            )
 
             return c.json({
               run_id: run.id,
               previous_phase: currentPhase,
               new_phase: currentPhase,
-              action: 'retry_noted',
-              message: `画像失敗を記録 (${run.retry_count + 1}/3) — Issue-2で自動リトライ実装予定`,
+              action: 'retrying',
+              message: `${failed}枚の失敗画像をリトライ中 (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`,
             })
           }
 
           // Retry exhausted → failed
           await transitionPhase(c.env.DB, run.id, 'generating_images', 'failed', {
             error_code: 'IMAGE_GENERATION_FAILED',
-            error_message: `${failed} image(s) failed after 3 retries`,
+            error_message: `${failed} image(s) failed after ${MAX_IMAGE_RETRIES} retries`,
             error_phase: 'generating_images',
           })
           return c.json({
@@ -727,6 +1245,7 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
+        // No images at all yet (edge case: generation just started or no records)
         return c.json({
           run_id: run.id,
           previous_phase: currentPhase,
