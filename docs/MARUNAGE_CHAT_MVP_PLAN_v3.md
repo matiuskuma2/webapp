@@ -639,11 +639,24 @@ AI の `generateMiniScenesAI` が `chunkTargetScenes` を目標にするが、�
 
 ## 9. コストタグ仕様（確定版）
 
-### 9-1. experience タグ
-- `'marunage'` | `'builder'` を全ログに付与
-- 既存の `api_usage_logs.metadata_json` に `{ "experience": "marunage" }` を追加
+### 9-1. experience_tag 固定値
 
-### 9-2. 記録ポイント
+- **v1 の experience_tag**: `marunage_chat_v1`（定数）
+- run 作成時に `marunage_runs.config_json.experience_tag` として固定記録する
+- API ログへの `experience` タグは短縮形 `'marunage'` を使用（集計クエリ簡易化のため）
+- `'marunage'` | `'builder'` を全ログに付与
+
+### 9-2. 記録箇所一覧
+
+| 記録先 | フィールド | 値 | 書込タイミング |
+|---|---|---|---|
+| `marunage_runs.config_json` | `experience_tag` | `"marunage_chat_v1"` | run 作成時（凍結） |
+| `api_usage_logs.metadata_json` | `experience` | `"marunage"` | 画像生成 API 呼出時 |
+| `tts_usage_logs` (既存 metadata) | `experience` | `"marunage"` | 音声生成 API 呼出時 |
+| `audit_logs` | event 名接頭辞 | `marunage.*` | 各フェーズ遷移時 |
+
+### 9-3. 記録ポイント
+
 | イベント | テーブル | タグ |
 |---|---|---|
 | run 開始 | audit_logs | `marunage.run_started` |
@@ -653,9 +666,10 @@ AI の `generateMiniScenesAI` が `chunkTargetScenes` を目標にするが、�
 | run 完了 | audit_logs | `marunage.run_completed` |
 | run 失敗 | audit_logs | `marunage.run_failed` |
 
-### 9-3. 既存への変更
+### 9-4. 既存への変更
 - `api_usage_logs` / `tts_usage_logs` のスキーマ変更は**不要**（metadata_json に含めるだけ）
 - 丸投げ側のラッパーで metadata にタグを追加してから既存関数を呼ぶ
+- **UI**: 左ボードフッターに `exp: marunage_chat_v1` を常時表示（Experience Spec v1 §13-3 参照）
 
 ---
 
@@ -680,6 +694,7 @@ AI の `generateMiniScenesAI` が `chunkTargetScenes` を目標にするが、�
 | 進捗バー仕様 | Experience Spec v1 | §10 |
 | ポーリング仕様・shouldAdvance | Experience Spec v1 | §11 |
 | 将来拡張パス（体験A/B/アップロード） | Experience Spec v1 | §12 |
+| experience_tag 仕様・フッター表示 | Experience Spec v1 | §13 |
 
 ### 10-1. 画面構成（概要）
 
@@ -795,8 +810,10 @@ function shouldAdvance(data) {
 ### Issue-6: 運用・監査・コストタグ
 - audit_logs に marunage イベント記録
 - api_usage_logs.metadata_json に experience タグ追加
+- `marunage_runs.config_json.experience_tag = 'marunage_chat_v1'` を run 作成時に固定
+- 左ボードフッターに `exp: marunage_chat_v1` 表示
 - admin ダッシュボードでの丸投げ run 一覧（将来）
-- **参照**: v3 §9（コストタグ仕様）
+- **参照**: v3 §9（コストタグ仕様・experience_tag 固定値と記録箇所）, Exp §13（experience_tag UI 仕様）
 
 ### Issue-7: 統合テスト & デプロイ
 - ローカル E2E テスト（5シーンパイプライン全通し）
