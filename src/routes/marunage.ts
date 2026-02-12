@@ -1449,20 +1449,43 @@ marunage.post('/:projectId/advance', async (c) => {
 
       // ---- generating_images → generating_audio (or retry failed) ----
       case 'generating_images': {
-        // Check image completion status
+        // Check image completion status (including scenes with no image record)
         const imgStats = await c.env.DB.prepare(`
           SELECT
+            COUNT(*) AS total_scenes,
             SUM(CASE WHEN ig.status='completed' THEN 1 ELSE 0 END) AS completed,
             SUM(CASE WHEN ig.status IN ('pending','generating') THEN 1 ELSE 0 END) AS generating,
-            SUM(CASE WHEN ig.status='failed' OR ig.status='policy_violation' THEN 1 ELSE 0 END) AS failed
+            SUM(CASE WHEN ig.status='failed' OR ig.status='policy_violation' THEN 1 ELSE 0 END) AS failed,
+            SUM(CASE WHEN ig.id IS NULL THEN 1 ELSE 0 END) AS no_image
           FROM scenes s
           LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
           WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
-        `).bind(projectId).first<{ completed: number; generating: number; failed: number }>()
+        `).bind(projectId).first<{ total_scenes: number; completed: number; generating: number; failed: number; no_image: number }>()
 
         const completed = imgStats?.completed || 0
         const generating = imgStats?.generating || 0
         const failed = imgStats?.failed || 0
+        const noImage = imgStats?.no_image || 0
+
+        console.log(`[Marunage:Advance:Images] project=${projectId} completed=${completed} generating=${generating} failed=${failed} noImage=${noImage}`)
+
+        // If there are scenes with no image record, re-kick image generation (1 image at a time)
+        if (noImage > 0 && generating === 0) {
+          console.log(`[Marunage:Advance:Images] Re-kicking image generation for ${noImage} scenes without records`)
+          c.executionCtx.waitUntil(
+            marunageGenerateImages(
+              c.env.DB, c.env.R2, run.id, projectId, config,
+              user.id, c.env, 'full'
+            ).catch(err => console.error(`[Marunage:Image] re-kick waitUntil error:`, err))
+          )
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: 'images_started',
+            message: `画像生成を再開しました (${noImage}枚未生成)`,
+          })
+        }
 
         if (generating > 0) {
           return c.json({

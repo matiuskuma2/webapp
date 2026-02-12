@@ -36,6 +36,9 @@ const MC = {
   // Progress tracking (for chat dedup)
   _lastProgressMsg: '',
   _progressBubble: null,
+
+  // Advance debounce
+  _lastAdvanceTime: 0,
 };
 
 // ============================================================
@@ -306,9 +309,16 @@ async function mcPoll() {
     // Update UI based on phase
     mcUpdateFromStatus(data);
     
-    // Check shouldAdvance
+    // Check shouldAdvance (debounce: min 10s between advance calls)
     if (mcShouldAdvance(data)) {
-      await mcAdvance();
+      const now = Date.now();
+      if (now - MC._lastAdvanceTime >= 10000) {
+        MC._lastAdvanceTime = now;
+        console.log('[Marunage] shouldAdvance=true, calling mcAdvance()');
+        await mcAdvance();
+      } else {
+        console.log('[Marunage] shouldAdvance=true but debounced, waiting...');
+      }
     }
     
     // Check terminal
@@ -342,8 +352,11 @@ function mcShouldAdvance(data) {
       return p.scenes_ready.utterances_ready && p.scenes_ready.visible_count > 0;
       
     case 'generating_images':
+      // Advance if done, or if all images completed with none generating,
+      // or if there are pending images with no generating (re-kick needed)
       return p.images.state === 'done' || 
-             (p.images.generating === 0 && p.images.completed > 0);
+             (p.images.generating === 0 && p.images.completed > 0) ||
+             (p.images.pending > 0 && p.images.generating === 0);
       
     case 'generating_audio':
       return p.audio.state === 'done';
