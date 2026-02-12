@@ -1588,6 +1588,21 @@ marunage.post('/:projectId/advance', async (c) => {
         }
 
         if (generating > 0) {
+          // Safety: if image_generations stuck in 'generating' for >5min, mark as failed
+          const staleFixed = await c.env.DB.prepare(`
+            UPDATE image_generations
+            SET status = 'failed', error_message = 'Timed out (stuck in generating)', updated_at = CURRENT_TIMESTAMP
+            WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
+              AND is_active = 1
+              AND status = 'generating'
+              AND updated_at < datetime('now', '-5 minutes')
+          `).bind(projectId).run()
+          const fixedCount = staleFixed.meta.changes || 0
+          if (fixedCount > 0) {
+            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records`)
+            // Re-check stats after fix (let next poll handle it)
+          }
+          
           return c.json({
             run_id: run.id,
             previous_phase: currentPhase,
