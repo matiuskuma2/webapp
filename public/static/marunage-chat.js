@@ -156,18 +156,22 @@ async function mcCheckAuth() {
 async function mcCheckActiveRun() {
   try {
     const res = await axios.get('/api/marunage/active');
+    console.log('[Marunage] Active run check:', res.data);
     if (res.data.run_id) {
       MC.runId = res.data.run_id;
       MC.projectId = res.data.project_id;
       MC.phase = res.data.phase;
       
-      mcAddSystemMessage('前回の処理を再開しています...');
+      document.getElementById('mcProjectTitle').textContent = 'Project #' + MC.projectId;
+      mcAddSystemMessage('前回の処理を再開しています... (Phase: ' + MC.phase + ')');
       mcSetUIState('processing');
       mcStartPolling();
+    } else {
+      console.log('[Marunage] No active run found');
     }
   } catch (err) {
     if (err.response?.status === 404) {
-      // No active run - stay in idle
+      console.log('[Marunage] No active run (404)');
       return;
     }
     console.warn('Active run check failed:', err);
@@ -276,6 +280,8 @@ async function mcPoll() {
   try {
     const res = await axios.get(`/api/marunage/${MC.projectId}/status`);
     const data = res.data;
+    
+    console.log('[Marunage Poll]', data.phase, 'images:', JSON.stringify(data.progress?.images), 'audio:', JSON.stringify(data.progress?.audio));
     
     MC.phase = data.phase;
     MC.config = data.config;
