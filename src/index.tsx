@@ -322,7 +322,7 @@ app.get('/', (c) => {
                     </div>
 
                     <!-- 動線2: 丸投げチャット（MVP v1） -->
-                    <a href="/marunage-chat" class="bg-white rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer border-2 border-transparent hover:border-purple-400 group block relative overflow-hidden">
+                    <a href="/marunage" class="bg-white rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer border-2 border-transparent hover:border-purple-400 group block relative overflow-hidden">
                         <div class="p-6">
                             <div class="flex items-center mb-3">
                                 <div class="w-12 h-12 bg-purple-100 rounded-xl flex items-center justify-center mr-4 group-hover:bg-purple-200 transition-colors">
@@ -4179,9 +4179,13 @@ app.get('/marunage', (c) => {
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
     <style>
-      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 50%, #fdf2f8 100%); min-height: 100vh; }
-      .run-card { transition: all 0.2s; }
-      .run-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f8f7ff; min-height: 100vh; }
+      .project-card { transition: all 0.2s; border: 2px solid transparent; }
+      .project-card:hover { transform: translateY(-3px); box-shadow: 0 12px 30px rgba(0,0,0,0.1); border-color: #a78bfa; }
+      .new-card { border: 2px dashed #c4b5fd; background: #faf5ff; }
+      .new-card:hover { border-color: #8b5cf6; background: #f5f0ff; }
+      .phase-pulse { animation: pulse 2s infinite; }
+      @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
     </style>
 </head>
 <body>
@@ -4194,43 +4198,28 @@ app.get('/marunage', (c) => {
     </div>
 
     <!-- Main Content -->
-    <div id="mgMain" class="hidden max-w-4xl mx-auto px-4 py-8">
+    <div id="mgMain" class="hidden max-w-5xl mx-auto px-4 py-8">
       <!-- Header -->
-      <div class="flex items-center justify-between mb-8">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-800">
-            <i class="fas fa-magic mr-2 text-purple-500"></i>丸投げダッシュボード
-          </h1>
-          <p class="text-sm text-gray-500 mt-1">テキストから動画素材を自動生成</p>
-        </div>
+      <div class="flex items-center justify-between mb-6">
         <div class="flex items-center gap-3">
-          <a href="/" class="text-gray-400 hover:text-gray-600 text-sm">
-            <i class="fas fa-home mr-1"></i>TOP
-          </a>
-          <a href="/marunage-chat" id="mgNewBtn" class="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg font-semibold text-sm hover:from-purple-700 hover:to-indigo-700 shadow-md">
-            <i class="fas fa-plus mr-1"></i>新しく作る
-          </a>
+          <a href="/" class="text-gray-400 hover:text-gray-600"><i class="fas fa-arrow-left"></i></a>
+          <div>
+            <h1 class="text-xl font-bold text-gray-800">
+              <i class="fas fa-comments mr-2 text-purple-500"></i>丸投げチャット
+            </h1>
+            <p class="text-xs text-gray-400 mt-0.5">テキストから5シーンの画像+音声を自動生成</p>
+          </div>
         </div>
       </div>
 
-      <!-- Run List -->
-      <div id="mgRunList" class="space-y-3">
-        <div class="text-center py-12 text-gray-400">
+      <!-- Project Grid -->
+      <h2 class="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4"><i class="fas fa-folder-open mr-1"></i>プロジェクト一覧</h2>
+      <div id="mgGrid" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+        <!-- Loading state -->
+        <div class="col-span-full text-center py-12 text-gray-400">
           <i class="fas fa-spinner fa-spin text-2xl mb-3"></i>
-          <p>読み込み中...</p>
+          <p class="text-sm">読み込み中...</p>
         </div>
-      </div>
-
-      <!-- Empty State -->
-      <div id="mgEmpty" class="hidden text-center py-16">
-        <div class="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
-          <i class="fas fa-film text-purple-500 text-3xl"></i>
-        </div>
-        <h3 class="text-lg font-bold text-gray-600 mb-2">まだ丸投げ動画がありません</h3>
-        <p class="text-sm text-gray-400 mb-6">テキストを貼り付けるだけで、画像+音声を自動生成します</p>
-        <a href="/marunage-chat" class="inline-flex items-center px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-indigo-700 shadow-md">
-          <i class="fas fa-plus mr-2"></i>最初の動画素材を作る
-        </a>
       </div>
     </div>
 
@@ -4238,15 +4227,15 @@ app.get('/marunage', (c) => {
     <script>
       axios.defaults.withCredentials = true;
 
-      const phaseMap = {
-        'init':              { label: '初期化中', color: 'bg-gray-100 text-gray-600', icon: 'fa-cog fa-spin' },
-        'formatting':        { label: '整形中',   color: 'bg-blue-100 text-blue-700', icon: 'fa-edit' },
-        'awaiting_ready':    { label: '確認待ち', color: 'bg-yellow-100 text-yellow-700', icon: 'fa-clock' },
-        'generating_images': { label: '画像生成中', color: 'bg-purple-100 text-purple-700', icon: 'fa-image' },
-        'generating_audio':  { label: '音声生成中', color: 'bg-indigo-100 text-indigo-700', icon: 'fa-volume-up' },
-        'ready':             { label: '完成',     color: 'bg-green-100 text-green-700', icon: 'fa-check-circle' },
-        'failed':            { label: 'エラー',   color: 'bg-red-100 text-red-700', icon: 'fa-exclamation-triangle' },
-        'canceled':          { label: '中断',     color: 'bg-gray-200 text-gray-500', icon: 'fa-ban' },
+      const phaseInfo = {
+        'init':              { label: '初期化中',   color: 'bg-gray-500',   icon: 'fa-cog' },
+        'formatting':        { label: '整形中',     color: 'bg-blue-500',   icon: 'fa-edit' },
+        'awaiting_ready':    { label: '確認待ち',   color: 'bg-yellow-500', icon: 'fa-clock' },
+        'generating_images': { label: '画像生成中', color: 'bg-purple-500', icon: 'fa-image' },
+        'generating_audio':  { label: '音声生成中', color: 'bg-indigo-500', icon: 'fa-volume-up' },
+        'ready':             { label: '完成',       color: 'bg-green-500',  icon: 'fa-check' },
+        'failed':            { label: 'エラー',     color: 'bg-red-500',    icon: 'fa-exclamation-triangle' },
+        'canceled':          { label: '中断',       color: 'bg-gray-400',   icon: 'fa-ban' },
       };
 
       async function mgInit() {
@@ -4254,7 +4243,6 @@ app.get('/marunage', (c) => {
           const authRes = await axios.get('/api/auth/me');
           if (!authRes.data.authenticated) { window.location.href = '/login'; return; }
         } catch { window.location.href = '/login'; return; }
-
         document.getElementById('mgAuthLoading').classList.add('hidden');
         document.getElementById('mgMain').classList.remove('hidden');
         await mgLoadRuns();
@@ -4264,59 +4252,86 @@ app.get('/marunage', (c) => {
         try {
           const res = await axios.get('/api/marunage/runs');
           const runs = res.data.runs || [];
+          const grid = document.getElementById('mgGrid');
 
-          if (runs.length === 0) {
-            document.getElementById('mgRunList').classList.add('hidden');
-            document.getElementById('mgEmpty').classList.remove('hidden');
-            return;
-          }
+          // Always show "New" card first
+          let html = '<a href="/marunage-chat" class="project-card new-card rounded-xl flex flex-col items-center justify-center min-h-[200px] hover:no-underline cursor-pointer">'
+            + '<div class="w-14 h-14 bg-purple-100 rounded-full flex items-center justify-center mb-3">'
+            + '<i class="fas fa-plus text-purple-500 text-2xl"></i>'
+            + '</div>'
+            + '<span class="text-sm font-bold text-purple-600">新しく作る</span>'
+            + '<span class="text-xs text-purple-400 mt-1">テキストを貼るだけ</span>'
+            + '</a>';
 
-          document.getElementById('mgEmpty').classList.add('hidden');
-          document.getElementById('mgRunList').classList.remove('hidden');
-          document.getElementById('mgRunList').innerHTML = runs.map(r => mgRenderCard(r)).join('');
+          html += runs.map(function(r) { return mgRenderCard(r); }).join('');
+          grid.innerHTML = html;
         } catch (err) {
           console.error('Load runs failed:', err);
-          document.getElementById('mgRunList').innerHTML = '<p class="text-center text-red-500">読み込みに失敗しました</p>';
+          document.getElementById('mgGrid').innerHTML = '<p class="col-span-full text-center text-red-500 py-8">読み込みに失敗しました</p>';
         }
       }
 
       function mgRenderCard(r) {
-        const ph = phaseMap[r.phase] || { label: r.phase, color: 'bg-gray-100 text-gray-600', icon: 'fa-question' };
-        const date = new Date(r.created_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-        const updatedDate = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        var ph = phaseInfo[r.phase] || { label: r.phase, color: 'bg-gray-500', icon: 'fa-question' };
+        var dateStr = new Date(r.created_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' });
+        var isActive = r.is_active;
+        var isReady = r.phase === 'ready';
+        var isFailed = r.phase === 'failed';
 
-        let progress = '';
+        // Determine link
+        var href = isActive ? '/marunage-chat?run=' + r.run_id
+                 : isReady  ? '/projects/' + r.project_id
+                 : isFailed ? '/marunage-chat?run=' + r.run_id
+                 : '#';
+
+        // Progress text
+        var progressText = '';
         if (r.scene_count > 0) {
-          progress = r.images_done + '/' + r.scene_count + '枚';
+          progressText = '<span class="text-xs text-gray-400"><i class="fas fa-image mr-0.5"></i>' + r.images_done + '/' + r.scene_count + '</span>';
         }
 
-        let actions = '';
-        if (r.is_active) {
-          actions = '<a href="/marunage-chat?run=' + r.run_id + '" class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700"><i class="fas fa-play mr-1"></i>続ける</a>'
-                  + ' <button onclick="mgCancel(' + r.project_id + ')" class="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-300"><i class="fas fa-stop mr-1"></i>中断</button>';
-        } else if (r.phase === 'ready') {
-          actions = '<a href="/projects/' + r.project_id + '" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700"><i class="fas fa-edit mr-1"></i>プロジェクト</a>';
-        } else if (r.phase === 'failed') {
-          actions = '<a href="/marunage-chat?run=' + r.run_id + '" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700"><i class="fas fa-redo mr-1"></i>リトライ</a>'
-                  + ' <button onclick="mgCancel(' + r.project_id + ')" class="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-300"><i class="fas fa-trash mr-1"></i>削除</button>';
+        // Badge pulse for active
+        var pulseClass = isActive ? ' phase-pulse' : '';
+
+        // Thumbnail placeholder (gradient based on phase)
+        var thumbBg = isReady ? 'from-green-400 to-emerald-500'
+                    : isFailed ? 'from-red-400 to-rose-500'
+                    : isActive ? 'from-purple-400 to-indigo-500'
+                    : 'from-gray-300 to-gray-400';
+        var thumbIcon = isReady ? 'fa-check-circle text-4xl' : 'fa-film text-3xl';
+
+        // Action button overlay
+        var actionOverlay = '';
+        if (isActive) {
+          actionOverlay = '<div class="absolute inset-0 bg-black/0 hover:bg-black/20 flex items-center justify-center opacity-0 hover:opacity-100 transition-all">'
+            + '<span class="bg-white text-purple-600 px-3 py-1 rounded-full text-xs font-bold shadow"><i class="fas fa-play mr-1"></i>続ける</span>'
+            + '</div>';
         }
 
-        return '<div class="run-card bg-white rounded-xl p-4 shadow-sm border border-gray-100">'
-          + '<div class="flex items-center justify-between">'
-          + '  <div class="flex-1 min-w-0">'
-          + '    <div class="flex items-center gap-2 mb-1">'
-          + '      <span class="text-xs px-2 py-0.5 rounded-full font-semibold ' + ph.color + '"><i class="fas ' + ph.icon + ' mr-1"></i>' + ph.label + '</span>'
-          + '      <span class="text-xs text-gray-400">#' + r.project_id + '</span>'
-          + (progress ? '      <span class="text-xs text-gray-400"><i class="fas fa-image mr-0.5"></i>' + progress + '</span>' : '')
-          + '    </div>'
-          + '    <h3 class="font-semibold text-gray-800 text-sm truncate">' + mgEscape(r.project_title || '無題') + '</h3>'
-          + '    <p class="text-xs text-gray-400 mt-0.5">' + date
-          + (updatedDate && updatedDate !== date ? ' → ' + updatedDate : '') + '</p>'
-          + (r.error_message ? '<p class="text-xs text-red-500 mt-1 truncate"><i class="fas fa-exclamation-circle mr-1"></i>' + mgEscape(r.error_message) + '</p>' : '')
-          + '  </div>'
-          + '  <div class="flex items-center gap-2 ml-4 flex-shrink-0">' + actions + '</div>'
+        return '<a href="' + href + '" class="project-card bg-white rounded-xl overflow-hidden shadow-sm block no-underline relative">'
+          // Thumbnail
+          + '<div class="relative aspect-video bg-gradient-to-br ' + thumbBg + ' flex items-center justify-center">'
+          + '<i class="fas ' + thumbIcon + ' text-white/80"></i>'
+          // Phase badge
+          + '<div class="absolute top-2 left-2">'
+          + '<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold text-white ' + ph.color + pulseClass + '">'
+          + '<i class="fas ' + ph.icon + ' mr-1"></i>' + ph.label
+          + '</span>'
           + '</div>'
-          + '</div>';
+          // Cancel button for active runs
+          + (isActive ? '<button onclick="event.preventDefault();event.stopPropagation();mgCancel(' + r.project_id + ')" class="absolute top-2 right-2 w-6 h-6 bg-black/30 hover:bg-red-500 rounded-full flex items-center justify-center text-white text-xs transition-colors" title="中断"><i class="fas fa-stop"></i></button>' : '')
+          + actionOverlay
+          + '</div>'
+          // Info
+          + '<div class="p-3">'
+          + '<h3 class="text-sm font-semibold text-gray-800 truncate">' + mgEscape(r.project_title || '無題') + '</h3>'
+          + '<div class="flex items-center justify-between mt-1">'
+          + '<span class="text-xs text-gray-400">' + dateStr + '</span>'
+          + progressText
+          + '</div>'
+          + (r.error_message ? '<p class="text-[10px] text-red-500 mt-1 truncate">' + mgEscape(r.error_message) + '</p>' : '')
+          + '</div>'
+          + '</a>';
       }
 
       async function mgCancel(projectId) {
@@ -4325,12 +4340,12 @@ app.get('/marunage', (c) => {
           await axios.post('/api/marunage/' + projectId + '/cancel');
           await mgLoadRuns();
         } catch (err) {
-          alert('中断に失敗しました: ' + (err.response?.data?.error?.message || err.message));
+          alert('中断に失敗: ' + (err.response?.data?.error?.message || err.message));
         }
       }
 
       function mgEscape(str) {
-        const div = document.createElement('div');
+        var div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
       }
@@ -4426,7 +4441,7 @@ app.get('/marunage-chat', (c) => {
             <!-- Left Header -->
             <div class="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-200">
                 <div class="flex items-center gap-3">
-                    <a href="/" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></a>
+                    <a href="/marunage" class="text-gray-500 hover:text-gray-700"><i class="fas fa-arrow-left"></i></a>
                     <div>
                         <h1 class="text-sm font-bold text-gray-800">
                             <i class="fas fa-comments text-purple-600 mr-1"></i>丸投げチャット
@@ -4506,7 +4521,7 @@ app.get('/marunage-chat', (c) => {
                     <button id="mcCancelBtn" class="hidden text-white/80 hover:text-white text-xs px-2 py-1 rounded border border-white/30 hover:bg-white/10">
                         <i class="fas fa-stop mr-1"></i>中断
                     </button>
-                    <a href="/" class="text-white/80 hover:text-white">
+                    <a href="/marunage" class="text-white/80 hover:text-white">
                         <i class="fas fa-home"></i>
                     </a>
                 </div>
