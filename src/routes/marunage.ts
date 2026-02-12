@@ -1101,8 +1101,10 @@ marunage.post('/start', async (c) => {
     if (error?.message?.includes('UNIQUE constraint')) {
       return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Active run already exists for this project')
     }
-    console.error('[Marunage] Start error:', error)
-    return errorJson(c, MARUNAGE_ERRORS.INTERNAL_ERROR, 'Failed to start marunage run', { message: String(error) })
+    // Full error for server logs only
+    console.error('[Marunage] Start error:', error instanceof Error ? `${error.message}\n${error.stack}` : String(error))
+    // Client gets only a safe message — no internal details
+    return errorJson(c, MARUNAGE_ERRORS.INTERNAL_ERROR, 'Failed to start marunage run')
   }
 })
 
@@ -1820,9 +1822,15 @@ marunage.post('/:projectId/advance', async (c) => {
         return errorJson(c, MARUNAGE_ERRORS.INVALID_PHASE, `Cannot advance from phase: ${currentPhase}`)
     }
   } catch (error) {
-    console.error(`[Marunage] Advance error for run ${run.id}:`, error)
-    const errMsg = error instanceof Error ? `${error.message}\n${error.stack}` : String(error)
-    return errorJson(c, MARUNAGE_ERRORS.INTERNAL_ERROR, 'Failed to advance', { message: errMsg.substring(0, 2000) })
+    // Full stack trace for server logs only (never exposed to client)
+    const fullError = error instanceof Error ? `${error.message}\n${error.stack}` : String(error)
+    console.error(`[Marunage] Advance error for run ${run.id}:`, fullError)
+
+    // Client gets only a safe error identifier — no internal details
+    return errorJson(c, MARUNAGE_ERRORS.INTERNAL_ERROR, 'Failed to advance', {
+      run_id: run.id,
+      phase: currentPhase,
+    })
   }
 })
 

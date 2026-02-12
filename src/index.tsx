@@ -4609,4 +4609,20 @@ app.get('/marunage-chat', (c) => {
   `)
 })
 
+// ============================================================
+// Global Error Handler — suppress stack traces in production
+// ============================================================
+app.onError((err, c) => {
+  // Full details for server logs only
+  console.error(`[Global] Unhandled error: ${err.message}\n${err.stack}`)
+
+  // Client gets only a safe generic message
+  return c.json({
+    error: {
+      code: 'INTERNAL_ERROR',
+      message: 'An unexpected error occurred',
+    }
+  }, 500)
+})
+
 export default app
