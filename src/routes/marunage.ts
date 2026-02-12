@@ -684,17 +684,16 @@ async function marunageGenerateImages(
       // Update existing failed record to 'generating'
       await db.prepare(`
         UPDATE image_generations
-        SET status = 'generating', error_message = NULL, r2_key = NULL,
-            updated_at = CURRENT_TIMESTAMP
+        SET status = 'generating', error_message = NULL, r2_key = NULL
         WHERE id = ?
       `).bind(existingImage.id).run()
       genId = existingImage.id
     } else {
       // Create new record
       const insertResult = await db.prepare(`
-        INSERT INTO image_generations (scene_id, status, provider, model, is_active)
-        VALUES (?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
-      `).bind(scene.id).run()
+        INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active)
+        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+      `).bind(scene.id, prompt).run()
       genId = insertResult.meta.last_row_id as number
     }
 
@@ -706,8 +705,7 @@ async function marunageGenerateImages(
       console.error(`[Marunage:Image] Failed for scene ${scene.id}: ${imageResult.error}`)
       await db.prepare(`
         UPDATE image_generations
-        SET status = 'failed', error_message = ?,
-            updated_at = CURRENT_TIMESTAMP
+        SET status = 'failed', error_message = ?
         WHERE id = ?
       `).bind((imageResult.error || 'Unknown error').substring(0, 1000), genId).run()
       failed++
@@ -725,8 +723,7 @@ async function marunageGenerateImages(
       console.error(`[Marunage:Image] R2 upload failed for scene ${scene.id}: ${uploadResult.error}`)
       await db.prepare(`
         UPDATE image_generations
-        SET status = 'failed', error_message = ?,
-            updated_at = CURRENT_TIMESTAMP
+        SET status = 'failed', error_message = ?
         WHERE id = ?
       `).bind(`R2 upload failed: ${uploadResult.error}`, genId).run()
       failed++
@@ -737,8 +734,7 @@ async function marunageGenerateImages(
     // Mark completed
     await db.prepare(`
       UPDATE image_generations
-      SET status = 'completed', r2_key = ?,
-          updated_at = CURRENT_TIMESTAMP
+      SET status = 'completed', r2_key = ?
       WHERE id = ?
     `).bind(r2Key, genId).run()
 
@@ -1560,7 +1556,7 @@ marunage.post('/:projectId/advance', async (c) => {
             })
             await c.env.DB.prepare(`
               UPDATE image_generations
-              SET status = 'completed', r2_key = ?, updated_at = CURRENT_TIMESTAMP
+              SET status = 'completed', r2_key = ?
               WHERE id = ?
             `).bind(r2Key, genId).run()
             // Also update scene's image_status for backward compat
@@ -1572,7 +1568,7 @@ marunage.post('/:projectId/advance', async (c) => {
           } else {
             await c.env.DB.prepare(`
               UPDATE image_generations
-              SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+              SET status = 'failed', error_message = ?
               WHERE id = ?
             `).bind((imageResult.error || 'Unknown error').substring(0, 500), genId).run()
             console.error(`[Marunage:Advance:Images] Scene ${nextScene.idx} image failed: ${imageResult.error}`)
@@ -1591,11 +1587,11 @@ marunage.post('/:projectId/advance', async (c) => {
           // Safety: if image_generations stuck in 'generating' for >5min, mark as failed
           const staleFixed = await c.env.DB.prepare(`
             UPDATE image_generations
-            SET status = 'failed', error_message = 'Timed out (stuck in generating)', updated_at = CURRENT_TIMESTAMP
+            SET status = 'failed', error_message = 'Timed out (stuck in generating)'
             WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
               AND is_active = 1
               AND status = 'generating'
-              AND updated_at < datetime('now', '-5 minutes')
+              AND created_at < datetime('now', '-5 minutes')
           `).bind(projectId).run()
           const fixedCount = staleFixed.meta.changes || 0
           if (fixedCount > 0) {
