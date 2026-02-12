@@ -692,9 +692,9 @@ async function marunageGenerateImages(
     } else {
       // Create new record
       const insertResult = await db.prepare(`
-        INSERT INTO image_generations (scene_id, project_id, status, provider, model, is_active)
-        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
-      `).bind(scene.id, projectId).run()
+        INSERT INTO image_generations (scene_id, status, provider, model, is_active)
+        VALUES (?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+      `).bind(scene.id).run()
       genId = insertResult.meta.last_row_id as number
     }
 
@@ -1543,9 +1543,9 @@ marunage.post('/:projectId/advance', async (c) => {
           
           // Create image_generations record
           const insertResult = await c.env.DB.prepare(`
-            INSERT INTO image_generations (scene_id, project_id, status, provider, model, is_active)
-            VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
-          `).bind(nextScene.id, projectId).run()
+            INSERT INTO image_generations (scene_id, status, provider, model, is_active)
+            VALUES (?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+          `).bind(nextScene.id).run()
           const genId = insertResult.meta.last_row_id as number
           
           // Generate image directly (await, not waitUntil)
