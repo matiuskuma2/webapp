@@ -420,6 +420,9 @@ async function mcAdvance() {
     
   } catch (err) {
     console.error('Advance error:', err);
+    if (err.response) {
+      console.error('Advance error response:', JSON.stringify(err.response.data));
+    }
   }
 }
 

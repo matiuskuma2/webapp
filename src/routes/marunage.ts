@@ -1813,7 +1813,8 @@ marunage.post('/:projectId/advance', async (c) => {
     }
   } catch (error) {
     console.error(`[Marunage] Advance error for run ${run.id}:`, error)
-    return errorJson(c, MARUNAGE_ERRORS.INTERNAL_ERROR, 'Failed to advance', { message: String(error) })
+    const errMsg = error instanceof Error ? `${error.message}\n${error.stack}` : String(error)
+    return errorJson(c, MARUNAGE_ERRORS.INTERNAL_ERROR, 'Failed to advance', { message: errMsg.substring(0, 2000) })
   }
 })
 
