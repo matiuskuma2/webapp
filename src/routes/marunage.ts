@@ -1559,12 +1559,9 @@ marunage.post('/:projectId/advance', async (c) => {
               SET status = 'completed', r2_key = ?
               WHERE id = ?
             `).bind(r2Key, genId).run()
-            // Also update scene's image_status for backward compat
-            await c.env.DB.prepare(`
-              UPDATE scenes SET image_status = 'completed', image_r2_key = ?, updated_at = CURRENT_TIMESTAMP
-              WHERE id = ?
-            `).bind(r2Key, nextScene.id).run()
-            console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} image completed`)
+            // Note: scenes table does NOT have image_status/image_r2_key columns.
+            // Image status is tracked exclusively via image_generations table.
+            console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} image completed, r2_key=${r2Key}`)
           } else {
             await c.env.DB.prepare(`
               UPDATE image_generations
@@ -1609,7 +1606,8 @@ marunage.post('/:projectId/advance', async (c) => {
         }
 
         // All completed → transition to generating_audio
-        if (completed > 0 && failed === 0) {
+        // Explicitly check noImage === 0 and generating === 0 for safety
+        if (completed > 0 && failed === 0 && noImage === 0 && generating === 0) {
           const lockUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10min lock for audio
           const ok = await transitionPhaseWithLock(c.env.DB, run.id, 'generating_images', 'generating_audio', lockUntil)
           if (!ok) {
@@ -1643,6 +1641,7 @@ marunage.post('/:projectId/advance', async (c) => {
         }
 
         // Failed images — Issue-2: Auto-retry (max 3 times)
+        // Reset failed images one at a time so they get picked up by the noImage > 0 branch.
         if (failed > 0) {
           const MAX_IMAGE_RETRIES = 3
           if (run.retry_count < MAX_IMAGE_RETRIES) {
@@ -1650,29 +1649,27 @@ marunage.post('/:projectId/advance', async (c) => {
             await c.env.DB.prepare(`
               UPDATE marunage_runs
               SET retry_count = retry_count + 1,
-                  locked_at = CURRENT_TIMESTAMP,
-                  locked_until = ?,
                   updated_at = CURRENT_TIMESTAMP
               WHERE id = ?
-            `).bind(
-              new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-              run.id
-            ).run()
+            `).bind(run.id).run()
 
-            // Start retry generation (only failed images)
-            c.executionCtx.waitUntil(
-              marunageGenerateImages(
-                c.env.DB, c.env.R2, run.id, projectId, config,
-                user.id, c.env, 'retry'
-              ).catch(err => console.error(`[Marunage:Image] retry waitUntil error:`, err))
-            )
+            // Deactivate failed image records so the scenes appear as noImage in next advance
+            await c.env.DB.prepare(`
+              UPDATE image_generations
+              SET is_active = 0
+              WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
+                AND is_active = 1
+                AND (status = 'failed' OR status = 'policy_violation')
+            `).bind(projectId).run()
+
+            console.log(`[Marunage:Advance:Images] Deactivated ${failed} failed images for retry (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`)
 
             return c.json({
               run_id: run.id,
               previous_phase: currentPhase,
               new_phase: currentPhase,
               action: 'retrying',
-              message: `${failed}枚の失敗画像をリトライ中 (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`,
+              message: `${failed}枚の失敗画像をリトライ準備中 (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`,
             })
           }
 
