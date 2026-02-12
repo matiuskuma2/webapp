@@ -888,6 +888,56 @@ async function marunageStartAudioGeneration(
 }
 
 // ============================================================
+// 5-0. GET /runs - ユーザーの全 run 一覧
+// ============================================================
+
+marunage.get('/runs', async (c) => {
+  const user = await getSessionUser(c.env.DB, getCookie(c, 'session'))
+  if (!user) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Session required')
+
+  const { results: runs } = await c.env.DB.prepare(`
+    SELECT
+      mr.id AS run_id,
+      mr.project_id,
+      mr.phase,
+      mr.error_code,
+      mr.error_message,
+      mr.created_at,
+      mr.updated_at,
+      mr.completed_at,
+      p.title AS project_title,
+      p.status AS project_status,
+      (SELECT COUNT(*) FROM scenes s WHERE s.project_id = mr.project_id AND (s.is_hidden = 0 OR s.is_hidden IS NULL)) AS scene_count,
+      (SELECT COUNT(*) FROM scenes s
+       LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+       WHERE s.project_id = mr.project_id AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.status = 'completed') AS images_done
+    FROM marunage_runs mr
+    JOIN projects p ON p.id = mr.project_id
+    WHERE mr.started_by_user_id = ?
+    ORDER BY mr.created_at DESC
+    LIMIT 50
+  `).bind(user.id).all()
+
+  return c.json({
+    runs: (runs || []).map((r: any) => ({
+      run_id: r.run_id,
+      project_id: r.project_id,
+      phase: r.phase,
+      project_title: r.project_title,
+      project_status: r.project_status,
+      scene_count: r.scene_count || 0,
+      images_done: r.images_done || 0,
+      error_code: r.error_code,
+      error_message: r.error_message,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+      completed_at: r.completed_at,
+      is_active: !['ready', 'failed', 'canceled'].includes(r.phase),
+    })),
+  })
+})
+
+// ============================================================
 // 5-1. GET /active - ユーザーのアクティブ run を検索
 // ============================================================
 

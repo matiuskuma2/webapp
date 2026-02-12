@@ -4164,6 +4164,185 @@ app.get('/signup', (c) => {
 })
 
 // ============================================================
+// Marunage Dashboard - 丸投げ一覧画面
+// ============================================================
+app.get('/marunage', (c) => {
+  const ASSET_VERSION = getAssetVersion(c.env)
+  return c.html(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>丸投げダッシュボード - MARUMUVI</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+      body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: linear-gradient(135deg, #f5f3ff 0%, #ede9fe 50%, #fdf2f8 100%); min-height: 100vh; }
+      .run-card { transition: all 0.2s; }
+      .run-card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.1); }
+    </style>
+</head>
+<body>
+    <!-- Auth Loading -->
+    <div id="mgAuthLoading" class="flex items-center justify-center min-h-screen">
+      <div class="text-center">
+        <i class="fas fa-spinner fa-spin text-purple-500 text-3xl mb-3"></i>
+        <p class="text-gray-500">認証を確認中...</p>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mgMain" class="hidden max-w-4xl mx-auto px-4 py-8">
+      <!-- Header -->
+      <div class="flex items-center justify-between mb-8">
+        <div>
+          <h1 class="text-2xl font-bold text-gray-800">
+            <i class="fas fa-magic mr-2 text-purple-500"></i>丸投げダッシュボード
+          </h1>
+          <p class="text-sm text-gray-500 mt-1">テキストから動画素材を自動生成</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <a href="/" class="text-gray-400 hover:text-gray-600 text-sm">
+            <i class="fas fa-home mr-1"></i>TOP
+          </a>
+          <a href="/marunage-chat" id="mgNewBtn" class="px-4 py-2 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg font-semibold text-sm hover:from-purple-700 hover:to-indigo-700 shadow-md">
+            <i class="fas fa-plus mr-1"></i>新しく作る
+          </a>
+        </div>
+      </div>
+
+      <!-- Run List -->
+      <div id="mgRunList" class="space-y-3">
+        <div class="text-center py-12 text-gray-400">
+          <i class="fas fa-spinner fa-spin text-2xl mb-3"></i>
+          <p>読み込み中...</p>
+        </div>
+      </div>
+
+      <!-- Empty State -->
+      <div id="mgEmpty" class="hidden text-center py-16">
+        <div class="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <i class="fas fa-film text-purple-500 text-3xl"></i>
+        </div>
+        <h3 class="text-lg font-bold text-gray-600 mb-2">まだ丸投げ動画がありません</h3>
+        <p class="text-sm text-gray-400 mb-6">テキストを貼り付けるだけで、画像+音声を自動生成します</p>
+        <a href="/marunage-chat" class="inline-flex items-center px-6 py-3 bg-gradient-to-r from-purple-600 to-indigo-600 text-white rounded-lg font-semibold hover:from-purple-700 hover:to-indigo-700 shadow-md">
+          <i class="fas fa-plus mr-2"></i>最初の動画素材を作る
+        </a>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script>
+      axios.defaults.withCredentials = true;
+
+      const phaseMap = {
+        'init':              { label: '初期化中', color: 'bg-gray-100 text-gray-600', icon: 'fa-cog fa-spin' },
+        'formatting':        { label: '整形中',   color: 'bg-blue-100 text-blue-700', icon: 'fa-edit' },
+        'awaiting_ready':    { label: '確認待ち', color: 'bg-yellow-100 text-yellow-700', icon: 'fa-clock' },
+        'generating_images': { label: '画像生成中', color: 'bg-purple-100 text-purple-700', icon: 'fa-image' },
+        'generating_audio':  { label: '音声生成中', color: 'bg-indigo-100 text-indigo-700', icon: 'fa-volume-up' },
+        'ready':             { label: '完成',     color: 'bg-green-100 text-green-700', icon: 'fa-check-circle' },
+        'failed':            { label: 'エラー',   color: 'bg-red-100 text-red-700', icon: 'fa-exclamation-triangle' },
+        'canceled':          { label: '中断',     color: 'bg-gray-200 text-gray-500', icon: 'fa-ban' },
+      };
+
+      async function mgInit() {
+        try {
+          const authRes = await axios.get('/api/auth/me');
+          if (!authRes.data.authenticated) { window.location.href = '/login'; return; }
+        } catch { window.location.href = '/login'; return; }
+
+        document.getElementById('mgAuthLoading').classList.add('hidden');
+        document.getElementById('mgMain').classList.remove('hidden');
+        await mgLoadRuns();
+      }
+
+      async function mgLoadRuns() {
+        try {
+          const res = await axios.get('/api/marunage/runs');
+          const runs = res.data.runs || [];
+
+          if (runs.length === 0) {
+            document.getElementById('mgRunList').classList.add('hidden');
+            document.getElementById('mgEmpty').classList.remove('hidden');
+            return;
+          }
+
+          document.getElementById('mgEmpty').classList.add('hidden');
+          document.getElementById('mgRunList').classList.remove('hidden');
+          document.getElementById('mgRunList').innerHTML = runs.map(r => mgRenderCard(r)).join('');
+        } catch (err) {
+          console.error('Load runs failed:', err);
+          document.getElementById('mgRunList').innerHTML = '<p class="text-center text-red-500">読み込みに失敗しました</p>';
+        }
+      }
+
+      function mgRenderCard(r) {
+        const ph = phaseMap[r.phase] || { label: r.phase, color: 'bg-gray-100 text-gray-600', icon: 'fa-question' };
+        const date = new Date(r.created_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const updatedDate = r.updated_at ? new Date(r.updated_at).toLocaleDateString('ja-JP', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+
+        let progress = '';
+        if (r.scene_count > 0) {
+          progress = r.images_done + '/' + r.scene_count + '枚';
+        }
+
+        let actions = '';
+        if (r.is_active) {
+          actions = '<a href="/marunage-chat?run=' + r.run_id + '" class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700"><i class="fas fa-play mr-1"></i>続ける</a>'
+                  + ' <button onclick="mgCancel(' + r.project_id + ')" class="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-300"><i class="fas fa-stop mr-1"></i>中断</button>';
+        } else if (r.phase === 'ready') {
+          actions = '<a href="/projects/' + r.project_id + '" class="px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700"><i class="fas fa-edit mr-1"></i>プロジェクト</a>';
+        } else if (r.phase === 'failed') {
+          actions = '<a href="/marunage-chat?run=' + r.run_id + '" class="px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-semibold hover:bg-red-700"><i class="fas fa-redo mr-1"></i>リトライ</a>'
+                  + ' <button onclick="mgCancel(' + r.project_id + ')" class="px-3 py-1.5 bg-gray-200 text-gray-600 rounded-lg text-xs hover:bg-gray-300"><i class="fas fa-trash mr-1"></i>削除</button>';
+        }
+
+        return '<div class="run-card bg-white rounded-xl p-4 shadow-sm border border-gray-100">'
+          + '<div class="flex items-center justify-between">'
+          + '  <div class="flex-1 min-w-0">'
+          + '    <div class="flex items-center gap-2 mb-1">'
+          + '      <span class="text-xs px-2 py-0.5 rounded-full font-semibold ' + ph.color + '"><i class="fas ' + ph.icon + ' mr-1"></i>' + ph.label + '</span>'
+          + '      <span class="text-xs text-gray-400">#' + r.project_id + '</span>'
+          + (progress ? '      <span class="text-xs text-gray-400"><i class="fas fa-image mr-0.5"></i>' + progress + '</span>' : '')
+          + '    </div>'
+          + '    <h3 class="font-semibold text-gray-800 text-sm truncate">' + mgEscape(r.project_title || '無題') + '</h3>'
+          + '    <p class="text-xs text-gray-400 mt-0.5">' + date
+          + (updatedDate && updatedDate !== date ? ' → ' + updatedDate : '') + '</p>'
+          + (r.error_message ? '<p class="text-xs text-red-500 mt-1 truncate"><i class="fas fa-exclamation-circle mr-1"></i>' + mgEscape(r.error_message) + '</p>' : '')
+          + '  </div>'
+          + '  <div class="flex items-center gap-2 ml-4 flex-shrink-0">' + actions + '</div>'
+          + '</div>'
+          + '</div>';
+      }
+
+      async function mgCancel(projectId) {
+        if (!confirm('この処理を中断しますか？')) return;
+        try {
+          await axios.post('/api/marunage/' + projectId + '/cancel');
+          await mgLoadRuns();
+        } catch (err) {
+          alert('中断に失敗しました: ' + (err.response?.data?.error?.message || err.message));
+        }
+      }
+
+      function mgEscape(str) {
+        const div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+      }
+
+      mgInit();
+    </script>
+</body>
+</html>
+  `)
+})
+
+// ============================================================
 // Marunage Chat MVP - 体験C 専用エントリ
 // Ref: docs/MARUNAGE_EXPERIENCE_SPEC_v1.md
 // ============================================================

@@ -141,8 +141,15 @@ async function mcCheckAuth() {
     document.getElementById('mcAuthLoading').classList.add('hidden');
     document.getElementById('mcShell').classList.remove('hidden');
     
-    // Check for active run
-    await mcCheckActiveRun();
+    // Check URL for ?run=:runId (from dashboard)
+    const urlParams = new URLSearchParams(window.location.search);
+    const runParam = urlParams.get('run');
+    
+    if (runParam) {
+      // Resume specific run from dashboard
+      await mcResumeRun(parseInt(runParam));
+    }
+    // If no ?run= param, stay in idle (new creation mode)
   } catch (err) {
     console.error('Auth check failed:', err);
     window.location.href = '/login';
@@ -150,31 +157,32 @@ async function mcCheckAuth() {
 }
 
 // ============================================================
-// Check Active Run (resume on revisit)
+// Resume specific run (from dashboard link)
 // ============================================================
 
-async function mcCheckActiveRun() {
+async function mcResumeRun(runId) {
   try {
+    // Find the run via /active or by checking status
     const res = await axios.get('/api/marunage/active');
-    console.log('[Marunage] Active run check:', res.data);
+    console.log('[Marunage] Resume run check:', res.data);
     if (res.data.run_id) {
       MC.runId = res.data.run_id;
       MC.projectId = res.data.project_id;
       MC.phase = res.data.phase;
       
       document.getElementById('mcProjectTitle').textContent = 'Project #' + MC.projectId;
-      mcAddSystemMessage('前回の処理を再開しています... (Phase: ' + MC.phase + ')');
+      mcAddSystemMessage('処理を再開しています... (Phase: ' + MC.phase + ')');
       mcSetUIState('processing');
       mcStartPolling();
     } else {
-      console.log('[Marunage] No active run found');
+      mcAddSystemMessage('指定された処理は見つかりませんでした。新しくテキストを入力してください。', 'error');
     }
   } catch (err) {
     if (err.response?.status === 404) {
-      console.log('[Marunage] No active run (404)');
+      mcAddSystemMessage('この処理は既に完了または中断されています。新しくテキストを入力してください。');
       return;
     }
-    console.warn('Active run check failed:', err);
+    console.warn('Resume run failed:', err);
   }
 }
 
@@ -238,17 +246,26 @@ async function mcSendMessage() {
     const errMsg = err.response?.data?.error?.message || 'エラーが発生しました';
     
     if (err.response?.status === 409) {
-      // Already has an active run
+      // Already has an active run — guide to dashboard
       const details = err.response?.data?.error?.details;
-      if (details?.run_id) {
-        MC.runId = details.run_id;
-        MC.projectId = details.project_id;
-        MC.phase = details.phase;
-        mcAddSystemMessage('既存の処理を再開しています...');
-        mcSetUIState('processing');
-        mcStartPolling();
-        return;
-      }
+      const container = document.getElementById('mcChatMessages');
+      const div = document.createElement('div');
+      div.className = 'flex justify-start';
+      div.innerHTML = '<div class="chat-bubble bg-yellow-50 text-yellow-800 border border-yellow-200">'
+        + '<p class="font-semibold mb-2"><i class="fas fa-exclamation-triangle mr-1"></i>処理中のプロジェクトがあります</p>'
+        + '<p class="text-sm mb-3">前回の処理がまだ進行中です。先にそちらを完了または中断してから、新しく作成できます。</p>'
+        + '<div class="flex gap-2">'
+        + (details?.run_id
+          ? '<a href="/marunage-chat?run=' + details.run_id + '" class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-semibold hover:bg-purple-700 no-underline"><i class="fas fa-play mr-1"></i>続ける</a>'
+          : '')
+        + '<a href="/marunage" class="px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-xs hover:bg-gray-300 no-underline"><i class="fas fa-list mr-1"></i>一覧を見る</a>'
+        + '</div>'
+        + '</div>';
+      container.appendChild(div);
+      container.scrollTop = container.scrollHeight;
+      document.getElementById('mcSendBtn').disabled = false;
+      input.disabled = false;
+      return;
     }
     
     mcAddSystemMessage(`エラー: ${errMsg}`, 'error');
@@ -718,6 +735,14 @@ async function mcCancel() {
     mcStopPolling();
     mcAddSystemMessage('処理を中断しました。');
     mcSetUIState('idle');
+    // Show dashboard link
+    const container = document.getElementById('mcChatMessages');
+    const div = document.createElement('div');
+    div.className = 'flex justify-start';
+    div.innerHTML = '<div class="chat-bubble bg-gray-50 text-gray-700">'
+      + '<a href="/marunage" class="text-purple-600 hover:underline font-semibold"><i class="fas fa-list mr-1"></i>ダッシュボードに戻る</a>'
+      + '</div>';
+    container.appendChild(div);
   } catch (err) {
     console.error('Cancel error:', err);
   }
@@ -795,6 +820,9 @@ function mcShowReadyActions() {
         <button onclick="mcStartNew()" class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm font-semibold hover:bg-purple-700">
           <i class="fas fa-plus mr-1"></i>新しく作る
         </button>
+        <a href="/marunage" class="inline-flex items-center px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-sm hover:bg-gray-300 no-underline">
+          <i class="fas fa-list mr-1"></i>一覧に戻る
+        </a>
       </div>
     </div>
   `;
