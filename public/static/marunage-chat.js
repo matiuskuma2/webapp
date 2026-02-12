@@ -39,6 +39,9 @@ const MC = {
 
   // Advance debounce
   _lastAdvanceTime: 0,
+
+  // Polling guard (prevent concurrent mcPoll execution)
+  _isPolling: false,
 };
 
 // ============================================================
@@ -296,6 +299,8 @@ function mcStopPolling() {
 
 async function mcPoll() {
   if (!MC.projectId) return;
+  if (MC._isPolling) return; // Prevent concurrent polls
+  MC._isPolling = true;
   
   try {
     const res = await axios.get(`/api/marunage/${MC.projectId}/status`);
@@ -333,6 +338,8 @@ async function mcPoll() {
       mcAddSystemMessage('処理が見つかりませんでした。', 'error');
       mcSetUIState('idle');
     }
+  } finally {
+    MC._isPolling = false;
   }
 }
 
@@ -352,11 +359,17 @@ function mcShouldAdvance(data) {
       return p.scenes_ready.utterances_ready && p.scenes_ready.visible_count > 0;
       
     case 'generating_images':
-      // Advance if done, or if all images completed with none generating,
-      // or if there are pending images with no generating (re-kick needed)
-      return p.images.state === 'done' || 
-             (p.images.generating === 0 && p.images.completed > 0) ||
-             (p.images.pending > 0 && p.images.generating === 0);
+      // Advance when:
+      // 1. All done (state='done') → audio transition
+      // 2. Some completed, none generating, none pending → audio transition  
+      // 3. Pending images exist, none generating → kick 1 image
+      // 4. Failed images exist, none generating/pending → trigger retry
+      if (p.images.state === 'done') return true;
+      if (p.images.generating > 0) return false; // wait while generating
+      if (p.images.pending > 0) return true; // kick next image
+      if (p.images.completed > 0 && p.images.failed === 0) return true; // all done
+      if (p.images.failed > 0) return true; // trigger retry logic
+      return false;
       
     case 'generating_audio':
       return p.audio.state === 'done';

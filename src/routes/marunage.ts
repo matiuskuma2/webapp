@@ -20,7 +20,7 @@
  * === Issue-2 Scope (Format & Image Generation) ===
  * - POST /start 後 → waitUntil で format 起動 (HTTP 経由)
  * - 5シーン収束 (advance formatting→awaiting_ready で超過シーン非表示)
- * - advance awaiting_ready→generating_images → waitUntil で画像生成起動
+ * - advance awaiting_ready→generating_images → 1枚ずつ直接生成 (waitUntil不使用)
  * - generating_images の自動リトライ (最大3回、失敗画像のみ再生成)
  * 
  * === Deferred to Issue-3 ===
