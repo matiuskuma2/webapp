@@ -1543,9 +1543,9 @@ marunage.post('/:projectId/advance', async (c) => {
           
           // Create image_generations record
           const insertResult = await c.env.DB.prepare(`
-            INSERT INTO image_generations (scene_id, status, provider, model, is_active)
-            VALUES (?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
-          `).bind(nextScene.id).run()
+            INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active)
+            VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+          `).bind(nextScene.id, prompt).run()
           const genId = insertResult.meta.last_row_id as number
           
           // Generate image directly (await, not waitUntil)
