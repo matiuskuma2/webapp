@@ -1308,11 +1308,34 @@ marunage.post('/:projectId/advance', async (c) => {
   if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No active run for this project')
   if (run.started_by_user_id !== user.id) return errorJson(c, MARUNAGE_ERRORS.FORBIDDEN, 'Not your project')
 
-  // Lock check
+  // Lock check — but allow re-kick if stuck in generating_images with no progress
   if (run.locked_until) {
     const lockExpiry = new Date(run.locked_until).getTime()
     if (Date.now() < lockExpiry) {
-      return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run is locked. Please wait.', { locked_until: run.locked_until })
+      // Check if we're in generating_images with no image records (dead waitUntil)
+      if (run.phase === 'generating_images') {
+        const stuckCheck = await c.env.DB.prepare(`
+          SELECT
+            SUM(CASE WHEN ig.id IS NULL THEN 1 ELSE 0 END) AS no_image,
+            SUM(CASE WHEN ig.status IN ('pending','generating') THEN 1 ELSE 0 END) AS in_progress
+          FROM scenes s
+          LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+          WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+        `).bind(projectId).first<{ no_image: number; in_progress: number }>()
+        const noImage = stuckCheck?.no_image || 0
+        const inProgress = stuckCheck?.in_progress || 0
+        if (noImage > 0 && inProgress === 0) {
+          console.log(`[Marunage:Advance] Lock bypassed: generating_images stuck with ${noImage} missing images, clearing lock`)
+          await c.env.DB.prepare(`
+            UPDATE marunage_runs SET locked_at = NULL, locked_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(run.id).run()
+          // Fall through to advance logic
+        } else {
+          return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run is locked. Please wait.', { locked_until: run.locked_until })
+        }
+      } else {
+        return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run is locked. Please wait.', { locked_until: run.locked_until })
+      }
     }
   }
 
@@ -1417,9 +1440,9 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
-        // Issue-2: Set lock + transition + start image generation
-        const lockUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString()  // 10 min for image gen
-        const ok = await transitionPhaseWithLock(c.env.DB, run.id, 'awaiting_ready', 'generating_images', lockUntil)
+        // Issue-2: Transition to generating_images (no lock, no waitUntil)
+        // Images will be generated 1-by-1 via advance calls from frontend polling
+        const ok = await transitionPhase(c.env.DB, run.id, 'awaiting_ready', 'generating_images')
         if (!ok) {
           return c.json({
             run_id: run.id,
@@ -1429,14 +1452,6 @@ marunage.post('/:projectId/advance', async (c) => {
             message: 'Already transitioned',
           })
         }
-
-        // Issue-2: Start image generation via waitUntil
-        c.executionCtx.waitUntil(
-          marunageGenerateImages(
-            c.env.DB, c.env.R2, run.id, projectId, config,
-            user.id, c.env, 'full'
-          ).catch(err => console.error(`[Marunage:Image] waitUntil error:`, err))
-        )
 
         return c.json({
           run_id: run.id,
@@ -1469,21 +1484,106 @@ marunage.post('/:projectId/advance', async (c) => {
 
         console.log(`[Marunage:Advance:Images] project=${projectId} completed=${completed} generating=${generating} failed=${failed} noImage=${noImage}`)
 
-        // If there are scenes with no image record, re-kick image generation (1 image at a time)
+        // If there are scenes with no image record, generate ONE image directly (not via waitUntil)
+        // This avoids Cloudflare Workers waitUntil timeout for multiple images.
+        // Frontend polls every 10s → advance → 1 image → repeat until all done.
         if (noImage > 0 && generating === 0) {
-          console.log(`[Marunage:Advance:Images] Re-kicking image generation for ${noImage} scenes without records`)
-          c.executionCtx.waitUntil(
-            marunageGenerateImages(
-              c.env.DB, c.env.R2, run.id, projectId, config,
-              user.id, c.env, 'full'
-            ).catch(err => console.error(`[Marunage:Image] re-kick waitUntil error:`, err))
-          )
+          console.log(`[Marunage:Advance:Images] Generating 1 image directly (${noImage} remaining)`)
+          
+          const aspectRatio = config.output_preset === 'short_vertical' ? '9:16' : '16:9'
+          
+          // Resolve API key
+          const billing = user.id
+            ? await resolveBillingContext(c.env.DB, user.id)
+            : { billingSource: 'system' as BillingSource, effectiveUserId: null, sponsorUserId: null }
+          const keyResult = await resolveProviderKey(c.env.DB, billing, 'gemini', c.env.GEMINI_API_KEY, c.env.ENCRYPTION_KEY)
+          if (!keyResult) {
+            console.error(`[Marunage:Advance:Images] No Gemini API key`)
+            await transitionPhase(c.env.DB, run.id, 'generating_images', 'failed', {
+              error_code: 'NO_API_KEY',
+              error_message: `No Gemini API key configured`,
+              error_phase: 'generating_images',
+            })
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: 'failed',
+              action: 'failed',
+              message: 'APIキーが設定されていません',
+            })
+          }
+          
+          // Find first scene without image
+          const nextScene = await c.env.DB.prepare(`
+            SELECT s.id, s.idx, s.image_prompt
+            FROM scenes s
+            LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+            WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
+            ORDER BY s.idx ASC LIMIT 1
+          `).bind(projectId).first<{ id: number; idx: number; image_prompt: string }>()
+          
+          if (!nextScene) {
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'waiting',
+              message: 'No scene without image found',
+            })
+          }
+          
+          // Build prompt
+          let prompt = nextScene.image_prompt || ''
+          try {
+            prompt = await composeStyledPrompt(c.env.DB, projectId, nextScene.id, prompt)
+          } catch (e) {
+            console.warn(`[Marunage:Advance:Images] Style composition failed:`, e)
+          }
+          if (!prompt) prompt = `A scene from a video presentation. Scene index: ${nextScene.idx}`
+          
+          // Create image_generations record
+          const insertResult = await c.env.DB.prepare(`
+            INSERT INTO image_generations (scene_id, project_id, status, provider, model, is_active)
+            VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+          `).bind(nextScene.id, projectId).run()
+          const genId = insertResult.meta.last_row_id as number
+          
+          // Generate image directly (await, not waitUntil)
+          console.log(`[Marunage:Advance:Images] Calling Gemini for scene ${nextScene.id} (idx=${nextScene.idx})`)
+          const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any)
+          
+          if (imageResult.success && imageResult.imageData) {
+            // Upload to R2
+            const r2Key = `projects/${projectId}/scenes/${nextScene.id}/image_${genId}.png`
+            await c.env.R2.put(r2Key, imageResult.imageData, {
+              httpMetadata: { contentType: 'image/png' },
+            })
+            await c.env.DB.prepare(`
+              UPDATE image_generations
+              SET status = 'completed', r2_key = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(r2Key, genId).run()
+            // Also update scene's image_status for backward compat
+            await c.env.DB.prepare(`
+              UPDATE scenes SET image_status = 'completed', image_r2_key = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind(r2Key, nextScene.id).run()
+            console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} image completed`)
+          } else {
+            await c.env.DB.prepare(`
+              UPDATE image_generations
+              SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).bind((imageResult.error || 'Unknown error').substring(0, 500), genId).run()
+            console.error(`[Marunage:Advance:Images] Scene ${nextScene.idx} image failed: ${imageResult.error}`)
+          }
+          
           return c.json({
             run_id: run.id,
             previous_phase: currentPhase,
             new_phase: currentPhase,
             action: 'images_started',
-            message: `画像生成を再開しました (${noImage}枚未生成)`,
+            message: `画像生成中 (シーン${nextScene.idx + 1})`,
           })
         }
 

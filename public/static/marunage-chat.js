@@ -312,7 +312,7 @@ async function mcPoll() {
     // Check shouldAdvance (debounce: min 10s between advance calls)
     if (mcShouldAdvance(data)) {
       const now = Date.now();
-      if (now - MC._lastAdvanceTime >= 10000) {
+      if (now - MC._lastAdvanceTime >= 5000) {
         MC._lastAdvanceTime = now;
         console.log('[Marunage] shouldAdvance=true, calling mcAdvance()');
         await mcAdvance();
@@ -374,7 +374,8 @@ async function mcAdvance() {
   if (!MC.projectId) return;
   
   try {
-    const res = await axios.post(`/api/marunage/${MC.projectId}/advance`);
+    // Longer timeout: advance may generate 1 image synchronously (10-30s)
+    const res = await axios.post(`/api/marunage/${MC.projectId}/advance`, {}, { timeout: 60000 });
     const data = res.data;
     
     if (data.action === 'waiting' || data.action === 'already_advanced') {
@@ -394,7 +395,7 @@ async function mcAdvance() {
         mcAddSystemMessage(`${data.message}`);
         break;
       case 'images_started':
-        mcAddSystemMessage('画像生成を開始しました...');
+        mcAddSystemMessage(data.message || '画像生成中...');
         break;
       case 'audio_started':
         mcAddSystemMessage('ナレーション音声を生成中...');
