@@ -130,8 +130,9 @@ async function transitionPhase(
     sql += `, completed_at = CURRENT_TIMESTAMP`
   }
 
-  // Clear lock on terminal phases
-  if (TERMINAL_PHASES.includes(to)) {
+  // Clear lock on terminal phases AND on generating_audio
+  // (generating_audio advance handler polls audio job status, lock is not needed)
+  if (TERMINAL_PHASES.includes(to) || to === 'generating_audio') {
     sql += `, locked_at = NULL, locked_until = NULL`
   }
 
@@ -1349,6 +1350,14 @@ marunage.post('/:projectId/advance', async (c) => {
         } else {
           return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run is locked. Please wait.', { locked_until: run.locked_until })
         }
+      } else if (run.phase === 'generating_audio') {
+        // generating_audio phase: always allow advance to check audio job status.
+        // Lock was set during transition but advance needs to poll the audio job.
+        console.log(`[Marunage:Advance] Lock bypassed: generating_audio phase, clearing lock to allow audio status polling`)
+        await c.env.DB.prepare(`
+          UPDATE marunage_runs SET locked_at = NULL, locked_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(run.id).run()
+        // Fall through to advance logic
       } else {
         return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run is locked. Please wait.', { locked_until: run.locked_until })
       }
@@ -1652,8 +1661,9 @@ marunage.post('/:projectId/advance', async (c) => {
         // All completed → transition to generating_audio
         // Explicitly check noImage === 0 and generating === 0 for safety
         if (completed > 0 && failed === 0 && noImage === 0 && generating === 0) {
-          const lockUntil = new Date(Date.now() + 10 * 60 * 1000).toISOString() // 10min lock for audio
-          const ok = await transitionPhaseWithLock(c.env.DB, run.id, 'generating_images', 'generating_audio', lockUntil)
+          // No lock needed: advance handler checks audio_job_id & job status on each poll.
+          // The 10-min lock was blocking subsequent advance calls (409 CONFLICT bug).
+          const ok = await transitionPhase(c.env.DB, run.id, 'generating_images', 'generating_audio')
           if (!ok) {
             return c.json({
               run_id: run.id,

@@ -458,6 +458,11 @@ async function mcAdvance() {
     console.error('Advance error:', err);
     if (err.response) {
       console.error('Advance error response:', JSON.stringify(err.response.data));
+      // 409 CONFLICT (lock): don't treat as fatal — next poll cycle will retry
+      if (err.response.status === 409) {
+        console.log('[Marunage] Advance blocked by lock (409). Will retry on next poll.');
+        return; // Do not break the polling loop
+      }
     }
   }
 }
