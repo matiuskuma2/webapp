@@ -29,6 +29,7 @@ const MC = {
   // Settings (pre-start)
   selectedVoice: { provider: 'google', voice_id: 'ja-JP-Neural2-B' },
   selectedPreset: 'yt_long',
+  selectedSceneCount: 5,
   
   // Auth
   currentUser: null,
@@ -233,6 +234,7 @@ async function mcSendMessage() {
       title: `丸投げ ${new Date().toLocaleDateString('ja-JP')}`,
       narration_voice: MC.selectedVoice,
       output_preset: MC.selectedPreset,
+      target_scene_count: MC.selectedSceneCount,
     });
     
     MC.runId = res.data.run_id;
@@ -246,9 +248,10 @@ async function mcSendMessage() {
     mcSetUIState('processing');
     mcStartPolling();
     
-    // Hide voice/preset selectors
+    // Hide voice/preset/scene selectors
     document.getElementById('mcVoiceSelect').classList.add('hidden');
     document.getElementById('mcOutputPreset').classList.add('hidden');
+    document.getElementById('mcSceneCount').classList.add('hidden');
     
   } catch (err) {
     console.error('Start error:', err);
@@ -939,6 +942,12 @@ function selectPreset(el) {
   document.querySelectorAll('#mcOutputPreset .voice-chip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
   MC.selectedPreset = el.dataset.preset;
+}
+
+function selectSceneCount(el) {
+  document.querySelectorAll('#mcSceneCount .voice-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  MC.selectedSceneCount = parseInt(el.dataset.scenes) || 5;
 }
 
 // ============================================================

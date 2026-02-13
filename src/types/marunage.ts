@@ -104,6 +104,7 @@ export interface MarunageStartRequest {
     voice_id: string
   }
   output_preset?: string   // 'yt_long' | 'short_vertical'
+  target_scene_count?: number  // 3-10, default 5
 }
 
 export interface MarunageStatusResponse {

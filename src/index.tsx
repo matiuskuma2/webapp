@@ -4577,6 +4577,27 @@ app.get('/marunage-chat', (c) => {
                 </div>
             </div>
             
+            <!-- Scene Count (shown before start) -->
+            <div id="mcSceneCount" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                <label class="text-xs font-semibold text-gray-600 mb-1 block">
+                    <i class="fas fa-images mr-1 text-blue-500"></i>シーン数
+                </label>
+                <div class="flex gap-1.5">
+                    <button class="voice-chip" data-scenes="3" onclick="selectSceneCount(this)">
+                        3枚 <span class="text-[10px] ml-0.5 opacity-60">速い</span>
+                    </button>
+                    <button class="voice-chip active" data-scenes="5" onclick="selectSceneCount(this)">
+                        5枚 <span class="text-[10px] ml-0.5 opacity-60">標準</span>
+                    </button>
+                    <button class="voice-chip" data-scenes="7" onclick="selectSceneCount(this)">
+                        7枚
+                    </button>
+                    <button class="voice-chip" data-scenes="10" onclick="selectSceneCount(this)">
+                        10枚 <span class="text-[10px] ml-0.5 opacity-60">高品質</span>
+                    </button>
+                </div>
+            </div>
+            
             <!-- Chat Input -->
             <div class="px-4 py-3 bg-white border-t border-gray-200">
                 <div class="flex items-end gap-2">

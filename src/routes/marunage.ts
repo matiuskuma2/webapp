@@ -358,10 +358,13 @@ async function marunageFormatStartup(
  * 
  * リトライ: 呼び出し元（advance）が retry_count を管理。この関数は1回分の生成のみ。
  */
-const GEMINI_MODEL = 'gemini-3-pro-image-preview'
+// Image generation model:
+//   gemini-3-pro-image-preview   → highest quality, but slow (avg 19s/image)
+//   gemini-2.5-flash-image       → Flash-tier speed, Stable, good quality
+const GEMINI_MODEL = 'gemini-2.5-flash-image'
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
 const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数 (25s timeout × 2 = max 50s, within CF Workers wall time)
-const IMAGE_GEN_DELAY = 4500       // 画像間の待機 (ms) — Gemini 15 RPM に対応
+const IMAGE_GEN_DELAY = 3000       // 画像間の待機 (ms) — Flash model has higher RPM allowance
 const MAX_R2_RETRIES = 3
 
 // ============================================================
@@ -1014,6 +1017,9 @@ marunage.post('/start', async (c) => {
     return errorJson(c, MARUNAGE_ERRORS.INVALID_REQUEST, 'Invalid output_preset')
   }
 
+  // Target scene count (3-10, default 5)
+  const targetSceneCount = Math.max(3, Math.min(10, body.target_scene_count || 5))
+
   // Narration voice
   const narrationVoice = {
     provider: body.narration_voice?.provider || 'google',
@@ -1023,6 +1029,7 @@ marunage.post('/start', async (c) => {
   // Build config snapshot
   const config: MarunageConfig = {
     ...DEFAULT_CONFIG,
+    target_scene_count: targetSceneCount,
     output_preset: outputPreset,
     narration_voice: {
       provider: narrationVoice.provider as any,
