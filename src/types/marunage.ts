@@ -3,36 +3,41 @@
  * 
  * Ref: docs/MARUNAGE_CHAT_MVP_PLAN_v3.md §2-3, §3
  * Ref: docs/MARUNAGE_EXPERIENCE_SPEC_v1.md §13
+ * Ref: docs/16_MARUNAGE_VIDEO_BUILD_SSOT.md (P1 video build design)
  */
 
 // ============================================================
 // Phase & Transitions
 // ============================================================
 
+/**
+ * MarunagePhase — matches DB CHECK constraint in migration 0050.
+ * 
+ * P1 scope: phase stays 'ready' even during video build.
+ * Video build progress is tracked via video_builds table lookup.
+ * P2 will add 'building_video' and 'video_ready' phases after
+ * CHECK constraint is removed.
+ */
 export type MarunagePhase =
   | 'init'
   | 'formatting'
   | 'awaiting_ready'
   | 'generating_images'
   | 'generating_audio'
-  | 'building_video'    // P1: video build phase
-  | 'video_ready'       // P1: video complete (new terminal)
-  | 'ready'             // MVP terminal (material ready, video not built)
+  | 'ready'             // terminal (material + optional video build)
   | 'failed'
   | 'canceled'
 
-export const TERMINAL_PHASES: readonly MarunagePhase[] = ['ready', 'video_ready', 'failed', 'canceled'] as const
+export const TERMINAL_PHASES: readonly MarunagePhase[] = ['ready', 'failed', 'canceled'] as const
 
 export const ALLOWED_TRANSITIONS: Record<MarunagePhase, readonly MarunagePhase[]> = {
   'init':              ['formatting'],
   'formatting':        ['awaiting_ready', 'failed'],
   'awaiting_ready':    ['generating_images', 'failed', 'canceled'],
   'generating_images': ['generating_audio', 'failed', 'canceled'],
-  'generating_audio':  ['building_video', 'ready', 'failed', 'canceled'],  // ready = skip video; building_video = full pipeline
-  'building_video':    ['video_ready', 'failed', 'canceled'],
-  'video_ready':       [],  // terminal
-  'ready':             ['building_video'],  // can start video build from ready state
-  'failed':            ['formatting', 'awaiting_ready', 'generating_images', 'generating_audio', 'building_video'],  // retry
+  'generating_audio':  ['ready', 'failed', 'canceled'],
+  'ready':             [],  // terminal — video build runs in background via video_builds table
+  'failed':            ['formatting', 'awaiting_ready', 'generating_images', 'generating_audio'],  // retry
   'canceled':          [],  // terminal
 } as const
 
@@ -42,7 +47,6 @@ export const RETRY_ROLLBACK_MAP: Record<string, MarunagePhase> = {
   'awaiting_ready':    'awaiting_ready',
   'generating_images': 'awaiting_ready',   // re-generate from awaiting_ready
   'generating_audio':  'generating_images', // re-generate audio after images confirmed
-  'building_video':    'building_video',    // retry video build directly
 } as const
 
 export const MAX_RETRY_COUNT = 5
@@ -90,7 +94,7 @@ export interface MarunageRunRow {
   error_phase: string | null
   retry_count: number
   audio_job_id: number | null
-  video_build_id: number | null  // P1: link to video_builds table
+  video_build_id: number | null  // P1: link to video_builds table (populated on ready + flag ON)
   locked_at: string | null
   locked_until: string | null
   created_at: string
@@ -160,7 +164,7 @@ export interface MarunageStatusResponse {
       failed: number
     }
     video: {
-      state: 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+      state: 'pending' | 'running' | 'done' | 'failed' | 'off'
       build_id: number | null
       build_status: string | null
       progress_percent: number | null
