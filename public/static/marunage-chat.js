@@ -95,7 +95,7 @@ function mcUpdateLiveProgress(data) {
       break;
     }
     case 'ready':
-      msg = '完成しました！';
+      msg = '✅ 素材が完成しました！プロジェクト詳細画面で動画を組み立てできます';
       break;
     case 'failed':
       msg = 'エラーが発生しました';
@@ -443,7 +443,13 @@ async function mcAdvance() {
         mcAddSystemMessage('音声生成を再起動しました...');
         break;
       case 'completed':
-        mcAddSystemMessage('完成しました！左のボードで結果を確認してください。', 'success');
+        mcAddSystemMessage(
+          '<div>🎉 素材がすべて完成しました！</div>'
+          + '<div class="mt-2 text-sm">画像 + ナレーション音声が生成されました。</div>'
+          + '<div class="mt-2"><a href="/projects/' + MC.projectId + '" class="inline-flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors no-underline"><i class="fas fa-film"></i> プロジェクト詳細を開く</a></div>'
+          + '<div class="mt-1 text-xs text-gray-500">↑ ここから動画のプレビュー・書き出しができます</div>',
+          'success'
+        );
         mcSetUIState('ready');
         break;
       case 'failed':
@@ -666,7 +672,14 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
     }
     
     const imgContent = scene.image_url
-      ? `<img src="${scene.image_url}" alt="Scene ${idx + 1}" class="w-full aspect-video object-cover" loading="lazy">`
+      ? `<img src="${scene.image_url}" alt="Scene ${idx + 1}" class="scene-card-img" style="object-fit:cover;display:block;" loading="lazy"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+         <div class="scene-card-img text-gray-400" style="display:none;">
+           <div class="text-center">
+             <i class="fas fa-exclamation-triangle text-3xl mb-1"></i>
+             <p class="text-xs">画像読込エラー</p>
+           </div>
+         </div>`
       : `<div class="scene-card-img text-gray-400">
            <div class="text-center">
              <i class="fas ${scene.image_status === 'generating' ? 'fa-spinner fa-spin' : 'fa-image'} text-3xl mb-1"></i>

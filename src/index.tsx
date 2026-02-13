@@ -4402,7 +4402,9 @@ app.get('/marunage-chat', (c) => {
         /* ===== Scene cards ===== */
         .scene-card { background: #fff; border-radius: 0.75rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; transition: all 0.3s; }
         .scene-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-        .scene-card-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #e5e7eb; display: flex; align-items: center; justify-content: center; }
+        .scene-card-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #e5e7eb; }
+        div.scene-card-img { display: flex; align-items: center; justify-content: center; }
+        img.scene-card-img { display: block; }
         .scene-badge { display: inline-flex; align-items: center; padding: 0.15rem 0.5rem; border-radius: 9999px; font-size: 0.65rem; font-weight: 700; }
         
         /* ===== Progress bar ===== */
