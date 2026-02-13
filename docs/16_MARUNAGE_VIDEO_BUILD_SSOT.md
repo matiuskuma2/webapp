@@ -239,28 +239,70 @@ Image generation cost logging is fully covered across all paths:
 
 ## 10. Production Operations
 
+### CRITICAL: Migration order matters
+
+Migrations **must** be applied in order: **0054 → 0055**.
+0055 adds `video_build_attempted_at` / `video_build_error` which depend on the
+`marunage_runs` table already having `video_build_id` (from 0054).
+
+```bash
+# Apply both migrations (wrangler applies them sequentially)
+npx wrangler d1 migrations apply webapp-production --remote
+
+# Verify both are applied
+npx wrangler d1 migrations list webapp-production --remote
+```
+
 ### Pre-deployment checklist
 
-1. Apply migrations 0054 + 0055 remotely
-2. Deploy code
-3. Verify flag is OFF: `SELECT ... FROM system_settings WHERE key = 'MARUNAGE_ENABLE_VIDEO_BUILD'`
-4. Manually test preflight for a known ready project:
-   ```
-   GET /api/projects/:id/video-builds/preflight
-   ```
-5. Turn flag ON when satisfied
+| Step | Action | Why |
+|------|--------|-----|
+| 1 | Apply migrations 0054 + 0055 remotely (in order) | 0055 depends on 0054 |
+| 2 | Deploy code | Flag defaults to OFF — zero behaviour change |
+| 3 | Verify flag is OFF | `SELECT key, value FROM system_settings WHERE key = 'MARUNAGE_ENABLE_VIDEO_BUILD';` (0 rows = OFF) |
+| **4** | **Pick a known `ready` project and manually call preflight** | **This is the most important step before turning ON** |
+| 5 | Turn flag ON only after preflight returns `200 + ready=true` | If preflight returns 401/403 → Cookie issue, builds will silently skip |
 
-### Monitoring queries
+### Step 4 detail: Preflight verification (before flag ON)
+
+```bash
+# Replace :projectId with a real project that has completed images + audio
+curl -v -b "session=YOUR_SESSION_COOKIE" \
+  https://app.marumuviai.com/api/projects/:projectId/video-builds/preflight
+```
+
+**Expected responses and what they mean:**
+
+| Response | Meaning | Action |
+|----------|---------|--------|
+| `200 { ready: true }` | Assets OK, Cookie OK → safe to enable flag | Proceed to step 5 |
+| `200 { ready: false, missing: [...] }` | Assets incomplete → builds would be skipped | Fix assets first |
+| `401` / `403` | Cookie invalid or expired | Flag ON would be "silently doing nothing" — investigate auth |
+| `500` / network error | Server issue | Do not enable until resolved |
+
+> **Why this matters**: If preflight returns 401/403, turning the flag ON is safe (no crash)
+> but meaningless — every trigger will silently skip at Gate 2. The build won't fire and
+> there's no visible error to the user. Test first to avoid "it's ON but nothing happens".
+
+### Post-ON monitoring
+
+After turning the flag ON, monitor these three things:
+
+#### 1. Are builds actually firing?
 
 ```sql
--- Runs with video builds
+-- Runs that attempted video build (should see video_build_attempted_at filled)
 SELECT id, project_id, phase, video_build_id,
        video_build_attempted_at, video_build_error, updated_at
 FROM marunage_runs
 WHERE phase = 'ready' AND video_build_attempted_at IS NOT NULL
 ORDER BY updated_at DESC LIMIT 10;
+```
 
--- Video build success rate
+#### 2. Are builds succeeding or failing?
+
+```sql
+-- Success vs failure breakdown
 SELECT
   CASE WHEN video_build_id IS NOT NULL THEN 'success' ELSE 'failed' END AS outcome,
   COUNT(*) AS count,
@@ -269,8 +311,30 @@ FROM marunage_runs
 WHERE phase = 'ready' AND video_build_attempted_at IS NOT NULL
 GROUP BY outcome, video_build_error
 ORDER BY count DESC;
+```
 
--- Active video builds for marunage runs
+#### 3. Is cooldown kicking in? (failure loop prevention)
+
+```sql
+-- Runs stuck in cooldown (error + recent attempt)
+SELECT id, project_id, video_build_error,
+       video_build_attempted_at,
+       ROUND((julianday('now') - julianday(video_build_attempted_at)) * 24 * 60, 1)
+         AS minutes_since_attempt
+FROM marunage_runs
+WHERE phase = 'ready'
+  AND video_build_error IS NOT NULL
+  AND video_build_attempted_at IS NOT NULL
+ORDER BY video_build_attempted_at DESC LIMIT 10;
+```
+
+> If `video_build_error` keeps appearing with the same message, investigate the root
+> cause (usually auth, missing assets, or AWS config). The 30min cooldown prevents
+> log floods but the underlying issue needs manual resolution.
+
+#### 4. Active video builds for marunage runs
+
+```sql
 SELECT vb.id, vb.project_id, vb.status, vb.progress_percent, vb.download_url
 FROM video_builds vb
 JOIN marunage_runs mr ON mr.video_build_id = vb.id
