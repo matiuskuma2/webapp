@@ -482,7 +482,7 @@ async function generateSingleImage(
           contents: [{ parts: [{ text: enhancedPrompt }] }],
           generationConfig: {
             responseModalities: ['Image'],
-            imageConfig: { aspectRatio, imageSize: '2K' },
+            imageConfig: { aspectRatio },
           },
         }),
         signal: controller.signal,
@@ -692,30 +692,34 @@ async function marunageGenerateImages(
       // Update existing failed record to 'generating'
       await db.prepare(`
         UPDATE image_generations
-        SET status = 'generating', error_message = NULL, r2_key = NULL
+        SET status = 'generating', error_message = NULL, r2_key = NULL, started_at = datetime('now')
         WHERE id = ?
       `).bind(existingImage.id).run()
       genId = existingImage.id
     } else {
       // Create new record
       const insertResult = await db.prepare(`
-        INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active)
-        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+        INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
+        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1, datetime('now'))
       `).bind(scene.id, prompt).run()
       genId = insertResult.meta.last_row_id as number
     }
 
     // Generate image
+    const tImgStart = Date.now()
     console.log(`[Marunage:Image] Generating image for scene ${scene.id} (idx=${scene.idx}), genId=${genId}`)
     const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any)
+    const imgGeminiMs = Date.now() - tImgStart
 
     if (!imageResult.success || !imageResult.imageData) {
-      console.error(`[Marunage:Image] Failed for scene ${scene.id}: ${imageResult.error}`)
+      const imgTotalMs = Date.now() - tImgStart
+      console.error(`[Marunage:Image] Failed for scene ${scene.id}: ${imageResult.error} (gemini=${imgGeminiMs}ms)`)
       await db.prepare(`
         UPDATE image_generations
-        SET status = 'failed', error_message = ?
+        SET status = 'failed', error_message = ?,
+            ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
         WHERE id = ?
-      `).bind((imageResult.error || 'Unknown error').substring(0, 1000), genId).run()
+      `).bind((imageResult.error || 'Unknown error').substring(0, 1000), imgTotalMs, imgGeminiMs, genId).run()
       failed++
 
       // Add delay between attempts even on failure
@@ -724,30 +728,36 @@ async function marunageGenerateImages(
     }
 
     // Upload to R2
+    const tR2UpStart = Date.now()
     const r2Key = buildR2Key(projectId, scene.idx as number, genId)
     const uploadResult = await uploadToR2(r2, r2Key, imageResult.imageData)
+    const imgR2Ms = Date.now() - tR2UpStart
 
     if (!uploadResult.success) {
-      console.error(`[Marunage:Image] R2 upload failed for scene ${scene.id}: ${uploadResult.error}`)
+      const imgTotalMs = Date.now() - tImgStart
+      console.error(`[Marunage:Image] R2 upload failed for scene ${scene.id}: ${uploadResult.error} (gemini=${imgGeminiMs}ms r2=${imgR2Ms}ms)`)
       await db.prepare(`
         UPDATE image_generations
-        SET status = 'failed', error_message = ?
+        SET status = 'failed', error_message = ?,
+            ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
         WHERE id = ?
-      `).bind(`R2 upload failed: ${uploadResult.error}`, genId).run()
+      `).bind(`R2 upload failed: ${uploadResult.error}`, imgTotalMs, imgGeminiMs, imgR2Ms, genId).run()
       failed++
       await sleep(IMAGE_GEN_DELAY)
       continue
     }
 
     // Mark completed
+    const imgTotalMs = Date.now() - tImgStart
     await db.prepare(`
       UPDATE image_generations
-      SET status = 'completed', r2_key = ?
+      SET status = 'completed', r2_key = ?,
+          ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
       WHERE id = ?
-    `).bind(r2Key, genId).run()
+    `).bind(r2Key, imgTotalMs, imgGeminiMs, imgR2Ms, genId).run()
 
     generated++
-    console.log(`[Marunage:Image] ✅ Scene ${scene.id} completed (${generated}/${scenes.length})`)
+    console.log(`[Marunage:Image] ✅ Scene ${scene.id} completed (${generated}/${scenes.length}) total=${imgTotalMs}ms gemini=${imgGeminiMs}ms r2=${imgR2Ms}ms`)
 
     // Delay between generations to respect Gemini rate limits
     await sleep(IMAGE_GEN_DELAY)
@@ -1547,38 +1557,50 @@ marunage.post('/:projectId/advance', async (c) => {
           }
           if (!prompt) prompt = `A scene from a video presentation. Scene index: ${nextScene.idx}`
           
-          // Create image_generations record
+          // ── Timing: overall start ──
+          const t0 = Date.now()
+          
+          // Create image_generations record with started_at
           const insertResult = await c.env.DB.prepare(`
-            INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active)
-            VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1)
+            INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
+            VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1, datetime('now'))
           `).bind(nextScene.id, prompt).run()
           const genId = insertResult.meta.last_row_id as number
           
-          // Generate image directly (await, not waitUntil)
+          // ── Timing: Gemini API call ──
+          const tGeminiStart = Date.now()
           console.log(`[Marunage:Advance:Images] Calling Gemini for scene ${nextScene.id} (idx=${nextScene.idx})`)
           const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any)
+          const geminiMs = Date.now() - tGeminiStart
           
           if (imageResult.success && imageResult.imageData) {
-            // Upload to R2
+            // ── Timing: R2 upload ──
+            const tR2Start = Date.now()
             const r2Key = `projects/${projectId}/scenes/${nextScene.id}/image_${genId}.png`
             await c.env.R2.put(r2Key, imageResult.imageData, {
               httpMetadata: { contentType: 'image/png' },
             })
+            const r2Ms = Date.now() - tR2Start
+            const totalMs = Date.now() - t0
+            
             await c.env.DB.prepare(`
               UPDATE image_generations
-              SET status = 'completed', r2_key = ?
+              SET status = 'completed', r2_key = ?,
+                  ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
               WHERE id = ?
-            `).bind(r2Key, genId).run()
+            `).bind(r2Key, totalMs, geminiMs, r2Ms, genId).run()
             // Note: scenes table does NOT have image_status/image_r2_key columns.
             // Image status is tracked exclusively via image_generations table.
-            console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} image completed, r2_key=${r2Key}`)
+            console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} ✅ completed — total=${totalMs}ms gemini=${geminiMs}ms r2=${r2Ms}ms`)
           } else {
+            const totalMs = Date.now() - t0
             await c.env.DB.prepare(`
               UPDATE image_generations
-              SET status = 'failed', error_message = ?
+              SET status = 'failed', error_message = ?,
+                  ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
               WHERE id = ?
-            `).bind((imageResult.error || 'Unknown error').substring(0, 500), genId).run()
-            console.error(`[Marunage:Advance:Images] Scene ${nextScene.idx} image failed: ${imageResult.error}`)
+            `).bind((imageResult.error || 'Unknown error').substring(0, 500), totalMs, geminiMs, genId).run()
+            console.error(`[Marunage:Advance:Images] Scene ${nextScene.idx} ❌ failed — total=${totalMs}ms gemini=${geminiMs}ms error=${imageResult.error}`)
           }
           
           return c.json({
@@ -1591,19 +1613,23 @@ marunage.post('/:projectId/advance', async (c) => {
         }
 
         if (generating > 0) {
-          // Safety: if image_generations stuck in 'generating' for >2min, mark as failed
-          // Cloudflare Workers have ~30s wall-time limit, so 2min is very generous
+          // Safety: if image_generations stuck in 'generating' for >60s, mark as failed
+          // Gemini + R2 should complete in <30s; 60s is generous
+          // Use COALESCE(started_at, created_at) for backward compat (old rows have no started_at)
           const staleFixed = await c.env.DB.prepare(`
             UPDATE image_generations
-            SET status = 'failed', error_message = 'Timed out (stuck in generating >2min)'
+            SET status = 'failed',
+                error_message = 'Timed out (stuck in generating >60s)',
+                ended_at = datetime('now'),
+                duration_ms = CAST((julianday('now') - julianday(COALESCE(started_at, created_at))) * 86400000 AS INTEGER)
             WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
               AND is_active = 1
               AND status = 'generating'
-              AND created_at < datetime('now', '-2 minutes')
+              AND COALESCE(started_at, created_at) < datetime('now', '-60 seconds')
           `).bind(projectId).run()
           const fixedCount = staleFixed.meta.changes || 0
           if (fixedCount > 0) {
-            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records (>2min)`)
+            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records (>60s)`)
             // Return immediately so next poll re-evaluates with fresh stats
             return c.json({
               run_id: run.id,

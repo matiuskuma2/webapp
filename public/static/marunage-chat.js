@@ -372,9 +372,9 @@ function mcShouldAdvance(data) {
       if (p.images.generating > 0) {
         // Track when we first saw generating status
         if (!MC._generatingSeenSince) MC._generatingSeenSince = Date.now();
-        // If generating for >2min, allow advance so backend can detect stale records
-        if (Date.now() - MC._generatingSeenSince > 120000) {
-          console.log('[Marunage] Generating stuck >2min, allowing advance for stale detection');
+        // If generating for >60s, allow advance so backend can detect stale records
+        if (Date.now() - MC._generatingSeenSince > 60000) {
+          console.log('[Marunage] Generating stuck >60s, allowing advance for stale detection');
           return true;
         }
         return false; // wait while generating (normal case)
