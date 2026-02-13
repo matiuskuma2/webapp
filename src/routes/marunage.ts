@@ -373,6 +373,58 @@ const IMAGE_GEN_DELAY = 5000       // 画像間の待機 (ms) — Pro model need
 const MAX_R2_RETRIES = 3
 
 // ============================================================
+// Cost estimation & logging (Nano Banana Pro)
+// ============================================================
+// 2026-02 Google 公式レート:
+//   Nano Banana Pro (gemini-3-pro-image-preview): $0.134/image (1K/2K)
+//   Nano Banana     (gemini-2.5-flash-image):     $0.039/image
+const COST_PER_IMAGE_USD = 0.134  // Nano Banana Pro rate
+
+async function logImageGenerationCost(
+  db: D1Database,
+  params: {
+    userId: number,
+    projectId: string,
+    sceneId: number,
+    status: 'completed' | 'failed',
+    apiKeySource: string,
+    sponsorUserId: number | null,
+    promptLength: number,
+    errorMessage?: string,
+  }
+): Promise<void> {
+  try {
+    const cost = params.status === 'completed' ? COST_PER_IMAGE_USD : 0
+    await db.prepare(`
+      INSERT INTO image_generation_logs (
+        user_id, project_id, scene_id, character_key,
+        generation_type, provider, model,
+        api_key_source, sponsor_user_id,
+        prompt_length, image_count, image_size, image_quality,
+        estimated_cost_usd, billing_unit, billing_amount,
+        status, error_message, error_code,
+        reference_image_count
+      ) VALUES (?, ?, ?, NULL, 'marunage_batch', 'gemini', ?, ?, ?, ?, 1, NULL, NULL, ?, 'image', 1, ?, ?, NULL, 0)
+    `).bind(
+      params.userId,
+      params.projectId,
+      params.sceneId,
+      GEMINI_MODEL,
+      params.apiKeySource,
+      params.sponsorUserId,
+      params.promptLength,
+      cost,
+      params.status,
+      params.errorMessage ?? null,
+    ).run()
+    console.log(`[Marunage:Cost] scene=${params.sceneId} status=${params.status} cost=$${cost.toFixed(4)} model=${GEMINI_MODEL}`)
+  } catch (e) {
+    // ログ記録の失敗は無視
+    console.error('[Marunage:Cost] Failed to log:', e)
+  }
+}
+
+// ============================================================
 // Issue-2.6: Billing context & API key resolution (SSOT)
 // ============================================================
 // 
@@ -729,6 +781,19 @@ async function marunageGenerateImages(
             ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
         WHERE id = ?
       `).bind((imageResult.error || 'Unknown error').substring(0, 1000), imgTotalMs, imgGeminiMs, genId).run()
+      
+      // Cost log (failed)
+      await logImageGenerationCost(db, {
+        userId: userId || 1,
+        projectId: String(projectId),
+        sceneId: scene.id,
+        status: 'failed',
+        apiKeySource: keyResult.keySource,
+        sponsorUserId: billing.sponsorUserId,
+        promptLength: prompt.length,
+        errorMessage: (imageResult.error || 'Unknown error').substring(0, 500),
+      })
+      
       failed++
 
       // Add delay between attempts even on failure
@@ -767,6 +832,17 @@ async function marunageGenerateImages(
 
     generated++
     console.log(`[Marunage:Image] ✅ Scene ${scene.id} completed (${generated}/${scenes.length}) total=${imgTotalMs}ms gemini=${imgGeminiMs}ms r2=${imgR2Ms}ms`)
+    
+    // Cost log (completed)
+    await logImageGenerationCost(db, {
+      userId: userId || 1,
+      projectId: String(projectId),
+      sceneId: scene.id,
+      status: 'completed',
+      apiKeySource: keyResult.keySource,
+      sponsorUserId: billing.sponsorUserId,
+      promptLength: prompt.length,
+    })
 
     // Delay between generations to respect Gemini rate limits
     await sleep(IMAGE_GEN_DELAY)

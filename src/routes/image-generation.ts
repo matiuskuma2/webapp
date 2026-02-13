@@ -138,19 +138,27 @@ interface ImageGenerationLogParams {
 }
 
 // コスト推定関数（画像生成）
-// 2026-02 Googleの公式レート:
-// - Gemini 2.0/2.5 Flash (image output): $30/1M tokens, ~1290 tokens/image → ~$0.039/image
-// - Gemini Imagen 3: ~$0.03-$0.04/image
-// - gemini-3-pro-image-preview: Gemini native image generation → ~$0.04/image
-// - OpenAI DALL-E 3: ~$0.04/image (1024x1024)
+// 2026-02 Google 公式レート (https://ai.google.dev/gemini-api/docs/pricing):
+//
+// ★ Nano Banana (gemini-2.5-flash-image):
+//   Output: $30/1M tokens, ~1290 tokens/image → $0.039/image
+//
+// ★ Nano Banana Pro (gemini-3-pro-image-preview):
+//   Output: $120/1M tokens, ~1120 tokens/image (1K/2K) → $0.134/image
+//   Output: $120/1M tokens, ~2000 tokens/image (4K) → $0.24/image
+//
+// ★ Imagen 4: $0.02 (fast) / $0.04 (standard) / $0.06 (ultra) per image
+// ★ OpenAI DALL-E 3: ~$0.04/image (1024x1024)
 function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
   if (provider === 'gemini') {
+    // Nano Banana Pro (gemini-3-pro-image-preview)
+    if (model.includes('gemini-3') || model.includes('3-pro-image')) {
+      return 0.134 * imageCount;  // 1K/2K resolution
+    }
     // Imagen models
     if (model.includes('imagen')) return 0.04 * imageCount;
-    // Gemini native image generation (gemini-2.0-flash, gemini-3-pro, etc.)
-    // Output: ~1290 tokens per image × $30/1M tokens = ~$0.039
-    // Plus input tokens cost (prompt, ~negligible for image gen)
-    return 0.04 * imageCount;
+    // Nano Banana (gemini-2.5-flash-image) and other Gemini image models
+    return 0.039 * imageCount;
   }
   if (provider === 'openai') {
     if (model.includes('dall-e-3')) return 0.04 * imageCount;
