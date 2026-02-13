@@ -18,11 +18,26 @@
 **Enable/disable:**
 ```sql
 -- Enable video build
-INSERT INTO system_settings (key, value) VALUES ('MARUNAGE_ENABLE_VIDEO_BUILD', 'true')
-  ON CONFLICT(key) DO UPDATE SET value = 'true';
+INSERT INTO system_settings (key, value, updated_at)
+VALUES ('MARUNAGE_ENABLE_VIDEO_BUILD', 'true', datetime('now'))
+ON CONFLICT(key) DO UPDATE SET value = 'true', updated_at = datetime('now');
 
--- Disable video build
-UPDATE system_settings SET value = 'false' WHERE key = 'MARUNAGE_ENABLE_VIDEO_BUILD';
+-- Disable video build (emergency stop)
+UPDATE system_settings SET value = 'false', updated_at = datetime('now')
+WHERE key = 'MARUNAGE_ENABLE_VIDEO_BUILD';
+
+-- Check current state
+SELECT key, value, updated_at FROM system_settings
+WHERE key = 'MARUNAGE_ENABLE_VIDEO_BUILD';
+```
+
+**Production deployment (migration 0054):**
+```bash
+# Apply migration to remote D1
+npx wrangler d1 migrations apply webapp-production --remote
+
+# Verify applied migrations
+npx wrangler d1 migrations list webapp-production --remote
 ```
 
 ---
