@@ -265,10 +265,18 @@ npx wrangler d1 migrations list webapp-production --remote
 
 ### Step 4 detail: Preflight verification (before flag ON)
 
+> **CRITICAL**: `$SITE_URL` must match the production `c.env.SITE_URL` value.
+> Preflight internally uses `SITE_URL` to build absolute asset URLs.
+> Calling from a different domain will give misleading results.
+
 ```bash
-# Replace :projectId with a real project that has completed images + audio
-curl -v -b "session=YOUR_SESSION_COOKIE" \
-  https://app.marumuviai.com/api/projects/:projectId/video-builds/preflight
+# SITE_URL は production の c.env.SITE_URL と一致させること（最重要）
+SITE_URL="https://app.koemusubi.com"   # ← 本番のカスタムドメインに合わせる
+PROJECT_ID="123"                        # ← ready 状態のプロジェクトID
+SESSION="YOUR_SESSION_COOKIE"           # ← ブラウザDevToolsから取得
+
+curl -v -b "session=${SESSION}" \
+  "${SITE_URL}/api/projects/${PROJECT_ID}/video-builds/preflight"
 ```
 
 **Expected responses and what they mean:**
@@ -283,6 +291,13 @@ curl -v -b "session=YOUR_SESSION_COOKIE" \
 > **Why this matters**: If preflight returns 401/403, turning the flag ON is safe (no crash)
 > but meaningless — every trigger will silently skip at Gate 2. The build won't fire and
 > there's no visible error to the user. Test first to avoid "it's ON but nothing happens".
+
+### Troubleshooting: "flag ON but nothing happens"
+
+| `video_build_attempted_at` | Meaning | Next step |
+|---------------------------|---------|-----------|
+| **増えている** | trigger は走っている → `video_build_error` を見る | Gate 2 or 3 のエラー内容を確認 |
+| **増えていない** | trigger 自体が呼ばれていない | run が `ready` に到達しているか / flag が本当に ON か / advance 呼び出し経路を確認 |
 
 ### Post-ON monitoring
 
