@@ -78,7 +78,7 @@ async function getActiveRunForUser(db: D1Database, userId: number): Promise<Maru
   return await db.prepare(`
     SELECT mr.* FROM marunage_runs mr
     JOIN projects p ON p.id = mr.project_id
-    WHERE mr.started_by_user_id = ? AND mr.phase NOT IN ('ready', 'failed', 'canceled')
+    WHERE mr.started_by_user_id = ? AND mr.phase NOT IN ('ready', 'video_ready', 'failed', 'canceled')
       AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
     ORDER BY mr.created_at DESC LIMIT 1
   `).bind(userId).first<MarunageRunRow>() || null
@@ -88,7 +88,7 @@ async function getActiveRunForProject(db: D1Database, projectId: number): Promis
   return await db.prepare(`
     SELECT mr.* FROM marunage_runs mr
     JOIN projects p ON p.id = mr.project_id
-    WHERE mr.project_id = ? AND mr.phase NOT IN ('ready', 'failed', 'canceled')
+    WHERE mr.project_id = ? AND mr.phase NOT IN ('ready', 'video_ready', 'failed', 'canceled')
       AND (p.is_deleted = 0 OR p.is_deleted IS NULL)
     ORDER BY mr.created_at DESC LIMIT 1
   `).bind(projectId).first<MarunageRunRow>() || null
@@ -126,7 +126,7 @@ async function transitionPhase(
     binds.push(errorFields.error_code || null, errorFields.error_message || null, errorFields.error_phase || null)
   }
 
-  if (to === 'ready') {
+  if (to === 'ready' || to === 'video_ready') {
     sql += `, completed_at = CURRENT_TIMESTAMP`
   }
 
@@ -140,22 +140,6 @@ async function transitionPhase(
   binds.push(runId, from)
 
   const result = await db.prepare(sql).bind(...binds).run()
-  return (result.meta?.changes ?? 0) > 0
-}
-
-async function transitionPhaseWithLock(
-  db: D1Database, runId: number, from: MarunagePhase, to: MarunagePhase, lockUntil: string
-): Promise<boolean> {
-  const allowed = ALLOWED_TRANSITIONS[from]
-  if (!allowed?.includes(to)) return false
-
-  const result = await db.prepare(`
-    UPDATE marunage_runs
-    SET phase = ?, locked_at = CURRENT_TIMESTAMP, locked_until = ?,
-        updated_at = CURRENT_TIMESTAMP
-    WHERE id = ? AND phase = ?
-  `).bind(to, lockUntil, runId, from).run()
-
   return (result.meta?.changes ?? 0) > 0
 }
 
@@ -386,15 +370,16 @@ async function logImageGenerationCost(
     userId: number,
     projectId: string,
     sceneId: number,
-    status: 'completed' | 'failed',
+    status: 'success' | 'failed',
     apiKeySource: string,
     sponsorUserId: number | null,
     promptLength: number,
     errorMessage?: string,
+    generationType?: string,  // 'marunage_batch' | 'marunage_advance' (default: 'marunage_batch')
   }
 ): Promise<void> {
   try {
-    const cost = params.status === 'completed' ? COST_PER_IMAGE_USD : 0
+    const cost = params.status === 'success' ? COST_PER_IMAGE_USD : 0
     await db.prepare(`
       INSERT INTO image_generation_logs (
         user_id, project_id, scene_id, character_key,
@@ -404,11 +389,12 @@ async function logImageGenerationCost(
         estimated_cost_usd, billing_unit, billing_amount,
         status, error_message, error_code,
         reference_image_count
-      ) VALUES (?, ?, ?, NULL, 'marunage_batch', 'gemini', ?, ?, ?, ?, 1, NULL, NULL, ?, 'image', 1, ?, ?, NULL, 0)
+      ) VALUES (?, ?, ?, NULL, ?, 'gemini', ?, ?, ?, ?, 1, NULL, NULL, ?, 'image', 1, ?, ?, NULL, 0)
     `).bind(
       params.userId,
       params.projectId,
       params.sceneId,
+      params.generationType || 'marunage_batch',
       GEMINI_MODEL,
       params.apiKeySource,
       params.sponsorUserId,
@@ -833,12 +819,12 @@ async function marunageGenerateImages(
     generated++
     console.log(`[Marunage:Image] ✅ Scene ${scene.id} completed (${generated}/${scenes.length}) total=${imgTotalMs}ms gemini=${imgGeminiMs}ms r2=${imgR2Ms}ms`)
     
-    // Cost log (completed)
+    // Cost log (success)
     await logImageGenerationCost(db, {
       userId: userId || 1,
       projectId: String(projectId),
       sceneId: scene.id,
-      status: 'completed',
+      status: 'success',
       apiKeySource: keyResult.keySource,
       sponsorUserId: billing.sponsorUserId,
       promptLength: prompt.length,
@@ -873,6 +859,121 @@ async function marunageGenerateImages(
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ============================================================
+// Issue-4: ビデオビルド起動ヘルパー (P1-c)
+// 既存の POST /api/projects/:projectId/video-builds を HTTP 経由で消費
+// Non-Impact Protocol: video-generation.ts のコードを一切変更しない
+// ============================================================
+
+/**
+ * 丸投げ用デフォルト build_settings (Option A: 固定テンプレート)
+ */
+const MARUNAGE_DEFAULT_BUILD_SETTINGS = {
+  captions: { enabled: true, position: 'bottom', show_speaker: false },
+  bgm: { enabled: false },
+  motion: { preset: 'gentle-zoom', transition: 'crossfade' },
+  telops: { enabled: false },
+}
+
+async function marunageStartVideoBuild(
+  db: D1Database,
+  runId: number,
+  projectId: number,
+  config: MarunageConfig,
+  requestUrl: string,
+  sessionCookie: string
+): Promise<void> {
+  const origin = new URL(requestUrl).origin
+  const buildUrl = `${origin}/api/projects/${projectId}/video-builds`
+
+  console.log(`[Marunage:Video] Starting video build for project ${projectId} (run ${runId})`)
+
+  try {
+    // Build settings — BGM enabled if config says 'auto'
+    const buildSettings = {
+      ...MARUNAGE_DEFAULT_BUILD_SETTINGS,
+      bgm: {
+        ...MARUNAGE_DEFAULT_BUILD_SETTINGS.bgm,
+        enabled: config.bgm_mode === 'auto',
+      },
+    }
+
+    // Call existing video-builds API via HTTP (Non-Impact Protocol)
+    const response = await fetch(buildUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': `session=${sessionCookie}`,
+      },
+      body: JSON.stringify(buildSettings),
+    })
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => 'Unknown error')
+      console.error(`[Marunage:Video] video-builds API returned ${response.status}: ${errorBody.substring(0, 500)}`)
+
+      // If 409 (build already in progress), try to extract existing build_id
+      if (response.status === 409) {
+        try {
+          const conflict = JSON.parse(errorBody)
+          const activeBuildId = conflict?.error?.details?.active_build_id
+          if (activeBuildId) {
+            console.log(`[Marunage:Video] Build already exists (${activeBuildId}), saving to run`)
+            await db.prepare(`
+              UPDATE marunage_runs SET video_build_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(activeBuildId, runId).run()
+            return
+          }
+        } catch (_) {}
+      }
+
+      // Mark run as failed
+      await transitionPhase(db, runId, 'building_video', 'failed', {
+        error_code: 'VIDEO_BUILD_START_FAILED',
+        error_message: `Video build API error: HTTP ${response.status} — ${errorBody.substring(0, 500)}`,
+        error_phase: 'building_video',
+      })
+      return
+    }
+
+    const result = await response.json() as any
+    const videoBuildId = result.video_build_id || result.id
+
+    if (!videoBuildId) {
+      console.error(`[Marunage:Video] No video_build_id in response:`, JSON.stringify(result).substring(0, 300))
+      await transitionPhase(db, runId, 'building_video', 'failed', {
+        error_code: 'VIDEO_BUILD_NO_ID',
+        error_message: 'Video build API did not return a build ID',
+        error_phase: 'building_video',
+      })
+      return
+    }
+
+    console.log(`[Marunage:Video] Video build ${videoBuildId} created for project ${projectId}`)
+
+    // Save video_build_id to marunage_runs
+    await db.prepare(`
+      UPDATE marunage_runs SET video_build_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(videoBuildId, runId).run()
+
+    console.log(`[Marunage:Video] Saved video_build_id=${videoBuildId} to run ${runId}`)
+
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    console.error(`[Marunage:Video] Critical error starting video build for run ${runId}:`, errorMsg)
+
+    try {
+      await transitionPhase(db, runId, 'building_video', 'failed', {
+        error_code: 'VIDEO_BUILD_START_FAILED',
+        error_message: `Video build startup error: ${errorMsg.substring(0, 500)}`,
+        error_phase: 'building_video',
+      })
+    } catch (failError) {
+      console.error(`[Marunage:Video] Failed to mark run as failed:`, failError)
+    }
+  }
 }
 
 // ============================================================
@@ -1031,7 +1132,7 @@ marunage.get('/runs', async (c) => {
       created_at: r.created_at,
       updated_at: r.updated_at,
       completed_at: r.completed_at,
-      is_active: !['ready', 'failed', 'canceled'].includes(r.phase),
+      is_active: !['ready', 'video_ready', 'failed', 'canceled'].includes(r.phase),
     })),
   })
 })
@@ -1336,6 +1437,28 @@ marunage.get('/:projectId/status', async (c) => {
     : audioJobStatus === 'failed' ? 'failed'
     : 'pending'
 
+  // 5. Video build progress
+  let videoBuildStatus: string | null = null
+  let videoProgressPercent: number | null = null
+  let videoDownloadUrl: string | null = null
+
+  if (run.video_build_id) {
+    const videoBuild = await c.env.DB.prepare(`
+      SELECT status, progress_percent, download_url FROM video_builds WHERE id = ?
+    `).bind(run.video_build_id).first<{ status: string; progress_percent: number | null; download_url: string | null }>()
+    if (videoBuild) {
+      videoBuildStatus = videoBuild.status
+      videoProgressPercent = videoBuild.progress_percent
+      videoDownloadUrl = videoBuild.download_url
+    }
+  }
+
+  const videoState = run.phase === 'video_ready' ? 'done'
+    : videoBuildStatus === 'rendering' || videoBuildStatus === 'uploading' || videoBuildStatus === 'submitted' ? 'running'
+    : videoBuildStatus === 'failed' ? 'failed'
+    : run.phase === 'ready' ? 'skipped'  // material ready but video not started
+    : 'pending'
+
   const response: MarunageStatusResponse = {
     run_id: run.id,
     project_id: run.project_id,
@@ -1383,6 +1506,13 @@ marunage.get('/:projectId/status', async (c) => {
         total_utterances: audioTotalUtterances,
         completed: audioCompleted,
         failed: audioFailed,
+      },
+      video: {
+        state: videoState as any,
+        build_id: run.video_build_id || null,
+        build_status: videoBuildStatus,
+        progress_percent: videoProgressPercent,
+        download_url: videoDownloadUrl,
       },
     },
     timestamps: {
@@ -1689,6 +1819,18 @@ marunage.post('/:projectId/advance', async (c) => {
             // Note: scenes table does NOT have image_status/image_r2_key columns.
             // Image status is tracked exclusively via image_generations table.
             console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} ✅ completed — total=${totalMs}ms gemini=${geminiMs}ms r2=${r2Ms}ms`)
+            
+            // ★ P0-1: コスト記録（advance経路）— 全画像生成経路で必ず1行残す SSOT
+            await logImageGenerationCost(c.env.DB, {
+              userId: user.id,
+              projectId: String(projectId),
+              sceneId: nextScene.id,
+              status: 'success',
+              apiKeySource: keyResult.keySource,
+              sponsorUserId: billing.sponsorUserId,
+              promptLength: prompt.length,
+              generationType: 'marunage_advance',
+            })
           } else {
             const totalMs = Date.now() - t0
             await c.env.DB.prepare(`
@@ -1698,6 +1840,19 @@ marunage.post('/:projectId/advance', async (c) => {
               WHERE id = ?
             `).bind((imageResult.error || 'Unknown error').substring(0, 500), totalMs, geminiMs, genId).run()
             console.error(`[Marunage:Advance:Images] Scene ${nextScene.idx} ❌ failed — total=${totalMs}ms gemini=${geminiMs}ms error=${imageResult.error}`)
+            
+            // ★ P0-1: コスト記録（advance経路・失敗）— 失敗も必ず記録
+            await logImageGenerationCost(c.env.DB, {
+              userId: user.id,
+              projectId: String(projectId),
+              sceneId: nextScene.id,
+              status: 'failed',
+              apiKeySource: keyResult.keySource,
+              sponsorUserId: billing.sponsorUserId,
+              promptLength: prompt.length,
+              errorMessage: (imageResult.error || 'Unknown error').substring(0, 500),
+              generationType: 'marunage_advance',
+            })
           }
           
           return c.json({
@@ -1863,13 +2018,23 @@ marunage.post('/:projectId/advance', async (c) => {
             console.log(`[Marunage:Audio] Found existing job ${existingJob.id} (${existingJob.status}), saved to run ${run.id}`)
 
             if (existingJob.status === 'completed') {
-              const ok = await transitionPhase(c.env.DB, run.id, 'generating_audio', 'ready')
+              const ok = await transitionPhase(c.env.DB, run.id, 'generating_audio', 'building_video')
+              if (ok) {
+                // Start video build immediately
+                const sessionCookieAudio = getCookie(c, 'session') || ''
+                c.executionCtx.waitUntil(
+                  marunageStartVideoBuild(
+                    c.env.DB, run.id, projectId, config,
+                    c.req.url, sessionCookieAudio
+                  ).catch(err => console.error(`[Marunage:Video] waitUntil error:`, err))
+                )
+              }
               return c.json({
                 run_id: run.id,
                 previous_phase: 'generating_audio',
-                new_phase: ok ? 'ready' : 'generating_audio',
-                action: ok ? 'completed' : 'already_advanced',
-                message: ok ? '完成しました！' : 'Already transitioned',
+                new_phase: ok ? 'building_video' : 'generating_audio',
+                action: ok ? 'video_build_started' : 'already_advanced',
+                message: ok ? '動画ビルドを開始しました' : 'Already transitioned',
               })
             }
 
@@ -1928,23 +2093,33 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
-        // Audio done → ready!
-        const ok = await transitionPhase(c.env.DB, run.id, 'generating_audio', 'ready')
+        // Audio done → building_video (full pipeline) or ready (material only)
+        // Default: go to building_video for full automatic pipeline
+        const ok = await transitionPhase(c.env.DB, run.id, 'generating_audio', 'building_video')
         if (!ok) {
           return c.json({
             run_id: run.id,
             previous_phase: currentPhase,
-            new_phase: 'ready',
+            new_phase: 'building_video',
             action: 'already_advanced',
             message: 'Already transitioned',
           })
         }
 
+        // Start video build via waitUntil (HTTP to existing video-builds API)
+        const sessionCookieForVideo = getCookie(c, 'session') || ''
+        c.executionCtx.waitUntil(
+          marunageStartVideoBuild(
+            c.env.DB, run.id, projectId, config,
+            c.req.url, sessionCookieForVideo
+          ).catch(err => console.error(`[Marunage:Video] waitUntil error:`, err))
+        )
+
         try {
           await logAudit({
             db: c.env.DB, userId: user.id, userRole: user.role,
             entityType: 'project', entityId: projectId, projectId,
-            action: 'marunage.run_completed',
+            action: 'marunage.video_build_started',
             details: { run_id: run.id },
           })
         } catch (_) {}
@@ -1952,9 +2127,137 @@ marunage.post('/:projectId/advance', async (c) => {
         return c.json({
           run_id: run.id,
           previous_phase: 'generating_audio',
-          new_phase: 'ready',
-          action: 'completed',
-          message: '完成しました！',
+          new_phase: 'building_video',
+          action: 'video_build_started',
+          message: '動画ビルドを開始しました',
+        })
+      }
+
+      // ---- building_video → video_ready (or failed) ----
+      case 'building_video': {
+        // Poll video_builds status via DB
+        if (!run.video_build_id) {
+          // video_build_id not yet saved — waitUntil may be delayed
+          // Check if a build exists for this project
+          const existingBuild = await c.env.DB.prepare(`
+            SELECT id, status, progress_percent, download_url FROM video_builds
+            WHERE project_id = ? AND status IN ('queued', 'validating', 'submitted', 'rendering', 'uploading', 'completed')
+            ORDER BY created_at DESC LIMIT 1
+          `).bind(projectId).first<{ id: number; status: string; progress_percent: number | null; download_url: string | null }>()
+
+          if (existingBuild) {
+            // Found existing build — save it
+            await c.env.DB.prepare(`
+              UPDATE marunage_runs SET video_build_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(existingBuild.id, run.id).run()
+            console.log(`[Marunage:Video] Found existing build ${existingBuild.id} (${existingBuild.status}), saved to run ${run.id}`)
+
+            if (existingBuild.status === 'completed') {
+              const ok = await transitionPhase(c.env.DB, run.id, 'building_video', 'video_ready')
+              return c.json({
+                run_id: run.id,
+                previous_phase: 'building_video',
+                new_phase: ok ? 'video_ready' : 'building_video',
+                action: ok ? 'video_completed' : 'already_advanced',
+                message: ok ? '動画が完成しました！' : 'Already transitioned',
+              })
+            }
+
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'waiting',
+              message: `Video build found (${existingBuild.status}), waiting for completion`,
+            })
+          }
+
+          // No build found — re-trigger
+          console.log(`[Marunage:Video] No video_build_id for run ${run.id}, re-triggering video build`)
+          const sessionCookieRetrigger = getCookie(c, 'session') || ''
+          c.executionCtx.waitUntil(
+            marunageStartVideoBuild(
+              c.env.DB, run.id, projectId, config,
+              c.req.url, sessionCookieRetrigger
+            ).catch(err => console.error(`[Marunage:Video] Re-trigger error:`, err))
+          )
+
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: 'video_retrigger',
+            message: '動画ビルドを再起動しました',
+          })
+        }
+
+        // video_build_id exists — check status
+        const videoBuild = await c.env.DB.prepare(`
+          SELECT status, progress_percent, download_url, error_message FROM video_builds WHERE id = ?
+        `).bind(run.video_build_id).first<{ status: string; progress_percent: number | null; download_url: string | null; error_message: string | null }>()
+
+        if (!videoBuild) {
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: 'waiting',
+            message: 'Video build record not found, waiting...',
+          })
+        }
+
+        if (videoBuild.status === 'completed') {
+          const ok = await transitionPhase(c.env.DB, run.id, 'building_video', 'video_ready')
+          if (!ok) {
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: 'video_ready',
+              action: 'already_advanced',
+              message: 'Already transitioned',
+            })
+          }
+
+          try {
+            await logAudit({
+              db: c.env.DB, userId: user.id, userRole: user.role,
+              entityType: 'project', entityId: projectId, projectId,
+              action: 'marunage.run_completed',
+              details: { run_id: run.id, video_build_id: run.video_build_id, download_url: videoBuild.download_url },
+            })
+          } catch (_) {}
+
+          return c.json({
+            run_id: run.id,
+            previous_phase: 'building_video',
+            new_phase: 'video_ready',
+            action: 'video_completed',
+            message: '動画が完成しました！',
+          })
+        }
+
+        if (videoBuild.status === 'failed' || videoBuild.status === 'cancelled') {
+          await transitionPhase(c.env.DB, run.id, 'building_video', 'failed', {
+            error_code: 'VIDEO_BUILD_FAILED',
+            error_message: videoBuild.error_message || 'Video build failed',
+            error_phase: 'building_video',
+          })
+          return c.json({
+            run_id: run.id,
+            previous_phase: 'building_video',
+            new_phase: 'failed',
+            action: 'failed',
+            message: '動画ビルドに失敗しました',
+          })
+        }
+
+        // Still in progress
+        return c.json({
+          run_id: run.id,
+          previous_phase: currentPhase,
+          new_phase: currentPhase,
+          action: 'waiting',
+          message: `動画ビルド中... (${videoBuild.progress_percent ?? 0}%)`,
         })
       }
 
@@ -2042,7 +2345,7 @@ marunage.post('/:projectId/cancel', async (c) => {
     UPDATE marunage_runs
     SET phase = 'canceled', updated_at = CURRENT_TIMESTAMP,
         locked_at = NULL, locked_until = NULL
-    WHERE id = ? AND phase NOT IN ('ready', 'failed', 'canceled')
+    WHERE id = ? AND phase NOT IN ('ready', 'video_ready', 'failed', 'canceled')
   `).bind(run.id).run()
 
   if ((result.meta?.changes ?? 0) === 0) {

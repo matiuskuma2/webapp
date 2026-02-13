@@ -565,3 +565,96 @@ src/
 - **バグ調査**: 「11→5問題」のような SSOT ズレを context で即座に特定
 - **パフォーマンス分析**: builder vs marunage のフォーマット処理時間を比較
 - **将来のフロー分離**: context に応じてデフォルト値やバリデーションを変更する基盤
+
+---
+
+## 12. 画像生成コスト追跡 SSOT
+
+### 12.1 原則
+
+> **どの経路で画像が生成されても、`image_generation_logs` に必ず1行残る**
+
+### 12.2 経路と generation_type
+
+| 経路 | ファイル | generation_type | 説明 |
+|---|---|---|---|
+| 制作ボード（単発） | `image-generation.ts` | `scene_image` | UI から1枚ずつ生成 |
+| 制作ボード（キャラクター） | `image-generation.ts` | `character_preview` / `character_reference` | キャラクター画像 |
+| 丸投げ batch | `marunage.ts` (`marunageGenerateImages`) | `marunage_batch` | 旧バッチループ |
+| 丸投げ advance | `marunage.ts` (advance handler) | `marunage_advance` | advance ポーリング経由1枚ずつ |
+
+### 12.3 status 値の統一（SSOT）
+
+DB に CHECK 制約なし → **アプリ側で統一**
+
+| status | 意味 |
+|---|---|
+| `success` | 画像生成+R2アップロード成功 |
+| `failed` | 生成失敗（API エラー、タイムアウト、R2 失敗） |
+| `quota_exceeded` | API クォータ超過（制作ボード側のみ使用） |
+
+### 12.4 コスト単価（2026-02 現在）
+
+| モデル | 識別子 | 単価 (USD/枚) |
+|---|---|---|
+| Nano Banana Pro | `gemini-3-pro-image-preview` | $0.134 (1K/2K) |
+| Nano Banana Flash | `gemini-2.5-flash-image` | $0.039 |
+| 将来: Pro 4K | `gemini-3-pro-image-preview` + `image_size='4K'` | $0.24 |
+
+### 12.5 運用集計 SQL
+
+```sql
+-- ■ 直近24時間のコスト集計（generation_type別）
+SELECT
+  generation_type,
+  status,
+  COUNT(*) AS count,
+  SUM(estimated_cost_usd) AS total_cost_usd,
+  AVG(estimated_cost_usd) AS avg_cost_usd
+FROM image_generation_logs
+WHERE created_at > datetime('now', '-24 hours')
+GROUP BY generation_type, status
+ORDER BY generation_type, status;
+
+-- ■ プロジェクト別合計コスト（丸投げのみ）
+SELECT
+  project_id,
+  generation_type,
+  COUNT(*) AS image_count,
+  SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
+  SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+  SUM(estimated_cost_usd) AS total_cost_usd
+FROM image_generation_logs
+WHERE generation_type IN ('marunage_batch', 'marunage_advance')
+GROUP BY project_id, generation_type
+ORDER BY total_cost_usd DESC;
+
+-- ■ ユーザー別月次コスト（全経路）
+SELECT
+  user_id,
+  api_key_source,
+  COUNT(*) AS total_images,
+  SUM(estimated_cost_usd) AS total_cost_usd,
+  strftime('%Y-%m', created_at) AS month
+FROM image_generation_logs
+WHERE status = 'success'
+GROUP BY user_id, api_key_source, month
+ORDER BY month DESC, total_cost_usd DESC;
+
+-- ■ 経路漏れ検出: image_generations にあるが logs にないレコード
+-- （advance経由の旧レコードなど、P0-1修正前のデータが該当する可能性）
+SELECT ig.id, ig.scene_id, ig.status, ig.model, ig.created_at
+FROM image_generations ig
+LEFT JOIN image_generation_logs igl
+  ON igl.scene_id = ig.scene_id
+  AND igl.project_id = (SELECT project_id FROM scenes WHERE id = ig.scene_id)
+  AND ABS(julianday(ig.created_at) - julianday(igl.created_at)) < 0.001
+WHERE igl.id IS NULL
+  AND ig.status IN ('completed', 'failed')
+ORDER BY ig.created_at DESC
+LIMIT 50;
+```
+
+### 12.6 変更履歴
+
+- 2026-02-13: 初版作成。P0-1（advance経路のコスト記録漏れ修正）、P0-2（status値統一 `completed` → `success`）を反映。generation_type に `marunage_advance` を追加。
