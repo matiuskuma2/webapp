@@ -359,7 +359,7 @@ async function marunageFormatStartup(
  */
 const GEMINI_MODEL = 'gemini-3-pro-image-preview'
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
-const IMAGE_GEN_RETRY = 3          // 個別画像のリトライ回数
+const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数 (25s timeout × 2 = max 50s, within CF Workers wall time)
 const IMAGE_GEN_DELAY = 4500       // 画像間の待機 (ms) — Gemini 15 RPM に対応
 const MAX_R2_RETRIES = 3
 
@@ -468,6 +468,10 @@ async function generateSingleImage(
 
   for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
     try {
+      // 25s timeout per attempt — must complete well within CF Workers wall time
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 25000)
+      
       const response = await fetch(GEMINI_ENDPOINT, {
         method: 'POST',
         headers: {
@@ -481,7 +485,9 @@ async function generateSingleImage(
             imageConfig: { aspectRatio, imageSize: '2K' },
           },
         }),
+        signal: controller.signal,
       })
+      clearTimeout(timeout)
 
       // Rate limit → retry with backoff
       if (response.status === 429) {
@@ -547,9 +553,11 @@ async function generateSingleImage(
       break
 
     } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error)
+      const isAbort = error instanceof Error && error.name === 'AbortError'
+      lastError = isAbort ? 'TIMEOUT_25s: Gemini API did not respond within 25 seconds' : (error instanceof Error ? error.message : String(error))
+      console.warn(`[Marunage:Image] Attempt ${attempt + 1}/${IMAGE_GEN_RETRY} failed: ${lastError}`)
       if (attempt < IMAGE_GEN_RETRY - 1) {
-        await sleep(2000 * (attempt + 1))
+        await sleep(isAbort ? 1000 : 2000 * (attempt + 1))
         continue
       }
     }
@@ -1583,19 +1591,27 @@ marunage.post('/:projectId/advance', async (c) => {
         }
 
         if (generating > 0) {
-          // Safety: if image_generations stuck in 'generating' for >5min, mark as failed
+          // Safety: if image_generations stuck in 'generating' for >2min, mark as failed
+          // Cloudflare Workers have ~30s wall-time limit, so 2min is very generous
           const staleFixed = await c.env.DB.prepare(`
             UPDATE image_generations
-            SET status = 'failed', error_message = 'Timed out (stuck in generating)'
+            SET status = 'failed', error_message = 'Timed out (stuck in generating >2min)'
             WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
               AND is_active = 1
               AND status = 'generating'
-              AND created_at < datetime('now', '-5 minutes')
+              AND created_at < datetime('now', '-2 minutes')
           `).bind(projectId).run()
           const fixedCount = staleFixed.meta.changes || 0
           if (fixedCount > 0) {
-            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records`)
-            // Re-check stats after fix (let next poll handle it)
+            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records (>2min)`)
+            // Return immediately so next poll re-evaluates with fresh stats
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'stale_fixed',
+              message: `${fixedCount}枚の停滞画像を検出、再生成します`,
+            })
           }
           
           return c.json({

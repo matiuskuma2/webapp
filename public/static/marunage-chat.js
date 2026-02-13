@@ -40,6 +40,9 @@ const MC = {
   // Advance debounce
   _lastAdvanceTime: 0,
 
+  // Track when 'generating' status was first seen (for stale detection)
+  _generatingSeenSince: 0,
+
   // Polling guard (prevent concurrent mcPoll execution)
   _isPolling: false,
 };
@@ -364,8 +367,20 @@ function mcShouldAdvance(data) {
       // 2. Some completed, none generating, none pending → audio transition  
       // 3. Pending images exist, none generating → kick 1 image
       // 4. Failed images exist, none generating/pending → trigger retry
+      // 5. Generating stuck >2min → call advance to trigger stale detection
       if (p.images.state === 'done') return true;
-      if (p.images.generating > 0) return false; // wait while generating
+      if (p.images.generating > 0) {
+        // Track when we first saw generating status
+        if (!MC._generatingSeenSince) MC._generatingSeenSince = Date.now();
+        // If generating for >2min, allow advance so backend can detect stale records
+        if (Date.now() - MC._generatingSeenSince > 120000) {
+          console.log('[Marunage] Generating stuck >2min, allowing advance for stale detection');
+          return true;
+        }
+        return false; // wait while generating (normal case)
+      }
+      // Reset generating timer when no longer generating
+      MC._generatingSeenSince = 0;
       if (p.images.pending > 0) return true; // kick next image
       if (p.images.completed > 0 && p.images.failed === 0) return true; // all done
       if (p.images.failed > 0) return true; // trigger retry logic
@@ -396,6 +411,13 @@ async function mcAdvance() {
       return;
     }
     
+    if (data.action === 'stale_fixed') {
+      // Stale generating records were cleaned up — reset timer and let next poll re-kick
+      MC._generatingSeenSince = 0;
+      mcAddSystemMessage(data.message || '停滞画像を検出、再生成します');
+      return;
+    }
+    
     MC.phase = data.new_phase;
     
     // Reset live progress bubble on phase transition
@@ -408,6 +430,7 @@ async function mcAdvance() {
         mcAddSystemMessage(`${data.message}`);
         break;
       case 'images_started':
+        MC._generatingSeenSince = Date.now(); // Reset: new image is being generated
         mcAddSystemMessage(data.message || '画像生成中...');
         break;
       case 'audio_started':
