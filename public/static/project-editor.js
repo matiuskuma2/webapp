@@ -1121,7 +1121,7 @@ function renderFormatSectionUI() {
                    class="mr-2 text-purple-600 focus:ring-purple-500">
             <span class="text-sm">
               <strong>原文そのまま（Raw）</strong>
-              <span class="text-gray-500 block text-xs">1段落=1シーン。目標数を変えると結合/分割</span>
+              <span class="text-gray-500 block text-xs">基本は1段落=1シーン。目標シーン数を変えると段落が結合/分割されます（省略なし）</span>
             </span>
           </label>
         </div>
@@ -1129,7 +1129,7 @@ function renderFormatSectionUI() {
       
       <!-- Target Scene Count -->
       <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数 <span class="text-xs text-gray-400">（空欄の段落数: ${paragraphCount}）</span></label>
+        <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数 <span class="text-xs text-gray-400">（現在の段落数: <strong>${paragraphCount}</strong>）</span></label>
         <div class="flex items-center gap-2">
           <input type="number" id="targetSceneCount" value="${initialTarget}" min="1" max="200"
                  onchange="updateTargetSceneCount(this.value)"
@@ -1137,7 +1137,7 @@ function renderFormatSectionUI() {
           <span class="text-sm text-gray-500">シーン（1〜200）</span>
         </div>
         <p id="targetSceneHint" class="text-xs text-gray-400 mt-1">
-          <i class="fas fa-info-circle mr-1"></i>Rawモード: 段落数と同じ値=1段落1シーン。増やすと文境界で分割、減らすと段落を結合（省略なし）
+          <i class="fas fa-info-circle mr-1"></i>Rawモード: 段落数と同値=そのまま1段落1シーン。値を減らすと段落結合、増やすと文境界で分割（原文は一切省略しません）
         </p>
       </div>
       
@@ -1151,11 +1151,12 @@ function renderFormatSectionUI() {
       
       <!-- Execute Button -->
       <!-- B) 実行前に「今回サーバーに送る値」固定表示 -->
-      <div id="executionPreview" class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
-        <p class="text-xs font-bold text-blue-700 mb-1"><i class="fas fa-paper-plane mr-1"></i>今回サーバーに送信される値:</p>
-        <div class="flex gap-4 text-xs text-blue-600">
+      <div id="executionPreview" class="mb-3 p-3 bg-yellow-50 border border-yellow-300 rounded-lg hidden">
+        <p class="text-xs font-bold text-yellow-700 mb-1"><i class="fas fa-paper-plane mr-1"></i>今回サーバーに送信される値（実行時の唯一の真実）:</p>
+        <div class="flex gap-4 text-xs text-yellow-700">
           <span>モード: <strong id="previewSplitMode">—</strong></span>
           <span>目標シーン数: <strong id="previewTargetCount">—</strong></span>
+          <span>段落数: <strong id="previewParagraphCount">${paragraphCount}</strong></span>
         </div>
       </div>
       
@@ -1206,12 +1207,13 @@ function updateExecutionPreview() {
   
   const modeEl = document.getElementById('previewSplitMode');
   const targetEl = document.getElementById('previewTargetCount');
+  const paraEl = document.getElementById('previewParagraphCount');
   if (!modeEl || !targetEl) return;
   
   if (currentSplitMode) {
-    const apiMode = currentSplitMode === 'raw' ? 'preserve' : 'ai';
     modeEl.textContent = currentSplitMode === 'raw' ? '原文そのまま (preserve)' : 'AI整理 (ai)';
     targetEl.textContent = String(currentTargetSceneCount);
+    if (paraEl) paraEl.textContent = String(countParagraphs());
     previewEl.classList.remove('hidden');
   } else {
     previewEl.classList.add('hidden');
@@ -1576,10 +1578,12 @@ async function formatAndSplit() {
       // SSOT: integrity_check の結果を表示
       const integrityCheck = response.data.integrity_check;
       const receivedTarget = response.data.received_target_scene_count;
+      const detectedParagraphs = response.data.detected_paragraph_count;
       if (integrityCheck) {
         if (integrityCheck.status === 'passed') {
-          const targetInfo = receivedTarget ? `（目標: ${receivedTarget}シーン, ` : '（';
-          showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました${targetInfo}整合性OK: ${integrityCheck.preserved_chars}文字保持）`, 'success');
+          const targetInfo = receivedTarget ? `（サーバー採用目標: ${receivedTarget}シーン` : '（';
+          const paraInfo = detectedParagraphs ? `, サーバー検出段落: ${detectedParagraphs}` : '';
+          showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました${targetInfo}${paraInfo}, 整合性OK: ${integrityCheck.preserved_chars}文字保持）`, 'success');
         } else {
           // integrity_check failed は通常 400/422 で返るが念のため
           showToast(`警告: 原文の整合性チェックに問題が発生しました`, 'warning');
@@ -1587,7 +1591,7 @@ async function formatAndSplit() {
       } else {
         showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました`, 'success');
       }
-      console.log('[Format] Server used target_scene_count:', receivedTarget, '→ actual scenes:', response.data.total_scenes);
+      console.log('[Format] Server used target_scene_count:', receivedTarget, 'detected_paragraphs:', detectedParagraphs, '→ actual scenes:', response.data.total_scenes);
       
       // 保存モードを更新（次回の変更検知用）
       savedSplitMode = 'raw';

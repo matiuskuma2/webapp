@@ -1998,6 +1998,13 @@ projects.get('/:id/chunks', async (c) => {
 /**
  * GET /api/projects/:id/scene-split-settings
  * Get scene split settings for a project
+ * 
+ * ★ SSOT 注意（B案決定済み — docs/15_PHASE_LOCK_PRESERVE_SPEC.md §4）:
+ * - このテーブルは「次回のUI初期値」を保持するためだけに存在する
+ * - /format API は このテーブルを一切参照しない
+ * - 実行時の唯一の真実は /format のリクエストボディ (split_mode, target_scene_count)
+ * - UI は scene_split_settings を読み取ってフォームの初期値として表示するが、
+ *   実行時は input の現在値を /format に送信する
  */
 projects.get('/:id/scene-split-settings', async (c) => {
   try {
@@ -2034,6 +2041,9 @@ projects.get('/:id/scene-split-settings', async (c) => {
 /**
  * PUT /api/projects/:id/scene-split-settings
  * Update scene split settings for a project
+ * 
+ * ★ SSOT 注意: UI の「次回の初期値」を保存するのみ。
+ *   /format API の実行時には参照されない（B案: リクエストボディが唯一の真実）
  */
 projects.put('/:id/scene-split-settings', async (c) => {
   try {
