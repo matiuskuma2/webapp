@@ -230,12 +230,41 @@ preserve モードでは以下のガードルールを厳守:
 ### 4.2 B案の実装ルール
 
 1. `formatting.ts` の `/format` API は `body.target_scene_count` と `body.split_mode` のみ使用
-2. `scene_split_settings` テーブルは UI の「次回デフォルト値」保持用に残す（将来削除可能）
-3. `world-character-ui.js` の設定 UI は UI のデフォルト値を変更するのみ
+2. `scene_split_settings` テーブルは UI の「次回デフォルト値」保持用に残す（将来削除可能）。**実行時は絶対に参照しない**
+3. `world-character-ui.js` の設定 UI は UI のデフォルト値を変更するのみ（コード内にSSOT注意コメント明記済み）
 4. 実行時に使用された値は `/format` レスポンスの `received_target_scene_count` で確認可能
-5. `projects` テーブルの `target_scene_count` は結果の記録用（SSOTではない）
+5. preserve モードではレスポンスに `detected_paragraph_count`（サーバー側段落検出数）を追加
+6. AI モード（`autoMergeScenes`）でも `received_target_scene_count` を統一返却
+7. 全レスポンスに `received_target_scene_count` が含まれるため、UI は分岐不要
 
-### 4.3 丸投げチャットへの影響
+### 4.4 監査ログ（サーバー側）
+
+`/format` API の冒頭で以下を `console.log` 出力（Cloudflare Workers ログ）:
+
+```
+[Format:AUDIT] project=238, mode=preserve, target=0, bodyTarget=NOT_SET, explicitlySet=false, reset=true
+[Format:AUDIT:Preserve] project=238, paragraphCount=11, target=11, explicitlySet=false
+```
+
+| フィールド | 説明 |
+|-----------|------|
+| `mode` | split_mode（ai / preserve） |
+| `target` | 実際に使用する targetSceneCount（0 はセンチネル→段落数に置換される） |
+| `bodyTarget` | リクエストボディの生値（`NOT_SET` = 未送信） |
+| `explicitlySet` | ユーザーが明示的に target を指定したか |
+| `paragraphCount` | preserve モードのみ。サーバーが検出した段落数 |
+
+### 4.5 UI 可視化
+
+| UI要素 | 場所 | 目的 |
+|--------|------|------|
+| **実行プレビュー** | 実行ボタン直上 | 「今回サーバーに送信される値」を固定表示（split_mode + target_scene_count） |
+| **成功Toast** | format完了時 | `received_target_scene_count` をトースト内に表示 |
+| **段落数表示** | targetSceneCount入力横 | UIの段落カウントとサーバー側の不一致を即発見可能に |
+
+---
+
+## 4（続き）. 丸投げチャットへの影響
 
 - **影響なし**: `marunage.ts` は常に `config.target_scene_count`（デフォルト5）を明示送信
 - `bodyTargetSceneCount` が number かつ > 0 → センチネル0にならない

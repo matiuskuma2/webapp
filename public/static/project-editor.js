@@ -1120,8 +1120,8 @@ function renderFormatSectionUI() {
                    onchange="updateSplitMode('preserve')"
                    class="mr-2 text-purple-600 focus:ring-purple-500">
             <span class="text-sm">
-              <strong>原文維持（台本モード）</strong>
-              <span class="text-gray-500 block text-xs">文章は一切変更しない</span>
+              <strong>原文そのまま（Raw）</strong>
+              <span class="text-gray-500 block text-xs">1段落=1シーン。目標数を変えると結合/分割</span>
             </span>
           </label>
         </div>
@@ -1137,7 +1137,7 @@ function renderFormatSectionUI() {
           <span class="text-sm text-gray-500">シーン（1〜200）</span>
         </div>
         <p id="targetSceneHint" class="text-xs text-gray-400 mt-1">
-          <i class="fas fa-info-circle mr-1"></i>原文そのままモードでは段落数と同じ値にすると1段落=1シーンになります
+          <i class="fas fa-info-circle mr-1"></i>Rawモード: 段落数と同じ値=1段落1シーン。増やすと文境界で分割、減らすと段落を結合（省略なし）
         </p>
       </div>
       
@@ -1150,6 +1150,15 @@ function renderFormatSectionUI() {
       </div>
       
       <!-- Execute Button -->
+      <!-- B) 実行前に「今回サーバーに送る値」固定表示 -->
+      <div id="executionPreview" class="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg hidden">
+        <p class="text-xs font-bold text-blue-700 mb-1"><i class="fas fa-paper-plane mr-1"></i>今回サーバーに送信される値:</p>
+        <div class="flex gap-4 text-xs text-blue-600">
+          <span>モード: <strong id="previewSplitMode">—</strong></span>
+          <span>目標シーン数: <strong id="previewTargetCount">—</strong></span>
+        </div>
+      </div>
+      
       <button 
         id="formatBtn"
         onclick="confirmAndFormatSplit()"
@@ -1185,6 +1194,28 @@ function countParagraphs() {
 function updateTargetSceneCount(value) {
   currentTargetSceneCount = parseInt(value) || 5;
   updateSplitModeDescription();
+  updateExecutionPreview();
+}
+
+/**
+ * B) 実行ボタン直前の「今回送信される値」プレビュー更新
+ */
+function updateExecutionPreview() {
+  const previewEl = document.getElementById('executionPreview');
+  if (!previewEl) return;
+  
+  const modeEl = document.getElementById('previewSplitMode');
+  const targetEl = document.getElementById('previewTargetCount');
+  if (!modeEl || !targetEl) return;
+  
+  if (currentSplitMode) {
+    const apiMode = currentSplitMode === 'raw' ? 'preserve' : 'ai';
+    modeEl.textContent = currentSplitMode === 'raw' ? '原文そのまま (preserve)' : 'AI整理 (ai)';
+    targetEl.textContent = String(currentTargetSceneCount);
+    previewEl.classList.remove('hidden');
+  } else {
+    previewEl.classList.add('hidden');
+  }
 }
 
 /**
@@ -1247,6 +1278,7 @@ window.onSplitModeChange = function(mode) {
   
   updateSplitModeDescription();
   updateSplitModeHint(normalizedMode);
+  updateExecutionPreview();
 }
 
 /**
@@ -1759,6 +1791,7 @@ function startFormatPolling() {
           
           await onFormatComplete({
             total_scenes: sceneCount,
+            received_target_scene_count: data.received_target_scene_count || null,
             chunk_stats: {
               total: data.total_chunks,
               processed: data.processed,
@@ -1770,6 +1803,7 @@ function startFormatPolling() {
           // Fallback: estimate from chunks
           await onFormatComplete({
             total_scenes: data.processed * 2, // Rough estimate: 2 scenes per chunk
+            received_target_scene_count: data.received_target_scene_count || null,
             chunk_stats: {
               total: data.total_chunks,
               processed: data.processed,
@@ -2154,18 +2188,19 @@ async function resumeFormatting() {
 
 // On format complete
 async function onFormatComplete(data) {
-  const { total_scenes, chunk_stats, failed } = data;
+  const { total_scenes, chunk_stats, failed, received_target_scene_count } = data;
   
   console.log('[onFormatComplete] Starting with data:', data);
   
   // Calculate failed count from either chunk_stats or direct failed field
   const failedCount = chunk_stats?.failed ?? failed ?? 0;
   
-  // Show completion message
+  // Show completion message with received_target_scene_count if available
+  const targetInfo = received_target_scene_count ? `（目標: ${received_target_scene_count}）` : '';
   if (failedCount > 0) {
-    showToast(`完了！${total_scenes || 0}シーンを生成しました（一部チャンク失敗: ${failedCount}件）`, 'warning');
+    showToast(`完了！${total_scenes || 0}シーンを生成しました${targetInfo}（一部チャンク失敗: ${failedCount}件）`, 'warning');
   } else {
-    showToast(`完了！${total_scenes || 0}シーンを生成しました`, 'success');
+    showToast(`完了！${total_scenes || 0}シーンを生成しました${targetInfo}`, 'success');
   }
   
   // CRITICAL FIX: Reset formatSection innerHTML before loadProject

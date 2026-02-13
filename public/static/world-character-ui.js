@@ -602,6 +602,10 @@
 
     /**
      * Phase X-3: Load scene split settings from API
+     * 
+     * ★ SSOT注意: この設定は「次回の初期値」保持用。
+     * 実行時は /format API のリクエストボディが唯一の真実（B案）。
+     * scene_split_settings テーブルの値は実行時に参照されない。
      */
     async loadSplitSettings() {
       try {

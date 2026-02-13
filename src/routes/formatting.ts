@@ -345,7 +345,7 @@ formatting.post('/:id/format', async (c) => {
       console.log(`[Format] preserve mode, target_scene_count not explicitly set → will auto-detect from paragraphs`)
     }
     
-    console.log(`[Format] project=${projectId}, mode=${splitMode}, target=${targetSceneCount}, bodyTarget=${bodyTargetSceneCount ?? 'NOT_SET'}, explicitlySet=${targetExplicitlySet}, reset=${shouldReset}`)
+    console.log(`[Format:AUDIT] project=${projectId}, mode=${splitMode}, target=${targetSceneCount}, bodyTarget=${bodyTargetSceneCount ?? 'NOT_SET'}, explicitlySet=${targetExplicitlySet}, reset=${shouldReset}`)
 
     // 1. プロジェクトの存在確認とステータスチェック
     const project = await c.env.DB.prepare(`
@@ -543,7 +543,7 @@ async function processTextChunks(
           `status='${project.status}' but ${stats.total_chunks} chunks done and ${sceneCount.count} scenes exist`)
         
         // autoMergeScenesを呼び出して正式にステータスを更新
-        return await autoMergeScenes(c, projectId, stats)
+        return await autoMergeScenes(c, projectId, stats, targetSceneCount)
       }
     }
   }
@@ -629,7 +629,7 @@ async function processTextChunks(
     }
 
     // pending=0 & processing=0 → 自動的にmerge実行して 'formatted' へ
-    return await autoMergeScenes(c, projectId, stats)
+    return await autoMergeScenes(c, projectId, stats, targetSceneCount)
   }
 
   // 各 chunk を処理
@@ -778,7 +778,7 @@ async function processTextChunks(
   // これにより、最後のchunkを処理したリクエストで即座に 'formatted' へ遷移する
   if (stats.pending === 0 && stats.processing === 0) {
     console.log(`[Format] All chunks processed in this batch, triggering autoMergeScenes for project ${projectId}`)
-    return await autoMergeScenes(c, projectId, stats)
+    return await autoMergeScenes(c, projectId, stats, targetSceneCount)
   }
 
   // 最新のrun_id/run_noを取得（SSOT: UI側でmismatch検出に使用）
@@ -956,6 +956,7 @@ async function processAudioTranscription(c: any, projectId: string, project: any
     project_id: parseInt(projectId),
     total_scenes: savedScenes.length,
     status: 'formatted',
+    received_target_scene_count: null,  // 漏れ1: 音声レガシーフローでは未使用
     scenes: savedScenes.map((scene: any) => ({
       id: scene.id,
       idx: scene.idx,
@@ -1048,7 +1049,8 @@ async function processPreserveMode(
     .map(p => p.trim())  // 前後の空白のみ除去
     .filter(p => p.length > 0)
   
-  console.log(`[PreserveMode] Found ${paragraphs.length} paragraphs, target=${targetSceneCount}`)
+  const detectedParagraphCount = paragraphs.length
+  console.log(`[Format:AUDIT:Preserve] project=${projectId}, paragraphCount=${detectedParagraphCount}, target=${targetSceneCount}, explicitlySet=${targetSceneCount > 0}`)
   
   // ★ SSOT: target=0 はセンチネル値（「段落数に合わせる」）
   // preserve モードで target 未明示指定の場合、段落数をそのまま使う
@@ -1200,6 +1202,7 @@ async function processPreserveMode(
     total_scenes: paragraphs.length,
     message: `原文維持モードで ${paragraphs.length} シーンを生成しました`,
     received_target_scene_count: targetSceneCount,  // P0-2: サーバーが実際に使った値
+    detected_paragraph_count: detectedParagraphCount,  // 漏れ2: サーバー側の段落検出数
     integrity_check: {
       original_chars: originalContentLength,
       preserved_chars: afterContentLength,
@@ -1362,7 +1365,7 @@ async function generateImagePromptFromText(
 /**
  * 自動merge実行（全chunk完了時）
  */
-async function autoMergeScenes(c: any, projectId: string, stats: any) {
+async function autoMergeScenes(c: any, projectId: string, stats: any, targetSceneCount?: number) {
   try {
     // 1. scenes取得（tempIdx順）
     const { results: scenes } = await c.env.DB.prepare(`
@@ -1471,6 +1474,7 @@ async function autoMergeScenes(c: any, projectId: string, stats: any) {
       total_scenes: scenes.length,
       merged: true,
       chunk_stats: stats,
+      received_target_scene_count: targetSceneCount ?? null,  // 漏れ1: AI mode でも統一返却
       message: stats.failed > 0
         ? `All chunks processed (${stats.failed} failed), ${scenes.length} scenes merged`
         : `All chunks processed successfully, ${scenes.length} scenes merged`
