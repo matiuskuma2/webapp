@@ -57,16 +57,30 @@ images.get('/signed/*', async (c) => {
 // 外部サービスからは /images/signed/* を使用すること
 images.get('/*', async (c) => {
   try {
-    // Request path: /images/12/scene_1/21_xxx.png
-    // R2 key: images/12/scene_1/21_xxx.png
-    const fullPath = c.req.path // e.g., "/images/12/scene_1/21_xxx.png"
-    const r2Key = fullPath.substring(1) // Remove leading "/" → "images/12/scene_1/21_xxx.png"
+    // Hono route: app.route('/images', images) + images.get('/*')
+    // c.req.path returns full path including mount point: "/images/projects/238/..."
+    const fullPath = c.req.path // e.g., "/images/projects/238/scenes/2394/image_1919.png"
     
-    if (!r2Key || r2Key === 'images') {
+    // Remove leading "/" → "images/projects/238/..."
+    let r2Key = fullPath.substring(1)
+    
+    // Handle both old and new R2 key formats:
+    // Old: "images/12/scene_1/21_xxx.png" → R2 key is "images/12/scene_1/21_xxx.png"
+    // New: "images/projects/238/scenes/2394/image_1919.png" → R2 key is "projects/238/..."
+    // The mount point "/images" adds an "images/" prefix that may not be in the R2 key.
+    // Try the key as-is first, then without "images/" prefix.
+    
+    if (!r2Key || r2Key === 'images' || r2Key === 'images/') {
       return c.json({ error: 'Invalid image path' }, 400)
     }
 
-    const object = await c.env.R2.get(r2Key)
+    let object = await c.env.R2.get(r2Key)
+    
+    // If not found and key starts with "images/", try without the prefix
+    if (!object && r2Key.startsWith('images/')) {
+      const keyWithoutPrefix = r2Key.substring('images/'.length)
+      object = await c.env.R2.get(keyWithoutPrefix)
+    }
     
     if (!object) {
       return c.notFound()
