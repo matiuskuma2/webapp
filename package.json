@@ -16,7 +16,8 @@
     "db:console:prod": "wrangler d1 execute webapp-production --remote",
     "db:verify": "wrangler d1 execute webapp-production --local --command=\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\"",
     "clean-port": "fuser -k 3000/tcp 2>/dev/null || true",
-    "test": "curl http://localhost:3000"
+    "test": "curl http://localhost:3000",
+    "check:schema": "node scripts/check-schema.mjs"
   },
   "dependencies": {
     "hono": "^4.11.0",
@@ -26,6 +27,7 @@
     "@hono/vite-build": "^1.2.0",
     "@hono/vite-dev-server": "^0.18.2",
     "autoprefixer": "^10.4.22",
+    "better-sqlite3": "^12.6.2",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.19",
     "vite": "^6.3.5",
