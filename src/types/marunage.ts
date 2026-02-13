@@ -95,6 +95,8 @@ export interface MarunageRunRow {
   retry_count: number
   audio_job_id: number | null
   video_build_id: number | null  // P1: link to video_builds table (populated on ready + flag ON)
+  video_build_attempted_at: string | null  // P1.5: last video build attempt timestamp
+  video_build_error: string | null         // P1.5: short error from last failure (cleared on success)
   locked_at: string | null
   locked_until: string | null
   created_at: string

@@ -882,8 +882,21 @@ async function isVideoBuildEnabled(db: D1Database): Promise<boolean> {
 // P1: Video build trigger (background, Non-Impact Protocol)
 // Called from ready phase when MARUNAGE_ENABLE_VIDEO_BUILD = true.
 // Phase stays 'ready'; video_build_id is stored in marunage_runs.
+//
+// 3-STAGE GATE (incident prevention):
+//   Gate 1: run.video_build_id IS NULL (no duplicate builds)
+//           + no active build in video_builds for this project
+//           + 30-min cooldown after last failure
+//   Gate 2: GET /video-builds/preflight returns ok=true
+//           (validates assets: images, audio, SITE_URL)
+//   Gate 3: Cookie auth verified via preflight response
+//           (if preflight returns 401/403, skip silently)
+//
 // Ref: docs/16_MARUNAGE_VIDEO_BUILD_SSOT.md
 // ============================================================
+
+/** Video build retry cooldown period (milliseconds) */
+const VIDEO_BUILD_COOLDOWN_MS = 30 * 60 * 1000 // 30 minutes
 
 /**
  * 丸投げ用デフォルト build_settings (Option A: 固定テンプレート)
@@ -896,9 +909,43 @@ const MARUNAGE_DEFAULT_BUILD_SETTINGS = {
 }
 
 /**
+ * Record a video build attempt (success or failure) in marunage_runs.
+ * Centralised helper to keep UPDATE queries consistent.
+ */
+async function recordVideoBuildAttempt(
+  db: D1Database,
+  runId: number,
+  opts: { videoBuildId?: number; error?: string }
+): Promise<void> {
+  if (opts.videoBuildId) {
+    await db.prepare(`
+      UPDATE marunage_runs
+      SET video_build_id = ?,
+          video_build_attempted_at = CURRENT_TIMESTAMP,
+          video_build_error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(opts.videoBuildId, runId).run()
+  } else {
+    await db.prepare(`
+      UPDATE marunage_runs
+      SET video_build_attempted_at = CURRENT_TIMESTAMP,
+          video_build_error = ?,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind((opts.error || 'unknown').substring(0, 500), runId).run()
+  }
+}
+
+/**
  * Trigger video build in background after run reaches 'ready'.
+ *
+ * 3-STAGE GATE:
+ *  1) Duplicate / cooldown guard (DB check only)
+ *  2) Preflight validation (GET /video-builds/preflight)
+ *  3) Build creation (POST /video-builds)
+ *
  * Phase does NOT change — it stays 'ready'.
- * Only video_build_id is saved to marunage_runs.
  * Errors are logged but do NOT fail the run.
  */
 async function marunageTriggerVideoBuild(
@@ -910,9 +957,111 @@ async function marunageTriggerVideoBuild(
   sessionCookie: string
 ): Promise<void> {
   const origin = new URL(requestUrl).origin
-  const buildUrl = `${origin}/api/projects/${projectId}/video-builds`
+  const tag = `[Marunage:Video:${projectId}]`
 
-  console.log(`[Marunage:Video] Starting video build for project ${projectId} (run ${runId}) [phase stays ready]`)
+  console.log(`${tag} Trigger requested for run ${runId} [phase stays ready]`)
+
+  // ────────────────────────────────────────────────────
+  // GATE 1: Duplicate / cooldown guard
+  // ────────────────────────────────────────────────────
+  try {
+    // 1a. If this run already has a video_build_id, skip
+    const run = await db.prepare(`
+      SELECT video_build_id, video_build_attempted_at, video_build_error
+      FROM marunage_runs WHERE id = ?
+    `).bind(runId).first<{
+      video_build_id: number | null
+      video_build_attempted_at: string | null
+      video_build_error: string | null
+    }>()
+
+    if (run?.video_build_id) {
+      console.log(`${tag} GATE1: video_build_id=${run.video_build_id} already set → skip`)
+      return
+    }
+
+    // 1b. Check 30-min cooldown after last failure
+    if (run?.video_build_attempted_at && run?.video_build_error) {
+      const lastAttempt = new Date(run.video_build_attempted_at).getTime()
+      const elapsed = Date.now() - lastAttempt
+      if (elapsed < VIDEO_BUILD_COOLDOWN_MS) {
+        const remainMin = Math.ceil((VIDEO_BUILD_COOLDOWN_MS - elapsed) / 60000)
+        console.log(`${tag} GATE1: Cooldown active (${remainMin}min remaining, last error: ${run.video_build_error}) → skip`)
+        return
+      }
+      console.log(`${tag} GATE1: Cooldown expired (${Math.floor(elapsed / 60000)}min since last failure), retrying`)
+    }
+
+    // 1c. Check for active builds on this project in video_builds table
+    const activeBuild = await db.prepare(`
+      SELECT id, status FROM video_builds
+      WHERE project_id = ? AND status IN ('queued','validating','submitted','rendering','uploading')
+      ORDER BY created_at DESC LIMIT 1
+    `).bind(projectId).first<{ id: number; status: string }>()
+
+    if (activeBuild) {
+      console.log(`${tag} GATE1: Active build ${activeBuild.id} (${activeBuild.status}) exists → save & skip`)
+      await recordVideoBuildAttempt(db, runId, { videoBuildId: activeBuild.id })
+      return
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`${tag} GATE1 DB check error (non-fatal): ${msg}`)
+    // On DB error, still attempt preflight (fail-open for gate 1 only)
+  }
+
+  // ────────────────────────────────────────────────────
+  // GATE 2: Preflight — asset validation + cookie auth
+  // ────────────────────────────────────────────────────
+  const preflightUrl = `${origin}/api/projects/${projectId}/video-builds/preflight`
+  const cookieHeader = `session=${sessionCookie}`
+
+  try {
+    console.log(`${tag} GATE2: Calling preflight...`)
+    const pfResponse = await fetch(preflightUrl, {
+      method: 'GET',
+      headers: { 'Cookie': cookieHeader },
+    })
+
+    // Cookie/auth failure → skip silently (incident prevention)
+    if (pfResponse.status === 401 || pfResponse.status === 403) {
+      const reason = `preflight returned ${pfResponse.status} (auth failure)`
+      console.warn(`${tag} GATE2: ${reason} → skip (cookie may be invalid/expired)`)
+      await recordVideoBuildAttempt(db, runId, { error: reason })
+      return
+    }
+
+    if (!pfResponse.ok) {
+      const reason = `preflight returned ${pfResponse.status}`
+      console.warn(`${tag} GATE2: ${reason} → skip`)
+      await recordVideoBuildAttempt(db, runId, { error: reason })
+      return
+    }
+
+    const pfResult = await pfResponse.json() as any
+    const isReady = pfResult?.ready === true || pfResult?.ok === true
+
+    if (!isReady) {
+      const missingCount = pfResult?.missing?.length || pfResult?.details?.missing_assets?.length || 'unknown'
+      const reason = `preflight not ready (missing: ${missingCount})`
+      console.warn(`${tag} GATE2: ${reason} → skip build`)
+      await recordVideoBuildAttempt(db, runId, { error: reason })
+      return
+    }
+
+    console.log(`${tag} GATE2: Preflight OK — assets validated, cookie authenticated`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    const reason = `preflight fetch error: ${msg.substring(0, 200)}`
+    console.error(`${tag} GATE2: ${reason} → skip`)
+    await recordVideoBuildAttempt(db, runId, { error: reason })
+    return
+  }
+
+  // ────────────────────────────────────────────────────
+  // GATE 3: Create video build (POST /video-builds)
+  // ────────────────────────────────────────────────────
+  const buildUrl = `${origin}/api/projects/${projectId}/video-builds`
 
   try {
     const buildSettings = {
@@ -923,34 +1072,35 @@ async function marunageTriggerVideoBuild(
       },
     }
 
+    console.log(`${tag} GATE3: POST /video-builds...`)
     const response = await fetch(buildUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Cookie': `session=${sessionCookie}`,
+        'Cookie': cookieHeader,
       },
       body: JSON.stringify(buildSettings),
     })
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => 'Unknown error')
-      console.error(`[Marunage:Video] video-builds API returned ${response.status}: ${errorBody.substring(0, 500)}`)
 
-      // If 409 (build already in progress), try to extract existing build_id
+      // 409 = build already in progress → extract and save existing build_id
       if (response.status === 409) {
         try {
           const conflict = JSON.parse(errorBody)
           const activeBuildId = conflict?.error?.details?.active_build_id
           if (activeBuildId) {
-            console.log(`[Marunage:Video] Build already exists (${activeBuildId}), saving to run`)
-            await db.prepare(`
-              UPDATE marunage_runs SET video_build_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).bind(activeBuildId, runId).run()
+            console.log(`${tag} GATE3: 409 conflict — active build ${activeBuildId}, saving to run`)
+            await recordVideoBuildAttempt(db, runId, { videoBuildId: activeBuildId })
+            return
           }
         } catch (_) {}
       }
-      // Do NOT transition to failed — phase stays 'ready'
-      // Video build failure is non-fatal in P1 scope
+
+      const reason = `POST returned ${response.status}: ${errorBody.substring(0, 300)}`
+      console.error(`${tag} GATE3: ${reason}`)
+      await recordVideoBuildAttempt(db, runId, { error: reason })
       return
     }
 
@@ -958,23 +1108,22 @@ async function marunageTriggerVideoBuild(
     const videoBuildId = result.video_build_id || result.id
 
     if (!videoBuildId) {
-      console.error(`[Marunage:Video] No video_build_id in response:`, JSON.stringify(result).substring(0, 300))
+      const reason = `No video_build_id in response: ${JSON.stringify(result).substring(0, 200)}`
+      console.error(`${tag} GATE3: ${reason}`)
+      await recordVideoBuildAttempt(db, runId, { error: reason })
       return
     }
 
-    console.log(`[Marunage:Video] Video build ${videoBuildId} created for project ${projectId}`)
-
-    // Save video_build_id to marunage_runs (phase stays 'ready')
-    await db.prepare(`
-      UPDATE marunage_runs SET video_build_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-    `).bind(videoBuildId, runId).run()
-
-    console.log(`[Marunage:Video] Saved video_build_id=${videoBuildId} to run ${runId}`)
+    // SUCCESS — save video_build_id and clear any previous error
+    await recordVideoBuildAttempt(db, runId, { videoBuildId })
+    console.log(`${tag} GATE3: Video build ${videoBuildId} created and saved to run ${runId}`)
 
   } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error)
-    console.error(`[Marunage:Video] Error starting video build for run ${runId} (non-fatal):`, errorMsg)
-    // Do NOT transition to failed — phase stays 'ready'
+    const msg = error instanceof Error ? error.message : String(error)
+    const reason = `POST fetch error: ${msg.substring(0, 200)}`
+    console.error(`${tag} GATE3: ${reason} (non-fatal)`)
+    await recordVideoBuildAttempt(db, runId, { error: reason })
+    // Phase stays 'ready' — non-fatal
   }
 }
 
