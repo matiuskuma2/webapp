@@ -1082,6 +1082,14 @@ function renderFormatSectionUI() {
   // 段落数を計算
   const paragraphCount = countParagraphs();
   
+  // ★ SSOT: target_scene_count の初期値
+  // - DBに保存値がある → それを使う
+  // - なければ段落数（raw向け）or 5（ai向け）
+  const initialTarget = currentProject && currentProject.target_scene_count
+    ? currentProject.target_scene_count
+    : (paragraphCount > 0 ? paragraphCount : 5);
+  currentTargetSceneCount = initialTarget;
+  
   return `
     <div class="p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg">
       <h3 class="font-bold text-gray-800 mb-4">シーン分割設定</h3>
@@ -1121,13 +1129,16 @@ function renderFormatSectionUI() {
       
       <!-- Target Scene Count -->
       <div class="mb-4">
-        <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数</label>
+        <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数 <span class="text-xs text-gray-400">（空欄の段落数: ${paragraphCount}）</span></label>
         <div class="flex items-center gap-2">
-          <input type="number" id="targetSceneCount" value="5" min="1" max="200"
+          <input type="number" id="targetSceneCount" value="${initialTarget}" min="1" max="200"
                  onchange="updateTargetSceneCount(this.value)"
                  class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
           <span class="text-sm text-gray-500">シーン（1〜200）</span>
         </div>
+        <p id="targetSceneHint" class="text-xs text-gray-400 mt-1">
+          <i class="fas fa-info-circle mr-1"></i>原文そのままモードでは段落数と同じ値にすると1段落=1シーンになります
+        </p>
       </div>
       
       <!-- Mode Description (動的更新) -->
@@ -1192,6 +1203,20 @@ function updateSplitMode(mode) {
 window.onSplitModeChange = function(mode) {
   const normalizedMode = normalizeSplitMode(mode);
   currentSplitMode = normalizedMode;
+  
+  // ★ SSOT: raw (preserve) モード選択時 → target_scene_count を段落数に自動設定
+  // ユーザーが「原文そのまま」を選んだ = 段落数 = シーン数 を期待している
+  if (normalizedMode === 'raw') {
+    const paragraphCount = countParagraphs();
+    if (paragraphCount > 0) {
+      const targetInput = document.getElementById('targetSceneCount');
+      if (targetInput) {
+        targetInput.value = paragraphCount;
+        currentTargetSceneCount = paragraphCount;
+        console.log('[SplitMode] Raw mode selected → auto-set target_scene_count to paragraph count:', paragraphCount);
+      }
+    }
+  }
   
   // UI更新: 選択状態のハイライト
   const rawLabel = document.getElementById('splitModeRawLabel');
@@ -1518,9 +1543,11 @@ async function formatAndSplit() {
       
       // SSOT: integrity_check の結果を表示
       const integrityCheck = response.data.integrity_check;
+      const receivedTarget = response.data.received_target_scene_count;
       if (integrityCheck) {
         if (integrityCheck.status === 'passed') {
-          showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました（整合性OK: ${integrityCheck.preserved_chars}文字保持）`, 'success');
+          const targetInfo = receivedTarget ? `（目標: ${receivedTarget}シーン, ` : '（';
+          showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました${targetInfo}整合性OK: ${integrityCheck.preserved_chars}文字保持）`, 'success');
         } else {
           // integrity_check failed は通常 400/422 で返るが念のため
           showToast(`警告: 原文の整合性チェックに問題が発生しました`, 'warning');
@@ -1528,6 +1555,7 @@ async function formatAndSplit() {
       } else {
         showToast(`原文そのままモードで ${response.data.total_scenes} シーンを生成しました`, 'success');
       }
+      console.log('[Format] Server used target_scene_count:', receivedTarget, '→ actual scenes:', response.data.total_scenes);
       
       // 保存モードを更新（次回の変更検知用）
       savedSplitMode = 'raw';

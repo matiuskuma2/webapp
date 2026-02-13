@@ -328,10 +328,24 @@ formatting.post('/:id/format', async (c) => {
     }
     
     const splitMode = body.split_mode || 'ai' // デフォルトは ai
-    const targetSceneCount = body.target_scene_count || 5 // デフォルトは 5
     const shouldReset = body.reset === true
+
+    // ★ SSOT: target_scene_count の決定ロジック
+    // - リクエストボディの値が唯一の真実（scene_split_settings テーブルは参照しない）
+    // - preserve(raw)モードかつ未指定の場合: 段落数を自動採用（processPreserveModeで上書き）
+    // - ai モードかつ未指定の場合: デフォルト 5
+    const bodyTargetSceneCount = body.target_scene_count  // undefined = 未指定
+    const targetExplicitlySet = typeof bodyTargetSceneCount === 'number' && bodyTargetSceneCount > 0
+    let targetSceneCount = targetExplicitlySet ? bodyTargetSceneCount : 5
     
-    console.log(`[Format] project=${projectId}, mode=${splitMode}, target=${targetSceneCount}, reset=${shouldReset}`)
+    // ★ preserve モードで target 未明示指定 → 0 をセンチネル値にして processPreserveMode に渡す
+    // processPreserveMode 内で段落数を検出した後に自動でその数を使う
+    if (splitMode === 'preserve' && !targetExplicitlySet) {
+      targetSceneCount = 0  // センチネル: 「段落数に合わせる」
+      console.log(`[Format] preserve mode, target_scene_count not explicitly set → will auto-detect from paragraphs`)
+    }
+    
+    console.log(`[Format] project=${projectId}, mode=${splitMode}, target=${targetSceneCount}, bodyTarget=${bodyTargetSceneCount ?? 'NOT_SET'}, explicitlySet=${targetExplicitlySet}, reset=${shouldReset}`)
 
     // 1. プロジェクトの存在確認とステータスチェック
     const project = await c.env.DB.prepare(`
@@ -1036,6 +1050,13 @@ async function processPreserveMode(
   
   console.log(`[PreserveMode] Found ${paragraphs.length} paragraphs, target=${targetSceneCount}`)
   
+  // ★ SSOT: target=0 はセンチネル値（「段落数に合わせる」）
+  // preserve モードで target 未明示指定の場合、段落数をそのまま使う
+  if (targetSceneCount <= 0) {
+    targetSceneCount = paragraphs.length
+    console.log(`[PreserveMode] target was not explicitly set → auto-adopting paragraph count: ${targetSceneCount}`)
+  }
+  
   // 3. 段落数を targetSceneCount に調整
   if (paragraphs.length > targetSceneCount) {
     // 段落を結合（省略なし、\n\n で結合）
@@ -1178,6 +1199,7 @@ async function processPreserveMode(
     split_mode: 'raw',  // SSOT: 新しい命名
     total_scenes: paragraphs.length,
     message: `原文維持モードで ${paragraphs.length} シーンを生成しました`,
+    received_target_scene_count: targetSceneCount,  // P0-2: サーバーが実際に使った値
     integrity_check: {
       original_chars: originalContentLength,
       preserved_chars: afterContentLength,
