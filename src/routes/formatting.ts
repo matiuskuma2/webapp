@@ -329,6 +329,10 @@ formatting.post('/:id/format', async (c) => {
     
     const splitMode = body.split_mode || 'ai' // デフォルトは ai
     const shouldReset = body.reset === true
+    
+    // ★ execution_context: リクエスト元を識別（builder = 制作ボード / marunage = 丸投げチャット）
+    // marunage.ts は X-Execution-Context: marunage ヘッダーを送信する
+    const executionContext: 'builder' | 'marunage' = c.req.header('X-Execution-Context') === 'marunage' ? 'marunage' : 'builder'
 
     // ★ SSOT: target_scene_count の決定ロジック
     // - リクエストボディの値が唯一の真実（scene_split_settings テーブルは参照しない）
@@ -345,7 +349,7 @@ formatting.post('/:id/format', async (c) => {
       console.log(`[Format] preserve mode, target_scene_count not explicitly set → will auto-detect from paragraphs`)
     }
     
-    console.log(`[Format:AUDIT] project=${projectId}, mode=${splitMode}, target=${targetSceneCount}, bodyTarget=${bodyTargetSceneCount ?? 'NOT_SET'}, explicitlySet=${targetExplicitlySet}, reset=${shouldReset}`)
+    console.log(`[Format:AUDIT] project=${projectId}, context=${executionContext}, mode=${splitMode}, target=${targetSceneCount}, bodyTarget=${bodyTargetSceneCount ?? 'NOT_SET'}, explicitlySet=${targetExplicitlySet}, reset=${shouldReset}`)
 
     // 1. プロジェクトの存在確認とステータスチェック
     const project = await c.env.DB.prepare(`
@@ -1050,7 +1054,8 @@ async function processPreserveMode(
     .filter(p => p.length > 0)
   
   const detectedParagraphCount = paragraphs.length
-  console.log(`[Format:AUDIT:Preserve] project=${projectId}, paragraphCount=${detectedParagraphCount}, target=${targetSceneCount}, explicitlySet=${targetSceneCount > 0}`)
+  const preserveExecContext = c.req.header('X-Execution-Context') === 'marunage' ? 'marunage' : 'builder'
+  console.log(`[Format:AUDIT:Preserve] project=${projectId}, context=${preserveExecContext}, paragraphCount=${detectedParagraphCount}, target=${targetSceneCount}, explicitlySet=${targetSceneCount > 0}`)
   
   // ★ SSOT: target=0 はセンチネル値（「段落数に合わせる」）
   // preserve モードで target 未明示指定の場合、段落数をそのまま使う

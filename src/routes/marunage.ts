@@ -234,6 +234,7 @@ async function marunageFormatStartup(
         headers: {
           'Content-Type': 'application/json',
           'Cookie': cookieHeader,
+          'X-Execution-Context': 'marunage',
         },
         body: JSON.stringify({
           split_mode: config.split_mode || 'ai',
@@ -359,12 +360,16 @@ async function marunageFormatStartup(
  * リトライ: 呼び出し元（advance）が retry_count を管理。この関数は1回分の生成のみ。
  */
 // Image generation model:
-//   gemini-3-pro-image-preview   → highest quality, but slow (avg 19s/image)
-//   gemini-2.5-flash-image       → Flash-tier speed, Stable, good quality
-const GEMINI_MODEL = 'gemini-2.5-flash-image'
+//   gemini-3-pro-image-preview   → Nano Banana Pro: highest quality, Thinking mode, 4K support (avg ~19s/image)
+//   gemini-2.5-flash-image       → Nano Banana: Flash-tier speed, Stable, good quality
+// ★ 2026-02-13: Switched to Nano Banana Pro (gemini-3-pro-image-preview) for highest quality output
+//   - Matches image-generation.ts (builder context) which already uses this model
+//   - Timeout increased: 25s → 45s per attempt to accommodate Pro model's processing time
+//   - Delay between images: 3s → 5s to respect lower RPM limits of Pro model
+const GEMINI_MODEL = 'gemini-3-pro-image-preview'
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
-const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数 (25s timeout × 2 = max 50s, within CF Workers wall time)
-const IMAGE_GEN_DELAY = 3000       // 画像間の待機 (ms) — Flash model has higher RPM allowance
+const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数 (45s timeout × 2 = max 90s)
+const IMAGE_GEN_DELAY = 5000       // 画像間の待機 (ms) — Pro model needs more spacing between requests
 const MAX_R2_RETRIES = 3
 
 // ============================================================
@@ -472,9 +477,9 @@ async function generateSingleImage(
 
   for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
     try {
-      // 25s timeout per attempt — must complete well within CF Workers wall time
+      // 45s timeout per attempt — Pro model (Nano Banana Pro) needs longer processing time (~19s avg)
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 25000)
+      const timeout = setTimeout(() => controller.abort(), 45000)
       
       const response = await fetch(GEMINI_ENDPOINT, {
         method: 'POST',
@@ -485,7 +490,7 @@ async function generateSingleImage(
         body: JSON.stringify({
           contents: [{ parts: [{ text: enhancedPrompt }] }],
           generationConfig: {
-            responseModalities: ['Image'],
+            responseModalities: ['TEXT', 'IMAGE'],
             imageConfig: { aspectRatio },
           },
         }),
@@ -558,7 +563,7 @@ async function generateSingleImage(
 
     } catch (error) {
       const isAbort = error instanceof Error && error.name === 'AbortError'
-      lastError = isAbort ? 'TIMEOUT_25s: Gemini API did not respond within 25 seconds' : (error instanceof Error ? error.message : String(error))
+      lastError = isAbort ? 'TIMEOUT_45s: Gemini API (Nano Banana Pro) did not respond within 45 seconds' : (error instanceof Error ? error.message : String(error))
       console.warn(`[Marunage:Image] Attempt ${attempt + 1}/${IMAGE_GEN_RETRY} failed: ${lastError}`)
       if (attempt < IMAGE_GEN_RETRY - 1) {
         await sleep(isAbort ? 1000 : 2000 * (attempt + 1))

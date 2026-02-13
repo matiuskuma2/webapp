@@ -1121,7 +1121,7 @@ function renderFormatSectionUI() {
                    class="mr-2 text-purple-600 focus:ring-purple-500">
             <span class="text-sm">
               <strong>原文そのまま（Raw）</strong>
-              <span class="text-gray-500 block text-xs">基本は1段落=1シーン。目標シーン数を変えると段落が結合/分割されます（省略なし）</span>
+              <span class="text-gray-500 block text-xs">原文は保持されますが、目標シーン数に合わせて段落が結合または文境界で分割されます（省略・言い換えなし）</span>
             </span>
           </label>
         </div>
@@ -1137,7 +1137,7 @@ function renderFormatSectionUI() {
           <span class="text-sm text-gray-500">シーン（1〜200）</span>
         </div>
         <p id="targetSceneHint" class="text-xs text-gray-400 mt-1">
-          <i class="fas fa-info-circle mr-1"></i>Rawモード: 段落数と同値=そのまま1段落1シーン。値を減らすと段落結合、増やすと文境界で分割（原文は一切省略しません）
+          <i class="fas fa-info-circle mr-1"></i>Rawモード: 段落数と同値=そのまま1段落1シーン。値を減らすと段落を等分配で結合[例: 8段落→5シーン=[2,2,2,1,1]]、増やすと文境界(。！？)で分割（原文は一切省略しません）
         </p>
       </div>
       
@@ -1158,6 +1158,7 @@ function renderFormatSectionUI() {
           <span>目標シーン数: <strong id="previewTargetCount">—</strong></span>
           <span>段落数: <strong id="previewParagraphCount">${paragraphCount}</strong></span>
         </div>
+        <div id="previewMergeInfo" class="hidden"></div>
       </div>
       
       <button 
@@ -1208,12 +1209,49 @@ function updateExecutionPreview() {
   const modeEl = document.getElementById('previewSplitMode');
   const targetEl = document.getElementById('previewTargetCount');
   const paraEl = document.getElementById('previewParagraphCount');
+  const mergeInfoEl = document.getElementById('previewMergeInfo');
   if (!modeEl || !targetEl) return;
   
   if (currentSplitMode) {
     modeEl.textContent = currentSplitMode === 'raw' ? '原文そのまま (preserve)' : 'AI整理 (ai)';
     targetEl.textContent = String(currentTargetSceneCount);
     if (paraEl) paraEl.textContent = String(countParagraphs());
+    
+    // ★ preserve モード: 段落結合/分割の配分を事前表示
+    if (mergeInfoEl) {
+      const paragraphCount = countParagraphs();
+      const target = currentTargetSceneCount;
+      if (currentSplitMode === 'raw' && paragraphCount > 0 && target > 0 && paragraphCount !== target) {
+        if (paragraphCount > target) {
+          // 結合: 等分配の計算 (サーバーと同一ロジック)
+          const base = Math.floor(paragraphCount / target);
+          const extra = paragraphCount % target;
+          const distribution = [];
+          for (let g = 0; g < target; g++) {
+            distribution.push(base + (g < extra ? 1 : 0));
+          }
+          mergeInfoEl.innerHTML = `
+            <div class="mt-1 text-xs text-orange-700 bg-orange-50 p-2 rounded">
+              <i class="fas fa-layer-group mr-1"></i>
+              <strong>結合配分:</strong> [${distribution.join(', ')}]
+              <span class="text-gray-500 ml-1">(各シーンに含まれる段落数)</span>
+            </div>`;
+        } else {
+          // 分割: 文境界で分割
+          mergeInfoEl.innerHTML = `
+            <div class="mt-1 text-xs text-blue-700 bg-blue-50 p-2 rounded">
+              <i class="fas fa-cut mr-1"></i>
+              <strong>分割:</strong> ${paragraphCount}段落を文境界(。！？)で分割 → 目標${target}シーン
+              <span class="text-gray-500 ml-1">(文数が足りない場合は文数が上限)</span>
+            </div>`;
+        }
+        mergeInfoEl.classList.remove('hidden');
+      } else {
+        mergeInfoEl.innerHTML = '';
+        mergeInfoEl.classList.add('hidden');
+      }
+    }
+    
     previewEl.classList.remove('hidden');
   } else {
     previewEl.classList.add('hidden');
@@ -1297,7 +1335,12 @@ function updateSplitModeDescription() {
     // preserve モードの説明（段落数と目標の比較）
     let adjustmentText = '';
     if (paragraphCount > target) {
-      adjustmentText = `<span class="text-orange-600"><i class="fas fa-compress-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（段落を結合、改変なし）</span>`;
+      // 結合: 等分配の計算を表示
+      const base = Math.floor(paragraphCount / target);
+      const extra = paragraphCount % target;
+      const dist = [];
+      for (let g = 0; g < target; g++) dist.push(base + (g < extra ? 1 : 0));
+      adjustmentText = `<span class="text-orange-600"><i class="fas fa-compress-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（段落を等分配で結合 [${dist.join(',')}]、改変なし）</span>`;
     } else if (paragraphCount < target) {
       adjustmentText = `<span class="text-blue-600"><i class="fas fa-expand-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（文境界で分割、改変なし）</span>`;
     } else {

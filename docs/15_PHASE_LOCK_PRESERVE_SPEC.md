@@ -14,6 +14,10 @@
 5. [スキーマ不整合 分類表](#5-スキーマ不整合-分類表)
 6. [AI 駆動開発用コード品質チェックガイドライン](#6-ai-駆動開発用コード品質チェックガイドライン)
 7. [変更履歴](#7-変更履歴)
+8. [画像生成モデル移行記録](#8-画像生成モデル移行記録)
+9. [formatting.ts 責務分割ロードマップ](#9-formattingts-責務分割ロードマップ)
+10. [CI ゲート正式ポリシー](#10-ci-ゲート正式ポリシー)
+11. [execution_context ログ仕様](#11-execution_context-ログ仕様)
 
 ---
 
@@ -372,3 +376,171 @@ AI（Copilot / Claude / GPT）がコードを生成・修正する際に、品�
 |------|------|
 | 2026-02-13 | 初版作成（P1-4 phase 責務表、P1-5 ロック設計表、P2-7 preserve モード仕様を統合） |
 | 2026-02-13 | SSOT B 案決定記録、スキーマ不整合分類、AI 開発ガイドライン追加 |
+| 2026-02-13 | §8 画像生成モデル移行記録、§9 formatting.ts 責務分割ロードマップ、§10 CI ゲート正式ポリシー、§11 execution_context ログ仕様 追加 |
+
+---
+
+## 8. 画像生成モデル移行記録
+
+### 8.1 モデル対応表（2026-02-13 更新）
+
+| 商品名 | API モデル名 | 特徴 | 速度 | 品質 |
+|--------|-------------|------|------|------|
+| **Nano Banana** | `gemini-2.5-flash-image` | Flash-tier、高速、安定 | 速い（~5s/枚） | ○ 良好 |
+| **Nano Banana Pro** | `gemini-3-pro-image-preview` | Thinking搭載、4K対応、高忠実テキスト | 遅い（~19s/枚） | ◎ 最高 |
+
+### 8.2 移行内容
+
+| 項目 | 変更前 | 変更後 |
+|------|--------|--------|
+| **marunage.ts** `GEMINI_MODEL` | `gemini-2.5-flash-image` | `gemini-3-pro-image-preview` |
+| **image-generation.ts** モデル | `gemini-3-pro-image-preview` | **変更なし**（既に Pro） |
+| `responseModalities` | `['Image']` | `['TEXT', 'IMAGE']` |
+| タイムアウト（1回あたり） | 25秒 | 45秒 |
+| 画像間ディレイ | 3000ms | 5000ms |
+| エラーメッセージ | `TIMEOUT_25s` | `TIMEOUT_45s: Gemini API (Nano Banana Pro)` |
+
+### 8.3 REST エンドポイント
+
+```
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent
+Header: x-goog-api-key: {API_KEY}
+Body: {
+  "contents": [{ "parts": [{ "text": "..." }] }],
+  "generationConfig": {
+    "responseModalities": ["TEXT", "IMAGE"],
+    "imageConfig": { "aspectRatio": "16:9" }
+  }
+}
+```
+
+### 8.4 注意事項
+
+- Pro モデルは「Thinking」モードを使用するため、レスポンスに TEXT パート（思考過程）が含まれる場合がある
+- レスポンスパーサーは `inlineData` を持つ part のみを画像として取得（TEXT part は無視）
+- `gemini-2.5-flash-image-preview` は **2026-01-16 に廃止済み**（`gemini-2.5-flash-image` stable は有効）
+
+---
+
+## 9. formatting.ts 責務分割ロードマップ
+
+### 9.1 現在の状態
+
+`formatting.ts`（~76KB）は以下の 5 つの責務を 1 ファイルに持つ:
+
+| # | 責務 | 関数/処理 | 行数（概算） |
+|---|------|----------|------------|
+| 1 | **Preserve Engine** | `processPreserveMode()`, `mergeParagraphsPreserve()`, `splitParagraphsPreserve()`, 整合性チェック | ~300行 |
+| 2 | **AI Split Engine** | `processTextChunks()`, OpenAI API 呼び出し、JSON バリデーション | ~400行 |
+| 3 | **Merge Engine** | `autoMergeScenes()`, idx正規化、role設定、キャラ自動割り当て、utterance生成 | ~200行 |
+| 4 | **Integrity Guard** | `checkRawIntegrity()`, 空白正規化、文字数カウント | ~100行（一部 utils/split-mode-ssot.ts に移動済み） |
+| 5 | **Scene Persistence** | DB INSERT/UPDATE、chunk管理、status更新 | ファイル全体に分散 |
+
+### 9.2 目標構造（Phase別）
+
+```
+src/
+├── routes/
+│   └── formatting.ts          ← ルーティングのみ（薄いコントローラー）
+├── engines/
+│   ├── preserve-engine.ts     ← ①
+│   ├── ai-split-engine.ts     ← ②
+│   └── merge-engine.ts        ← ③
+├── guards/
+│   └── integrity-guard.ts     ← ④（既存 utils/split-mode-ssot.ts を拡張）
+└── repositories/
+    └── scene-persistence.ts   ← ⑤
+```
+
+### 9.3 移行フェーズ
+
+| フェーズ | 対象 | リスク | 前提条件 |
+|---------|------|--------|---------|
+| Phase A | `integrity-guard.ts` 抽出 | 低（純関数） | なし |
+| Phase B | `preserve-engine.ts` 抽出 | 低（DB依存少ない） | Phase A 完了 |
+| Phase C | `ai-split-engine.ts` 抽出 | 中（OpenAI API依存） | テストカバレッジ追加 |
+| Phase D | `merge-engine.ts` 抽出 | 中（副作用多い） | Phase B, C 完了 |
+| Phase E | `scene-persistence.ts` 抽出 | 高（全体に分散） | Phase A-D 完了 |
+
+### 9.4 現時点での方針
+
+- **即座の分割は行わない** — 現在の安定動作を優先
+- Phase A, B は低リスクなので、次の大きな機能追加時に並行して実施
+- 各 engine は**pure function 中心**に設計し、テスト容易性を確保
+
+---
+
+## 10. CI ゲート正式ポリシー
+
+### 10.1 ゲート方針
+
+**原則**: `MISSING_COLUMN` が検出されたファイルはデプロイをブロックする（段階導入）
+
+### 10.2 段階導入テーブル
+
+| Phase | 対象ファイル | ゲート条件 | 実施時期 | 状態 |
+|-------|------------|----------|---------|------|
+| **Phase 1** | `marunage.ts` | `MISSING_COLUMN = 0` | 即座 | ✅ 0件（ゲート可能） |
+| **Phase 2** | `formatting.ts`, `scenes.ts` | `MISSING_COLUMN = 0` | P0完了後 | ⏳ 要確認 |
+| **Phase 3** | 全 `src/routes/*.ts` | `MISSING_COLUMN = 0` | スキーマ修正後 | ⏳ |
+| **Phase 4** | 全ファイル + `UNKNOWN_TABLE` | 全 issue = 0 | 長期目標 | ⏳ |
+
+### 10.3 Warning レベル定義
+
+| レベル | 基準 | 対応 |
+|--------|------|------|
+| 🔴 **BLOCK** | Phase 対象ファイルで MISSING_COLUMN > 0 | デプロイ不可。修正必須 |
+| 🟡 **WARN** | Phase 対象外ファイルで MISSING_COLUMN > 0 | ログ出力のみ。修正推奨 |
+| 🟢 **INFO** | `UNKNOWN_TABLE` | ログ出力のみ。Phase 4 で対応 |
+
+### 10.4 CI スクリプト仕様（`npm run check:schema`）
+
+```bash
+# Exit code:
+#   0 = No issues in gated files
+#   1 = MISSING_COLUMN found in gated files (BLOCK)
+#
+# Output format:
+#   [BLOCK] marunage.ts:L42 — MISSING_COLUMN: api_usage_logs.operation
+#   [WARN]  patches.ts:L128 — MISSING_COLUMN: project_audio_tracks.track_url
+#   [INFO]  projects.ts:L345 — UNKNOWN_TABLE: utterances
+```
+
+### 10.5 不整合修正の優先順位
+
+1. **patches.ts の 6 件**: 旧カラム名参照 → コード削除（旧バージョン用パッチは不要）
+2. **admin.ts + webhooks.ts**: `api_usage_logs.operation` → migration 追加 or コード削除
+3. **runs-v2.ts**: `text_chunks.length` → `.length` プロパティ誤検出の可能性あり。手動確認
+4. **projects.ts, scenes.ts**: `utterances`, `scene_characters` → UNKNOWN_TABLE（テーブル存在確認）
+
+---
+
+## 11. execution_context ログ仕様
+
+### 11.1 目的
+
+`/format` API が **制作ボード（builder）** と **丸投げチャット（marunage）** の両方から呼ばれるため、ログで呼び出し元を明確に区別する。
+
+### 11.2 実装方式
+
+| 要素 | 詳細 |
+|------|------|
+| **識別方法** | HTTP ヘッダー `X-Execution-Context: marunage` |
+| **送信元** | `marunage.ts` の `startFormatLoop()` 内の `fetch()` 呼び出し |
+| **受信側** | `formatting.ts` の `/format` ハンドラ冒頭で `c.req.header('X-Execution-Context')` を読み取り |
+| **デフォルト** | ヘッダーなし → `'builder'` |
+| **ログ出力** | `[Format:AUDIT]` と `[Format:AUDIT:Preserve]` の両方に `context=` フィールドを追加 |
+
+### 11.3 ログ出力例
+
+```
+[Format:AUDIT] project=238, context=builder, mode=preserve, target=0, bodyTarget=NOT_SET, explicitlySet=false, reset=true
+[Format:AUDIT] project=239, context=marunage, mode=ai, target=5, bodyTarget=5, explicitlySet=true, reset=false
+[Format:AUDIT:Preserve] project=238, context=builder, paragraphCount=11, target=11, explicitlySet=false
+```
+
+### 11.4 活用シナリオ
+
+- **バグ調査**: 「11→5問題」のような SSOT ズレを context で即座に特定
+- **パフォーマンス分析**: builder vs marunage のフォーマット処理時間を比較
+- **将来のフロー分離**: context に応じてデフォルト値やバリデーションを変更する基盤
