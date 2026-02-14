@@ -1289,6 +1289,36 @@ marunage.get('/runs', async (c) => {
 })
 
 // ============================================================
+// 5-0.5. GET /runs/:runId - run_id → project_id 逆引き（v1仕様 §3.2）
+// ready/failed/canceled の run も返す（Result View 再表示用）
+// ============================================================
+
+marunage.get('/runs/:runId', async (c) => {
+  const user = await getSessionUser(c.env.DB, getCookie(c, 'session'))
+  if (!user) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Session required')
+
+  const runId = parseInt(c.req.param('runId'))
+  if (isNaN(runId)) return errorJson(c, MARUNAGE_ERRORS.INVALID_REQUEST, 'Invalid runId')
+
+  const run = await c.env.DB.prepare(`
+    SELECT id AS run_id, project_id, phase, created_at
+    FROM marunage_runs WHERE id = ?
+  `).bind(runId).first<{ run_id: number; project_id: number; phase: string; created_at: string }>()
+
+  if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'Run not found')
+
+  // Ownership check
+  const ownership = await c.env.DB.prepare(
+    `SELECT started_by_user_id FROM marunage_runs WHERE id = ?`
+  ).bind(runId).first<{ started_by_user_id: number }>()
+  if (ownership?.started_by_user_id !== user.id) {
+    return errorJson(c, MARUNAGE_ERRORS.FORBIDDEN, 'Not your run')
+  }
+
+  return c.json(run)
+})
+
+// ============================================================
 // 5-1. GET /active - ユーザーのアクティブ run を検索
 // ============================================================
 

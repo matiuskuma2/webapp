@@ -46,6 +46,10 @@ const MC = {
 
   // Polling guard (prevent concurrent mcPoll execution)
   _isPolling: false,
+
+  // One-shot notification guards (video build)
+  _videoDoneNotified: false,
+  _videoFailedNotified: false,
 };
 
 // ============================================================
@@ -94,9 +98,15 @@ function mcUpdateLiveProgress(data) {
       }
       break;
     }
-    case 'ready':
-      msg = '✅ 素材が完成しました！';
+    case 'ready': {
+      const vs = p?.video?.state;
+      if (vs === 'running') msg = '🎬 動画レンダリング中... ' + (p.video.progress_percent || 0) + '%';
+      else if (vs === 'done') msg = '✅ 動画が完成しました！';
+      else if (vs === 'failed') msg = '⚠️ 動画生成に失敗';
+      else if (vs === 'pending') msg = '⏳ 動画ビルド準備中...';
+      else msg = '✅ 素材が完成しました';
       break;
+    }
     case 'failed':
       msg = 'エラーが発生しました';
       break;
@@ -172,27 +182,60 @@ async function mcCheckAuth() {
 
 async function mcResumeRun(runId) {
   try {
-    // Find the run via /active or by checking status
+    // Step 1: Try /active first (for in-progress runs)
     const res = await axios.get('/api/marunage/active');
-    console.log('[Marunage] Resume run check:', res.data);
-    if (res.data.run_id) {
-      MC.runId = res.data.run_id;
-      MC.projectId = res.data.project_id;
-      MC.phase = res.data.phase;
-      
-      document.getElementById('mcProjectTitle').textContent = 'Project #' + MC.projectId;
-      mcAddSystemMessage('処理を再開しています... (Phase: ' + MC.phase + ')');
-      mcSetUIState('processing');
-      mcStartPolling();
-    } else {
-      mcAddSystemMessage('指定された処理は見つかりませんでした。新しくテキストを入力してください。', 'error');
-    }
-  } catch (err) {
-    if (err.response?.status === 404) {
-      mcAddSystemMessage('この処理は既に完了または中断されています。新しくテキストを入力してください。');
+    console.log('[Marunage] Resume via /active:', res.data);
+    MC.runId = res.data.run_id;
+    MC.projectId = res.data.project_id;
+    MC.phase = res.data.phase;
+    
+    document.getElementById('mcProjectTitle').textContent = 'Project #' + MC.projectId;
+    mcAddSystemMessage('処理を再開しています... (Phase: ' + MC.phase + ')');
+    mcSetUIState('processing');
+    mcStartPolling();
+  } catch (activeErr) {
+    // Step 2: /active returned 404 → try direct run lookup (for ready/failed/canceled runs)
+    if (activeErr.response?.status !== 404) {
+      console.warn('Resume run failed (non-404):', activeErr);
       return;
     }
-    console.warn('Resume run failed:', err);
+    
+    try {
+      const runRes = await axios.get('/api/marunage/runs/' + runId);
+      console.log('[Marunage] Resume via /runs/:runId:', runRes.data);
+      MC.runId = runRes.data.run_id;
+      MC.projectId = runRes.data.project_id;
+      MC.phase = runRes.data.phase;
+      
+      document.getElementById('mcProjectTitle').textContent = 'Project #' + MC.projectId;
+      
+      if (MC.phase === 'ready') {
+        // Ready run: fetch full status and show Result View
+        mcAddSystemMessage('完成した処理を表示しています...');
+        mcSetUIState('processing'); // temporary
+        mcStartPolling(); // will trigger mcUpdateFromStatus → mcSetUIState('ready') → mcShowReadyActions()
+      } else if (MC.phase === 'failed') {
+        mcAddSystemMessage('この処理はエラーで停止しています。', 'error');
+        mcSetUIState('error');
+        mcStartPolling(); // fetch full status once
+      } else if (MC.phase === 'canceled') {
+        mcAddSystemMessage('この処理は中断されています。');
+      } else {
+        // Unexpected terminal state
+        mcAddSystemMessage('処理状態: ' + MC.phase);
+        mcSetUIState('processing');
+        mcStartPolling();
+      }
+    } catch (runErr) {
+      if (runErr.response?.status === 404) {
+        mcAddSystemMessage('指定された処理が見つかりませんでした。新しくテキストを入力してください。', 'error');
+      } else if (runErr.response?.status === 403) {
+        mcAddSystemMessage('この処理へのアクセス権がありません。', 'error');
+      } else {
+        console.warn('Resume run lookup failed:', runErr);
+        mcAddSystemMessage('処理の読み込みに失敗しました。', 'error');
+      }
+    }
   }
 }
 
@@ -450,10 +493,12 @@ async function mcAdvance() {
         mcAddSystemMessage('音声生成を再起動しました...');
         break;
       case 'completed':
+        // Message adapts to whether video build is enabled
+        // (next poll will reveal video.state; for now, generic success)
         mcAddSystemMessage(
-          '<div>🎉 素材がすべて完成しました！</div>'
-          + '<div class="mt-2 text-sm">画像 + ナレーション音声が生成されました。</div>'
-          + '<div class="mt-2 text-sm text-gray-500">動画ビルドの状況は下のパネルで確認できます。</div>',
+          '<div>🎉 素材が完成しました！</div>'
+          + '<div class="mt-2 text-sm">画像 + ナレーション音声が揃いました。</div>'
+          + '<div class="mt-2 text-sm text-gray-500">動画の自動合成を確認中...</div>',
           'success'
         );
         mcSetUIState('ready');
@@ -490,8 +535,8 @@ function mcUpdateFromStatus(data) {
   const phase = data.phase;
   const p = data.progress;
   
-  // Update phase badge
-  mcUpdatePhaseBadge(phase);
+  // Update phase badge (pass video.state for ready phase)
+  mcUpdatePhaseBadge(phase, p?.video?.state);
   
   // Update progress bar
   mcUpdateProgress(data);
@@ -522,6 +567,21 @@ function mcUpdateFromStatus(data) {
     mcSetUIState('ready');
     // Update video status panel if already shown
     mcUpdateVideoPanel(data.progress?.video);
+    
+    // One-shot chat bubble when video.state transitions to done/failed
+    const vs = data.progress?.video?.state;
+    if (vs === 'done' && !MC._videoDoneNotified) {
+      MC._videoDoneNotified = true;
+      mcAddSystemMessage(
+        '<div>✅ 動画が完成しました！</div>'
+        + '<div class="mt-1 text-sm">下のパネルからダウンロードできます。</div>',
+        'success'
+      );
+    }
+    if (vs === 'failed' && !MC._videoFailedNotified) {
+      MC._videoFailedNotified = true;
+      mcAddSystemMessage('⚠️ 動画の生成に失敗しました。', 'error');
+    }
   }
   
   // Handle canceled
@@ -543,8 +603,24 @@ function mcUpdateFromStatus(data) {
 // Phase Badge
 // ============================================================
 
-function mcUpdatePhaseBadge(phase) {
+function mcUpdatePhaseBadge(phase, videoState) {
   const badge = document.getElementById('mcPhaseBadge');
+  
+  // For ready phase, badge varies by video.state (Spec §2.1)
+  if (phase === 'ready' && videoState) {
+    const videoMap = {
+      'off':     { text: '素材完成', bg: 'bg-green-100', fg: 'text-green-700' },
+      'pending': { text: '動画準備中', bg: 'bg-yellow-100', fg: 'text-yellow-700' },
+      'running': { text: '動画レンダリング中', bg: 'bg-blue-100', fg: 'text-blue-700' },
+      'done':    { text: '動画完成', bg: 'bg-green-200', fg: 'text-green-800' },
+      'failed':  { text: '動画エラー', bg: 'bg-red-100', fg: 'text-red-700' },
+    };
+    const vm = videoMap[videoState] || { text: '完成', bg: 'bg-green-100', fg: 'text-green-700' };
+    badge.textContent = vm.text;
+    badge.className = `text-xs px-2 py-0.5 rounded-full font-semibold ${vm.bg} ${vm.fg}`;
+    return;
+  }
+  
   const map = {
     'init':              { text: '初期化中', bg: 'bg-gray-200', fg: 'text-gray-700' },
     'formatting':        { text: '整形中', bg: 'bg-blue-100', fg: 'text-blue-700' },
@@ -896,13 +972,30 @@ function mcShowReadyActions() {
   const audioDone = p?.audio?.completed || 0;
   const audioTotal = p?.audio?.total_utterances || 0;
   
+  const videoState = p?.video?.state;
+  // Title adapts to video build status
+  let readyTitle, readySubtitle;
+  if (videoState === 'done') {
+    readyTitle = '動画が完成しました！';
+    readySubtitle = '下のパネルからダウンロードできます。';
+  } else if (videoState === 'running' || videoState === 'pending') {
+    readyTitle = '素材完成 — 動画を自動合成中...';
+    readySubtitle = '左のボードでシーン画像を確認できます。動画は自動的に生成されます。';
+  } else if (videoState === 'failed') {
+    readyTitle = '素材完成 — 動画生成エラー';
+    readySubtitle = '左のボードでシーン画像を確認できます。';
+  } else {
+    readyTitle = '素材が完成しました！';
+    readySubtitle = '左のボードでシーン画像を確認できます。';
+  }
+  
   const div = document.createElement('div');
   div.className = 'flex justify-start';
   div.setAttribute('data-ready-actions', 'true');
   div.innerHTML = `
     <div class="chat-bubble bg-green-50 text-green-800 border border-green-200 w-full">
-      <p class="font-bold mb-2"><i class="fas fa-check-circle mr-1"></i>素材が完成しました！</p>
-      <p class="text-sm mb-2">左のボードでシーン画像を確認できます。</p>
+      <p class="font-bold mb-2"><i class="fas fa-check-circle mr-1"></i>${readyTitle}</p>
+      <p class="text-sm mb-2">${readySubtitle}</p>
       
       <div class="grid grid-cols-2 gap-2 mb-3 text-sm">
         <div class="bg-white rounded px-2 py-1.5 border">
@@ -976,6 +1069,9 @@ function mcUpdateVideoPanel(video) {
 }
 
 function mcStartNew() {
+  // Confirmation dialog to prevent accidental data loss perception
+  if (!confirm('現在の結果を閉じて新しく作りますか？\n（作成済みの作品は一覧から再表示できます）')) return;
+  
   // Reset everything
   MC.runId = null;
   MC.projectId = null;
@@ -984,6 +1080,8 @@ function mcStartNew() {
   MC._retryShown = false;
   MC._lastProgressMsg = '';
   MC._progressBubble = null;
+  MC._videoDoneNotified = false;
+  MC._videoFailedNotified = false;
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
