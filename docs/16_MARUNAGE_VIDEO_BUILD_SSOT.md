@@ -397,3 +397,100 @@ When the feature is stable:
 4. **Update TERMINAL_PHASES** — include `video_ready`
 5. **Update unique index** — `WHERE phase NOT IN ('ready', 'video_ready', 'failed', 'canceled')`
 6. **4K pricing** — add `image_size` column to `image_generation_logs`, branching cost logic
+7. **Audio preview** — add audio URLs to status API response (D7)
+8. **Video rebuild button** — manual re-trigger from Result View (D5)
+9. **Dedicated `is_marunage` column** — replace `json_extract` filter if project count > 10K (D10)
+
+---
+
+## 13. Marunage UI Separation (P1, commit c494a9f)
+
+> Added: 2026-02-14 | Scope: Complete UI separation of Marunage from Builder
+
+### 13.1 Problem Statement
+
+Marunage projects shared the `projects` table with regular projects. On completion (`ready` phase):
+- Dashboard card linked to `/projects/:id` (Builder)
+- Chat completion messages linked to Builder
+- Builder had no guard against marunage projects
+- Regular project list included marunage projects
+
+### 13.2 Identification Method
+
+Marunage projects are identified by `settings_json` containing `marunage_mode: true`:
+```sql
+-- Set during /api/marunage/start (marunage.ts L1391-1395)
+json_extract(settings_json, '$.marunage_mode') = 1
+```
+
+### 13.3 Changes (3 files, +102/-13)
+
+| File | Change |
+|------|--------|
+| `src/routes/projects.ts` L317 | `AND json_extract(settings_json, '$.marunage_mode') IS NOT 1` |
+| `src/index.tsx` L537-557 | Server-side guard: `json_extract` → redirect to `/marunage-chat?run=X` |
+| `src/index.tsx` L4300 | Ready card link: `/marunage-chat?run=X` (was `/projects/:id`) |
+| `marunage-chat.js` L97 | Ready message: removed Builder reference |
+| `marunage-chat.js` L335-345 | Polling: continues during `video.state = running/pending` |
+| `marunage-chat.js` L446-451 | Completion message: removed Builder link |
+| `marunage-chat.js` L877-960 | `mcShowReadyActions` → Result View with video panel |
+
+### 13.4 Builder Guard (Server-Side)
+
+```
+GET /projects/:id
+  → DB: SELECT json_extract(settings_json, '$.marunage_mode') as is_marunage
+  → if is_marunage === 1:
+      → SELECT id FROM marunage_runs WHERE project_id = ?
+      → 302 redirect to /marunage-chat?run={id} or /marunage
+  → else: normal Builder HTML
+```
+
+### 13.5 Result View (mcShowReadyActions)
+
+Displays inline in chat right pane:
+- Image completion count (e.g., "8/8")
+- Audio completion count (e.g., "8/8")
+- Video build panel (`mcRenderVideoPanel`):
+  - `off`: "動画ビルドは無効です"
+  - `pending`: "ビルド準備中..."
+  - `running`: progress bar with percentage
+  - `done`: download button
+  - `failed`: error message
+- Action buttons: "新しく作る" + "一覧に戻る" (NO Builder link)
+
+### 13.6 Polling Behavior
+
+```
+phase = ready AND video.state in (running, pending) → continue polling
+phase = ready AND video.state in (off, done, failed) → stop polling
+phase in (failed, canceled) → stop polling
+```
+
+### 13.7 Verification Checklist
+
+```bash
+SITE_URL="https://webapp-c7n.pages.dev"  # or production custom domain
+
+# 1. Regular project list excludes marunage
+curl -b "session=..." "${SITE_URL}/api/projects"
+
+# 2. Builder direct access redirects
+curl -v "${SITE_URL}/projects/<marunage-project-id>"
+# Expected: 302 → /marunage-chat?run=X
+
+# 3. Marunage dashboard ready card → /marunage-chat?run=X
+
+# 4. Chat ready state → Result View (no Builder link)
+
+# 5. Video panel states: off/pending/running/done/failed
+```
+
+### 13.8 Non-Impact Confirmation
+
+- `formatting.ts`: unchanged
+- `image-generation.ts`: unchanged
+- `video-generation.ts`: unchanged
+- `marunage_runs.phase` CHECK: unchanged
+- No new migrations required
+- `building_video`/`video_ready`: comment-only (P2)
