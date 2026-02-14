@@ -351,6 +351,19 @@ formatting.post('/:id/format', async (c) => {
     
     console.log(`[Format:AUDIT] project=${projectId}, context=${executionContext}, mode=${splitMode}, target=${targetSceneCount}, bodyTarget=${bodyTargetSceneCount ?? 'NOT_SET'}, explicitlySet=${targetExplicitlySet}, reset=${shouldReset}`)
 
+    // ★ FIX: split_mode と target_scene_count をプロジェクトに保存
+    // 次回ロード時に正しい初期値がフロントエンドに返る
+    try {
+      const saveSplitMode = splitMode  // preserve or ai
+      const saveTarget = targetExplicitlySet ? bodyTargetSceneCount : null  // null = 自動
+      await c.env.DB.prepare(`
+        UPDATE projects SET split_mode = ?, target_scene_count = ? WHERE id = ?
+      `).bind(saveSplitMode, saveTarget, projectId).run()
+      console.log(`[Format] Saved split_mode=${saveSplitMode}, target_scene_count=${saveTarget} to project ${projectId}`)
+    } catch (e) {
+      console.warn(`[Format] Failed to save split settings to project:`, e)
+    }
+
     // 1. プロジェクトの存在確認とステータスチェック
     const project = await c.env.DB.prepare(`
       SELECT id, title, status, source_type, source_text

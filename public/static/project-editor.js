@@ -979,7 +979,7 @@ async function saveSourceText() {
 
 // Global split settings (SSOT: raw / optimized)
 let currentSplitMode = null; // null = 未選択, 'raw' = 原文そのまま, 'optimized' = AI整形
-let currentTargetSceneCount = 5; // Default target scene count
+let currentTargetSceneCount = null; // null = 未設定（段落数から自動決定）
 let savedSplitMode = null; // プロジェクトに保存されているモード（変更検知用）
 
 /**
@@ -1083,12 +1083,13 @@ function renderFormatSectionUI() {
   const paragraphCount = countParagraphs();
   
   // ★ SSOT: target_scene_count の初期値
-  // - DBに保存値がある → それを使う
-  // - なければ段落数（raw向け）or 5（ai向け）
-  const initialTarget = currentProject && currentProject.target_scene_count
-    ? currentProject.target_scene_count
-    : (paragraphCount > 0 ? paragraphCount : 5);
-  currentTargetSceneCount = initialTarget;
+  // - DBに保存値がある（かつ null/0 でない） → それを使う
+  // - なければ段落数を優先、段落数も0なら空欄（プレースホルダ「自動」表示）
+  const dbTarget = currentProject && currentProject.target_scene_count;
+  const initialTarget = (dbTarget && dbTarget > 0)
+    ? dbTarget
+    : (paragraphCount > 0 ? paragraphCount : '');
+  currentTargetSceneCount = initialTarget || null;
   
   return `
     <div class="p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg">
@@ -1131,7 +1132,7 @@ function renderFormatSectionUI() {
       <div class="mb-4">
         <label class="block text-sm font-medium text-gray-700 mb-2">目標シーン数 <span class="text-xs text-gray-400">（現在の段落数: <strong>${paragraphCount}</strong>）</span></label>
         <div class="flex items-center gap-2">
-          <input type="number" id="targetSceneCount" value="${initialTarget}" min="1" max="200"
+          <input type="number" id="targetSceneCount" value="${initialTarget}" placeholder="自動" min="1" max="200"
                  onchange="updateTargetSceneCount(this.value)"
                  class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500">
           <span class="text-sm text-gray-500">シーン（1〜200）</span>
@@ -1194,7 +1195,9 @@ function countParagraphs() {
  * Update target scene count and refresh description
  */
 function updateTargetSceneCount(value) {
-  currentTargetSceneCount = parseInt(value) || 5;
+  const parsed = parseInt(value);
+  currentTargetSceneCount = (parsed > 0) ? parsed : null;
+  console.log('[updateTargetSceneCount] input:', value, '→ currentTargetSceneCount:', currentTargetSceneCount);
   updateSplitModeDescription();
   updateExecutionPreview();
 }
@@ -1214,7 +1217,7 @@ function updateExecutionPreview() {
   
   if (currentSplitMode) {
     modeEl.textContent = currentSplitMode === 'raw' ? '原文そのまま (preserve)' : 'AI整理 (ai)';
-    targetEl.textContent = String(currentTargetSceneCount);
+    targetEl.textContent = currentTargetSceneCount ? String(currentTargetSceneCount) : '自動';
     if (paraEl) paraEl.textContent = String(countParagraphs());
     
     // ★ preserve モード: 段落結合/分割の配分を事前表示
@@ -1333,18 +1336,19 @@ function updateSplitModeDescription() {
   
   if (currentSplitMode === 'preserve') {
     // preserve モードの説明（段落数と目標の比較）
+    const effectiveTarget = target || paragraphCount;  // null/0 → 段落数を使用
     let adjustmentText = '';
-    if (paragraphCount > target) {
+    if (paragraphCount > effectiveTarget) {
       // 結合: 等分配の計算を表示
-      const base = Math.floor(paragraphCount / target);
-      const extra = paragraphCount % target;
+      const base = Math.floor(paragraphCount / effectiveTarget);
+      const extra = paragraphCount % effectiveTarget;
       const dist = [];
-      for (let g = 0; g < target; g++) dist.push(base + (g < extra ? 1 : 0));
-      adjustmentText = `<span class="text-orange-600"><i class="fas fa-compress-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（段落を等分配で結合 [${dist.join(',')}]、改変なし）</span>`;
-    } else if (paragraphCount < target) {
-      adjustmentText = `<span class="text-blue-600"><i class="fas fa-expand-arrows-alt mr-1"></i>${paragraphCount}段落 → ${target}シーン（文境界で分割、改変なし）</span>`;
+      for (let g = 0; g < effectiveTarget; g++) dist.push(base + (g < extra ? 1 : 0));
+      adjustmentText = `<span class="text-orange-600"><i class="fas fa-compress-arrows-alt mr-1"></i>${paragraphCount}段落 → ${effectiveTarget}シーン（段落を等分配で結合 [${dist.join(',')}]、改変なし）</span>`;
+    } else if (paragraphCount < effectiveTarget) {
+      adjustmentText = `<span class="text-blue-600"><i class="fas fa-expand-arrows-alt mr-1"></i>${paragraphCount}段落 → ${effectiveTarget}シーン（文境界で分割、改変なし）</span>`;
     } else {
-      adjustmentText = `<span class="text-green-600"><i class="fas fa-check mr-1"></i>${paragraphCount}段落 = ${target}シーン（そのまま）</span>`;
+      adjustmentText = `<span class="text-green-600"><i class="fas fa-check mr-1"></i>${paragraphCount}段落 = ${effectiveTarget}シーン（そのまま）</span>`;
     }
     
     descEl.innerHTML = `
@@ -1389,7 +1393,8 @@ async function confirmAndFormatSplit() {
   // Get target scene count from input
   const targetInput = document.getElementById('targetSceneCount');
   if (targetInput) {
-    currentTargetSceneCount = parseInt(targetInput.value) || 5;
+    const parsedVal = parseInt(targetInput.value);
+    currentTargetSceneCount = (parsedVal > 0) ? parsedVal : null;
     console.log('[confirmAndFormatSplit] targetInput.value:', targetInput.value, '→ currentTargetSceneCount:', currentTargetSceneCount);
   } else {
     console.warn('[confirmAndFormatSplit] targetInput not found, using default:', currentTargetSceneCount);
@@ -1414,7 +1419,7 @@ async function confirmAndFormatSplit() {
   const confirmed = confirm(
     `シーン分割を実行しますか？\n\n` +
     `分割モード: ${modeText}\n` +
-    `目標シーン数: ${currentTargetSceneCount}\n\n` +
+    `目標シーン数: ${currentTargetSceneCount || '自動（段落数に合わせる）'}\n\n` +
     `⚠️ リセットされる制作物:\n` +
     `  ・原文由来シーン（chunk_id≠NULL）\n` +
     `  ・上記シーンの画像・音声・吹き出し\n` +
@@ -1488,7 +1493,10 @@ async function formatAndSplit() {
   // Get split mode and target scene count from global state (set by confirmAndFormatSplit)
   // SSOT: raw → preserve, optimized → ai に変換（バックエンド互換）
   const apiSplitMode = currentSplitMode === 'raw' ? 'preserve' : 'ai';
-  const targetSceneCount = currentTargetSceneCount || 5;
+  // ★ FIX: null/0 の場合はバックエンドに 0 を送信し、バックエンドの自動検出に任せる
+  // preserve モード: 0 = 段落数に自動合わせ（バックエンドのセンチネル値）
+  // ai モード: 0 の場合はバックエンドが 5 をデフォルト使用
+  const targetSceneCount = (currentTargetSceneCount && currentTargetSceneCount > 0) ? currentTargetSceneCount : 0;
   
   console.log('[Format] currentTargetSceneCount:', currentTargetSceneCount);
   console.log('[Format] Split mode:', currentSplitMode, '(API:', apiSplitMode, ') Target scene count:', targetSceneCount);
