@@ -47,6 +47,12 @@ const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
  * 
  * CRITICAL: Remotion Lambda cannot resolve relative URLs and will append them
  * to its own S3 bucket URL, causing 404 errors.
+ * 
+ * Image r2_url in DB:  "/projects/252/scenes/2508/image_2016.png"
+ * Image route mounted:  app.route('/images', images)
+ * So the correct public URL is:  SITE_URL + "/images" + r2_url
+ * 
+ * Audio r2_url already includes the route prefix: "/audio/252/scene_1/..."
  */
 function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string | undefined): string | null {
   if (!relativeUrl) return null;
@@ -56,7 +62,14 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
   }
   // Relative path - prefix with SITE_URL (with fallback)
   const baseUrl = (siteUrl || DEFAULT_SITE_URL).replace(/\/$/, ''); // Remove trailing slash
-  const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+  let path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+  
+  // Image URLs from DB start with "/projects/" but are served under "/images/projects/..."
+  // Audio URLs already include "/audio/" prefix and don't need adjustment
+  if (path.startsWith('/projects/') && !path.startsWith('/images/')) {
+    path = `/images${path}`;
+  }
+  
   const absoluteUrl = `${baseUrl}${path}`;
   
   // Log for debugging if using fallback

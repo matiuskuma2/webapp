@@ -1956,6 +1956,9 @@ const DEFAULT_SITE_URL = 'https://app.marumuviai.com';
 /**
  * Convert relative R2 URL to absolute URL
  * CRITICAL: Remotion Lambda cannot resolve relative URLs
+ * 
+ * Image r2_url: "/projects/..." → needs "/images" prefix for app route
+ * Audio r2_url: "/audio/..." → already has correct route prefix
  */
 function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string | undefined): string | null {
   if (!relativeUrl) return null;
@@ -1965,7 +1968,13 @@ function toAbsoluteUrl(relativeUrl: string | null | undefined, siteUrl: string |
     return ensureCloudFrontUrl(relativeUrl);
   }
   const baseUrl = (siteUrl || DEFAULT_SITE_URL).replace(/\/$/, '');
-  const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+  let path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`;
+  
+  // Image URLs from DB start with "/projects/" but are served under "/images/projects/..."
+  if (path.startsWith('/projects/') && !path.startsWith('/images/')) {
+    path = `/images${path}`;
+  }
+  
   return `${baseUrl}${path}`;
 }
 
