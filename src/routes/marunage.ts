@@ -809,12 +809,13 @@ async function marunageGenerateImages(
 
     // Mark completed
     const imgTotalMs = Date.now() - tImgStart
+    const r2Url = `/${r2Key}`  // ★ FIX: r2_url を設定（preflight が参照する）
     await db.prepare(`
       UPDATE image_generations
-      SET status = 'completed', r2_key = ?,
+      SET status = 'completed', r2_key = ?, r2_url = ?,
           ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
       WHERE id = ?
-    `).bind(r2Key, imgTotalMs, imgGeminiMs, imgR2Ms, genId).run()
+    `).bind(r2Key, r2Url, imgTotalMs, imgGeminiMs, imgR2Ms, genId).run()
 
     generated++
     console.log(`[Marunage:Image] ✅ Scene ${scene.id} completed (${generated}/${scenes.length}) total=${imgTotalMs}ms gemini=${imgGeminiMs}ms r2=${imgR2Ms}ms`)
@@ -1993,12 +1994,13 @@ marunage.post('/:projectId/advance', async (c) => {
             const r2Ms = Date.now() - tR2Start
             const totalMs = Date.now() - t0
             
+            const r2Url = `/${r2Key}`  // ★ FIX: r2_url を設定（preflight が参照する）
             await c.env.DB.prepare(`
               UPDATE image_generations
-              SET status = 'completed', r2_key = ?,
+              SET status = 'completed', r2_key = ?, r2_url = ?,
                   ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
               WHERE id = ?
-            `).bind(r2Key, totalMs, geminiMs, r2Ms, genId).run()
+            `).bind(r2Key, r2Url, totalMs, geminiMs, r2Ms, genId).run()
             // Note: scenes table does NOT have image_status/image_r2_key columns.
             // Image status is tracked exclusively via image_generations table.
             console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} ✅ completed — total=${totalMs}ms gemini=${geminiMs}ms r2=${r2Ms}ms`)
