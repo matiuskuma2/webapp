@@ -271,7 +271,8 @@ npx wrangler d1 migrations list webapp-production --remote
 
 ```bash
 # SITE_URL は production の c.env.SITE_URL と一致させること（最重要）
-SITE_URL="https://app.koemusubi.com"   # ← 本番のカスタムドメインに合わせる
+# ※カスタムドメイン運用の場合は SITE_URL をそちらに差し替えてください
+SITE_URL="https://webapp-c7n.pages.dev"
 PROJECT_ID="123"                        # ← ready 状態のプロジェクトID
 SESSION="YOUR_SESSION_COOKIE"           # ← ブラウザDevToolsから取得
 
@@ -470,7 +471,8 @@ phase in (failed, canceled) → stop polling
 ### 13.7 Verification Checklist
 
 ```bash
-SITE_URL="https://webapp-c7n.pages.dev"  # or production custom domain
+# ※カスタムドメイン運用の場合は SITE_URL をそちらに差し替えてください
+SITE_URL="https://webapp-c7n.pages.dev"
 
 # 1. Regular project list excludes marunage
 curl -b "session=..." "${SITE_URL}/api/projects"
