@@ -8,7 +8,38 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-02-09（サービス名 MARUMUVI へリブランド + TOP 2動線化 + 丸投げチャット準備中ページ）
+- **最終更新**: 2026-02-14（丸投げチャット動画パイプライン完全修復）
+
+---
+
+## 🔧 2026-02-14 修正ログ（丸投げチャット動画パイプライン）
+
+### 修正済みバグ一覧
+
+| # | バグ | 原因 | 修正 (commit) |
+|---|------|------|---------------|
+| 1 | Gate2 preflight 常に失敗 | レスポンスフィールド `ready` → `is_ready` | `d4c7917` |
+| 2 | Gate3 POST 結果パース失敗 | `result.id` → `result.build.id` | `2192489` |
+| 3 | UI「素材完成」で 0枚/0枚 表示 | advance が ready 描画→status 未取得 | `2192489` |
+| 4 | 進捗バー 100% で止まる | 動画ステップなし (5段階→6段階) | `2192489` |
+| 5 | status API が DB 読み取りのみで停止 | inline refresh 未実装 | `9743f4d` |
+| 6 | フラグ ON でも videoState=off | flag チェックなし | `e891ce1` |
+| 7 | ready 後の自動トリガー不発 | phase 遷移時のみ発火、status 経由なし | `be20798` |
+| 8 | 失敗ビルド後リトライ不能 | Gate1 が video_build_id で永久ブロック | `4bf2bd2` |
+| 9 | Remotion が画像 URL 取得失敗 (404) | r2_url `/projects/...` に `/images/` 欠落 | `75db5f1` |
+
+### 検証結果
+- **Run 21 / Project 252**: Build 175 → **completed** (progress 100%, download_url あり, error なし)
+- Build 173: cron 自動キャンセル (submitted で 30分停止 → AWS 側問題)
+- Build 174: 画像 URL 404 (修正前の `/projects/...` パス)
+- Build 175: `/images/projects/...` パスで成功 ✅
+
+### 設計変更サマリ
+1. **進捗バー 6 ステップ**: フォーマット → 確認 → 画像 → 音声 → 動画 → 完成
+2. **status API 自動トリガー**: ready + flag ON + build 未開始 → polling 中に自動起動
+3. **auto-retry**: failed build → 5分クールダウン後に status API で自動再試行
+4. **toAbsoluteUrl 補正**: `/projects/...` パスに自動で `/images/` プレフィックス付加
+5. **UI flag 表示**: off (無効) / pending (準備中) / running (進行中) / done (完了) / failed (失敗)
 
 ---
 
@@ -22,14 +53,16 @@
 4. 動画化（Veo2/Veo3）
 5. 合成・エクスポート
 
-### フロー2: 丸投げチャット（Coming Soon・工事中）
+### フロー2: 丸投げチャット（稼働中 ✅）
 チャットだけで動画完成する全自動型。
-1. チャットでシナリオを伝える
-2. シーン画像を全自動生成
-3. 画像から動画を自動生成
-4. 全シーンを合算して完成
+1. チャットでシナリオを伝える → AI がシーン分割
+2. シーン画像を全自動生成（Gemini API）
+3. 音声を全自動生成（TTS）
+4. 動画を自動合成（Remotion Lambda → AWS）
+5. ダウンロード URL を表示
 
-> `/marunage-chat` で工事中ページを確認可能。既存プロジェクト機能とは完全に切り離して開発予定。
+> `/marunage-chat` でアクセス。6ステップ進捗バー（フォーマット→確認→画像→音声→動画→完成）でリアルタイム表示。
+> `MARUNAGE_ENABLE_VIDEO_BUILD` フラグで動画合成の ON/OFF を制御。
 
 ---
 
