@@ -1699,6 +1699,19 @@ marunage.get('/:projectId/status', async (c) => {
       videoDownloadUrl = null
     }
   }
+
+  // ── Auto-trigger: If phase ready + flag ON + no build attempted → trigger first build ──
+  // Handles cases where the flag was enabled after the run reached ready, or trigger was missed
+  if (run.phase === 'ready' && videoBuildFlagOn && !run.video_build_id && !run.video_build_attempted_at && !run.video_build_error) {
+    console.log(`[Marunage:Status] No build attempted for run ${run.id}, triggering now (flag ON + ready)`)
+    const sessionCookie = getCookie(c, 'session') || ''
+    c.executionCtx.waitUntil(
+      marunageTriggerVideoBuild(
+        c.env.DB, run.id, run.project_id, config,
+        c.req.url, sessionCookie
+      ).catch(err => console.error(`[Marunage:Status] Auto-trigger error:`, err))
+    )
+  }
   let videoState: 'off' | 'pending' | 'running' | 'done' | 'failed'
   if (run.video_build_id) {
     // Build exists — derive state from build status
