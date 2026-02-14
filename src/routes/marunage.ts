@@ -1639,6 +1639,33 @@ marunage.get('/:projectId/status', async (c) => {
       videoBuildStatus = videoBuild.status
       videoProgressPercent = videoBuild.progress_percent
       videoDownloadUrl = videoBuild.download_url
+
+      // If build is active (not terminal), trigger a refresh via internal fetch
+      // This keeps the DB updated from AWS/Remotion so the marunage UI gets live progress
+      const activeStatuses = ['queued', 'validating', 'submitted', 'rendering', 'uploading']
+      if (activeStatuses.includes(videoBuild.status)) {
+        try {
+          const origin = new URL(c.req.url).origin
+          const refreshUrl = `${origin}/api/video-builds/${run.video_build_id}/refresh`
+          const sessionCookie = getCookie(c, 'session') || ''
+          const refreshRes = await fetch(refreshUrl, {
+            method: 'POST',
+            headers: { 'Cookie': `session=${sessionCookie}` },
+          })
+          if (refreshRes.ok) {
+            const refreshData = await refreshRes.json() as any
+            const rb = refreshData?.build
+            if (rb) {
+              videoBuildStatus = rb.status || videoBuildStatus
+              videoProgressPercent = rb.progress_percent ?? videoProgressPercent
+              videoDownloadUrl = rb.download_url || videoDownloadUrl
+              console.log(`[Marunage:Status] Build ${run.video_build_id} refreshed: ${videoBuild.status} → ${rb.status}`)
+            }
+          }
+        } catch (refreshErr) {
+          console.warn(`[Marunage:Status] Build refresh failed (non-fatal):`, refreshErr instanceof Error ? refreshErr.message : refreshErr)
+        }
+      }
     }
   }
 
