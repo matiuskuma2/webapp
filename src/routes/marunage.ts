@@ -1669,14 +1669,36 @@ marunage.get('/:projectId/status', async (c) => {
     }
   }
 
-  // P1: phase stays 'ready'. Video progress is derived from video_builds table.
-  // States: 'off' | 'pending' | 'running' | 'done' | 'failed'
-  // - 'off'     = video build feature flag is OFF (intentionally disabled)
-  // - 'pending' = flag ON, build not yet created (awaiting trigger) OR created but not started
-  // - 'running' = rendering/uploading in progress
-  // - 'done'    = completed with download_url
-  // - 'failed'  = trigger error or build failure
+  // ── Auto-retry: If build failed + flag ON + phase ready → clear & re-trigger ──
+  // Retries once per status poll to avoid infinite loops. Uses video_build_attempted_at as cooldown.
   const videoBuildFlagOn = await isVideoBuildEnabled(c.env.DB)
+  if (run.phase === 'ready' && videoBuildFlagOn && videoBuildStatus === 'failed' && run.video_build_id) {
+    // Check cooldown (5 min after failure detection)
+    const attemptedAt = run.video_build_attempted_at ? new Date(run.video_build_attempted_at).getTime() : 0
+    const elapsed = Date.now() - attemptedAt
+    const RETRY_COOLDOWN_MS = 5 * 60 * 1000 // 5 minutes
+    if (elapsed >= RETRY_COOLDOWN_MS) {
+      console.log(`[Marunage:Status] Build ${run.video_build_id} failed, retrying after ${Math.floor(elapsed / 60000)}min cooldown`)
+      // Clear run's video build state
+      await c.env.DB.prepare(`
+        UPDATE marunage_runs
+        SET video_build_id = NULL, video_build_error = NULL, video_build_attempted_at = NULL
+        WHERE id = ?
+      `).bind(run.id).run()
+      // Trigger in background
+      const sessionCookie = getCookie(c, 'session') || ''
+      c.executionCtx.waitUntil(
+        marunageTriggerVideoBuild(
+          c.env.DB, run.id, run.project_id, config,
+          c.req.url, sessionCookie
+        ).catch(err => console.error(`[Marunage:Status] Auto-retry error:`, err))
+      )
+      // Override state for this response
+      videoBuildStatus = null
+      videoProgressPercent = null
+      videoDownloadUrl = null
+    }
+  }
   let videoState: 'off' | 'pending' | 'running' | 'done' | 'failed'
   if (run.video_build_id) {
     // Build exists — derive state from build status
