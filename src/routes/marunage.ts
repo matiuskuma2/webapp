@@ -1254,6 +1254,9 @@ marunage.get('/runs', async (c) => {
   const user = await getSessionUser(c.env.DB, getCookie(c, 'session'))
   if (!user) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Session required')
 
+  // Query param: ?archived=1 to show archived runs, default shows only non-archived
+  const showArchived = c.req.query('archived') === '1'
+
   const { results: runs } = await c.env.DB.prepare(`
     SELECT
       mr.id AS run_id,
@@ -1264,6 +1267,7 @@ marunage.get('/runs', async (c) => {
       mr.created_at,
       mr.updated_at,
       mr.completed_at,
+      mr.is_archived,
       p.title AS project_title,
       p.status AS project_status,
       (SELECT COUNT(*) FROM scenes s WHERE s.project_id = mr.project_id AND (s.is_hidden = 0 OR s.is_hidden IS NULL)) AS scene_count,
@@ -1273,6 +1277,7 @@ marunage.get('/runs', async (c) => {
     FROM marunage_runs mr
     JOIN projects p ON p.id = mr.project_id
     WHERE mr.started_by_user_id = ?
+      AND ${showArchived ? 'mr.is_archived = 1' : '(mr.is_archived = 0 OR mr.is_archived IS NULL)'}
     ORDER BY mr.created_at DESC
     LIMIT 50
   `).bind(user.id).all()
@@ -1292,8 +1297,57 @@ marunage.get('/runs', async (c) => {
       updated_at: r.updated_at,
       completed_at: r.completed_at,
       is_active: !['ready', 'failed', 'canceled'].includes(r.phase),
+      is_archived: r.is_archived === 1,
     })),
   })
+})
+
+// ============================================================
+// 5-0.3. POST /runs/:runId/archive - アーカイブ（非表示）
+// ============================================================
+marunage.post('/runs/:runId/archive', async (c) => {
+  const user = await getSessionUser(c.env.DB, getCookie(c, 'session'))
+  if (!user) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Session required')
+
+  const runId = parseInt(c.req.param('runId'))
+  if (isNaN(runId)) return errorJson(c, MARUNAGE_ERRORS.INVALID_REQUEST, 'Invalid runId')
+
+  const run = await c.env.DB.prepare(`
+    SELECT id, started_by_user_id FROM marunage_runs WHERE id = ?
+  `).bind(runId).first<{ id: number; started_by_user_id: number }>()
+
+  if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'Run not found')
+  if (run.started_by_user_id !== user.id) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Not your run')
+
+  await c.env.DB.prepare(`
+    UPDATE marunage_runs SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+  `).bind(runId).run()
+
+  return c.json({ success: true, run_id: runId, is_archived: true })
+})
+
+// ============================================================
+// 5-0.4. POST /runs/:runId/unarchive - アーカイブ解除
+// ============================================================
+marunage.post('/runs/:runId/unarchive', async (c) => {
+  const user = await getSessionUser(c.env.DB, getCookie(c, 'session'))
+  if (!user) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Session required')
+
+  const runId = parseInt(c.req.param('runId'))
+  if (isNaN(runId)) return errorJson(c, MARUNAGE_ERRORS.INVALID_REQUEST, 'Invalid runId')
+
+  const run = await c.env.DB.prepare(`
+    SELECT id, started_by_user_id FROM marunage_runs WHERE id = ?
+  `).bind(runId).first<{ id: number; started_by_user_id: number }>()
+
+  if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'Run not found')
+  if (run.started_by_user_id !== user.id) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Not your run')
+
+  await c.env.DB.prepare(`
+    UPDATE marunage_runs SET is_archived = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+  `).bind(runId).run()
+
+  return c.json({ success: true, run_id: runId, is_archived: false })
 })
 
 // ============================================================
