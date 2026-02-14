@@ -95,7 +95,7 @@ function mcUpdateLiveProgress(data) {
       break;
     }
     case 'ready':
-      msg = '✅ 素材が完成しました！プロジェクト詳細画面で動画を組み立てできます';
+      msg = '✅ 素材が完成しました！';
       break;
     case 'failed':
       msg = 'エラーが発生しました';
@@ -333,8 +333,15 @@ async function mcPoll() {
     }
     
     // Check terminal
-    if (['ready', 'failed', 'canceled'].includes(data.phase)) {
+    if (['failed', 'canceled'].includes(data.phase)) {
       mcStopPolling();
+    }
+    if (data.phase === 'ready') {
+      const vs = data.progress?.video?.state;
+      if (!vs || vs === 'off' || vs === 'done' || vs === 'failed') {
+        mcStopPolling();
+      }
+      // running/pending → continue polling for video build progress
     }
     
   } catch (err) {
@@ -446,8 +453,7 @@ async function mcAdvance() {
         mcAddSystemMessage(
           '<div>🎉 素材がすべて完成しました！</div>'
           + '<div class="mt-2 text-sm">画像 + ナレーション音声が生成されました。</div>'
-          + '<div class="mt-2"><a href="/projects/' + MC.projectId + '" class="inline-flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition-colors no-underline"><i class="fas fa-film"></i> プロジェクト詳細を開く</a></div>'
-          + '<div class="mt-1 text-xs text-gray-500">↑ ここから動画のプレビュー・書き出しができます</div>',
+          + '<div class="mt-2 text-sm text-gray-500">動画ビルドの状況は下のパネルで確認できます。</div>',
           'success'
         );
         mcSetUIState('ready');
@@ -510,9 +516,12 @@ function mcUpdateFromStatus(data) {
     }
   }
   
-  // Handle ready
+  // Handle ready — store latest status for Result View
   if (phase === 'ready') {
+    MC._lastStatus = data;
     mcSetUIState('ready');
+    // Update video status panel if already shown
+    mcUpdateVideoPanel(data.progress?.video);
   }
   
   // Handle canceled
@@ -862,7 +871,7 @@ function mcSetUIState(state) {
       input.disabled = true;
       sendBtn.disabled = true;
       input.placeholder = '完成しました';
-      mcStopPolling();
+      // Note: polling stop is now handled in mcPoll based on video.state
       mcShowReadyActions();
       break;
       
@@ -880,17 +889,35 @@ function mcShowReadyActions() {
   // Check if ready actions already shown
   if (container.querySelector('[data-ready-actions]')) return;
   
+  const status = MC._lastStatus;
+  const p = status?.progress;
+  const imgDone = p?.images?.completed || 0;
+  const imgTotal = p?.images?.total || 0;
+  const audioDone = p?.audio?.completed || 0;
+  const audioTotal = p?.audio?.total_utterances || 0;
+  
   const div = document.createElement('div');
   div.className = 'flex justify-start';
   div.setAttribute('data-ready-actions', 'true');
   div.innerHTML = `
     <div class="chat-bubble bg-green-50 text-green-800 border border-green-200 w-full">
       <p class="font-bold mb-2"><i class="fas fa-check-circle mr-1"></i>素材が完成しました！</p>
-      <p class="text-sm mb-3">左のボードでシーン画像を確認できます。</p>
+      <p class="text-sm mb-2">左のボードでシーン画像を確認できます。</p>
+      
+      <div class="grid grid-cols-2 gap-2 mb-3 text-sm">
+        <div class="bg-white rounded px-2 py-1.5 border">
+          <i class="fas fa-image text-blue-500 mr-1"></i>画像: <strong>${imgDone}/${imgTotal}</strong>
+        </div>
+        <div class="bg-white rounded px-2 py-1.5 border">
+          <i class="fas fa-microphone text-purple-500 mr-1"></i>音声: <strong>${audioDone}/${audioTotal}</strong>
+        </div>
+      </div>
+      
+      <div id="mcVideoPanel" class="mb-3 p-2.5 bg-white rounded border">
+        ${mcRenderVideoPanel(p?.video)}
+      </div>
+      
       <div class="flex flex-wrap gap-2">
-        <a href="/projects/${MC.projectId}" class="inline-flex items-center px-3 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-semibold hover:bg-blue-700 no-underline">
-          <i class="fas fa-edit mr-1"></i>プロジェクトを開く
-        </a>
         <button onclick="mcStartNew()" class="px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm font-semibold hover:bg-purple-700">
           <i class="fas fa-plus mr-1"></i>新しく作る
         </button>
@@ -902,6 +929,50 @@ function mcShowReadyActions() {
   `;
   container.appendChild(div);
   container.scrollTop = container.scrollHeight;
+}
+
+// ── Video Build Panel Renderer ──
+function mcRenderVideoPanel(video) {
+  if (!video || video.state === 'off') {
+    return '<div class="text-sm text-gray-400"><i class="fas fa-video-slash mr-1"></i>動画ビルドは無効です</div>';
+  }
+  
+  switch (video.state) {
+    case 'pending':
+      return '<div class="text-sm text-yellow-600"><i class="fas fa-clock mr-1 animate-pulse"></i>動画ビルド準備中...</div>';
+    
+    case 'running': {
+      const pct = video.progress_percent || 0;
+      return `
+        <div class="text-sm text-blue-600 mb-1"><i class="fas fa-spinner fa-spin mr-1"></i>動画レンダリング中...</div>
+        <div class="w-full bg-gray-200 rounded-full h-2.5">
+          <div class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width:${pct}%"></div>
+        </div>
+        <div class="text-xs text-gray-500 mt-1 text-right">${pct}%</div>
+      `;
+    }
+    
+    case 'done': {
+      const url = video.download_url;
+      return `
+        <div class="text-sm text-green-600 mb-2"><i class="fas fa-check-circle mr-1"></i>動画が完成しました！</div>
+        ${url ? '<a href="' + url + '" target="_blank" rel="noopener" class="inline-flex items-center px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 no-underline"><i class="fas fa-download mr-1"></i>動画をダウンロード</a>' : '<div class="text-xs text-gray-400">ダウンロードリンク準備中...</div>'}
+      `;
+    }
+    
+    case 'failed':
+      return '<div class="text-sm text-red-600"><i class="fas fa-exclamation-triangle mr-1"></i>動画ビルドに失敗しました</div>';
+    
+    default:
+      return '<div class="text-sm text-gray-400"><i class="fas fa-film mr-1"></i>動画: ' + (video.state || '不明') + '</div>';
+  }
+}
+
+// ── Update video panel in-place (called on each poll while ready + video running) ──
+function mcUpdateVideoPanel(video) {
+  const panel = document.getElementById('mcVideoPanel');
+  if (!panel) return;
+  panel.innerHTML = mcRenderVideoPanel(video);
 }
 
 function mcStartNew() {

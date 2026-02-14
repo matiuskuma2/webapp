@@ -534,10 +534,27 @@ app.get('/', (c) => {
 
 // Project Editor route
 
-app.get('/projects/:id', (c) => {
+app.get('/projects/:id', async (c) => {
   const projectId = c.req.param('id')
   const ASSET_VERSION = getAssetVersion(c.env)
-  
+
+  // ── Marunage guard: block marunage projects from Builder ──
+  // Uses json_extract in SQL to avoid JSON.parse failure on corrupted settings_json
+  try {
+    const proj = await c.env.DB.prepare(
+      `SELECT json_extract(settings_json, '$.marunage_mode') as is_marunage
+       FROM projects
+       WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
+       LIMIT 1`
+    ).bind(projectId).first<{ is_marunage: number | null }>()
+    if (proj?.is_marunage === 1) {
+      const run = await c.env.DB.prepare(
+        `SELECT id FROM marunage_runs WHERE project_id = ? ORDER BY created_at DESC LIMIT 1`
+      ).bind(projectId).first<{ id: string | number }>()
+      return c.redirect(run ? '/marunage-chat?run=' + String(run.id) : '/marunage')
+    }
+  } catch (_) { /* DB error → fall through to normal Builder */ }
+
   return c.html(`
 
 <!DOCTYPE html>
@@ -4280,7 +4297,7 @@ app.get('/marunage', (c) => {
 
         // Determine link
         var href = isActive ? '/marunage-chat?run=' + r.run_id
-                 : isReady  ? '/projects/' + r.project_id
+                 : isReady  ? '/marunage-chat?run=' + r.run_id
                  : isFailed ? '/marunage-chat?run=' + r.run_id
                  : '#';
 

@@ -316,6 +316,7 @@ projects.get('/', async (c) => {
       SELECT id, title, status, audio_filename, audio_r2_key, audio_size_bytes, created_at, updated_at
       FROM projects
       WHERE (is_deleted = 0 OR is_deleted IS NULL)
+        AND json_extract(settings_json, '$.marunage_mode') IS NOT 1
       ORDER BY created_at DESC
     `).all()
 
