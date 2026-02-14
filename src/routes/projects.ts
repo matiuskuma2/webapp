@@ -128,8 +128,8 @@ projects.post('/', async (c) => {
     }
 
     const result = await c.env.DB.prepare(`
-      INSERT INTO projects (title, status, user_id) 
-      VALUES (?, 'created', ?)
+      INSERT INTO projects (title, status, user_id, target_scene_count, split_mode) 
+      VALUES (?, 'created', ?, NULL, NULL)
     `).bind(title.trim(), userId).run()
 
     const projectId = result.meta.last_row_id as number

@@ -1083,12 +1083,13 @@ function renderFormatSectionUI() {
   const paragraphCount = countParagraphs();
   
   // ★ SSOT: target_scene_count の初期値
-  // - DBに保存値がある（かつ null/0 でない） → それを使う
-  // - なければ段落数を優先、段落数も0なら空欄（プレースホルダ「自動」表示）
+  // 段落数 > 0 の場合は常に段落数を初期値にする（テキストの実態が最も正確）
+  // DB保存値は format再実行時のヒントとして「前回の分割モード」表示に使う
+  // 段落数が0（テキスト未入力）の場合のみ DB保存値を使用
   const dbTarget = currentProject && currentProject.target_scene_count;
-  const initialTarget = (dbTarget && dbTarget > 0)
-    ? dbTarget
-    : (paragraphCount > 0 ? paragraphCount : '');
+  const initialTarget = (paragraphCount > 0)
+    ? paragraphCount
+    : ((dbTarget && dbTarget > 0) ? dbTarget : '');
   currentTargetSceneCount = initialTarget || null;
   
   return `
