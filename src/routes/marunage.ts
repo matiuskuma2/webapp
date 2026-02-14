@@ -1671,17 +1671,29 @@ marunage.get('/:projectId/status', async (c) => {
 
   // P1: phase stays 'ready'. Video progress is derived from video_builds table.
   // States: 'off' | 'pending' | 'running' | 'done' | 'failed'
-  // - 'off' = no video build attempted yet (flag may be off or run hasn't triggered)
-  // - 'pending' = build created but not yet started rendering  
+  // - 'off'     = video build feature flag is OFF (intentionally disabled)
+  // - 'pending' = flag ON, build not yet created (awaiting trigger) OR created but not started
   // - 'running' = rendering/uploading in progress
-  // - 'done' = completed with download_url
-  // - 'failed' = trigger error or build failure
-  const videoState = run.video_build_id
-    ? (videoBuildStatus === 'completed' ? 'done'
-      : videoBuildStatus === 'rendering' || videoBuildStatus === 'uploading' || videoBuildStatus === 'submitted' || videoBuildStatus === 'queued' || videoBuildStatus === 'validating' ? 'running'
-      : videoBuildStatus === 'failed' || videoBuildStatus === 'cancelled' ? 'failed'
-      : 'pending')
-    : (run.video_build_error ? 'failed' : 'off')
+  // - 'done'    = completed with download_url
+  // - 'failed'  = trigger error or build failure
+  const videoBuildFlagOn = await isVideoBuildEnabled(c.env.DB)
+  let videoState: 'off' | 'pending' | 'running' | 'done' | 'failed'
+  if (run.video_build_id) {
+    // Build exists — derive state from build status
+    if (videoBuildStatus === 'completed') videoState = 'done'
+    else if (['rendering', 'uploading', 'submitted', 'queued', 'validating'].includes(videoBuildStatus || '')) videoState = 'running'
+    else if (videoBuildStatus === 'failed' || videoBuildStatus === 'cancelled') videoState = 'failed'
+    else videoState = 'pending'
+  } else if (run.video_build_error) {
+    // Trigger attempted but failed
+    videoState = 'failed'
+  } else if (run.phase === 'ready' && videoBuildFlagOn) {
+    // Flag ON, phase ready, no build yet → trigger will fire soon
+    videoState = 'pending'
+  } else {
+    // Flag OFF or not in ready phase
+    videoState = 'off'
+  }
 
   const response: MarunageStatusResponse = {
     run_id: run.id,
@@ -1732,7 +1744,8 @@ marunage.get('/:projectId/status', async (c) => {
         failed: audioFailed,
       },
       video: {
-        state: videoState as any,
+        state: videoState,
+        enabled: videoBuildFlagOn,
         build_id: run.video_build_id || null,
         build_status: videoBuildStatus,
         progress_percent: videoProgressPercent,

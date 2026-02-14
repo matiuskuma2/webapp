@@ -382,21 +382,22 @@ async function mcPoll() {
     if (data.phase === 'ready') {
       const vs = data.progress?.video?.state;
       // Only stop polling when video is truly terminal (done/failed)
-      // 'off' means video build hasn't been attempted yet — keep polling for a while
-      // to catch the background trigger (waitUntil is async)
+      // 'pending' means flag ON, waiting for trigger → keep polling
+      // 'running' means build in progress → keep polling
+      // 'off' means flag OFF → stop after timeout
       if (vs === 'done' || vs === 'failed') {
         mcStopPolling();
       }
-      // For 'off': keep polling up to 2 minutes, then stop
-      if (vs === 'off' || !vs) {
+      // For 'off' (flag disabled): keep polling briefly then stop
+      if (vs === 'off') {
         if (!MC._readyPollStart) MC._readyPollStart = Date.now();
         const elapsed = Date.now() - MC._readyPollStart;
         if (elapsed > 120000) { // 2 minutes
-          console.log('[Marunage] Video still off after 2min, stopping poll');
+          console.log('[Marunage] Video feature off after 2min, stopping poll');
           mcStopPolling();
         }
       }
-      // running/pending → continue polling for video build progress
+      // 'pending' / 'running' → continue polling indefinitely for video progress
     }
     
   } catch (err) {
@@ -1076,18 +1077,28 @@ function mcShowReadyActions() {
 
 // ── Video Build Panel Renderer ──
 function mcRenderVideoPanel(video) {
-  if (!video || video.state === 'off') {
-    return '<div class="text-sm text-gray-400"><i class="fas fa-film mr-1"></i>動画ビルド待機中（素材完成後に自動開始）</div>';
+  if (!video) {
+    return '<div class="text-sm text-gray-400"><i class="fas fa-film mr-1"></i>動画情報なし</div>';
+  }
+  
+  if (video.state === 'off') {
+    // Flag is OFF — video build feature disabled
+    if (video.enabled === false) {
+      return '<div class="text-sm text-gray-400"><i class="fas fa-video-slash mr-1"></i>動画自動合成は無効です</div>';
+    }
+    // Flag status unknown or not yet in ready phase
+    return '<div class="text-sm text-gray-400"><i class="fas fa-film mr-1"></i>動画ビルド待機中</div>';
   }
   
   switch (video.state) {
     case 'pending':
-      return '<div class="text-sm text-yellow-600"><i class="fas fa-clock mr-1 animate-pulse"></i>動画ビルド準備中...</div>';
+      return '<div class="text-sm text-yellow-600"><i class="fas fa-clock mr-1 animate-pulse"></i>動画ビルド準備中（自動開始します）...</div>';
     
     case 'running': {
       const pct = video.progress_percent || 0;
+      const stage = video.build_status ? `（${video.build_status}）` : '';
       return `
-        <div class="text-sm text-blue-600 mb-1"><i class="fas fa-spinner fa-spin mr-1"></i>動画レンダリング中...</div>
+        <div class="text-sm text-blue-600 mb-1"><i class="fas fa-spinner fa-spin mr-1"></i>動画レンダリング中${stage}...</div>
         <div class="w-full bg-gray-200 rounded-full h-2.5">
           <div class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width:${pct}%"></div>
         </div>
