@@ -1112,10 +1112,11 @@ async function marunageTriggerVideoBuild(
     }
 
     const result = await response.json() as any
-    const videoBuildId = result.video_build_id || result.id
+    // POST /video-builds returns { success, build: { id, ... } }
+    const videoBuildId = result?.build?.id || result?.video_build_id || result?.id
 
     if (!videoBuildId) {
-      const reason = `No video_build_id in response: ${JSON.stringify(result).substring(0, 200)}`
+      const reason = `No video_build_id in response (keys: ${Object.keys(result || {}).join(',')}): ${JSON.stringify(result).substring(0, 300)}`
       console.error(`${tag} GATE3: ${reason}`)
       await recordVideoBuildAttempt(db, runId, { error: reason })
       return

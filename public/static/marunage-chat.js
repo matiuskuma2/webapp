@@ -381,8 +381,20 @@ async function mcPoll() {
     }
     if (data.phase === 'ready') {
       const vs = data.progress?.video?.state;
-      if (!vs || vs === 'off' || vs === 'done' || vs === 'failed') {
+      // Only stop polling when video is truly terminal (done/failed)
+      // 'off' means video build hasn't been attempted yet — keep polling for a while
+      // to catch the background trigger (waitUntil is async)
+      if (vs === 'done' || vs === 'failed') {
         mcStopPolling();
+      }
+      // For 'off': keep polling up to 2 minutes, then stop
+      if (vs === 'off' || !vs) {
+        if (!MC._readyPollStart) MC._readyPollStart = Date.now();
+        const elapsed = Date.now() - MC._readyPollStart;
+        if (elapsed > 120000) { // 2 minutes
+          console.log('[Marunage] Video still off after 2min, stopping poll');
+          mcStopPolling();
+        }
       }
       // running/pending → continue polling for video build progress
     }
@@ -494,14 +506,16 @@ async function mcAdvance() {
         break;
       case 'completed':
         // Message adapts to whether video build is enabled
-        // (next poll will reveal video.state; for now, generic success)
+        // (next poll will reveal video.state and set MC._lastStatus properly)
         mcAddSystemMessage(
           '<div>🎉 素材が完成しました！</div>'
           + '<div class="mt-2 text-sm">画像 + ナレーション音声が揃いました。</div>'
           + '<div class="mt-2 text-sm text-gray-500">動画の自動合成を確認中...</div>',
           'success'
         );
-        mcSetUIState('ready');
+        // Do NOT call mcSetUIState('ready') here — let the next poll cycle
+        // call mcUpdateFromStatus() which properly sets MC._lastStatus
+        // before triggering mcShowReadyActions().
         break;
       case 'failed':
       case 'failed_no_scenes':
@@ -649,42 +663,57 @@ function mcUpdateProgress(data) {
   switch (phase) {
     case 'init':
     case 'formatting':
-      // 0-20%: based on chunk progress
+      // 0-15%: based on chunk progress
       if (p.format.chunks.total > 0) {
-        percent = Math.round((p.format.chunks.done / p.format.chunks.total) * 20);
+        percent = Math.round((p.format.chunks.done / p.format.chunks.total) * 15);
       } else {
         percent = 5;
       }
       break;
       
     case 'awaiting_ready':
-      percent = 20;
-      if (p.scenes_ready.utterances_ready) percent = 25;
+      percent = 15;
+      if (p.scenes_ready.utterances_ready) percent = 20;
       break;
       
     case 'generating_images':
-      // 25-65%
+      // 20-45%
       if (p.images.total > 0) {
         const imgProgress = p.images.completed / p.images.total;
-        percent = 25 + Math.round(imgProgress * 40);
+        percent = 20 + Math.round(imgProgress * 25);
       } else {
-        percent = 30;
+        percent = 25;
       }
       break;
       
     case 'generating_audio':
-      // 65-95%
+      // 45-70%
       if (p.audio.total_utterances > 0) {
         const audioProgress = p.audio.completed / p.audio.total_utterances;
-        percent = 65 + Math.round(audioProgress * 30);
+        percent = 45 + Math.round(audioProgress * 25);
       } else {
-        percent = 70;
+        percent = 50;
       }
       break;
       
-    case 'ready':
-      percent = 100;
+    case 'ready': {
+      // 70-100%: depends on video build state
+      const vs = p?.video?.state;
+      if (vs === 'done') {
+        percent = 100;
+      } else if (vs === 'running') {
+        const vp = p?.video?.progress_percent || 0;
+        percent = 75 + Math.round(vp * 0.25); // 75-100
+      } else if (vs === 'pending') {
+        percent = 72;
+      } else if (vs === 'failed') {
+        percent = 75;
+      } else {
+        // off / waiting — material done, video not started yet
+        percent = 70;
+      }
       break;
+    }
       
     case 'failed':
     case 'canceled':
@@ -695,16 +724,25 @@ function mcUpdateProgress(data) {
   document.getElementById('mcProgressFill').style.width = `${percent}%`;
   document.getElementById('mcProgressPercent').textContent = `${percent}%`;
   
-  // Update step indicators
-  const steps = ['mcStep1', 'mcStep2', 'mcStep3', 'mcStep4', 'mcStep5'];
+  // Update step indicators (6 steps: 整形→確認→画像→音声→動画→完了)
+  const steps = ['mcStep1', 'mcStep2', 'mcStep3', 'mcStep4', 'mcStep5', 'mcStep6'];
+  const vs = p?.video?.state;
   const phaseStepMap = {
     'init': 0, 'formatting': 0, 'awaiting_ready': 1,
     'generating_images': 2, 'generating_audio': 3, 'ready': 4,
   };
-  const activeStep = phaseStepMap[phase] ?? -1;
+  let activeStep = phaseStepMap[phase] ?? -1;
+  // When ready + video running/pending → step 4 (動画), done → step 5 (完了)
+  if (phase === 'ready') {
+    if (vs === 'done') activeStep = 5;
+    else if (vs === 'running' || vs === 'pending') activeStep = 4;
+    else if (vs === 'failed') activeStep = 4;
+    else activeStep = 4; // off / waiting
+  }
   
   steps.forEach((id, i) => {
     const el = document.getElementById(id);
+    if (!el) return;
     if (i < activeStep) {
       el.className = 'text-[10px] text-green-600 font-bold';
     } else if (i === activeStep) {
@@ -962,9 +1000,6 @@ function mcSetUIState(state) {
 function mcShowReadyActions() {
   const container = document.getElementById('mcChatMessages');
   
-  // Check if ready actions already shown
-  if (container.querySelector('[data-ready-actions]')) return;
-  
   const status = MC._lastStatus;
   const p = status?.progress;
   const imgDone = p?.images?.completed || 0;
@@ -989,19 +1024,34 @@ function mcShowReadyActions() {
     readySubtitle = '左のボードでシーン画像を確認できます。';
   }
   
+  // If already shown, update in-place instead of re-creating
+  const existing = container.querySelector('[data-ready-actions]');
+  if (existing) {
+    const titleEl = existing.querySelector('[data-ready-title]');
+    const subtitleEl = existing.querySelector('[data-ready-subtitle]');
+    const imgCountEl = existing.querySelector('[data-img-count]');
+    const audioCountEl = existing.querySelector('[data-audio-count]');
+    if (titleEl) titleEl.innerHTML = `<i class="fas fa-check-circle mr-1"></i>${readyTitle}`;
+    if (subtitleEl) subtitleEl.textContent = readySubtitle;
+    if (imgCountEl) imgCountEl.innerHTML = `<i class="fas fa-image text-blue-500 mr-1"></i>画像: <strong>${imgDone}/${imgTotal}</strong>`;
+    if (audioCountEl) audioCountEl.innerHTML = `<i class="fas fa-microphone text-purple-500 mr-1"></i>音声: <strong>${audioDone}/${audioTotal}</strong>`;
+    mcUpdateVideoPanel(p?.video);
+    return;
+  }
+  
   const div = document.createElement('div');
   div.className = 'flex justify-start';
   div.setAttribute('data-ready-actions', 'true');
   div.innerHTML = `
     <div class="chat-bubble bg-green-50 text-green-800 border border-green-200 w-full">
-      <p class="font-bold mb-2"><i class="fas fa-check-circle mr-1"></i>${readyTitle}</p>
-      <p class="text-sm mb-2">${readySubtitle}</p>
+      <p class="font-bold mb-2" data-ready-title><i class="fas fa-check-circle mr-1"></i>${readyTitle}</p>
+      <p class="text-sm mb-2" data-ready-subtitle>${readySubtitle}</p>
       
       <div class="grid grid-cols-2 gap-2 mb-3 text-sm">
-        <div class="bg-white rounded px-2 py-1.5 border">
+        <div class="bg-white rounded px-2 py-1.5 border" data-img-count>
           <i class="fas fa-image text-blue-500 mr-1"></i>画像: <strong>${imgDone}/${imgTotal}</strong>
         </div>
-        <div class="bg-white rounded px-2 py-1.5 border">
+        <div class="bg-white rounded px-2 py-1.5 border" data-audio-count>
           <i class="fas fa-microphone text-purple-500 mr-1"></i>音声: <strong>${audioDone}/${audioTotal}</strong>
         </div>
       </div>
