@@ -1027,7 +1027,7 @@ function mcShowReadyActions() {
 // ── Video Build Panel Renderer ──
 function mcRenderVideoPanel(video) {
   if (!video || video.state === 'off') {
-    return '<div class="text-sm text-gray-400"><i class="fas fa-video-slash mr-1"></i>動画ビルドは無効です</div>';
+    return '<div class="text-sm text-gray-400"><i class="fas fa-film mr-1"></i>動画ビルド待機中（素材完成後に自動開始）</div>';
   }
   
   switch (video.state) {
@@ -1053,8 +1053,10 @@ function mcRenderVideoPanel(video) {
       `;
     }
     
-    case 'failed':
-      return '<div class="text-sm text-red-600"><i class="fas fa-exclamation-triangle mr-1"></i>動画ビルドに失敗しました</div>';
+    case 'failed': {
+      const errorMsg = video.error ? `<div class="text-xs text-gray-500 mt-1">原因: ${video.error.substring(0, 100)}</div>` : '';
+      return `<div class="text-sm text-red-600"><i class="fas fa-exclamation-triangle mr-1"></i>動画ビルドに失敗しました</div>${errorMsg}`;
+    }
     
     default:
       return '<div class="text-sm text-gray-400"><i class="fas fa-film mr-1"></i>動画: ' + (video.state || '不明') + '</div>';

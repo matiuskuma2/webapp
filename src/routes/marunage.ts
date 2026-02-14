@@ -1040,11 +1040,17 @@ async function marunageTriggerVideoBuild(
     }
 
     const pfResult = await pfResponse.json() as any
-    const isReady = pfResult?.ready === true || pfResult?.ok === true
+    // Preflight returns: is_ready (asset check), can_generate (full check incl. AWS, visual validation)
+    const isReady = pfResult?.is_ready === true
+    const canGenerate = pfResult?.can_generate === true || pfResult?.validation?.can_generate === true
 
-    if (!isReady) {
-      const missingCount = pfResult?.missing?.length || pfResult?.details?.missing_assets?.length || 'unknown'
-      const reason = `preflight not ready (missing: ${missingCount})`
+    console.log(`${tag} GATE2: preflight result — is_ready=${pfResult?.is_ready}, can_generate=${pfResult?.can_generate}, missing=${pfResult?.missing?.length || 0}, errors=${pfResult?.validation?.errors?.length || 0}`)
+
+    if (!isReady || !canGenerate) {
+      const missingCount = pfResult?.missing?.length || 0
+      const errorCount = pfResult?.validation?.errors?.length || 0
+      const errorDetails = pfResult?.validation?.errors?.slice(0, 3)?.map((e: any) => e.message || e.reason || e.code).join('; ') || ''
+      const reason = `preflight not ready (is_ready=${pfResult?.is_ready}, can_generate=${pfResult?.can_generate}, missing=${missingCount}, errors=${errorCount}${errorDetails ? ': ' + errorDetails.substring(0, 200) : ''})`
       console.warn(`${tag} GATE2: ${reason} → skip build`)
       await recordVideoBuildAttempt(db, runId, { error: reason })
       return
@@ -1636,12 +1642,18 @@ marunage.get('/:projectId/status', async (c) => {
   }
 
   // P1: phase stays 'ready'. Video progress is derived from video_builds table.
-  // 'off' = flag disabled or no video build; 'done'/'running'/'failed' from build status
-  const videoState = !run.video_build_id ? 'off'
-    : videoBuildStatus === 'completed' ? 'done'
-    : videoBuildStatus === 'rendering' || videoBuildStatus === 'uploading' || videoBuildStatus === 'submitted' || videoBuildStatus === 'queued' || videoBuildStatus === 'validating' ? 'running'
-    : videoBuildStatus === 'failed' || videoBuildStatus === 'cancelled' ? 'failed'
-    : 'pending'
+  // States: 'off' | 'pending' | 'running' | 'done' | 'failed'
+  // - 'off' = no video build attempted yet (flag may be off or run hasn't triggered)
+  // - 'pending' = build created but not yet started rendering  
+  // - 'running' = rendering/uploading in progress
+  // - 'done' = completed with download_url
+  // - 'failed' = trigger error or build failure
+  const videoState = run.video_build_id
+    ? (videoBuildStatus === 'completed' ? 'done'
+      : videoBuildStatus === 'rendering' || videoBuildStatus === 'uploading' || videoBuildStatus === 'submitted' || videoBuildStatus === 'queued' || videoBuildStatus === 'validating' ? 'running'
+      : videoBuildStatus === 'failed' || videoBuildStatus === 'cancelled' ? 'failed'
+      : 'pending')
+    : (run.video_build_error ? 'failed' : 'off')
 
   const response: MarunageStatusResponse = {
     run_id: run.id,
@@ -1697,6 +1709,8 @@ marunage.get('/:projectId/status', async (c) => {
         build_status: videoBuildStatus,
         progress_percent: videoProgressPercent,
         download_url: videoDownloadUrl,
+        error: run.video_build_error || null,
+        attempted_at: run.video_build_attempted_at || null,
       },
     },
     timestamps: {
