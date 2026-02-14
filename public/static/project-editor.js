@@ -194,8 +194,9 @@ function updateTabsAvailability() {
     builderTab.classList.add('opacity-50', 'cursor-not-allowed', 'pointer-events-none');
   }
   
-  // Export tab: enabled if completed
-  if (currentProject.status === 'completed') {
+  // Export tab: enabled if formatted or later (with scenes ready)
+  const isFormattedOrLater = ['formatted', 'generating_images', 'completed'].includes(currentProject.status);
+  if (currentProject.status === 'completed' || isFormattedOrLater) {
     exportTab.disabled = false;
     exportTab.classList.remove('opacity-50', 'cursor-not-allowed', 'pointer-events-none');
   } else {
@@ -203,10 +204,12 @@ function updateTabsAvailability() {
     exportTab.classList.add('opacity-50', 'cursor-not-allowed', 'pointer-events-none');
   }
   
-  // Video Build tab: enabled if completed (all scenes have images)
+  // Video Build tab: enabled if formatted or later (preflight will check readiness)
+  // Previously required 'completed' status, but individual image regeneration
+  // doesn't transition status, leaving it stuck at 'formatted'
   const videoBuildTab = document.getElementById('tabVideoBuild');
   if (videoBuildTab) {
-    if (currentProject.status === 'completed') {
+    if (isFormattedOrLater) {
       videoBuildTab.disabled = false;
       videoBuildTab.classList.remove('opacity-50', 'cursor-not-allowed', 'pointer-events-none');
     } else {
@@ -298,8 +301,8 @@ function switchTab(tabName) {
     const tabRequirements = {
       'sceneSplit': statusOrder.indexOf('uploaded'),  // Need at least 'uploaded'
       'builder': statusOrder.indexOf('formatted'),     // Need at least 'formatted'
-      'export': statusOrder.indexOf('completed'),      // Need 'completed'
-      'videoBuild': statusOrder.indexOf('completed'),  // Need 'completed'
+      'export': statusOrder.indexOf('formatted'),      // Need at least 'formatted' (was: completed)
+      'videoBuild': statusOrder.indexOf('formatted'),  // Need at least 'formatted' (was: completed)
       'styles': -1,  // Always accessible
       'input': -1    // Always accessible
     };
@@ -313,7 +316,7 @@ function switchTab(tabName) {
       } else if (tabName === 'sceneSplit') {
         message = 'Scene Split タブはテキスト入力または音声アップロード後に利用できます。';
       } else if (tabName === 'export' || tabName === 'videoBuild') {
-        message = 'このタブは全ての画像生成完了後に利用できます。';
+      message = 'このタブはシーン分割（Format）完了後に利用できます。Builderで素材を準備してください。';
       }
       
       if (message) {
@@ -4200,18 +4203,31 @@ function renderComicAudioSection(scene) {
   
   // 音声プリセットリスト
   const voicePresets = [
-    { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）' },
-    { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）' },
-    { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）' },
-    { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）' },
-    { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）' },
-    { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）' },
-    { id: 'ja-JP-Wavenet-D', name: '男性B（WaveNet）' }
+    // Google TTS
+    { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）', provider: 'google' },
+    { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）', provider: 'google' },
+    { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）', provider: 'google' },
+    { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）', provider: 'google' },
+    { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）', provider: 'google' },
+    { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）', provider: 'google' },
+    { id: 'ja-JP-Wavenet-D', name: '男性B（WaveNet）', provider: 'google' },
+    // ElevenLabs
+    { id: 'el-aria', name: 'Aria（女性・落ち着き）', provider: 'elevenlabs' },
+    { id: 'el-sarah', name: 'Sarah（女性・優しい）', provider: 'elevenlabs' },
+    { id: 'el-charlotte', name: 'Charlotte（女性・明るい）', provider: 'elevenlabs' },
+    { id: 'el-lily', name: 'Lily（若い女性）', provider: 'elevenlabs' },
+    { id: 'el-adam', name: 'Adam（男性・深い）', provider: 'elevenlabs' },
+    { id: 'el-bill', name: 'Bill（男性・自然）', provider: 'elevenlabs' },
+    { id: 'el-brian', name: 'Brian（男性・プロ）', provider: 'elevenlabs' },
+    { id: 'el-george', name: 'George（男性・落ち着き）', provider: 'elevenlabs' },
+    // Fish Audio
+    { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', provider: 'fish' },
   ];
   
-  const voiceOptions = voicePresets.map(preset => 
-    `<option value="${preset.id}">${preset.name}</option>`
-  ).join('');
+  const voiceOptions = voicePresets.map(preset => {
+    const providerLabel = preset.provider === 'elevenlabs' ? ' [EL]' : preset.provider === 'fish' ? ' [Fish]' : '';
+    return `<option value="${preset.id}">${preset.name}${providerLabel}</option>`;
+  }).join('');
   
   // プロジェクトのキャラクターリスト
   const projectCharacters = window.lastLoadedCharacters || [];
@@ -4839,29 +4855,44 @@ function renderSceneAudioSection(scene) {
   
   // 音声プリセットリスト（インライン定義で確実に表示）
   const voicePresets = [
-    { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）', gender: 'female' },
-    { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）', gender: 'male' },
-    { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）', gender: 'male' },
-    { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）', gender: 'female' },
-    { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）', gender: 'female' },
-    { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）', gender: 'male' },
-    { id: 'ja-JP-Wavenet-D', name: '男性B（WaveNet）', gender: 'male' },
-    { id: 'ja-JP-Standard-A', name: '女性A（Standard）', gender: 'female' },
-    { id: 'ja-JP-Standard-B', name: '女性B（Standard）', gender: 'female' },
-    { id: 'ja-JP-Standard-C', name: '男性A（Standard）', gender: 'male' },
-    { id: 'ja-JP-Standard-D', name: '男性B（Standard）', gender: 'male' }
+    // Google TTS
+    { id: 'ja-JP-Neural2-B', name: '女性A（Neural2）', gender: 'female', provider: 'google' },
+    { id: 'ja-JP-Neural2-C', name: '男性A（Neural2）', gender: 'male', provider: 'google' },
+    { id: 'ja-JP-Neural2-D', name: '男性B（Neural2）', gender: 'male', provider: 'google' },
+    { id: 'ja-JP-Wavenet-A', name: '女性A（WaveNet）', gender: 'female', provider: 'google' },
+    { id: 'ja-JP-Wavenet-B', name: '女性B（WaveNet）', gender: 'female', provider: 'google' },
+    { id: 'ja-JP-Wavenet-C', name: '男性A（WaveNet）', gender: 'male', provider: 'google' },
+    { id: 'ja-JP-Wavenet-D', name: '男性B（WaveNet）', gender: 'male', provider: 'google' },
+    { id: 'ja-JP-Standard-A', name: '女性A（Standard）', gender: 'female', provider: 'google' },
+    { id: 'ja-JP-Standard-B', name: '女性B（Standard）', gender: 'female', provider: 'google' },
+    { id: 'ja-JP-Standard-C', name: '男性A（Standard）', gender: 'male', provider: 'google' },
+    { id: 'ja-JP-Standard-D', name: '男性B（Standard）', gender: 'male', provider: 'google' },
+    // ElevenLabs
+    { id: 'el-aria', name: 'Aria（女性・落ち着き）', gender: 'female', provider: 'elevenlabs' },
+    { id: 'el-sarah', name: 'Sarah（女性・優しい）', gender: 'female', provider: 'elevenlabs' },
+    { id: 'el-charlotte', name: 'Charlotte（女性・明るい）', gender: 'female', provider: 'elevenlabs' },
+    { id: 'el-lily', name: 'Lily（若い女性）', gender: 'female', provider: 'elevenlabs' },
+    { id: 'el-adam', name: 'Adam（男性・深い）', gender: 'male', provider: 'elevenlabs' },
+    { id: 'el-bill', name: 'Bill（男性・自然）', gender: 'male', provider: 'elevenlabs' },
+    { id: 'el-brian', name: 'Brian（男性・プロ）', gender: 'male', provider: 'elevenlabs' },
+    { id: 'el-george', name: 'George（男性・落ち着き）', gender: 'male', provider: 'elevenlabs' },
+    // Fish Audio
+    { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', gender: 'female', provider: 'fish' },
   ];
   
-  const voiceOptions = voicePresets.map(preset => 
-    `<option value="${preset.id}">${preset.name}</option>`
-  ).join('');
+  const voiceOptions = voicePresets.map(preset => {
+    const providerLabel = preset.provider === 'elevenlabs' ? ' [EL]' : preset.provider === 'fish' ? ' [Fish]' : '';
+    return `<option value="${preset.id}">${preset.name}${providerLabel}</option>`;
+  }).join('');
   
   // プロジェクトのキャラクターリスト（マイキャラクター）
   const projectCharacters = window.lastLoadedCharacters || [];
   const charOptions = projectCharacters.length > 0 
     ? projectCharacters.map(char => {
         const voiceLabel = char.voice_preset_id 
-          ? (char.voice_preset_id.startsWith('fish:') ? 'Fish Audio' : 'Google TTS')
+          ? (char.voice_preset_id.startsWith('fish:') || char.voice_preset_id.startsWith('fish-') ? 'Fish Audio' 
+            : char.voice_preset_id.startsWith('el-') || char.voice_preset_id.startsWith('elevenlabs:') ? 'ElevenLabs'
+            : 'Google TTS')
           : '音声未設定';
         return `<option value="${char.character_key}" data-voice="${char.voice_preset_id || ''}">${escapeHtml(char.character_name)}（${voiceLabel}）</option>`;
       }).join('')
@@ -7172,7 +7203,8 @@ function updateTabStates(projectStatus) {
   const tabs = [
     { id: 'sceneTab', minStatus: 'transcribed' },
     { id: 'builderTab', minStatus: 'formatted' },
-    { id: 'exportTab', minStatus: 'completed' }
+    { id: 'exportTab', minStatus: 'formatted' },
+    { id: 'videoBuildTab', minStatus: 'formatted' }
   ];
   
   const statusOrder = [
@@ -13480,13 +13512,14 @@ async function loadNarrationVoiceSettings() {
       const provider = voice.provider || 'google';
       const voiceId = voice.voice_id;
       const selectValue = `${provider}:${voiceId}`;
+      const providerLabel = provider === 'elevenlabs' ? 'ElevenLabs' : provider === 'fish' ? 'Fish Audio' : 'Google TTS';
       
       if (statusEl) {
-        statusEl.textContent = voiceId;
+        statusEl.textContent = `${voiceId}（${providerLabel}）`;
         statusEl.className = 'text-xs px-2 py-0.5 bg-green-100 text-green-700 rounded-full';
       }
       if (selectEl) selectEl.value = selectValue;
-      if (currentEl) currentEl.textContent = `現在: ${voiceId}（${data.is_custom ? 'カスタム設定' : 'デフォルト'}）`;
+      if (currentEl) currentEl.textContent = `現在: ${voiceId}（${providerLabel} / ${data.is_custom ? 'カスタム設定' : 'デフォルト'}）`;
     } else {
       if (statusEl) {
         statusEl.textContent = 'ja-JP-Neural2-B（デフォルト）';

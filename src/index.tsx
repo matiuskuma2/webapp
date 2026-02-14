@@ -1642,6 +1642,19 @@ app.get('/projects/:id', async (c) => {
                                     <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (女性・自然)</option>
                                     <option value="google:ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・低音)</option>
                                 </optgroup>
+                                <optgroup label="ElevenLabs (高品質・多言語)">
+                                    <option value="elevenlabs:el-aria">Aria（女性・落ち着き）</option>
+                                    <option value="elevenlabs:el-sarah">Sarah（女性・優しい）</option>
+                                    <option value="elevenlabs:el-charlotte">Charlotte（女性・明るい）</option>
+                                    <option value="elevenlabs:el-lily">Lily（若い女性）</option>
+                                    <option value="elevenlabs:el-adam">Adam（男性・深い）</option>
+                                    <option value="elevenlabs:el-bill">Bill（男性・自然）</option>
+                                    <option value="elevenlabs:el-brian">Brian（男性・プロ）</option>
+                                    <option value="elevenlabs:el-george">George（男性・落ち着き）</option>
+                                </optgroup>
+                                <optgroup label="Fish Audio (日本語特化)">
+                                    <option value="fish:fish-nanamin">Nanamin（女性・アニメ）</option>
+                                </optgroup>
                                 <!-- プロジェクトキャラクターの音声はJSで動的に追加 -->
                             </select>
                             <p class="text-xs text-gray-500 mt-1">

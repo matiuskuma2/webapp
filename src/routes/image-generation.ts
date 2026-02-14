@@ -1089,7 +1089,29 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       status: 'success'
     });
 
-    // 14. レスポンス返却
+    // 14. Auto-transition to 'completed' if all scenes now have active images
+    // This handles the case where individual image regeneration completes the last scene
+    if (project.status === 'formatted' || project.status === 'generating_images') {
+      try {
+        const missingCount = await c.env.DB.prepare(`
+          SELECT COUNT(*) as cnt FROM scenes s
+          LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1 AND ig.status = 'completed'
+          WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
+        `).bind(scene.project_id).first<{ cnt: number }>()
+        
+        if (missingCount && missingCount.cnt === 0) {
+          await c.env.DB.prepare(`
+            UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND status IN ('formatted', 'generating_images')
+          `).bind(scene.project_id).run()
+          console.log(`[Single Image Gen] All scenes have images, project ${scene.project_id} → completed`)
+        }
+      } catch (autoTransitionErr) {
+        console.warn('[Single Image Gen] Auto-transition check failed:', autoTransitionErr)
+      }
+    }
+
+    // 15. レスポンス返却
     return c.json({
       scene_id: parseInt(sceneId),
       image_generation_id: generationId,
