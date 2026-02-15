@@ -4210,119 +4210,105 @@ app.get('/marunage', (c) => {
     <link href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" rel="stylesheet">
     <style>
       body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Kaku Gothic ProN', sans-serif; background: #fafafa; min-height: 100vh; }
-      .card-hover { transition: all 0.25s cubic-bezier(.4,0,.2,1); }
-      .card-hover:hover { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(0,0,0,0.08); }
-      .fade-in { animation: fadeIn 0.4s ease forwards; opacity: 0; }
-      @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-      .pulse-dot { animation: softPulse 2s ease-in-out infinite; }
-      @keyframes softPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-      .step-done { background: #d1fae5; color: #059669; }
-      .step-current { background: #8b5cf6; color: white; animation: softPulse 2s ease-in-out infinite; }
-      .step-pending { background: #f3f4f6; color: #9ca3af; }
-      .step-failed { background: #fee2e2; color: #dc2626; }
-      .thumb-placeholder { background: linear-gradient(135deg, #f3e8ff 0%, #ede9fe 50%, #e0e7ff 100%); }
-      .action-btn { opacity: 0; transition: opacity 0.2s; }
-      .card-hover:hover .action-btn { opacity: 1; }
-      .nav-icon { width: 40px; height: 40px; border-radius: 12px; display: flex; align-items: center; justify-content: center; transition: all 0.2s; }
-      .nav-icon:hover { background: #f3f4f6; }
-      .nav-icon.active { background: #8b5cf6; color: white; }
-      .new-project-btn { transition: all 0.3s ease; }
-      .new-project-btn:hover { transform: scale(1.02); box-shadow: 0 8px 20px rgba(139, 92, 246, 0.2); }
+      .card-item { transition: all 0.22s cubic-bezier(.4,0,.2,1); }
+      .card-item:hover { transform: translateY(-3px); box-shadow: 0 12px 32px rgba(0,0,0,0.08); }
+      .fade-in { animation: fadeIn 0.35s ease forwards; opacity: 0; }
+      @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+      .pulse-dot { animation: pulse 2s ease-in-out infinite; }
+      @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+      .action-btn { opacity: 0; transition: opacity 0.15s; }
+      .card-item:hover .action-btn { opacity: 1; }
+      .nav-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; transition: all 0.15s; color: #9ca3af; }
+      .nav-icon:hover { background: #f3f4f6; color: #374151; }
+      .nav-icon.active { background: #111827; color: white; }
+      .input-card { transition: box-shadow 0.25s ease; }
+      .input-card:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.06); }
+      .scroll-row { scrollbar-width: none; -ms-overflow-style: none; }
+      .scroll-row::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body>
     <!-- Auth Loading -->
     <div id="mgAuthLoading" class="flex items-center justify-center min-h-screen">
       <div class="text-center">
-        <div class="w-10 h-10 border-2 border-purple-200 border-t-purple-500 rounded-full animate-spin mx-auto mb-4"></div>
-        <p class="text-gray-400 text-sm">読み込み中...</p>
+        <div class="w-8 h-8 border-2 border-gray-200 border-t-gray-800 rounded-full animate-spin mx-auto mb-3"></div>
+        <p class="text-gray-400 text-xs">読み込み中</p>
       </div>
     </div>
 
     <!-- Main Layout -->
     <div id="mgMain" class="hidden min-h-screen flex">
-      <!-- Left Sidebar Navigation -->
-      <aside class="w-16 bg-white border-r border-gray-100 flex flex-col items-center py-6 gap-3 shrink-0 sticky top-0 h-screen">
-        <a href="/" class="nav-icon text-gray-400 hover:text-gray-700 mb-4" title="ホーム">
-          <i class="fas fa-th-large text-sm"></i>
+      <!-- Left Sidebar -->
+      <aside class="w-14 bg-white border-r border-gray-100/80 flex flex-col items-center py-5 gap-2 shrink-0 sticky top-0 h-screen">
+        <a href="/" class="nav-icon mb-3" title="ホーム">
+          <i class="fas fa-th-large text-xs"></i>
         </a>
         <div class="nav-icon active" title="丸投げチャット">
-          <i class="fas fa-magic text-sm"></i>
+          <i class="fas fa-magic text-xs"></i>
         </div>
-        <a href="/" class="nav-icon text-gray-400 hover:text-gray-700" title="プロジェクト">
-          <i class="fas fa-folder text-sm"></i>
+        <a href="/" class="nav-icon" title="プロジェクト">
+          <i class="fas fa-folder text-xs"></i>
         </a>
         <div class="flex-1"></div>
-        <a href="/" class="nav-icon text-gray-400 hover:text-gray-700" title="設定">
-          <i class="fas fa-cog text-sm"></i>
+        <a href="/" class="nav-icon" title="設定">
+          <i class="fas fa-cog text-xs"></i>
         </a>
       </aside>
 
       <!-- Main Content -->
       <main class="flex-1 min-w-0">
-        <!-- Hero Section -->
-        <div class="bg-white border-b border-gray-100">
-          <div class="max-w-6xl mx-auto px-8 py-10">
-            <!-- Back + Title -->
-            <div class="flex items-center gap-4 mb-6">
-              <a href="/" class="w-10 h-10 rounded-full bg-gray-50 hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-all border border-gray-100">
-                <i class="fas fa-arrow-left text-sm"></i>
-              </a>
-              <div>
-                <h1 class="text-2xl font-bold text-gray-900 tracking-tight">丸投げチャット</h1>
-                <p class="text-sm text-gray-400 mt-0.5">テキストを貼り付けるだけで、シーン画像・ナレーション・動画を自動生成</p>
-              </div>
+
+        <!-- ===== Hero: centered title + input card ===== -->
+        <div class="bg-white border-b border-gray-100/60">
+          <div class="max-w-3xl mx-auto px-8 pt-14 pb-10">
+            <div class="text-center mb-8">
+              <h1 class="text-3xl font-bold text-gray-900 tracking-tight">丸投げチャット</h1>
+              <p class="text-sm text-gray-400 mt-2">テキストを貼り付けるだけで、画像・音声・動画まで自動生成</p>
             </div>
 
-            <!-- New Project Card (Lovart-style input) -->
-            <a href="/marunage-chat" id="mgNewCard" class="new-project-btn block bg-white rounded-2xl border border-gray-200 shadow-sm p-5 hover:no-underline">
-              <div class="flex items-center gap-4">
-                <div class="w-12 h-12 bg-purple-50 rounded-xl flex items-center justify-center shrink-0">
-                  <i class="fas fa-plus text-purple-500 text-lg"></i>
+            <!-- Input-style CTA (Lovart) -->
+            <a href="/marunage-chat" id="mgNewCard" class="input-card block bg-white border border-gray-200 rounded-2xl shadow-sm p-4 hover:no-underline">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center shrink-0">
+                  <i class="fas fa-pen text-gray-400 text-sm"></i>
                 </div>
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <span class="text-base font-bold text-gray-800">新しい動画を作成</span>
-                      <p class="text-xs text-gray-400 mt-0.5">シナリオテキストを入力 → 画像 → 音声 → 動画まで全自動</p>
-                    </div>
-                    <div class="w-10 h-10 rounded-full bg-purple-500 hover:bg-purple-600 flex items-center justify-center transition-colors shrink-0">
-                      <i class="fas fa-arrow-right text-white text-sm"></i>
-                    </div>
-                  </div>
+                <div class="flex-1 min-w-0 text-left">
+                  <div class="text-sm text-gray-400">シナリオを貼り付けて動画を作る</div>
+                  <div class="text-xs text-gray-300 mt-0.5">例）「朝の東京を紹介するVlog」</div>
+                </div>
+                <div class="w-9 h-9 rounded-full bg-gray-900 flex items-center justify-center shrink-0">
+                  <i class="fas fa-arrow-right text-white text-xs"></i>
                 </div>
               </div>
             </a>
           </div>
         </div>
 
-        <!-- Projects Section -->
-        <div class="max-w-6xl mx-auto px-8 py-8">
-          <!-- Section Header -->
-          <div class="flex items-center justify-between mb-6">
-            <div class="flex items-center gap-3">
-              <h2 id="mgSectionLabel" class="text-sm font-bold text-gray-700">最近のプロジェクト</h2>
-              <span id="mgCount" class="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full"></span>
+        <!-- ===== Recent Projects: horizontal scroll ===== -->
+        <div class="py-8 px-8">
+          <div class="max-w-6xl mx-auto">
+            <!-- Section Header -->
+            <div class="flex items-center justify-between mb-5">
+              <div class="flex items-center gap-3">
+                <h2 id="mgSectionLabel" class="text-sm font-bold text-gray-700">最近のプロジェクト</h2>
+                <span id="mgCount" class="text-[11px] text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full"></span>
+              </div>
+              <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+                <button id="mgFilterActive" onclick="mgSetFilter('active')" class="px-3 py-1.5 text-xs font-semibold rounded-md bg-white text-gray-800 shadow-sm transition-all">アクティブ</button>
+                <button id="mgFilterArchived" onclick="mgSetFilter('archived')" class="px-3 py-1.5 text-xs font-semibold rounded-md text-gray-400 transition-all">アーカイブ</button>
+              </div>
             </div>
-            <!-- Filter Toggle -->
-            <div class="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
-              <button id="mgFilterActive" onclick="mgSetFilter('active')" class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all bg-white text-gray-800 shadow-sm">
-                アクティブ
-              </button>
-              <button id="mgFilterArchived" onclick="mgSetFilter('archived')" class="px-3 py-1.5 text-xs font-semibold rounded-md transition-all text-gray-500 hover:text-gray-700">
-                アーカイブ
-              </button>
-            </div>
-          </div>
 
-          <!-- Project Grid -->
-          <div id="mgGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            <div class="col-span-full text-center py-16 text-gray-300">
-              <div class="w-10 h-10 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin mx-auto mb-4"></div>
-              <p class="text-sm">読み込み中...</p>
+            <!-- Scroll Row -->
+            <div id="mgGrid" class="scroll-row flex gap-4 overflow-x-auto pb-4">
+              <div class="flex-1 text-center py-16">
+                <div class="w-8 h-8 border-2 border-gray-200 border-t-gray-400 rounded-full animate-spin mx-auto mb-3"></div>
+                <p class="text-xs text-gray-300">読み込み中</p>
+              </div>
             </div>
           </div>
         </div>
+
       </main>
     </div>
 
@@ -4331,94 +4317,70 @@ app.get('/marunage', (c) => {
       axios.defaults.withCredentials = true;
       var mgCurrentFilter = 'active';
 
-      // 6-step mapping: 整形 → 確認 → 画像 → 音声 → 動画 → 完了
-      var STEPS = [
-        { key: 'format',  label: '整形', icon: 'fa-align-left' },
-        { key: 'confirm', label: '確認', icon: 'fa-check-circle' },
-        { key: 'image',   label: '画像', icon: 'fa-image' },
-        { key: 'audio',   label: '音声', icon: 'fa-volume-up' },
-        { key: 'video',   label: '動画', icon: 'fa-film' },
-        { key: 'done',    label: '完了', icon: 'fa-flag-checkered' },
-      ];
+      // ── 6-step config ──
+      var STEPS = ['整形','確認','画像','音声','動画','完了'];
 
-      // Determine which step index (0-5) a run is at, and whether it's failed
       function mgGetStepInfo(r) {
-        var phase = r.phase;
-        // Terminal failures / canceled
-        if (phase === 'failed' || phase === 'canceled') {
-          // Determine last completed step from context
+        var p = r.phase;
+        if (p === 'failed' || p === 'canceled') {
           if (r.video_build_id) return { step: 4, failed: true };
           if (r.audio_done > 0) return { step: 3, failed: true };
           if (r.images_done > 0) return { step: 2, failed: true };
           if (r.scene_count > 0) return { step: 1, failed: true };
           return { step: 0, failed: true };
         }
-        if (phase === 'init' || phase === 'formatting') return { step: 0, failed: false };
-        if (phase === 'awaiting_ready') return { step: 1, failed: false };
-        if (phase === 'generating_images') return { step: 2, failed: false };
-        if (phase === 'generating_audio') return { step: 3, failed: false };
-        // Ready phase — check video build
-        if (phase === 'ready') {
+        if (p === 'init' || p === 'formatting') return { step: 0, failed: false };
+        if (p === 'awaiting_ready') return { step: 1, failed: false };
+        if (p === 'generating_images') return { step: 2, failed: false };
+        if (p === 'generating_audio') return { step: 3, failed: false };
+        if (p === 'ready') {
           if (!r.video_build_id) return { step: 4, failed: false };
           var vs = r.video_build_status;
           if (vs === 'completed') return { step: 5, failed: false };
           if (vs === 'failed') return { step: 4, failed: true };
-          return { step: 4, failed: false }; // queued/submitted/rendering/uploading
+          return { step: 4, failed: false };
         }
         return { step: 0, failed: false };
       }
 
       function mgRender6Steps(r) {
         var info = mgGetStepInfo(r);
-        var currentStep = info.step;
-        var isFailed = info.failed;
-        var html = '<div class="flex items-center gap-0.5 mt-2">';
+        var s = info.step, f = info.failed;
+        var html = '<div class="flex gap-1 mt-3">';
         for (var i = 0; i < 6; i++) {
-          var cls = '';
-          if (isFailed && i === currentStep) {
-            cls = 'step-failed';
-          } else if (i < currentStep) {
-            cls = 'step-done';
-          } else if (i === currentStep) {
-            cls = isFailed ? 'step-failed' : 'step-current';
-          } else {
-            cls = 'step-pending';
-          }
-          html += '<div class="flex-1 h-1.5 rounded-full ' + cls + '" title="' + STEPS[i].label + '"></div>';
+          var c = 'bg-gray-100';
+          if (f && i === s) c = 'bg-red-300';
+          else if (i < s) c = 'bg-emerald-400';
+          else if (i === s) c = f ? 'bg-red-300' : 'bg-gray-900';
+          html += '<div class="h-1 rounded-full flex-1 ' + c + '"></div>';
         }
         html += '</div>';
-        // Step label
-        var labelIdx = Math.min(currentStep, 5);
-        var stepLabel = STEPS[labelIdx].label;
-        if (isFailed) stepLabel = STEPS[labelIdx].label + '（エラー）';
-        else if (currentStep >= 5) stepLabel = '完了';
-        html += '<div class="text-[10px] text-gray-400 mt-1 text-right">' + stepLabel + '</div>';
+        var label = s >= 5 ? '完了' : STEPS[s] + (f ? '（エラー）' : '');
+        html += '<div class="flex items-center justify-between mt-1.5">';
+        html += '<span class="text-[10px] text-gray-300">' + label + '</span>';
+        html += '<span class="text-[10px] text-gray-300">' + Math.min(s, 5) + '/6</span>';
+        html += '</div>';
         return html;
       }
 
-      // Phase chip config
-      var phaseConfig = {
-        'init':              { label: '準備中',     bg: 'bg-gray-100',    text: 'text-gray-600',   icon: 'fa-cog' },
-        'formatting':        { label: '整形中',     bg: 'bg-blue-50',     text: 'text-blue-600',   icon: 'fa-align-left' },
-        'awaiting_ready':    { label: '確認待ち',   bg: 'bg-amber-50',    text: 'text-amber-600',  icon: 'fa-clock' },
-        'generating_images': { label: '画像生成中', bg: 'bg-purple-50',   text: 'text-purple-600', icon: 'fa-image' },
-        'generating_audio':  { label: '音声生成中', bg: 'bg-indigo-50',   text: 'text-indigo-600', icon: 'fa-volume-up' },
-        'ready':             { label: '完成',       bg: 'bg-emerald-50',  text: 'text-emerald-600',icon: 'fa-check' },
-        'failed':            { label: 'エラー',     bg: 'bg-red-50',      text: 'text-red-600',    icon: 'fa-exclamation-triangle' },
-        'canceled':          { label: '中断',       bg: 'bg-gray-100',    text: 'text-gray-500',   icon: 'fa-pause' },
+      // ── Phase chip ──
+      var PH = {
+        'init':              { l: '準備中',   bg: 'bg-gray-100',   tx: 'text-gray-500' },
+        'formatting':        { l: '整形中',   bg: 'bg-blue-50',    tx: 'text-blue-500' },
+        'awaiting_ready':    { l: '確認待ち', bg: 'bg-amber-50',   tx: 'text-amber-600' },
+        'generating_images': { l: '画像生成', bg: 'bg-purple-50',  tx: 'text-purple-500' },
+        'generating_audio':  { l: '音声生成', bg: 'bg-indigo-50',  tx: 'text-indigo-500' },
+        'ready':             { l: '完成',     bg: 'bg-emerald-50', tx: 'text-emerald-600' },
+        'failed':            { l: 'エラー',   bg: 'bg-red-50',     tx: 'text-red-500' },
+        'canceled':          { l: '中断',     bg: 'bg-gray-50',    tx: 'text-gray-400' },
       };
 
       function mgSetFilter(f) {
         mgCurrentFilter = f;
-        var activeBtn = document.getElementById('mgFilterActive');
-        var archivedBtn = document.getElementById('mgFilterArchived');
-        if (f === 'active') {
-          activeBtn.className = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all bg-white text-gray-800 shadow-sm';
-          archivedBtn.className = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all text-gray-500 hover:text-gray-700';
-        } else {
-          archivedBtn.className = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all bg-white text-gray-800 shadow-sm';
-          activeBtn.className = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all text-gray-500 hover:text-gray-700';
-        }
+        var a = document.getElementById('mgFilterActive');
+        var b = document.getElementById('mgFilterArchived');
+        a.className = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all ' + (f === 'active' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400');
+        b.className = 'px-3 py-1.5 text-xs font-semibold rounded-md transition-all ' + (f === 'archived' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-400');
         document.getElementById('mgNewCard').style.display = f === 'archived' ? 'none' : '';
         document.getElementById('mgSectionLabel').textContent = f === 'archived' ? 'アーカイブ済み' : '最近のプロジェクト';
         mgLoadRuns();
@@ -4426,9 +4388,9 @@ app.get('/marunage', (c) => {
 
       async function mgInit() {
         try {
-          var authRes = await axios.get('/api/auth/me');
-          if (!authRes.data.authenticated) { window.location.href = '/login'; return; }
-        } catch(e) { window.location.href = '/login'; return; }
+          var auth = await axios.get('/api/auth/me');
+          if (!auth.data.authenticated) { location.href = '/login'; return; }
+        } catch(e) { location.href = '/login'; return; }
         document.getElementById('mgAuthLoading').classList.add('hidden');
         document.getElementById('mgMain').classList.remove('hidden');
         await mgLoadRuns();
@@ -4443,129 +4405,91 @@ app.get('/marunage', (c) => {
           document.getElementById('mgCount').textContent = runs.length + '件';
 
           if (runs.length === 0) {
-            grid.innerHTML = '<div class="col-span-full text-center py-20">'
-              + '<div class="w-16 h-16 bg-gray-50 rounded-2xl flex items-center justify-center mx-auto mb-4">'
-              + '<i class="fas ' + (mgCurrentFilter === 'archived' ? 'fa-archive' : 'fa-inbox') + ' text-2xl text-gray-300"></i>'
+            grid.innerHTML = '<div class="flex-1 text-center py-20">'
+              + '<div class="w-14 h-14 bg-gray-50 rounded-2xl flex items-center justify-center mx-auto mb-3">'
+              + '<i class="fas ' + (mgCurrentFilter === 'archived' ? 'fa-archive' : 'fa-inbox') + ' text-xl text-gray-300"></i>'
               + '</div>'
-              + '<p class="text-gray-400 text-sm">' + (mgCurrentFilter === 'archived' ? 'アーカイブされたプロジェクトはありません' : 'まだプロジェクトがありません') + '</p>'
-              + '<p class="text-gray-300 text-xs mt-1">上の「新しい動画を作成」からスタート</p>'
+              + '<p class="text-gray-400 text-sm">' + (mgCurrentFilter === 'archived' ? 'アーカイブはありません' : 'プロジェクトはまだありません') + '</p>'
               + '</div>';
             return;
           }
 
-          grid.innerHTML = runs.map(function(r, i) { return mgRenderCard(r, i); }).join('');
+          grid.innerHTML = runs.map(function(r, i) { return mgCard(r, i); }).join('');
         } catch (err) {
-          console.error('Load runs failed:', err);
-          document.getElementById('mgGrid').innerHTML = '<div class="col-span-full text-center py-12"><p class="text-red-500 text-sm">読み込みに失敗しました</p></div>';
+          console.error('Load failed:', err);
+          document.getElementById('mgGrid').innerHTML = '<div class="flex-1 text-center py-12"><p class="text-red-400 text-sm">読み込みに失敗しました</p></div>';
         }
       }
 
-      function mgRenderCard(r, idx) {
-        var ph = phaseConfig[r.phase] || { label: r.phase, bg: 'bg-gray-100', text: 'text-gray-600', icon: 'fa-question' };
-        var dateStr = mgFormatDate(r.updated_at || r.created_at);
+      function mgCard(r, idx) {
+        var ph = PH[r.phase] || { l: r.phase, bg: 'bg-gray-100', tx: 'text-gray-500' };
+        var date = mgDate(r.updated_at || r.created_at);
         var href = '/marunage-chat?run=' + r.run_id;
-        var isActive = r.is_active;
 
         // Thumbnail
-        var thumb;
-        if (r.first_image_url) {
-          thumb = '<div class="w-full aspect-video rounded-xl overflow-hidden bg-gray-100 mb-3">'
-            + '<img src="' + r.first_image_url + '" alt="" class="w-full h-full object-cover" onerror="mgThumbError(this)">'
-            + '</div>';
+        var thumb = r.first_image_url
+          ? '<img src="' + r.first_image_url + '" alt="" class="w-full h-full object-cover" onerror="mgThumbErr(this)">'
+          : '<div class="w-full h-full bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center"><i class="fas fa-film text-2xl text-gray-200"></i></div>';
+
+        // Chip
+        var chip = '<span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ' + ph.bg + ' ' + ph.tx + '">'
+          + (r.is_active ? '<span class="w-1 h-1 rounded-full bg-current pulse-dot"></span>' : '')
+          + ph.l + '</span>';
+
+        // Action buttons (archive/cancel)
+        var actions = '';
+        if (mgCurrentFilter === 'archived') {
+          actions = '<button onclick="event.preventDefault();event.stopPropagation();mgUnarchive(' + r.run_id + ')" class="action-btn absolute top-2 right-2 w-7 h-7 rounded-lg bg-white/90 shadow-sm border border-gray-100 flex items-center justify-center text-blue-400 hover:text-blue-600 z-10" title="復元"><i class="fas fa-undo text-[10px]"></i></button>';
         } else {
-          thumb = '<div class="w-full aspect-video rounded-xl thumb-placeholder flex items-center justify-center mb-3">'
-            + '<i class="fas fa-film text-3xl text-purple-300"></i>'
-            + '</div>';
+          actions = '<button onclick="event.preventDefault();event.stopPropagation();mgArchive(' + r.run_id + ')" class="action-btn absolute top-2 right-2 w-7 h-7 rounded-lg bg-white/90 shadow-sm border border-gray-100 flex items-center justify-center text-gray-300 hover:text-red-400 z-10" title="非表示"><i class="fas fa-eye-slash text-[10px]"></i></button>';
+        }
+        if (r.is_active) {
+          actions += '<button onclick="event.preventDefault();event.stopPropagation();mgCancel(' + r.project_id + ')" class="action-btn absolute top-2 ' + (mgCurrentFilter === 'archived' ? 'right-10' : 'right-10') + ' w-7 h-7 rounded-lg bg-white/90 shadow-sm border border-gray-100 flex items-center justify-center text-gray-300 hover:text-red-400 z-10" title="中断"><i class="fas fa-stop text-[10px]"></i></button>';
         }
 
-        // Status chip
-        var chip = '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold ' + ph.bg + ' ' + ph.text + '">'
-          + (isActive ? '<span class="w-1.5 h-1.5 rounded-full bg-current pulse-dot"></span>' : '')
-          + '<i class="fas ' + ph.icon + ' text-[9px]"></i> ' + ph.label
-          + '</span>';
-
-        // Archive / unarchive button
-        var archiveBtn = mgCurrentFilter === 'archived'
-          ? '<button onclick="event.preventDefault();event.stopPropagation();mgUnarchive(' + r.run_id + ')" class="action-btn absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/90 backdrop-blur flex items-center justify-center text-blue-500 hover:bg-blue-50 shadow-sm border border-gray-100 transition-all z-10" title="復元"><i class="fas fa-undo text-xs"></i></button>'
-          : '<button onclick="event.preventDefault();event.stopPropagation();mgArchive(' + r.run_id + ')" class="action-btn absolute top-3 right-3 w-8 h-8 rounded-lg bg-white/90 backdrop-blur flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 shadow-sm border border-gray-100 transition-all z-10" title="非表示"><i class="fas fa-eye-slash text-xs"></i></button>';
-
-        // Cancel button for active runs
-        var cancelBtn = isActive
-          ? '<button onclick="event.preventDefault();event.stopPropagation();mgCancel(' + r.project_id + ')" class="action-btn absolute top-3 right-12 w-8 h-8 rounded-lg bg-white/90 backdrop-blur flex items-center justify-center text-gray-400 hover:text-red-500 hover:bg-red-50 shadow-sm border border-gray-100 transition-all z-10" title="中断"><i class="fas fa-stop text-xs"></i></button>'
-          : '';
-
-        // 6-step progress
-        var steps = mgRender6Steps(r);
-
-        return '<a href="' + href + '" class="card-hover fade-in block bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden hover:no-underline relative" style="animation-delay:' + (idx * 60) + 'ms">'
-          + archiveBtn + cancelBtn
-          + '<div class="p-4">'
-          + thumb
-          + '<div class="flex items-start justify-between gap-2 mb-1">'
-          + '<h3 class="text-sm font-bold text-gray-900 truncate flex-1">' + mgEscape(r.project_title || '無題') + '</h3>'
+        return '<a href="' + href + '" class="card-item fade-in block w-[260px] shrink-0 relative hover:no-underline" style="animation-delay:' + (idx * 50) + 'ms">'
+          + actions
+          + '<div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">'
+          + '<div class="aspect-[16/10] bg-gray-50 overflow-hidden">' + thumb + '</div>'
+          + '<div class="p-3.5">'
+          + '<div class="flex items-start justify-between gap-2">'
+          + '<h3 class="text-[13px] font-semibold text-gray-900 truncate flex-1">' + mgEsc(r.project_title || '無題') + '</h3>'
           + chip
           + '</div>'
-          + '<div class="flex items-center gap-2 text-[11px] text-gray-400">'
-          + '<span>' + dateStr + '</span>'
-          + (r.scene_count > 0 ? '<span class="text-gray-300">·</span><span>' + r.scene_count + 'シーン</span>' : '')
+          + '<p class="text-[11px] text-gray-400 mt-1">' + date + '</p>'
+          + (r.error_message ? '<p class="text-[10px] text-red-400 mt-1 truncate">' + mgEsc(r.error_message.substring(0, 60)) + '</p>' : '')
+          + mgRender6Steps(r)
           + '</div>'
-          + (r.error_message ? '<p class="text-[10px] text-red-400 mt-1 truncate">' + mgEscape(r.error_message.substring(0, 80)) + '</p>' : '')
-          + steps
           + '</div>'
           + '</a>';
       }
 
-      function mgFormatDate(dateStr) {
-        if (!dateStr) return '';
-        var d = new Date(dateStr + 'Z');
-        var now = new Date();
-        var diffMs = now - d;
-        var diffH = Math.floor(diffMs / 3600000);
-        if (diffH < 1) return Math.max(1, Math.floor(diffMs / 60000)) + '分前';
-        if (diffH < 24) return diffH + '時間前';
-        var diffD = Math.floor(diffH / 24);
-        if (diffD < 7) return diffD + '日前';
+      function mgDate(s) {
+        if (!s) return '';
+        var d = new Date(s + 'Z'), now = new Date(), ms = now - d;
+        var h = Math.floor(ms / 3600000);
+        if (h < 1) return Math.max(1, Math.floor(ms / 60000)) + '分前';
+        if (h < 24) return h + '時間前';
+        var dd = Math.floor(h / 24);
+        if (dd < 7) return dd + '日前';
         return d.toLocaleDateString('ja-JP', { month: 'short', day: 'numeric' });
       }
 
-      async function mgArchive(runId) {
-        try {
-          await axios.post('/api/marunage/runs/' + runId + '/archive');
-          await mgLoadRuns();
-        } catch (err) {
-          alert('非表示に失敗: ' + (err.response?.data?.error?.message || err.message));
-        }
+      async function mgArchive(id) {
+        try { await axios.post('/api/marunage/runs/' + id + '/archive'); await mgLoadRuns(); }
+        catch(e) { alert('失敗: ' + (e.response?.data?.error?.message || e.message)); }
       }
-
-      async function mgUnarchive(runId) {
-        try {
-          await axios.post('/api/marunage/runs/' + runId + '/unarchive');
-          await mgLoadRuns();
-        } catch (err) {
-          alert('復元に失敗: ' + (err.response?.data?.error?.message || err.message));
-        }
+      async function mgUnarchive(id) {
+        try { await axios.post('/api/marunage/runs/' + id + '/unarchive'); await mgLoadRuns(); }
+        catch(e) { alert('失敗: ' + (e.response?.data?.error?.message || e.message)); }
       }
-
-      async function mgCancel(projectId) {
+      async function mgCancel(pid) {
         if (!confirm('この処理を中断しますか？')) return;
-        try {
-          await axios.post('/api/marunage/' + projectId + '/cancel');
-          await mgLoadRuns();
-        } catch (err) {
-          alert('中断に失敗: ' + (err.response?.data?.error?.message || err.message));
-        }
+        try { await axios.post('/api/marunage/' + pid + '/cancel'); await mgLoadRuns(); }
+        catch(e) { alert('失敗: ' + (e.response?.data?.error?.message || e.message)); }
       }
-
-      function mgEscape(str) {
-        var div = document.createElement('div');
-        div.textContent = str;
-        return div.innerHTML;
-      }
-
-      function mgThumbError(img) {
-        var p = img.parentElement;
-        p.innerHTML = '<div class="w-full h-full thumb-placeholder flex items-center justify-center"><i class="fas fa-film text-3xl text-purple-300"></i></div>';
-      }
+      function mgEsc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+      function mgThumbErr(img) { var p = img.parentElement; p.innerHTML = '<div class="w-full h-full bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center"><i class="fas fa-film text-2xl text-gray-200"></i></div>'; }
 
       mgInit();
     </script>
