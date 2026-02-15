@@ -444,7 +444,9 @@ function mcShouldAdvance(data) {
   
   switch (phase) {
     case 'formatting':
-      return p.format.state === 'done';
+      // Allow advance during formatting to drive parse+format via advance endpoint
+      // 'done' = completed, 'running'/'pending' = needs advance to push forward
+      return p.format.state === 'done' || p.format.state === 'running' || p.format.state === 'pending';
       
     case 'awaiting_ready':
       return p.scenes_ready.utterances_ready && p.scenes_ready.visible_count > 0;
@@ -494,7 +496,7 @@ async function mcAdvance() {
     const res = await axios.post(`/api/marunage/${MC.projectId}/advance`, {}, { timeout: 60000 });
     const data = res.data;
     
-    if (data.action === 'waiting' || data.action === 'already_advanced') {
+    if (data.action === 'waiting' || data.action === 'already_advanced' || data.action === 'formatting_in_progress') {
       // No-op, will be picked up next poll
       return;
     }
@@ -542,6 +544,8 @@ async function mcAdvance() {
         break;
       case 'failed':
       case 'failed_no_scenes':
+      case 'failed_parse':
+      case 'failed_format':
         mcAddSystemMessage(`エラー: ${data.message}`, 'error');
         mcSetUIState('error');
         break;

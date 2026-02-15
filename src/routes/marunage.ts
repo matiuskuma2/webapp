@@ -1755,13 +1755,9 @@ marunage.post('/start', async (c) => {
     // Issue-2: フェーズ遷移 + waitUntil で format 起動
     await transitionPhase(c.env.DB, runId, 'init', 'formatting')
 
-    // Issue-2: Format startup — 非同期でフォーマット処理を開始
-    const sessionCookie = getCookie(c, 'session') || ''
-    const requestUrl = c.req.url
-    c.executionCtx.waitUntil(
-      marunageFormatStartup(c.env.DB, runId, projectId, config, requestUrl, sessionCookie)
-        .catch(err => console.error(`[Marunage:Format] waitUntil error:`, err))
-    )
+    // Issue-2: Format startup — now driven by advance endpoint polling (no more waitUntil self-fetch)
+    // Parse + Format are called from advance's 'formatting' case on each poll cycle
+    console.log(`[Marunage:Start] Format will be driven by advance polling for project ${projectId}, run ${runId}`)
 
     // Audit log
     try {
@@ -2241,13 +2237,124 @@ marunage.post('/:projectId/advance', async (c) => {
         ).bind(projectId).first<{ status: string }>()
 
         if (!proj || proj.status !== 'formatted') {
-          return c.json({
-            run_id: run.id,
-            previous_phase: currentPhase,
-            new_phase: currentPhase,
-            action: 'waiting',
-            message: 'Formatting not yet complete',
-          })
+          // ★ Active formatting: advance endpoint drives parse + format instead of waitUntil self-fetch
+          // This avoids Cloudflare Workers self-fetch issues and timeouts
+          const origin = new URL(c.req.url).origin
+          const sessionCookie = getCookie(c, 'session') || ''
+          const cookieHeader = `session=${sessionCookie}`
+
+          // Step A: Parse if not yet parsed (idempotent — returns immediately if already parsed)
+          const projForParse = await c.env.DB.prepare(
+            `SELECT status FROM projects WHERE id = ?`
+          ).bind(projectId).first<{ status: string }>()
+
+          if (projForParse && (projForParse.status === 'uploaded' || projForParse.status === 'text')) {
+            console.log(`[Marunage:Advance:Format] Calling parse API for project ${projectId}`)
+            try {
+              const parseRes = await fetch(`${origin}/api/projects/${projectId}/parse`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Cookie': cookieHeader },
+              })
+              if (!parseRes.ok) {
+                const parseErr = await parseRes.text().catch(() => 'Unknown')
+                console.error(`[Marunage:Advance:Format] Parse failed HTTP ${parseRes.status}: ${parseErr.substring(0, 300)}`)
+                await transitionPhase(c.env.DB, run.id, currentPhase, 'failed', {
+                  error_code: 'PARSE_FAILED',
+                  error_message: `Parse API returned ${parseRes.status}: ${parseErr.substring(0, 500)}`,
+                  error_phase: 'formatting',
+                })
+                return c.json({
+                  run_id: run.id, previous_phase: currentPhase, new_phase: 'failed',
+                  action: 'failed_parse', message: `Parse API failed: ${parseRes.status}`,
+                })
+              }
+              console.log(`[Marunage:Advance:Format] Parse completed for project ${projectId}`)
+            } catch (parseError: any) {
+              console.error(`[Marunage:Advance:Format] Parse fetch error:`, parseError)
+            }
+          }
+
+          // Step B: Call format API once to process pending chunks
+          // Build character hints from project_character_models
+          let characterHints: Array<{ key: string; name: string; description: string }> = []
+          if (config.selected_character_ids && config.selected_character_ids.length > 0) {
+            try {
+              const { results: chars } = await c.env.DB.prepare(
+                `SELECT character_key, character_name, description FROM project_character_models WHERE project_id = ?`
+              ).bind(projectId).all()
+              characterHints = (chars || []).map((ch: any) => ({
+                key: ch.character_key as string,
+                name: ch.character_name as string,
+                description: (ch.description as string) || '',
+              }))
+            } catch (_) {}
+          }
+
+          console.log(`[Marunage:Advance:Format] Calling format API for project ${projectId} (single pass)`)
+          try {
+            const formatRes = await fetch(`${origin}/api/projects/${projectId}/format`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Cookie': cookieHeader,
+                'X-Execution-Context': 'marunage',
+              },
+              body: JSON.stringify({
+                split_mode: config.split_mode || 'ai',
+                target_scene_count: config.target_scene_count || 5,
+                ...(characterHints.length > 0 ? { character_hints: characterHints } : {}),
+              }),
+            })
+
+            if (formatRes.ok) {
+              const formatBody = await formatRes.json().catch(() => null) as any
+              console.log(`[Marunage:Advance:Format] Format response: status=${formatBody?.status}, processed=${formatBody?.processed || 0}, failed=${formatBody?.failed_count || 0}`)
+
+              // Re-check project status after format call
+              const projAfter = await c.env.DB.prepare(
+                `SELECT status FROM projects WHERE id = ?`
+              ).bind(projectId).first<{ status: string }>()
+
+              if (projAfter?.status === 'formatted') {
+                // Formatting just completed — fall through to scene check below
+                console.log(`[Marunage:Advance:Format] Project ${projectId} is now formatted, proceeding to scene check`)
+              } else {
+                // Still formatting — return progress so frontend polls again
+                return c.json({
+                  run_id: run.id,
+                  previous_phase: currentPhase,
+                  new_phase: currentPhase,
+                  action: 'formatting_in_progress',
+                  message: `Formatting in progress: ${formatBody?.processed || 0} chunks processed`,
+                })
+              }
+            } else {
+              const errBody = await formatRes.text().catch(() => 'Unknown')
+              console.error(`[Marunage:Advance:Format] Format API HTTP ${formatRes.status}: ${errBody.substring(0, 300)}`)
+              if (formatRes.status >= 400 && formatRes.status < 500) {
+                await transitionPhase(c.env.DB, run.id, currentPhase, 'failed', {
+                  error_code: 'FORMAT_API_ERROR',
+                  error_message: `Format API returned ${formatRes.status}: ${errBody.substring(0, 500)}`,
+                  error_phase: 'formatting',
+                })
+                return c.json({
+                  run_id: run.id, previous_phase: currentPhase, new_phase: 'failed',
+                  action: 'failed_format', message: `Format API failed: ${formatRes.status}`,
+                })
+              }
+              // 5xx — return waiting, frontend will retry
+              return c.json({
+                run_id: run.id, previous_phase: currentPhase, new_phase: currentPhase,
+                action: 'formatting_in_progress', message: 'Format API temporarily unavailable, retrying...',
+              })
+            }
+          } catch (formatError: any) {
+            console.error(`[Marunage:Advance:Format] Format fetch error:`, formatError)
+            return c.json({
+              run_id: run.id, previous_phase: currentPhase, new_phase: currentPhase,
+              action: 'formatting_in_progress', message: 'Format processing, will retry...',
+            })
+          }
         }
 
         // 5-scene convergence: check and hide excess scenes
@@ -2903,15 +3010,8 @@ marunage.post('/:projectId/retry', async (c) => {
 
     console.log(`[Marunage:Retry] Reset chunks + scenes + project status for project ${projectId}`)
 
-    // ★ FIX: retry時にフォーマット処理を再起動する（start時と同じ waitUntil パターン）
-    const config: MarunageConfig = JSON.parse(run.config_json || '{}')
-    const sessionCookie = getCookie(c, 'session') || ''
-    const requestUrl = c.req.url
-    c.executionCtx.waitUntil(
-      marunageFormatStartup(c.env.DB, run.id, projectId, config, requestUrl, sessionCookie)
-        .catch(err => console.error(`[Marunage:Retry:Format] waitUntil error:`, err))
-    )
-    console.log(`[Marunage:Retry] Format startup triggered via waitUntil for project ${projectId}`)
+    // Format will be driven by advance endpoint polling (no more waitUntil self-fetch)
+    console.log(`[Marunage:Retry] Format will be driven by advance polling for project ${projectId}`)
   }
 
   try {
