@@ -1760,7 +1760,7 @@ async function mcLoadUserCharacters() {
   const container = document.getElementById('mcCharacterList');
   const hint = document.getElementById('mcCharacterHint');
   try {
-    const res = await axios.get('/api/settings/user/characters');
+    const res = await axios.get('/api/user/characters');
     const chars = res.data.characters || [];
     MC._userCharacters = chars;
     
