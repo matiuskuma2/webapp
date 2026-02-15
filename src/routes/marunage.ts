@@ -1282,7 +1282,7 @@ marunage.get('/runs', async (c) => {
       (SELECT ig2.r2_key FROM scenes s3
        LEFT JOIN image_generations ig2 ON ig2.scene_id = s3.id AND ig2.is_active = 1 AND ig2.status = 'completed'
        WHERE s3.project_id = mr.project_id AND (s3.is_hidden = 0 OR s3.is_hidden IS NULL) AND ig2.r2_key IS NOT NULL
-       ORDER BY s3.scene_order ASC LIMIT 1) AS first_image_key,
+       ORDER BY s3.idx ASC LIMIT 1) AS first_image_key,
       (SELECT vb.status FROM video_builds vb WHERE vb.id = mr.video_build_id) AS video_build_status,
       (SELECT vb.progress_percent FROM video_builds vb WHERE vb.id = mr.video_build_id) AS video_progress_percent,
       (SELECT vb.download_url FROM video_builds vb WHERE vb.id = mr.video_build_id) AS video_download_url

@@ -4246,11 +4246,11 @@ app.get('/marunage', (c) => {
         <div class="nav-icon active" title="丸投げチャット">
           <i class="fas fa-magic text-xs"></i>
         </div>
-        <a href="/" class="nav-icon" title="プロジェクト">
+        <a href="/" class="nav-icon" title="プロジェクト一覧">
           <i class="fas fa-folder text-xs"></i>
         </a>
         <div class="flex-1"></div>
-        <a href="/" class="nav-icon" title="設定">
+        <a href="javascript:void(0)" onclick="mgOpenSettings()" class="nav-icon" title="設定">
           <i class="fas fa-cog text-xs"></i>
         </a>
       </aside>
@@ -4310,6 +4310,38 @@ app.get('/marunage', (c) => {
         </div>
 
       </main>
+
+      </div>
+
+    <!-- Settings Modal (outside mgMain) -->
+    <div id="mgSettingsModal" class="fixed inset-0 bg-black/30 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+      <div class="bg-white rounded-2xl shadow-xl w-full max-w-sm mx-4 overflow-hidden">
+        <div class="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <h3 class="text-sm font-bold text-gray-900">設定</h3>
+          <button onclick="mgCloseSettings()" class="w-7 h-7 rounded-lg hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-gray-600 transition-colors">
+            <i class="fas fa-times text-xs"></i>
+          </button>
+        </div>
+        <div class="p-5 space-y-4">
+          <div>
+            <label class="text-xs font-medium text-gray-500 block mb-1.5">デフォルト表示</label>
+            <select id="mgSettingDefaultFilter" class="w-full text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-1 focus:ring-gray-300">
+              <option value="active">アクティブ</option>
+              <option value="archived">アーカイブ</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs font-medium text-gray-500 block mb-1.5">一覧の自動更新</label>
+            <div class="flex items-center gap-2">
+              <input type="checkbox" id="mgSettingAutoRefresh" class="w-4 h-4 rounded border-gray-300 text-gray-900 focus:ring-gray-300">
+              <span class="text-sm text-gray-600">30秒ごとに自動更新する</span>
+            </div>
+          </div>
+        </div>
+        <div class="px-5 py-3 bg-gray-50 border-t border-gray-100 flex justify-end">
+          <button onclick="mgSaveSettings()" class="px-4 py-1.5 bg-gray-900 text-white text-xs font-semibold rounded-lg hover:bg-gray-800 transition-colors">保存</button>
+        </div>
+      </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
@@ -4393,6 +4425,7 @@ app.get('/marunage', (c) => {
         } catch(e) { location.href = '/login'; return; }
         document.getElementById('mgAuthLoading').classList.add('hidden');
         document.getElementById('mgMain').classList.remove('hidden');
+        mgLoadSettings();
         await mgLoadRuns();
       }
 
@@ -4490,6 +4523,40 @@ app.get('/marunage', (c) => {
       }
       function mgEsc(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
       function mgThumbErr(img) { var p = img.parentElement; p.innerHTML = '<div class="w-full h-full bg-gradient-to-br from-gray-50 to-gray-100 flex items-center justify-center"><i class="fas fa-film text-2xl text-gray-200"></i></div>'; }
+
+      // ── Settings modal ──
+      var mgAutoRefreshTimer = null;
+
+      function mgOpenSettings() {
+        var settings = JSON.parse(localStorage.getItem('mgSettings') || '{}');
+        document.getElementById('mgSettingDefaultFilter').value = settings.defaultFilter || 'active';
+        document.getElementById('mgSettingAutoRefresh').checked = settings.autoRefresh !== false;
+        document.getElementById('mgSettingsModal').classList.remove('hidden');
+      }
+      function mgCloseSettings() {
+        document.getElementById('mgSettingsModal').classList.add('hidden');
+      }
+      function mgSaveSettings() {
+        var settings = {
+          defaultFilter: document.getElementById('mgSettingDefaultFilter').value,
+          autoRefresh: document.getElementById('mgSettingAutoRefresh').checked
+        };
+        localStorage.setItem('mgSettings', JSON.stringify(settings));
+        mgCloseSettings();
+        mgApplySettings(settings);
+      }
+      function mgApplySettings(settings) {
+        // Auto-refresh
+        if (mgAutoRefreshTimer) { clearInterval(mgAutoRefreshTimer); mgAutoRefreshTimer = null; }
+        if (settings.autoRefresh !== false) {
+          mgAutoRefreshTimer = setInterval(function() { mgLoadRuns(); }, 30000);
+        }
+      }
+      function mgLoadSettings() {
+        var settings = JSON.parse(localStorage.getItem('mgSettings') || '{}');
+        if (settings.defaultFilter) { mgSetFilter(settings.defaultFilter); }
+        mgApplySettings(settings);
+      }
 
       mgInit();
     </script>
