@@ -1966,6 +1966,33 @@ marunage.get('/:projectId/status', async (c) => {
     videoState = 'off'
   }
 
+  // 6. Confirmed selections for left board (B-spec)
+  const { results: confirmedCharacters } = await c.env.DB.prepare(`
+    SELECT character_key, character_name, voice_preset_id
+    FROM project_character_models
+    WHERE project_id = ?
+    ORDER BY id ASC
+  `).bind(projectId).all()
+
+  const styleSettings = await c.env.DB.prepare(`
+    SELECT pss.default_style_preset_id, sp.name AS style_name
+    FROM project_style_settings pss
+    LEFT JOIN style_presets sp ON sp.id = pss.default_style_preset_id
+    WHERE pss.project_id = ?
+  `).bind(projectId).first<{ default_style_preset_id: number | null; style_name: string | null }>()
+
+  // Narration voice from settings_json
+  const projSettings = await c.env.DB.prepare(`
+    SELECT settings_json FROM projects WHERE id = ?
+  `).bind(projectId).first<{ settings_json: string | null }>()
+  let confirmedVoice: { provider: string; voice_id: string } | null = null
+  try {
+    const sj = projSettings?.settings_json ? JSON.parse(projSettings.settings_json) : {}
+    if (sj.default_narration_voice) {
+      confirmedVoice = sj.default_narration_voice
+    }
+  } catch {}
+
   const response: MarunageStatusResponse = {
     run_id: run.id,
     project_id: run.project_id,
@@ -2029,6 +2056,19 @@ marunage.get('/:projectId/status', async (c) => {
       created_at: run.created_at,
       updated_at: run.updated_at,
       completed_at: run.completed_at,
+    },
+    // B-spec: confirmed selections for left board display
+    confirmed: {
+      characters: (confirmedCharacters || []).map((ch: any) => ({
+        character_key: ch.character_key,
+        character_name: ch.character_name,
+        voice_preset_id: ch.voice_preset_id,
+      })),
+      style: styleSettings ? {
+        preset_id: styleSettings.default_style_preset_id,
+        name: styleSettings.style_name,
+      } : null,
+      voice: confirmedVoice,
     },
   }
 

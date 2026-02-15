@@ -4586,6 +4586,13 @@ app.get('/marunage-chat', (c) => {
         .prov-google { background: #4285f4; }
         .prov-elevenlabs { background: #000; }
         .prov-fish { background: #ff6b35; }
+        
+        /* Board section */
+        .mc-board-section { background: #fff; }
+        .mc-board-section-header { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 1rem; }
+        .mc-board-section.locked { position: relative; pointer-events: none; }
+        .mc-board-section.locked::after { content: ''; position: absolute; inset: 0; background: rgba(249,250,251,0.5); z-index: 1; border-radius: inherit; }
+        .mc-lock-badge { display: inline-flex; align-items: center; gap: 2px; padding: 1px 6px; border-radius: 4px; background: #f3f4f6; color: #9ca3af; font-size: 10px; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -4642,27 +4649,158 @@ app.get('/marunage-chat', (c) => {
                 <p id="mcPhaseDetail" class="text-xs text-gray-500 mt-1.5 text-center hidden"></p>
             </div>
             
-            <!-- Board Content (scenes) -->
-            <div id="mcBoardContent" class="flex-1 overflow-y-auto mc-scroll p-4">
-                <!-- Idle state -->
-                <div id="mcBoardIdle" class="flex flex-col items-center justify-center h-full text-center px-6">
-                    <div class="w-20 h-20 bg-purple-100 rounded-full flex items-center justify-center mb-4">
-                        <i class="fas fa-film text-purple-500 text-3xl"></i>
+            <!-- Board Content: 4 Sections (B-spec) -->
+            <div id="mcBoardContent" class="flex-1 overflow-y-auto mc-scroll">
+                <!-- ===== Section 1: Characters ===== -->
+                <div id="mcBoardCharacters" class="mc-board-section border-b border-gray-100">
+                    <div class="mc-board-section-header">
+                        <span class="text-xs font-semibold text-gray-600">
+                            <i class="fas fa-users mr-1 text-blue-500"></i>キャラクター
+                            <span class="text-[10px] text-gray-400 font-normal ml-1">任意・最大3名</span>
+                        </span>
+                        <span id="mcBoardCharLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                            <i class="fas fa-lock text-[10px]"></i>
+                        </span>
                     </div>
-                    <h3 class="text-lg font-bold text-gray-700 mb-2">動画素材を自動生成</h3>
-                    <p class="text-sm text-gray-500 leading-relaxed mb-4">
-                        右のチャットにシナリオを貼り付けると、<br>
-                        5シーンの画像 + ナレーション音声を自動生成します。
-                    </p>
-                    <p class="text-xs text-purple-500 bg-purple-50 px-3 py-1.5 rounded-lg">
-                        <i class="fas fa-info-circle mr-1"></i>
-                        今後、画像だけ/動画だけの個別生成も追加予定です（v2以降）
-                    </p>
+                    <div class="px-4 pb-3">
+                        <div id="mcCharacterList" class="flex flex-wrap gap-1.5">
+                            <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
+                        </div>
+                        <p id="mcCharacterHint" class="text-[10px] text-gray-400 mt-1 hidden">
+                            <i class="fas fa-info-circle mr-1"></i>キャラは <a href="/settings" class="text-purple-500 hover:underline">設定</a> から追加できます
+                        </p>
+                        <!-- Locked state: confirmed characters display -->
+                        <div id="mcCharacterLocked" class="hidden">
+                            <div id="mcCharacterConfirmed" class="flex flex-wrap gap-1.5"></div>
+                        </div>
+                    </div>
                 </div>
                 
-                <!-- Scene cards (populated dynamically) -->
-                <div id="mcSceneCards" class="space-y-4 hidden">
-                    <!-- Rendered by JS -->
+                <!-- ===== Section 2: Style ===== -->
+                <div id="mcBoardStyle" class="mc-board-section border-b border-gray-100">
+                    <div class="mc-board-section-header">
+                        <span class="text-xs font-semibold text-gray-600">
+                            <i class="fas fa-palette mr-1 text-pink-500"></i>スタイル
+                        </span>
+                        <span id="mcBoardStyleLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                            <i class="fas fa-lock text-[10px]"></i>
+                        </span>
+                    </div>
+                    <div class="px-4 pb-3">
+                        <div id="mcStyleList" class="flex flex-wrap gap-1.5">
+                            <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
+                        </div>
+                        <!-- Locked state: confirmed style display -->
+                        <div id="mcStyleLocked" class="hidden">
+                            <span id="mcStyleConfirmed" class="text-xs text-gray-700 font-medium"></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ===== Section 3: Voice ===== -->
+                <div id="mcBoardVoice" class="mc-board-section border-b border-gray-100">
+                    <div class="mc-board-section-header">
+                        <span class="text-xs font-semibold text-gray-600">
+                            <i class="fas fa-microphone-alt mr-1 text-purple-500"></i>ナレーション音声
+                        </span>
+                        <span id="mcBoardVoiceLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                            <i class="fas fa-lock text-[10px]"></i>
+                        </span>
+                    </div>
+                    <div class="px-4 pb-3">
+                        <!-- Provider Tabs -->
+                        <div id="mcVoiceProvTabs" class="flex gap-1 mb-1.5">
+                            <button class="voice-prov-tab active" data-prov="all" onclick="mcFilterVoices('all',this)">すべて</button>
+                            <button class="voice-prov-tab" data-prov="google" onclick="mcFilterVoices('google',this)">Google</button>
+                            <button class="voice-prov-tab" data-prov="elevenlabs" onclick="mcFilterVoices('elevenlabs',this)">ElevenLabs</button>
+                            <button class="voice-prov-tab" data-prov="fish" onclick="mcFilterVoices('fish',this)">Fish</button>
+                        </div>
+                        <!-- Search -->
+                        <input type="text" id="mcVoiceSearch" placeholder="ボイス名で検索..." 
+                               class="w-full px-2 py-1 text-xs border border-gray-200 rounded-md mb-1.5 focus:outline-none focus:ring-1 focus:ring-purple-300"
+                               oninput="mcFilterVoicesBySearch(this.value)">
+                        <!-- Voice List -->
+                        <div id="mcVoiceList" class="max-h-28 overflow-y-auto mc-scroll flex flex-wrap gap-1">
+                            <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
+                        </div>
+                        <!-- Selected indicator -->
+                        <div id="mcVoiceSelected" class="text-[10px] text-purple-600 mt-1 hidden">
+                            <i class="fas fa-check-circle mr-0.5"></i><span id="mcVoiceSelectedName">-</span>
+                        </div>
+                        <!-- Locked state: confirmed voice display -->
+                        <div id="mcVoiceLocked" class="hidden">
+                            <span id="mcVoiceConfirmed" class="text-xs text-gray-700 font-medium"></span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ===== Section 3.5: Output Settings (Preset + Scene Count) ===== -->
+                <div id="mcBoardOutputSettings" class="mc-board-section border-b border-gray-100">
+                    <div class="mc-board-section-header">
+                        <span class="text-xs font-semibold text-gray-600">
+                            <i class="fas fa-sliders-h mr-1 text-indigo-500"></i>出力設定
+                        </span>
+                        <span id="mcBoardOutputLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                            <i class="fas fa-lock text-[10px]"></i>
+                        </span>
+                    </div>
+                    <div class="px-4 pb-3">
+                        <div class="mb-2">
+                            <span class="text-[10px] text-gray-500 block mb-1">プリセット</span>
+                            <div id="mcOutputPresetList" class="flex gap-1.5">
+                                <button class="voice-chip active" data-preset="yt_long" onclick="selectPreset(this)">
+                                    <i class="fas fa-desktop mr-1"></i>YouTube横型
+                                </button>
+                                <button class="voice-chip" data-preset="short_vertical" onclick="selectPreset(this)">
+                                    <i class="fas fa-mobile-alt mr-1"></i>縦型ショート
+                                </button>
+                            </div>
+                        </div>
+                        <div>
+                            <span class="text-[10px] text-gray-500 block mb-1">シーン数</span>
+                            <div id="mcSceneCountList" class="flex gap-1.5">
+                                <button class="voice-chip" data-scenes="3" onclick="selectSceneCount(this)">
+                                    3枚 <span class="text-[10px] ml-0.5 opacity-60">速い</span>
+                                </button>
+                                <button class="voice-chip active" data-scenes="5" onclick="selectSceneCount(this)">
+                                    5枚 <span class="text-[10px] ml-0.5 opacity-60">標準</span>
+                                </button>
+                                <button class="voice-chip" data-scenes="7" onclick="selectSceneCount(this)">
+                                    7枚
+                                </button>
+                                <button class="voice-chip" data-scenes="10" onclick="selectSceneCount(this)">
+                                    10枚 <span class="text-[10px] ml-0.5 opacity-60">高品質</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- ===== Section 4: Assets / Progress ===== -->
+                <div id="mcBoardAssets" class="mc-board-section">
+                    <div class="mc-board-section-header">
+                        <span class="text-xs font-semibold text-gray-600">
+                            <i class="fas fa-photo-video mr-1 text-green-500"></i>アセット
+                        </span>
+                    </div>
+                    <div class="px-4 pb-3">
+                        <!-- Idle state -->
+                        <div id="mcBoardIdle" class="flex flex-col items-center justify-center py-6 text-center">
+                            <div class="w-14 h-14 bg-purple-100 rounded-full flex items-center justify-center mb-3">
+                                <i class="fas fa-film text-purple-500 text-xl"></i>
+                            </div>
+                            <h3 class="text-sm font-bold text-gray-700 mb-1">動画素材を自動生成</h3>
+                            <p class="text-xs text-gray-500 leading-relaxed">
+                                右のチャットにシナリオを貼り付けると、<br>
+                                画像 + ナレーション音声を自動生成します。
+                            </p>
+                        </div>
+                        
+                        <!-- Scene cards (populated dynamically) -->
+                        <div id="mcSceneCards" class="space-y-3 hidden">
+                            <!-- Rendered by JS -->
+                        </div>
+                    </div>
                 </div>
             </div>
             
@@ -4705,90 +4843,6 @@ app.get('/marunage-chat', (c) => {
                 </div>
             </div>
             
-            <!-- ===== Style Selection (shown before start) ===== -->
-            <div id="mcStyleSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
-                <label class="text-xs font-semibold text-gray-600 mb-1 block">
-                    <i class="fas fa-palette mr-1 text-pink-500"></i>スタイル
-                </label>
-                <div id="mcStyleList" class="flex flex-wrap gap-1.5">
-                    <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
-                </div>
-            </div>
-            
-            <!-- ===== Character Selection (shown before start) ===== -->
-            <div id="mcCharacterSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
-                <label class="text-xs font-semibold text-gray-600 mb-1 block">
-                    <i class="fas fa-users mr-1 text-blue-500"></i>キャラクター <span class="text-[10px] text-gray-400 font-normal ml-1">任意・最大3名</span>
-                </label>
-                <div id="mcCharacterList" class="flex flex-wrap gap-1.5">
-                    <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
-                </div>
-                <p id="mcCharacterHint" class="text-[10px] text-gray-400 mt-1 hidden">
-                    <i class="fas fa-info-circle mr-1"></i>キャラは <a href="/settings" class="text-purple-500 hover:underline">設定</a> から追加できます
-                </p>
-            </div>
-            
-            <!-- Voice Selection (shown before start) — SSOT: /api/tts/voices -->
-            <div id="mcVoiceSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
-                <label class="text-xs font-semibold text-gray-600 mb-1.5 block">
-                    <i class="fas fa-microphone-alt mr-1 text-purple-500"></i>ナレーション音声
-                </label>
-                <!-- Provider Tabs -->
-                <div class="flex gap-1 mb-1.5">
-                    <button class="voice-prov-tab active" data-prov="all" onclick="mcFilterVoices('all',this)">すべて</button>
-                    <button class="voice-prov-tab" data-prov="google" onclick="mcFilterVoices('google',this)">Google</button>
-                    <button class="voice-prov-tab" data-prov="elevenlabs" onclick="mcFilterVoices('elevenlabs',this)">ElevenLabs</button>
-                    <button class="voice-prov-tab" data-prov="fish" onclick="mcFilterVoices('fish',this)">Fish</button>
-                </div>
-                <!-- Search -->
-                <input type="text" id="mcVoiceSearch" placeholder="ボイス名で検索..." 
-                       class="w-full px-2 py-1 text-xs border border-gray-200 rounded-md mb-1.5 focus:outline-none focus:ring-1 focus:ring-purple-300"
-                       oninput="mcFilterVoicesBySearch(this.value)">
-                <!-- Voice List (populated by JS) -->
-                <div id="mcVoiceList" class="max-h-32 overflow-y-auto mc-scroll flex flex-wrap gap-1">
-                    <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
-                </div>
-                <!-- Selected indicator -->
-                <div id="mcVoiceSelected" class="text-[10px] text-purple-600 mt-1 hidden">
-                    <i class="fas fa-check-circle mr-0.5"></i><span id="mcVoiceSelectedName">-</span>
-                </div>
-            </div>
-            
-            <!-- Output Preset (shown before start) -->
-            <div id="mcOutputPreset" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
-                <label class="text-xs font-semibold text-gray-600 mb-1 block">
-                    <i class="fas fa-tv mr-1 text-purple-500"></i>出力プリセット
-                </label>
-                <div class="flex gap-1.5">
-                    <button class="voice-chip active" data-preset="yt_long" onclick="selectPreset(this)">
-                        <i class="fas fa-desktop mr-1"></i>YouTube横型
-                    </button>
-                    <button class="voice-chip" data-preset="short_vertical" onclick="selectPreset(this)">
-                        <i class="fas fa-mobile-alt mr-1"></i>縦型ショート
-                    </button>
-                </div>
-            </div>
-            
-            <!-- Scene Count (shown before start) -->
-            <div id="mcSceneCount" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
-                <label class="text-xs font-semibold text-gray-600 mb-1 block">
-                    <i class="fas fa-images mr-1 text-blue-500"></i>シーン数
-                </label>
-                <div class="flex gap-1.5">
-                    <button class="voice-chip" data-scenes="3" onclick="selectSceneCount(this)">
-                        3枚 <span class="text-[10px] ml-0.5 opacity-60">速い</span>
-                    </button>
-                    <button class="voice-chip active" data-scenes="5" onclick="selectSceneCount(this)">
-                        5枚 <span class="text-[10px] ml-0.5 opacity-60">標準</span>
-                    </button>
-                    <button class="voice-chip" data-scenes="7" onclick="selectSceneCount(this)">
-                        7枚
-                    </button>
-                    <button class="voice-chip" data-scenes="10" onclick="selectSceneCount(this)">
-                        10枚 <span class="text-[10px] ml-0.5 opacity-60">高品質</span>
-                    </button>
-                </div>
-            </div>
             
             <!-- Chat Input -->
             <div class="px-4 py-3 bg-white border-t border-gray-200">

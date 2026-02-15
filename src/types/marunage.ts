@@ -209,6 +209,22 @@ export interface MarunageStatusResponse {
     updated_at: string
     completed_at: string | null
   }
+  // B-spec: confirmed selections for left board display
+  confirmed?: {
+    characters: Array<{
+      character_key: string
+      character_name: string
+      voice_preset_id: number | null
+    }>
+    style: {
+      preset_id: number | null
+      name: string | null
+    } | null
+    voice: {
+      provider: string
+      voice_id: string
+    } | null
+  }
 }
 
 export interface MarunageAdvanceResponse {

@@ -315,12 +315,8 @@ async function mcSendMessage() {
     mcSetUIState('processing');
     mcStartPolling();
     
-    // Hide all pre-start selectors
-    document.getElementById('mcStyleSelect').classList.add('hidden');
-    document.getElementById('mcCharacterSelect').classList.add('hidden');
-    document.getElementById('mcVoiceSelect').classList.add('hidden');
-    document.getElementById('mcOutputPreset').classList.add('hidden');
-    document.getElementById('mcSceneCount').classList.add('hidden');
+    // Lock left board (B-spec: no edits after start)
+    mcLockBoard();
     
   } catch (err) {
     console.error('Start error:', err);
@@ -587,6 +583,11 @@ function mcUpdateFromStatus(data) {
   
   // Update scene cards
   mcUpdateSceneCards(p.scenes_ready.scenes, p.images, p.audio);
+  
+  // B-spec: Update left board confirmed selections from status API
+  if (data.confirmed) {
+    mcUpdateBoardFromConfirmed(data.confirmed);
+  }
   
   // Update timestamp
   if (data.timestamps.updated_at) {
@@ -981,10 +982,6 @@ function mcSetUIState(state) {
   
   const input = document.getElementById('mcChatInput');
   const sendBtn = document.getElementById('mcSendBtn');
-  const styleSelect = document.getElementById('mcStyleSelect');
-  const characterSelect = document.getElementById('mcCharacterSelect');
-  const voiceSelect = document.getElementById('mcVoiceSelect');
-  const outputPreset = document.getElementById('mcOutputPreset');
   const boardIdle = document.getElementById('mcBoardIdle');
   
   switch (state) {
@@ -992,11 +989,7 @@ function mcSetUIState(state) {
       input.disabled = false;
       sendBtn.disabled = false;
       input.placeholder = 'シナリオテキストを貼り付けてください...';
-      styleSelect.classList.remove('hidden');
-      characterSelect.classList.remove('hidden');
-      voiceSelect.classList.remove('hidden');
-      outputPreset.classList.remove('hidden');
-      document.getElementById('mcSceneCount').classList.remove('hidden');
+      mcUnlockBoard();
       boardIdle.classList.remove('hidden');
       document.getElementById('mcSceneCards').classList.add('hidden');
       MC.runId = null;
@@ -1009,18 +1002,14 @@ function mcSetUIState(state) {
       input.disabled = true;
       sendBtn.disabled = true;
       input.placeholder = '処理中...';
-      styleSelect.classList.add('hidden');
-      characterSelect.classList.add('hidden');
-      voiceSelect.classList.add('hidden');
-      outputPreset.classList.add('hidden');
-      document.getElementById('mcSceneCount').classList.add('hidden');
+      mcLockBoard();
       break;
       
     case 'ready':
       input.disabled = true;
       sendBtn.disabled = true;
       input.placeholder = '完成しました';
-      // Note: polling stop is now handled in mcPoll based on video.state
+      mcLockBoard();
       mcShowReadyActions();
       break;
       
@@ -1029,6 +1018,110 @@ function mcSetUIState(state) {
       sendBtn.disabled = true;
       input.placeholder = 'エラーが発生しました';
       break;
+  }
+}
+
+// ============================================================
+// Left Board Lock/Unlock (B-spec)
+// ============================================================
+
+function mcLockBoard() {
+  const sections = ['mcBoardCharacters', 'mcBoardStyle', 'mcBoardVoice', 'mcBoardOutputSettings'];
+  const locks = ['mcBoardCharLock', 'mcBoardStyleLock', 'mcBoardVoiceLock', 'mcBoardOutputLock'];
+  
+  sections.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('locked');
+  });
+  locks.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('hidden');
+  });
+  
+  // Show locked-state displays (confirmed selections)
+  mcShowConfirmedSelections();
+}
+
+function mcUnlockBoard() {
+  const sections = ['mcBoardCharacters', 'mcBoardStyle', 'mcBoardVoice', 'mcBoardOutputSettings'];
+  const locks = ['mcBoardCharLock', 'mcBoardStyleLock', 'mcBoardVoiceLock', 'mcBoardOutputLock'];
+  
+  sections.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.remove('locked');
+  });
+  locks.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  });
+  
+  // Hide locked-state displays, show edit controls
+  ['mcCharacterLocked', 'mcStyleLocked', 'mcVoiceLocked'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  });
+  // Show edit controls
+  const charList = document.getElementById('mcCharacterList');
+  if (charList) charList.classList.remove('hidden');
+  const styleList = document.getElementById('mcStyleList');
+  if (styleList) styleList.classList.remove('hidden');
+  const voiceProvTabs = document.getElementById('mcVoiceProvTabs');
+  if (voiceProvTabs) voiceProvTabs.classList.remove('hidden');
+  const voiceSearch = document.getElementById('mcVoiceSearch');
+  if (voiceSearch) voiceSearch.classList.remove('hidden');
+  const voiceList = document.getElementById('mcVoiceList');
+  if (voiceList) voiceList.classList.remove('hidden');
+}
+
+function mcShowConfirmedSelections() {
+  // Characters
+  const charConfirmed = document.getElementById('mcCharacterConfirmed');
+  const charLocked = document.getElementById('mcCharacterLocked');
+  if (charConfirmed && charLocked) {
+    if (MC.selectedCharacterIds.length > 0) {
+      const names = MC.selectedCharacterIds.map(id => {
+        const ch = MC._userCharacters.find(c => c.id === id);
+        return ch ? ch.character_name : 'ID:' + id;
+      });
+      charConfirmed.innerHTML = names.map(n =>
+        '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">' +
+        '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(n) + '</span>'
+      ).join('');
+    } else {
+      charConfirmed.innerHTML = '<span class="text-xs text-gray-400">キャラクターなし</span>';
+    }
+    charLocked.classList.remove('hidden');
+    const charList = document.getElementById('mcCharacterList');
+    if (charList) charList.classList.add('hidden');
+  }
+  
+  // Style
+  const styleLocked = document.getElementById('mcStyleLocked');
+  const styleConfirmed = document.getElementById('mcStyleConfirmed');
+  if (styleLocked && styleConfirmed) {
+    const preset = MC._stylePresets.find(p => p.id === MC.selectedStylePresetId);
+    styleConfirmed.innerHTML = '<i class="fas fa-brush mr-1 text-pink-500"></i>' + escapeHtml(preset ? preset.name : '未選択');
+    styleLocked.classList.remove('hidden');
+    const styleList = document.getElementById('mcStyleList');
+    if (styleList) styleList.classList.add('hidden');
+  }
+  
+  // Voice
+  const voiceLocked = document.getElementById('mcVoiceLocked');
+  const voiceConfirmed = document.getElementById('mcVoiceConfirmed');
+  if (voiceLocked && voiceConfirmed) {
+    const v = MC._allVoices.find(v => v.provider === MC.selectedVoice.provider && v.voice_id === MC.selectedVoice.voice_id);
+    voiceConfirmed.innerHTML = '<i class="fas fa-microphone-alt mr-1 text-purple-500"></i>' + escapeHtml(v ? v.name + ' (' + v.provider + ')' : MC.selectedVoice.voice_id);
+    voiceLocked.classList.remove('hidden');
+    // Hide edit controls
+    const voiceProvTabs = document.getElementById('mcVoiceProvTabs');
+    if (voiceProvTabs) voiceProvTabs.classList.add('hidden');
+    const voiceSearch = document.getElementById('mcVoiceSearch');
+    if (voiceSearch) voiceSearch.classList.add('hidden');
+    const voiceList = document.getElementById('mcVoiceList');
+    if (voiceList) voiceList.classList.add('hidden');
+    const voiceSelected = document.getElementById('mcVoiceSelected');
+    if (voiceSelected) voiceSelected.classList.add('hidden');
   }
 }
 
@@ -1224,10 +1317,69 @@ function mcStartNew() {
     else t.classList.remove('active');
   });
   mcRenderVoiceList();
-  // Show scene count section
-  document.getElementById('mcSceneCount').classList.remove('hidden');
+  // Unlock left board for new creation
+  mcUnlockBoard();
   
   mcSetUIState('idle');
+}
+
+// ============================================================
+// B-spec: Update left board from status API confirmed data
+// ============================================================
+
+function mcUpdateBoardFromConfirmed(confirmed) {
+  if (!confirmed) return;
+  
+  // Characters (from server SSOT)
+  const charConfirmed = document.getElementById('mcCharacterConfirmed');
+  const charLocked = document.getElementById('mcCharacterLocked');
+  if (charConfirmed && charLocked && confirmed.characters) {
+    if (confirmed.characters.length > 0) {
+      charConfirmed.innerHTML = confirmed.characters.map(ch =>
+        '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">' +
+        '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(ch.character_name) + '</span>'
+      ).join('');
+    } else {
+      charConfirmed.innerHTML = '<span class="text-xs text-gray-400">キャラクターなし</span>';
+    }
+    if (MC.uiState !== 'idle') {
+      charLocked.classList.remove('hidden');
+      const charList = document.getElementById('mcCharacterList');
+      if (charList) charList.classList.add('hidden');
+    }
+  }
+  
+  // Style (from server SSOT)
+  const styleConfirmed = document.getElementById('mcStyleConfirmed');
+  const styleLocked = document.getElementById('mcStyleLocked');
+  if (styleConfirmed && styleLocked && confirmed.style) {
+    styleConfirmed.innerHTML = '<i class="fas fa-brush mr-1 text-pink-500"></i>' + escapeHtml(confirmed.style.name || '未選択');
+    if (MC.uiState !== 'idle') {
+      styleLocked.classList.remove('hidden');
+      const styleList = document.getElementById('mcStyleList');
+      if (styleList) styleList.classList.add('hidden');
+    }
+  }
+  
+  // Voice (from server SSOT)
+  const voiceConfirmed = document.getElementById('mcVoiceConfirmed');
+  const voiceLocked = document.getElementById('mcVoiceLocked');
+  if (voiceConfirmed && voiceLocked && confirmed.voice) {
+    const v = MC._allVoices.find(v => v.provider === confirmed.voice.provider && v.voice_id === confirmed.voice.voice_id);
+    const voiceName = v ? v.name + ' (' + v.provider + ')' : confirmed.voice.voice_id + ' (' + confirmed.voice.provider + ')';
+    voiceConfirmed.innerHTML = '<i class="fas fa-microphone-alt mr-1 text-purple-500"></i>' + escapeHtml(voiceName);
+    if (MC.uiState !== 'idle') {
+      voiceLocked.classList.remove('hidden');
+      const voiceProvTabs = document.getElementById('mcVoiceProvTabs');
+      if (voiceProvTabs) voiceProvTabs.classList.add('hidden');
+      const voiceSearch = document.getElementById('mcVoiceSearch');
+      if (voiceSearch) voiceSearch.classList.add('hidden');
+      const voiceList = document.getElementById('mcVoiceList');
+      if (voiceList) voiceList.classList.add('hidden');
+      const voiceSelected = document.getElementById('mcVoiceSelected');
+      if (voiceSelected) voiceSelected.classList.add('hidden');
+    }
+  }
 }
 
 // ============================================================
@@ -1389,13 +1541,13 @@ function selectVoice(el) {
 }
 
 function selectPreset(el) {
-  document.querySelectorAll('#mcOutputPreset .voice-chip').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('#mcOutputPresetList .voice-chip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
   MC.selectedPreset = el.dataset.preset;
 }
 
 function selectSceneCount(el) {
-  document.querySelectorAll('#mcSceneCount .voice-chip').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('#mcSceneCountList .voice-chip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
   MC.selectedSceneCount = parseInt(el.dataset.scenes) || 5;
 }
