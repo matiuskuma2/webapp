@@ -1781,11 +1781,12 @@ async function mcLoadUserCharacters() {
     hint.classList.remove('hidden');
   } catch (err) {
     console.warn('[MC] Failed to load user characters:', err);
-    // 401 = not logged in — show friendly message instead of generic error
-    if (err.response && err.response.status === 401) {
+    // Check for auth-related errors: 401, 403, redirect to login, or network errors
+    const status = err.response?.status;
+    if (status === 401 || status === 403 || !err.response) {
       container.innerHTML = '<span class="text-xs text-gray-400"><i class="fas fa-sign-in-alt mr-1"></i>ログインするとキャラクターが使えます</span>';
     } else {
-      container.innerHTML = '<span class="text-xs text-gray-400">読み込み失敗</span>';
+      container.innerHTML = '<span class="text-xs text-gray-400">読み込み失敗（' + (status || 'error') + '）</span>';
     }
     hint.classList.remove('hidden');
   }
