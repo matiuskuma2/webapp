@@ -60,6 +60,26 @@ export interface MarunageNarrationVoice {
   voice_id: string
 }
 
+/** v2.1: Individual voice specification */
+export interface VoiceSpec {
+  provider: 'google' | 'elevenlabs' | 'fish'
+  voice_id: string
+}
+
+/** v2.1: Unified voice policy structure */
+export interface VoicePolicy {
+  /**
+   * Voice selection mode:
+   * - 'narration_only': Only narration voice is selectable; characters use their default voice_preset_id (v1 recommended)
+   * - 'full_override': Narration + per-character voice override (v2 future)
+   */
+  mode: 'narration_only' | 'full_override'
+  /** Narration voice (used for scene_utterances with role='narration') */
+  narration: VoiceSpec
+  /** Per-character voice overrides (character_key → VoiceSpec). Ignored when mode='narration_only'. */
+  characters?: Record<string, VoiceSpec>
+}
+
 export interface MarunageConfig {
   experience_tag: 'marunage_chat_v1'
   target_scene_count: number       // MVP: always 5
@@ -67,6 +87,11 @@ export interface MarunageConfig {
   output_preset: string            // e.g. 'yt_long', 'short_vertical'
   narration_voice: MarunageNarrationVoice
   bgm_mode: 'none' | 'auto'       // MVP: always 'none'
+  // Phase 1: Style selection
+  style_preset_id?: number
+  // Phase 2: Character selection & voice policy
+  selected_character_ids?: number[]
+  voice_policy?: VoicePolicy
 }
 
 export const DEFAULT_CONFIG: MarunageConfig = {
@@ -117,6 +142,12 @@ export interface MarunageStartRequest {
   }
   output_preset?: string   // 'yt_long' | 'short_vertical'
   target_scene_count?: number  // 3-10, default 5
+  // Phase 1: Style selection
+  style_preset_id?: number
+  // Phase 2: Character selection
+  selected_character_ids?: number[]
+  // Phase 2: Voice policy (v2.1 unified structure)
+  voice_policy?: VoicePolicy
 }
 
 export interface MarunageStatusResponse {

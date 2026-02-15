@@ -48,6 +48,7 @@ import {
 } from '../types/marunage'
 import { logAudit } from '../utils/audit-logger'
 import { composeStyledPrompt, buildR2Key } from '../utils/image-prompt-builder'
+import { getSceneReferenceImages } from '../utils/character-reference-helper'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -201,6 +202,27 @@ async function marunageFormatStartup(
     console.log(`[Marunage:Format] Parse completed: ${parseResult?.total_chunks || 0} chunks created`)
 
     // Step 1: Polling loop for format API
+    // Phase 3 (M-5): Build character hints from project_character_models (if any)
+    let characterHints: Array<{ key: string; name: string; description: string }> = []
+    if (config.selected_character_ids && config.selected_character_ids.length > 0) {
+      try {
+        const { results: chars } = await db.prepare(`
+          SELECT character_key, character_name, description
+          FROM project_character_models WHERE project_id = ?
+        `).bind(projectId).all()
+        characterHints = (chars || []).map((ch: any) => ({
+          key: ch.character_key as string,
+          name: ch.character_name as string,
+          description: (ch.description as string) || '',
+        }))
+        if (characterHints.length > 0) {
+          console.log(`[Marunage:Format] Injecting ${characterHints.length} character hints into format API`)
+        }
+      } catch (e) {
+        console.warn(`[Marunage:Format] Failed to load character hints:`, e)
+      }
+    }
+
     for (let poll = 0; poll < MAX_FORMAT_POLLS; poll++) {
       // Check if run is still active (not canceled/failed externally)
       const currentRun = await db.prepare(
@@ -223,6 +245,8 @@ async function marunageFormatStartup(
         body: JSON.stringify({
           split_mode: config.split_mode || 'ai',
           target_scene_count: config.target_scene_count || 5,
+          // Phase 3 (M-5): character hints for AI prompt injection
+          ...(characterHints.length > 0 ? { character_hints: characterHints } : {}),
         }),
       })
 
@@ -501,15 +525,28 @@ async function resolveProviderKey(
 
 /**
  * Gemini API で画像を1枚生成 (リトライ付き)
+ * Phase 4 (M-7): referenceImages 追加 — キャラ参照画像を Gemini に渡す
  */
 async function generateSingleImage(
   apiKey: string,
   prompt: string,
-  aspectRatio: '16:9' | '9:16' | '1:1'
+  aspectRatio: '16:9' | '9:16' | '1:1',
+  referenceImages?: Array<{ base64Data: string; mimeType: string; characterName?: string }>
 ): Promise<{ success: boolean; imageData?: ArrayBuffer; error?: string }> {
   const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
   const characterTraitInstruction = 'NOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually. Do NOT render these descriptions as text in the image.'
-  const enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\n${prompt}`
+  
+  // Phase 4 (M-7): Add character consistency instruction when reference images are provided
+  let enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\n${prompt}`
+  if (referenceImages && referenceImages.length > 0) {
+    const charNames = referenceImages
+      .filter(r => r.characterName)
+      .map(r => r.characterName)
+      .join(', ')
+    if (charNames) {
+      enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\nUsing the provided reference images for character visual consistency (${charNames}), generate:\n\n${prompt}`
+    }
+  }
 
   let lastError = ''
 
@@ -526,7 +563,13 @@ async function generateSingleImage(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: enhancedPrompt }] }],
+          contents: [{ parts: [
+            // Phase 4 (M-7): Reference images first (if any) for character consistency
+            ...(referenceImages || []).map(img => ({
+              inlineData: { mimeType: img.mimeType, data: img.base64Data }
+            })),
+            { text: enhancedPrompt }
+          ] }],
           generationConfig: {
             responseModalities: ['TEXT', 'IMAGE'],
             imageConfig: { aspectRatio },
@@ -733,6 +776,23 @@ async function marunageGenerateImages(
       prompt = `A scene from a video presentation. Scene index: ${scene.idx}`
     }
 
+    // Phase 4 (M-7): Fetch reference images for character consistency
+    let refImages: Array<{ base64Data: string; mimeType: string; characterName?: string }> = []
+    try {
+      const refs = await getSceneReferenceImages(db, r2, scene.id as number, 5)
+      refImages = refs.map(r => ({
+        base64Data: r.base64Data,
+        mimeType: r.mimeType,
+        characterName: r.characterName,
+      }))
+      if (refImages.length > 0) {
+        console.log(`[Marunage:Image] Loaded ${refImages.length} reference image(s) for scene ${scene.id}`)
+      }
+    } catch (e) {
+      console.warn(`[Marunage:Image] Reference image loading failed for scene ${scene.id}:`, e)
+      // Continue without reference images (graceful degradation)
+    }
+
     // Create or update image_generations record
     let genId: number
     if (existingImage) {
@@ -754,8 +814,8 @@ async function marunageGenerateImages(
 
     // Generate image
     const tImgStart = Date.now()
-    console.log(`[Marunage:Image] Generating image for scene ${scene.id} (idx=${scene.idx}), genId=${genId}`)
-    const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any)
+    console.log(`[Marunage:Image] Generating image for scene ${scene.id} (idx=${scene.idx}), genId=${genId}${refImages.length > 0 ? `, refImages=${refImages.length}` : ''}`)
+    const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any, refImages.length > 0 ? refImages : undefined)
     const imgGeminiMs = Date.now() - tImgStart
 
     if (!imageResult.success || !imageResult.imageData) {
@@ -1478,6 +1538,11 @@ marunage.post('/start', async (c) => {
       provider: narrationVoice.provider as any,
       voice_id: narrationVoice.voice_id,
     },
+    // Phase 1: style selection snapshot
+    ...(body.style_preset_id ? { style_preset_id: body.style_preset_id } : {}),
+    // Phase 2: character selection snapshot
+    ...(body.selected_character_ids?.length ? { selected_character_ids: body.selected_character_ids } : {}),
+    ...(body.voice_policy ? { voice_policy: body.voice_policy } : {}),
   }
   const configJson = JSON.stringify(config)
   const title = body.title?.trim() || `丸投げ ${new Date().toLocaleDateString('ja-JP')}`
@@ -1498,25 +1563,124 @@ marunage.post('/start', async (c) => {
       WHERE id = ?
     `).bind(textTrimmed, projectId).run()
 
+    // ===== Step 1.2: Style selection (Phase 1: M-2) =====
+    // Use provided style_preset_id if valid, otherwise fallback to 'インフォグラフィック'
+    let styleId: number | null = null
+    if (body.style_preset_id) {
+      const userStyle = await c.env.DB.prepare(`
+        SELECT id FROM style_presets WHERE id = ? AND is_active = 1 LIMIT 1
+      `).bind(body.style_preset_id).first<{ id: number }>()
+      if (userStyle) {
+        styleId = userStyle.id
+        console.log(`[Marunage:Start] Using user-selected style preset: id=${styleId}`)
+      } else {
+        console.warn(`[Marunage:Start] Invalid style_preset_id=${body.style_preset_id}, falling back to default`)
+      }
+    }
+    if (!styleId) {
+      const defaultStyle = await c.env.DB.prepare(`
+        SELECT id FROM style_presets WHERE name = 'インフォグラフィック' AND is_active = 1 LIMIT 1
+      `).first<{ id: number }>()
+      styleId = defaultStyle?.id ?? null
+    }
+    if (styleId) {
+      await c.env.DB.prepare(`
+        INSERT INTO project_style_settings (project_id, default_style_preset_id) VALUES (?, ?)
+      `).bind(projectId, styleId).run()
+    }
+
+    // ===== Step 1.5: Copy selected characters to project (Phase 2: M-3) =====
+    if (body.selected_character_ids && body.selected_character_ids.length > 0) {
+      for (const ucId of body.selected_character_ids) {
+        // Fetch from user's library (ownership check)
+        const uc = await c.env.DB.prepare(`
+          SELECT id, character_key, character_name, description,
+                 appearance_description, reference_image_r2_key, reference_image_r2_url,
+                 voice_preset_id, aliases_json
+          FROM user_characters WHERE id = ? AND user_id = ?
+        `).bind(ucId, user.id).first<any>()
+
+        if (!uc) {
+          console.warn(`[Marunage:Start] user_character ${ucId} not found for user ${user.id}, skipping`)
+          continue
+        }
+
+        // Check duplicate (same character_key already in project)
+        const existing = await c.env.DB.prepare(`
+          SELECT id FROM project_character_models WHERE project_id = ? AND character_key = ?
+        `).bind(projectId, uc.character_key).first()
+
+        if (existing) {
+          console.warn(`[Marunage:Start] character_key=${uc.character_key} already in project ${projectId}, skipping`)
+          continue
+        }
+
+        // Determine voice_preset_id: voice_policy override > original
+        let voicePresetId = uc.voice_preset_id
+        if (body.voice_policy?.mode === 'full_override' && body.voice_policy.characters?.[uc.character_key]) {
+          const override = body.voice_policy.characters[uc.character_key]
+          voicePresetId = override.voice_id  // e.g., "el-aria", "ja-JP-Wavenet-A"
+        }
+
+        // Copy to project_character_models (same schema as character-models.ts:344-358)
+        await c.env.DB.prepare(`
+          INSERT INTO project_character_models
+            (project_id, character_key, character_name, description,
+             appearance_description, reference_image_r2_key, reference_image_r2_url,
+             voice_preset_id, aliases_json)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+          projectId,
+          uc.character_key,
+          uc.character_name,
+          uc.description,
+          uc.appearance_description,
+          uc.reference_image_r2_key,
+          uc.reference_image_r2_url,
+          voicePresetId,
+          uc.aliases_json
+        ).run()
+
+        // Link in project_character_instances
+        await c.env.DB.prepare(`
+          INSERT INTO project_character_instances
+            (project_id, user_character_id, character_key, is_customized)
+          VALUES (?, ?, ?, ?)
+        `).bind(projectId, ucId, uc.character_key, voicePresetId !== uc.voice_preset_id ? 1 : 0).run()
+      }
+
+      console.log(`[Marunage:Start] Copied ${body.selected_character_ids.length} character(s) to project ${projectId}`)
+    }
+
+    // ===== Step 1.6: Build settings_json with character voices (Phase 2: M-4) =====
+    // Build character_voices map from project_character_models
+    const characterVoices: Record<string, { provider: string; voice_id: string }> = {}
+    if (body.selected_character_ids && body.selected_character_ids.length > 0) {
+      const { results: projectChars } = await c.env.DB.prepare(`
+        SELECT character_key, voice_preset_id FROM project_character_models WHERE project_id = ?
+      `).bind(projectId).all()
+      for (const pc of (projectChars || [])) {
+        if (pc.voice_preset_id) {
+          let provider = 'google'
+          const vid = pc.voice_preset_id as string
+          if (vid.startsWith('el-') || vid.startsWith('elevenlabs:')) provider = 'elevenlabs'
+          else if (vid.startsWith('fish-') || vid.startsWith('fish:')) provider = 'fish'
+          characterVoices[pc.character_key as string] = { provider, voice_id: vid }
+        }
+      }
+    }
+
     // Set default narration voice + output_preset + marunage_mode in settings_json
     const settingsJson = JSON.stringify({
       default_narration_voice: narrationVoice,
       output_preset: outputPreset,
       marunage_mode: true,
+      // Phase 2: character voices map (resolveVoiceForUtterance reads this as Priority 2 source)
+      ...(Object.keys(characterVoices).length > 0 ? { character_voices: characterVoices } : {}),
     })
     await c.env.DB.prepare(`
       UPDATE projects SET settings_json = ?, output_preset = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
     `).bind(settingsJson, outputPreset, projectId).run()
-
-    // Set default style preset (same pattern as existing project creation)
-    const defaultStyle = await c.env.DB.prepare(`
-      SELECT id FROM style_presets WHERE name = 'インフォグラフィック' AND is_active = 1 LIMIT 1
-    `).first<{ id: number }>()
-    if (defaultStyle) {
-      await c.env.DB.prepare(`
-        INSERT INTO project_style_settings (project_id, default_style_preset_id) VALUES (?, ?)
-      `).bind(projectId, defaultStyle.id).run()
-    }
 
     // Create Run #1 (same pattern as existing project creation)
     await c.env.DB.prepare(`
@@ -2130,6 +2294,23 @@ marunage.post('/:projectId/advance', async (c) => {
           }
           if (!prompt) prompt = `A scene from a video presentation. Scene index: ${nextScene.idx}`
           
+          // Phase 4 (M-7): Fetch reference images for character consistency
+          let refImages: Array<{ base64Data: string; mimeType: string; characterName?: string }> = []
+          try {
+            const refs = await getSceneReferenceImages(c.env.DB, c.env.R2, nextScene.id, 5)
+            refImages = refs.map(r => ({
+              base64Data: r.base64Data,
+              mimeType: r.mimeType,
+              characterName: r.characterName,
+            }))
+            if (refImages.length > 0) {
+              console.log(`[Marunage:Advance:Images] Loaded ${refImages.length} reference image(s) for scene ${nextScene.id}`)
+            }
+          } catch (e) {
+            console.warn(`[Marunage:Advance:Images] Reference image loading failed for scene ${nextScene.id}:`, e)
+            // Continue without reference images (graceful degradation)
+          }
+          
           // ── Timing: overall start ──
           const t0 = Date.now()
           
@@ -2142,8 +2323,8 @@ marunage.post('/:projectId/advance', async (c) => {
           
           // ── Timing: Gemini API call ──
           const tGeminiStart = Date.now()
-          console.log(`[Marunage:Advance:Images] Calling Gemini for scene ${nextScene.id} (idx=${nextScene.idx})`)
-          const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any)
+          console.log(`[Marunage:Advance:Images] Calling Gemini for scene ${nextScene.id} (idx=${nextScene.idx})${refImages.length > 0 ? ` with ${refImages.length} ref images` : ''}`)
+          const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any, refImages.length > 0 ? refImages : undefined)
           const geminiMs = Date.now() - tGeminiStart
           
           if (imageResult.success && imageResult.imageData) {

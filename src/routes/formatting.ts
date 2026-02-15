@@ -320,6 +320,8 @@ formatting.post('/:id/format', async (c) => {
       split_mode?: 'preserve' | 'ai'
       target_scene_count?: number
       reset?: boolean
+      // Phase 3 (M-6): character hints from marunage for AI prompt injection
+      character_hints?: Array<{ key: string; name: string; description: string }>
     } = {}
     try {
       body = await c.req.json()
@@ -333,6 +335,14 @@ formatting.post('/:id/format', async (c) => {
     // ★ execution_context: リクエスト元を識別（builder = 制作ボード / marunage = 丸投げチャット）
     // marunage.ts は X-Execution-Context: marunage ヘッダーを送信する
     const executionContext: 'builder' | 'marunage' = c.req.header('X-Execution-Context') === 'marunage' ? 'marunage' : 'builder'
+
+    // Phase 3 (M-6): Build character prompt section for AI (only when marunage + character_hints present)
+    const characterHints = body.character_hints
+    let characterPromptSection = ''
+    if (characterHints && characterHints.length > 0 && executionContext === 'marunage') {
+      characterPromptSection = `\n\n【登場キャラクター（固定）】\n以下のキャラクターが登場します。セリフは必ずこれらのキャラクター名を speaker として使用してください:\n${characterHints.map(ch => `- ${ch.name}（${ch.description || '説明なし'}）`).join('\n')}\n\n【セリフルール】\n- ナレーション（語り手）は speech_type="narration" としてください\n- キャラクターのセリフは speech_type="dialogue" とし、dialogue 内に「キャラ名：「セリフ」」形式で記載してください\n- 1シーンあたり最大3名のキャラクターが登場できます\n- キャラクター名は上記リストのいずれかに限定してください`
+      console.log(`[Format:M-6] Injecting ${characterHints.length} character(s) into AI prompt: ${characterHints.map(c => c.name).join(', ')}`)
+    }
 
     // ★ SSOT: target_scene_count の決定ロジック
     // - リクエストボディの値が唯一の真実（scene_split_settings テーブルは参照しない）
@@ -692,7 +702,8 @@ async function processTextChunks(
         project.title as string,
         chunk.idx as number,
         c.env.OPENAI_API_KEY,
-        chunkTargetScenes  // chunk単位の目標シーン数
+        chunkTargetScenes,  // chunk単位の目標シーン数
+        characterPromptSection  // Phase 3 (M-6): character hints for AI
       )
 
       if (!miniScenesResult.success) {
@@ -862,7 +873,8 @@ async function processAudioTranscription(c: any, projectId: string, project: any
   const scenarioResult = await generateRILARCScenario(
     transcription.raw_text as string,
     project.title as string,
-    c.env.OPENAI_API_KEY
+    c.env.OPENAI_API_KEY,
+    characterPromptSection  // Phase 3 (M-6): character hints for AI
   )
 
   if (!scenarioResult.success) {
@@ -1527,14 +1539,15 @@ async function generateMiniScenesAI(
   projectTitle: string,
   chunkIdx: number,
   apiKey: string,
-  targetSceneCount: number = 5
+  targetSceneCount: number = 5,
+  characterPromptSection: string = ''  // Phase 3 (M-6)
 ): Promise<{
   success: boolean
   scenes?: any[]
   error?: string
 }> {
   // 第1回目の生成試行
-  const firstAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.7, targetSceneCount)
+  const firstAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.7, targetSceneCount, characterPromptSection)
   if (firstAttempt.success) {
     return firstAttempt
   }
@@ -1542,7 +1555,7 @@ async function generateMiniScenesAI(
   console.warn('First attempt failed, retrying with lower temperature...', firstAttempt.error)
 
   // 第2回目の生成試行（temperature 下げ）
-  const secondAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.3, targetSceneCount)
+  const secondAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.3, targetSceneCount, characterPromptSection)
   if (secondAttempt.success) {
     return secondAttempt
   }
@@ -1568,14 +1581,15 @@ async function generateMiniScenesAI(
 async function generateRILARCScenario(
   rawText: string,
   projectTitle: string,
-  apiKey: string
+  apiKey: string,
+  characterPromptSection: string = ''  // Phase 3 (M-6)
 ): Promise<{
   success: boolean
   scenario?: any
   error?: string
 }> {
   // 第1回目の生成試行
-  const firstAttempt = await generateWithSchema(rawText, projectTitle, apiKey, 0.7)
+  const firstAttempt = await generateWithSchema(rawText, projectTitle, apiKey, 0.7, characterPromptSection)
   if (firstAttempt.success) {
     return firstAttempt
   }
@@ -1583,7 +1597,7 @@ async function generateRILARCScenario(
   console.warn('First attempt failed, retrying with lower temperature...', firstAttempt.error)
 
   // 第2回目の生成試行（temperature 下げ）
-  const secondAttempt = await generateWithSchema(rawText, projectTitle, apiKey, 0.3)
+  const secondAttempt = await generateWithSchema(rawText, projectTitle, apiKey, 0.3, characterPromptSection)
   if (secondAttempt.success) {
     return secondAttempt
   }
@@ -1613,7 +1627,8 @@ async function generateMiniScenesWithSchemaAI(
   chunkIdx: number,
   apiKey: string,
   temperature: number,
-  targetSceneCount: number = 5
+  targetSceneCount: number = 5,
+  characterPromptSection: string = ''  // Phase 3 (M-6)
 ): Promise<{
   success: boolean
   scenes?: any[]
@@ -1659,7 +1674,7 @@ async function generateMiniScenesWithSchemaAI(
 - summary: 重要ポイントの振り返り
 - cta: 視聴者への呼びかけ、次のアクション
 
-注意：idx、metadata は不要。シーン配列のみを返してください。`
+注意：idx、metadata は不要。シーン配列のみを返してください。${characterPromptSection}`
 
     const userPrompt = `以下の文章断片からシーンを生成してください。
 **元の文章の内容を省略せず、できるだけ原文を活かしてください。**
@@ -1922,7 +1937,8 @@ async function generateWithSchema(
   rawText: string,
   projectTitle: string,
   apiKey: string,
-  temperature: number
+  temperature: number,
+  characterPromptSection: string = ''  // Phase 3 (M-6)
 ): Promise<{
   success: boolean
   scenario?: any
@@ -1962,7 +1978,7 @@ async function generateWithSchema(
 - timeline: 経緯、歴史的流れ
 - analysis: 深掘り、解釈、意味づけ
 - summary: 重要ポイントの振り返り
-- cta: 視聴者への呼びかけ、次のアクション`
+- cta: 視聴者への呼びかけ、次のアクション${characterPromptSection}`
 
     const userPrompt = `以下の文字起こしテキストをRILARCシナリオに変換してください。
 
