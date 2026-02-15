@@ -656,14 +656,14 @@ Phase 4 (参照画像) ←────────── Phase 3 必須
 Phase 1 (スタイル選択) — ~80行:
   [x] M-1: types/marunage.ts — style_preset_id 追加
   [x] M-2: marunage.ts:1511 — ハードコード→動的選択+フォールバック
-  [x] M-8a: index.tsx — スタイルカード UI  ← 未実装（UIは別チケット）
+  [x] M-8a: index.tsx — スタイルカード UI（右チャットパネル内、API動的ロード）
   [ ] Done: D1-1〜D1-6 全て PASS ← 本番テスト待ち
 
 Phase 2 (キャラ選択) — ~200行:
   [x] M-1: types/marunage.ts — selected_character_ids, voice_policy 追加
   [x] M-3: marunage.ts:1509+ — コピーロジック + instances リンク
   [x] M-4: marunage.ts:1502 — settings_json 拡張 + voice_policy 対応
-  [x] M-8b: index.tsx — キャラカード UI + ボイスプルダウン ← 未実装（UIは別チケット）
+  [x] M-8b: index.tsx — キャラチップ UI（マルチセレクト最大3名、設定画面リンク付き）
   [ ] Done: D2-1〜D2-9 全て PASS ← 本番テスト待ち
 
 Phase 3 (AI キャラ注入) — ~70行:
@@ -680,11 +680,26 @@ Phase 5 (ボイス確認) — 0行:
   [x] 変更不要確認済み — resolveVoiceForUtterance() が自動的に動作
   [ ] Done: D5-1〜D5-3 全て PASS ← 本番テスト待ち
 
+UI 実装 (フロントエンド) — ~150行:
+  [x] index.tsx — HTML: mcStyleSelect, mcCharacterSelect セクション追加
+  [x] index.tsx — CSS: char-chip スタイル（multi-select, disabled state）
+  [x] marunage-chat.js — mcLoadStylePresets(): GET /api/style-presets → チップ自動生成
+  [x] marunage-chat.js — mcLoadUserCharacters(): GET /api/settings/user/characters → チップ自動生成
+  [x] marunage-chat.js — selectStyle(): 単一選択切替
+  [x] marunage-chat.js — toggleCharacter(): マルチセレクト（最大3名制限 + disabled表示）
+  [x] marunage-chat.js — mcSendMessage(): style_preset_id + selected_character_ids 送信
+  [x] marunage-chat.js — MC.selectedStylePresetId, MC.selectedCharacterIds 追加
+  [x] marunage-chat.js — mcSetUIState(): 全セレクタの show/hide 統一
+  [x] marunage-chat.js — mcStartNew(): スタイル/キャラリセット
+  [x] ビルド成功確認（npm run build — 107 modules, 0 errors）
+
 横断チェック:
   [x] ビルド成功（npm run build — 107 modules, 0 errors）
   [x] R1〜R5 ゼロインパクトルール全てコード上で確認済み
   [ ] 既存 Builder UI でプロジェクト作成→画像生成→音声生成が正常動作 ← 本番テスト待ち
   [ ] 既存丸投げ（キャラ・スタイル未指定）が正常動作 ← 本番テスト待ち
 
-git commit: 1b986d8 (feat: Character fixation & style selection Phase 1-4)
+git commits:
+  1b986d8 (feat: Character fixation & style selection Phase 1-4)
+  <pending> (feat: UI — style & character selection in marunage-chat)
 ```

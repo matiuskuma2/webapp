@@ -4567,9 +4567,13 @@ app.get('/marunage-chat', (c) => {
         .mc-scroll::-webkit-scrollbar-track { background: transparent; }
         .mc-scroll::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
         
-        /* Voice select chip */
+        /* Voice/style select chip */
         .voice-chip { padding: 0.35rem 0.75rem; border-radius: 0.5rem; font-size: 0.75rem; cursor: pointer; transition: all 0.2s; border: 2px solid #e5e7eb; }
         .voice-chip.active { border-color: #7c3aed; background: #ede9fe; color: #5b21b6; }
+        /* Character toggle chip (multi-select) */
+        .char-chip { padding: 0.3rem 0.65rem; border-radius: 0.5rem; font-size: 0.72rem; cursor: pointer; transition: all 0.2s; border: 2px solid #e5e7eb; background: #fff; display: inline-flex; align-items: center; gap: 0.25rem; }
+        .char-chip.selected { border-color: #2563eb; background: #eff6ff; color: #1e40af; }
+        .char-chip.disabled { opacity: 0.4; cursor: not-allowed; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -4687,6 +4691,29 @@ app.get('/marunage-chat', (c) => {
                         </p>
                     </div>
                 </div>
+            </div>
+            
+            <!-- ===== Style Selection (shown before start) ===== -->
+            <div id="mcStyleSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                <label class="text-xs font-semibold text-gray-600 mb-1 block">
+                    <i class="fas fa-palette mr-1 text-pink-500"></i>スタイル
+                </label>
+                <div id="mcStyleList" class="flex flex-wrap gap-1.5">
+                    <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
+                </div>
+            </div>
+            
+            <!-- ===== Character Selection (shown before start) ===== -->
+            <div id="mcCharacterSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
+                <label class="text-xs font-semibold text-gray-600 mb-1 block">
+                    <i class="fas fa-users mr-1 text-blue-500"></i>キャラクター <span class="text-[10px] text-gray-400 font-normal ml-1">任意・最大3名</span>
+                </label>
+                <div id="mcCharacterList" class="flex flex-wrap gap-1.5">
+                    <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
+                </div>
+                <p id="mcCharacterHint" class="text-[10px] text-gray-400 mt-1 hidden">
+                    <i class="fas fa-info-circle mr-1"></i>キャラは <a href="/settings" class="text-purple-500 hover:underline">設定</a> から追加できます
+                </p>
             </div>
             
             <!-- Voice Selection (shown before start) -->

@@ -30,6 +30,12 @@ const MC = {
   selectedVoice: { provider: 'google', voice_id: 'ja-JP-Neural2-B' },
   selectedPreset: 'yt_long',
   selectedSceneCount: 5,
+  selectedStylePresetId: null,   // Phase 1: style preset ID
+  selectedCharacterIds: [],      // Phase 2: user_character IDs (max 3)
+  
+  // Loaded options cache
+  _stylePresets: [],
+  _userCharacters: [],
   
   // Auth
   currentUser: null,
@@ -161,6 +167,10 @@ async function mcCheckAuth() {
     document.getElementById('mcAuthLoading').classList.add('hidden');
     document.getElementById('mcShell').classList.remove('hidden');
     
+    // Load style presets and user characters (non-blocking)
+    mcLoadStylePresets();
+    mcLoadUserCharacters();
+    
     // Check URL for ?run=:runId (from dashboard)
     const urlParams = new URLSearchParams(window.location.search);
     const runParam = urlParams.get('run');
@@ -272,13 +282,23 @@ async function mcSendMessage() {
   mcAddSystemMessage('処理を開始しています...');
   
   try {
-    const res = await axios.post('/api/marunage/start', {
+    // Build request body with style + character selections
+    const startBody = {
       text: text,
       title: `丸投げ ${new Date().toLocaleDateString('ja-JP')}`,
       narration_voice: MC.selectedVoice,
       output_preset: MC.selectedPreset,
       target_scene_count: MC.selectedSceneCount,
-    });
+    };
+    // Phase 1: style preset
+    if (MC.selectedStylePresetId) {
+      startBody.style_preset_id = MC.selectedStylePresetId;
+    }
+    // Phase 2: character selection
+    if (MC.selectedCharacterIds.length > 0) {
+      startBody.selected_character_ids = MC.selectedCharacterIds;
+    }
+    const res = await axios.post('/api/marunage/start', startBody);
     
     MC.runId = res.data.run_id;
     MC.projectId = res.data.project_id;
@@ -291,7 +311,9 @@ async function mcSendMessage() {
     mcSetUIState('processing');
     mcStartPolling();
     
-    // Hide voice/preset/scene selectors
+    // Hide all pre-start selectors
+    document.getElementById('mcStyleSelect').classList.add('hidden');
+    document.getElementById('mcCharacterSelect').classList.add('hidden');
     document.getElementById('mcVoiceSelect').classList.add('hidden');
     document.getElementById('mcOutputPreset').classList.add('hidden');
     document.getElementById('mcSceneCount').classList.add('hidden');
@@ -955,6 +977,8 @@ function mcSetUIState(state) {
   
   const input = document.getElementById('mcChatInput');
   const sendBtn = document.getElementById('mcSendBtn');
+  const styleSelect = document.getElementById('mcStyleSelect');
+  const characterSelect = document.getElementById('mcCharacterSelect');
   const voiceSelect = document.getElementById('mcVoiceSelect');
   const outputPreset = document.getElementById('mcOutputPreset');
   const boardIdle = document.getElementById('mcBoardIdle');
@@ -964,8 +988,11 @@ function mcSetUIState(state) {
       input.disabled = false;
       sendBtn.disabled = false;
       input.placeholder = 'シナリオテキストを貼り付けてください...';
+      styleSelect.classList.remove('hidden');
+      characterSelect.classList.remove('hidden');
       voiceSelect.classList.remove('hidden');
       outputPreset.classList.remove('hidden');
+      document.getElementById('mcSceneCount').classList.remove('hidden');
       boardIdle.classList.remove('hidden');
       document.getElementById('mcSceneCards').classList.add('hidden');
       MC.runId = null;
@@ -978,8 +1005,11 @@ function mcSetUIState(state) {
       input.disabled = true;
       sendBtn.disabled = true;
       input.placeholder = '処理中...';
+      styleSelect.classList.add('hidden');
+      characterSelect.classList.add('hidden');
       voiceSelect.classList.add('hidden');
       outputPreset.classList.add('hidden');
+      document.getElementById('mcSceneCount').classList.add('hidden');
       break;
       
     case 'ready':
@@ -1145,6 +1175,8 @@ function mcStartNew() {
   MC._progressBubble = null;
   MC._videoDoneNotified = false;
   MC._videoFailedNotified = false;
+  MC.selectedStylePresetId = MC._stylePresets.length > 0 ? MC._stylePresets[0].id : null;
+  MC.selectedCharacterIds = [];
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
@@ -1167,6 +1199,18 @@ function mcStartNew() {
   document.getElementById('mcProgressPercent').textContent = '0%';
   const phaseDetail = document.getElementById('mcPhaseDetail');
   if (phaseDetail) { phaseDetail.textContent = ''; phaseDetail.classList.add('hidden'); }
+  
+  // Reset style chips — re-select first
+  document.querySelectorAll('#mcStyleList .voice-chip').forEach((c, i) => {
+    if (i === 0) c.classList.add('active');
+    else c.classList.remove('active');
+  });
+  // Reset character chips — deselect all
+  document.querySelectorAll('#mcCharacterList .char-chip').forEach(c => {
+    c.classList.remove('selected', 'disabled');
+  });
+  // Show scene count section
+  document.getElementById('mcSceneCount').classList.remove('hidden');
   
   mcSetUIState('idle');
 }
@@ -1233,6 +1277,105 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+// ============================================================
+// Style Preset Loading & Selection (Phase 1 UI)
+// ============================================================
+
+async function mcLoadStylePresets() {
+  const container = document.getElementById('mcStyleList');
+  try {
+    const res = await axios.get('/api/style-presets');
+    const presets = res.data.style_presets || [];
+    MC._stylePresets = presets;
+    
+    if (presets.length === 0) {
+      container.innerHTML = '<span class="text-xs text-gray-400">スタイルが未登録です</span>';
+      return;
+    }
+    
+    // Render style chips — first one pre-selected by default
+    container.innerHTML = presets.map((p, i) => {
+      const isDefault = i === 0; // Auto-select first preset
+      if (isDefault) MC.selectedStylePresetId = p.id;
+      return '<button class="voice-chip' + (isDefault ? ' active' : '') + '" data-style-id="' + p.id + '" onclick="selectStyle(this)" title="' + escapeHtml(p.description || '') + '">'
+        + '<i class="fas fa-brush mr-1"></i>' + escapeHtml(p.name)
+        + '</button>';
+    }).join('');
+  } catch (err) {
+    console.warn('[MC] Failed to load style presets:', err);
+    container.innerHTML = '<span class="text-xs text-gray-400">読み込み失敗</span>';
+  }
+}
+
+function selectStyle(el) {
+  document.querySelectorAll('#mcStyleList .voice-chip').forEach(c => c.classList.remove('active'));
+  el.classList.add('active');
+  MC.selectedStylePresetId = parseInt(el.dataset.styleId) || null;
+}
+
+// ============================================================
+// Character Loading & Selection (Phase 2 UI)
+// ============================================================
+
+async function mcLoadUserCharacters() {
+  const container = document.getElementById('mcCharacterList');
+  const hint = document.getElementById('mcCharacterHint');
+  try {
+    const res = await axios.get('/api/settings/user/characters');
+    const chars = res.data.characters || [];
+    MC._userCharacters = chars;
+    
+    if (chars.length === 0) {
+      container.innerHTML = '<span class="text-xs text-gray-400">キャラクターが未登録です</span>';
+      hint.classList.remove('hidden');
+      return;
+    }
+    
+    // Render character chips (multi-select, max 3)
+    container.innerHTML = chars.map(ch => {
+      const initial = (ch.character_name || '?').charAt(0);
+      return '<button class="char-chip" data-char-id="' + ch.id + '" onclick="toggleCharacter(this)">'
+        + '<span class="w-5 h-5 rounded-full bg-blue-100 text-blue-600 text-[10px] font-bold flex items-center justify-center shrink-0">' + escapeHtml(initial) + '</span>'
+        + '<span>' + escapeHtml(ch.character_name) + '</span>'
+        + '</button>';
+    }).join('');
+    hint.classList.remove('hidden');
+  } catch (err) {
+    console.warn('[MC] Failed to load user characters:', err);
+    container.innerHTML = '<span class="text-xs text-gray-400">読み込み失敗</span>';
+    hint.classList.remove('hidden');
+  }
+}
+
+function toggleCharacter(el) {
+  const charId = parseInt(el.dataset.charId);
+  const idx = MC.selectedCharacterIds.indexOf(charId);
+  
+  if (idx >= 0) {
+    // Deselect
+    MC.selectedCharacterIds.splice(idx, 1);
+    el.classList.remove('selected');
+  } else {
+    // Check max 3
+    if (MC.selectedCharacterIds.length >= 3) {
+      mcAddSystemMessage('キャラクターは最大3名まで選択できます', 'error');
+      return;
+    }
+    MC.selectedCharacterIds.push(charId);
+    el.classList.add('selected');
+  }
+  
+  // Update disabled state on unselected chips
+  document.querySelectorAll('#mcCharacterList .char-chip').forEach(chip => {
+    const cid = parseInt(chip.dataset.charId);
+    if (MC.selectedCharacterIds.length >= 3 && !MC.selectedCharacterIds.includes(cid)) {
+      chip.classList.add('disabled');
+    } else {
+      chip.classList.remove('disabled');
+    }
+  });
 }
 
 // ============================================================
