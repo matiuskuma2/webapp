@@ -638,6 +638,80 @@ Phase 4 (参照画像) ←────────── Phase 3 必須
 
 ---
 
+## 10.5 ナレーション音声UI v1 仕様
+
+> 実装完了: commit d1332ba
+
+### § UI-1 ナレーション音声セレクタ（SSOT = GET /api/tts/voices）
+
+| 要素 | 実装 | 備考 |
+|---|---|---|
+| 取得SSOT | `GET /api/tts/voices` | 全プロバイダー統合レスポンス |
+| 保存先（丸投げ） | `POST /api/marunage/start` → `narration_voice: { provider, voice_id }` | 既存payloadに変更なし |
+| プロジェクト保存先 | `projects.settings_json.default_narration_voice` | 既存フロー |
+
+**UIコンポーネント:**
+
+1. **プロバイダフィルタ** — segmented control 4タブ（すべて / Google / ElevenLabs / Fish）
+2. **検索入力** — placeholder: `ボイス名で検索...`、検索対象: name, id, provider, gender
+3. **音声リスト** — voice-item チップ形式（provider dot色分け + 性別アイコン + 名前）、最大高さ 128px スクロール
+4. **選択表示** — リスト下に `✓ 選択中: {name} ({provider})` 表示
+5. **未設定プロバイダ** — グレーアウト + 🔒 アイコン + disabled
+
+### § UI-2 初期値・フォールバック・エラー処理
+
+| 条件 | 挙動 |
+|---|---|
+| 正常ロード | 全ボイス表示、先頭 or デフォルト（Neural2-B）を自動選択 |
+| APIにデフォルトボイスが含まれない | 合成エントリとして `Neural2-B（男性・デフォルト）` を追加 |
+| API失敗（ネットワーク/サーバー） | フォールバック: Neural2-B のみ暫定表示 + 「読み込み失敗」警告 → ユーザーは続行可能 |
+| プロバイダ未設定 | ボイスは表示するがグレーアウト＆選択不可 |
+
+### § API-1 /start payload（v1 確定形）
+
+```json
+{
+  "text": "…",
+  "title": "…",
+  "narration_voice": { "provider": "google|elevenlabs|fish", "voice_id": "…" },
+  "output_preset": "yt_long",
+  "target_scene_count": 5,
+  "style_preset_id": 123,
+  "selected_character_ids": [1, 2, 3]
+}
+```
+
+※ v1では `voice_policy` は送らない。キャラ別ボイスは `project_character_models.voice_preset_id` が自動解決。
+
+### § Voice SSOT方針（v1 / v2）
+
+**v1（現在）:**
+
+| 用途 | SSOT | UIの有無 |
+|---|---|---|
+| ナレーション音声 | `projects.settings_json.default_narration_voice` | ✅ 全プロバイダーセレクタ |
+| キャラ別ボイス | `project_character_models.voice_preset_id` | ❌ UIなし（自動解決） |
+| `settings_json.character_voices` | **使用しない**（二重管理回避） | ❌ |
+
+**v2（将来）:**
+
+| 方針 | 推奨度 | 理由 |
+|---|---|---|
+| SSOT = project_character_models.voice_preset_id | **推奨（A案）** | bulk-audio改修不要、resolveVoiceForUtterance がそのまま動く |
+| SSOT = settings_json.character_voices | 非推奨 | bulk-audio の優先順位組み替えが必要、二重管理リスク |
+
+### § 期待動作（音声生成フロー）
+
+| utterance.role | character_key | 使用ボイス |
+|---|---|---|
+| narration | — | `settings_json.default_narration_voice` |
+| dialogue | あり | `project_character_models.voice_preset_id` |
+| dialogue | あり（voice_preset_id空） | `settings_json.default_narration_voice` へフォールバック |
+| dialogue | なし | `settings_json.default_narration_voice` へフォールバック |
+| *全て失敗* | — | `google:ja-JP-Neural2-B`（ハードコードフォールバック） |
+
+---
+
 ## 11. 将来拡張（v2以降）
 
 | 項目 | 優先度 | 前提 |

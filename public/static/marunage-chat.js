@@ -1308,7 +1308,15 @@ async function mcLoadVoices() {
 
   } catch (err) {
     console.warn('[MC] Failed to load voices:', err);
-    container.innerHTML = '<span class="text-xs text-gray-400">ボイス読み込み失敗</span>';
+    // Fallback: show default voice so user can still proceed
+    MC._allVoices = [{
+      id: 'ja-JP-Neural2-B', voice_id: 'ja-JP-Neural2-B',
+      name: 'Neural2-B（男性・デフォルト）', provider: 'google', gender: 'male', unavailable: false,
+    }];
+    mcRenderVoiceList();
+    container.insertAdjacentHTML('beforeend',
+      '<div class="text-[10px] text-amber-500 mt-1"><i class="fas fa-exclamation-triangle mr-0.5"></i>音声一覧の読み込みに失敗。デフォルトのみ表示中</div>'
+    );
   }
 }
 
@@ -1319,7 +1327,7 @@ function mcRenderVoiceList() {
 
   const filtered = MC._allVoices.filter(v => {
     if (filter !== 'all' && v.provider !== filter) return false;
-    if (search && !v.name.toLowerCase().includes(search) && !v.id.toLowerCase().includes(search)) return false;
+    if (search && !v.name.toLowerCase().includes(search) && !v.id.toLowerCase().includes(search) && !v.provider.includes(search) && !(v.gender || '').includes(search)) return false;
     return true;
   });
 
