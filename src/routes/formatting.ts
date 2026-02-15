@@ -418,7 +418,7 @@ ${castList}
     // Note: Parse API実行済み（status='parsed'）の場合は chunk単位処理を使用
     if (project.status === 'parsed' || project.status === 'formatting') {
       // Parse API実行済み → chunk単位処理（テキスト・音声共通）
-      return await processTextChunks(c, projectId, project, splitMode, targetSceneCount)
+      return await processTextChunks(c, projectId, project, splitMode, targetSceneCount, characterPromptSection)
     } else if (project.source_type === 'audio' && project.status === 'transcribed') {
       // 音声入力 + Parse未実行の場合：従来のフロー（全文を1回で処理）
       // ※このケースは Parse をスキップした場合のみ
@@ -426,7 +426,7 @@ ${castList}
     } else if (project.source_type === 'text') {
       // テキスト入力の場合：chunk単位処理
       // まず parse を実行する必要がある
-      return await processTextChunks(c, projectId, project, splitMode, targetSceneCount)
+      return await processTextChunks(c, projectId, project, splitMode, targetSceneCount, characterPromptSection)
     } else {
       // 想定外のステータス
       return c.json({
@@ -557,7 +557,8 @@ async function processTextChunks(
   projectId: string, 
   project: any,
   splitMode: 'preserve' | 'ai' = 'ai',
-  targetSceneCount: number = 5
+  targetSceneCount: number = 5,
+  characterPromptSection: string = ''
 ) {
   console.log(`[processTextChunks] mode=${splitMode}, target=${targetSceneCount}`)
   
