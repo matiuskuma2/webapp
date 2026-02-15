@@ -262,6 +262,15 @@ async function mcSendMessage() {
   const text = input.value.trim();
   
   if (!text) return;
+  
+  // P-2: If in ready phase with a selected scene, treat as scene edit command
+  if (MC.phase === 'ready' && MC._selectedSceneId) {
+    await mcHandleSceneEdit(text);
+    input.value = '';
+    updateCharCount();
+    return;
+  }
+  
   if (text.length < 100) {
     mcAddSystemMessage(`テキストが短すぎます（現在${text.length}文字、最低100文字必要です）`, 'error');
     return;
@@ -588,6 +597,9 @@ function mcUpdateFromStatus(data) {
   // Update live progress text (board + chat)
   mcUpdateLiveProgress(data);
   
+  // P-0: Update left board video preview
+  mcUpdateBoardVideoPreview(p?.video);
+  
   // Update scene cards
   mcUpdateSceneCards(p.scenes_ready.scenes, p.images, p.audio);
   
@@ -848,7 +860,7 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
          </div>`;
     
     return `
-      <div class="scene-card">
+      <div class="scene-card" data-scene-id="${scene.id}" data-scene-idx="${idx}" onclick="mcSelectScene(${scene.id}, ${idx})">
         ${imgContent}
         <div class="p-3">
           <div class="flex items-center justify-between mb-1">
@@ -866,6 +878,89 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       </div>
     `;
   }).join('');
+}
+
+// ============================================================
+// P-2: Scene Selection & Chat-Driven Image Regeneration
+// ============================================================
+
+// Currently selected scene for editing
+MC._selectedSceneId = null;
+MC._selectedSceneIdx = null;
+
+function mcSelectScene(sceneId, idx) {
+  // Toggle selection
+  if (MC._selectedSceneId === sceneId) {
+    MC._selectedSceneId = null;
+    MC._selectedSceneIdx = null;
+  } else {
+    MC._selectedSceneId = sceneId;
+    MC._selectedSceneIdx = idx;
+  }
+  
+  // Update visual highlight
+  document.querySelectorAll('#mcSceneCards .scene-card').forEach(card => {
+    if (parseInt(card.dataset.sceneId) === MC._selectedSceneId) {
+      card.style.outline = '2px solid #7c3aed';
+      card.style.outlineOffset = '-2px';
+      card.style.borderRadius = '8px';
+    } else {
+      card.style.outline = 'none';
+    }
+  });
+  
+  // Update input placeholder based on selection
+  const input = document.getElementById('mcChatInput');
+  if (MC._selectedSceneId && MC.phase === 'ready') {
+    input.disabled = false;
+    document.getElementById('mcSendBtn').disabled = false;
+    input.placeholder = `シーン${MC._selectedSceneIdx + 1} 選択中: 「もっと明るく」等の指示を入力...`;
+  } else if (MC.phase === 'ready') {
+    input.placeholder = '完成しました（シーンをタップして画像再生成）';
+  }
+}
+
+// P-2: Handle chat input during ready phase (scene editing commands)
+async function mcHandleSceneEdit(text) {
+  // Parse which scene to edit — explicit reference or selected scene
+  let targetSceneId = MC._selectedSceneId;
+  let targetSceneIdx = MC._selectedSceneIdx;
+  
+  // Try to extract scene number from text: "3番", "シーン3", "scene 3" etc.
+  const sceneRef = text.match(/(?:シーン|scene|Scene|)\s*(\d+)\s*(?:番|枚)?/i);
+  if (sceneRef) {
+    const refIdx = parseInt(sceneRef[1]) - 1; // Convert 1-indexed to 0-indexed
+    const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+    const targetScene = scenes[refIdx];
+    if (targetScene) {
+      targetSceneId = targetScene.id;
+      targetSceneIdx = refIdx;
+    }
+  }
+  
+  if (!targetSceneId) {
+    mcAddSystemMessage('編集対象のシーンを左のボードからタップして選択するか、「シーン3の画像を明るく」のように指定してください。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像を再生成中...`);
+  
+  try {
+    const res = await axios.post(`/api/scenes/${targetSceneId}/generate-image`, {
+      prompt_override: text,  // Pass user instruction as prompt modifier
+      regenerate: true
+    }, { timeout: 60000 });
+    
+    if (res.data?.success || res.data?.image_generation?.id) {
+      mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成を開始しました。更新まで少々お待ちください。`, 'success');
+    } else {
+      mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成に失敗しました: ${res.data?.error?.message || '不明なエラー'}`, 'error');
+    }
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`画像再生成エラー: ${errMsg}`, 'error');
+  }
 }
 
 // ============================================================
@@ -1004,6 +1099,11 @@ function mcSetUIState(state) {
       const assetsSummaryIdle = document.getElementById('mcAssetsSummary');
       if (assetsSummaryIdle) assetsSummaryIdle.classList.add('hidden');
       document.getElementById('mcSceneCards').classList.add('hidden');
+      // P-0: Hide video preview
+      const vpIdle = document.getElementById('mcBoardVideoPreview');
+      if (vpIdle) vpIdle.classList.add('hidden');
+      const vbIdle = document.getElementById('mcBoardVideoBuildProgress');
+      if (vbIdle) vbIdle.classList.add('hidden');
       MC.runId = null;
       MC.projectId = null;
       MC.phase = null;
@@ -1020,7 +1120,7 @@ function mcSetUIState(state) {
     case 'ready':
       input.disabled = true;
       sendBtn.disabled = true;
-      input.placeholder = '完成しました';
+      input.placeholder = '完成しました（シーンをタップして画像再生成）';
       mcLockBoard();
       mcShowReadyActions();
       break;
@@ -1276,6 +1376,56 @@ function mcUpdateVideoPanel(video) {
   panel.innerHTML = mcRenderVideoPanel(video);
 }
 
+// ── P-0: Left Board Video Preview ──
+function mcUpdateBoardVideoPreview(video) {
+  const previewEl = document.getElementById('mcBoardVideoPreview');
+  const buildEl = document.getElementById('mcBoardVideoBuildProgress');
+  if (!previewEl || !buildEl) return;
+  
+  if (!video || video.state === 'off' || video.state === 'pending') {
+    previewEl.classList.add('hidden');
+    buildEl.classList.add('hidden');
+    return;
+  }
+  
+  if (video.state === 'running') {
+    // Show build progress bar on left board
+    previewEl.classList.add('hidden');
+    buildEl.classList.remove('hidden');
+    const pct = video.progress_percent || 0;
+    const stage = video.build_status || 'レンダリング';
+    document.getElementById('mcBoardVideoBuildLabel').textContent = `動画${stage}中...`;
+    document.getElementById('mcBoardVideoBuildBar').style.width = pct + '%';
+    document.getElementById('mcBoardVideoBuildPct').textContent = pct + '%';
+    return;
+  }
+  
+  if (video.state === 'done' && video.download_url) {
+    // Show completed video player
+    buildEl.classList.add('hidden');
+    previewEl.classList.remove('hidden');
+    const player = document.getElementById('mcBoardVideoPlayer');
+    const dlLink = document.getElementById('mcBoardVideoDL');
+    const statusEl = document.getElementById('mcBoardVideoStatus');
+    
+    // Only update src if changed (avoid reload flicker)
+    if (player.getAttribute('data-src') !== video.download_url) {
+      player.setAttribute('data-src', video.download_url);
+      player.src = video.download_url;
+      player.load();
+    }
+    dlLink.href = video.download_url;
+    statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>動画完成 — タップで再生';
+    return;
+  }
+  
+  if (video.state === 'failed') {
+    buildEl.classList.add('hidden');
+    previewEl.classList.add('hidden');
+    return;
+  }
+}
+
 function mcStartNew() {
   // Confirmation dialog to prevent accidental data loss perception
   if (!confirm('現在の結果を閉じて新しく作りますか？\n（作成済みの作品は一覧から再表示できます）')) return;
@@ -1292,6 +1442,10 @@ function mcStartNew() {
   MC._videoFailedNotified = false;
   MC.selectedStylePresetId = MC._stylePresets.length > 0 ? MC._stylePresets[0].id : null;
   MC.selectedCharacterIds = [];
+  
+  // P-2: Reset scene selection
+  MC._selectedSceneId = null;
+  MC._selectedSceneIdx = null;
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
@@ -1349,6 +1503,16 @@ function mcStartNew() {
   const boardIdle = document.getElementById('mcBoardIdle');
   if (boardIdle) boardIdle.classList.remove('hidden');
   
+  // P-0: Reset video preview
+  const videoPreview = document.getElementById('mcBoardVideoPreview');
+  if (videoPreview) videoPreview.classList.add('hidden');
+  const videoBuildProgress = document.getElementById('mcBoardVideoBuildProgress');
+  if (videoBuildProgress) videoBuildProgress.classList.add('hidden');
+  
+  // P-1: Reset custom scene count
+  const customScene = document.getElementById('mcCustomSceneCount');
+  if (customScene) customScene.classList.add('hidden');
+  
   mcSetUIState('idle');
 }
 
@@ -1369,10 +1533,12 @@ function mcUpdateBoardFromConfirmed(confirmed) {
           : ch.voice_provider === 'fish' ? '🎤Fish' : '🔊Google';
         const scenesTotal = MC._lastStatus?.progress?.format?.scene_count || 0;
         const appear = ch.appear_scenes || 0;
-        const statsText = scenesTotal > 0 ? ' ' + appear + '/' + scenesTotal : '';
+        const uttCount = ch.utterance_count || 0;
+        const statsText = scenesTotal > 0 ? ' ' + appear + '/' + scenesTotal + 'シーン' : '';
+        const uttText = uttCount > 0 ? ' ' + uttCount + '発話' : '';
         return '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">'
           + '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(ch.character_name)
-          + '<span class="text-[9px] text-gray-400 ml-0.5">' + statsText + ' ' + voiceLabel + '</span>'
+          + '<span class="text-[9px] text-gray-400 ml-0.5">' + statsText + uttText + ' ' + voiceLabel + '</span>'
           + '</span>';
       }).join('');
     } else {
@@ -1677,7 +1843,48 @@ function selectPreset(el) {
 function selectSceneCount(el) {
   document.querySelectorAll('#mcSceneCountList .voice-chip').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
-  MC.selectedSceneCount = parseInt(el.dataset.scenes) || 5;
+  const val = el.dataset.scenes;
+  if (val === 'custom') return; // handled by mcShowCustomSceneCount
+  MC.selectedSceneCount = parseInt(val) || 5;
+  // Hide custom input when preset selected
+  const customEl = document.getElementById('mcCustomSceneCount');
+  if (customEl) customEl.classList.add('hidden');
+}
+
+// P-1: Show custom scene count input
+function mcShowCustomSceneCount() {
+  const customEl = document.getElementById('mcCustomSceneCount');
+  if (customEl) customEl.classList.toggle('hidden');
+}
+
+// P-1: Apply custom scene count with warnings
+function mcApplyCustomSceneCount() {
+  const input = document.getElementById('mcCustomSceneInput');
+  const warnEl = document.getElementById('mcSceneCountWarning');
+  let val = parseInt(input.value) || 5;
+  val = Math.max(1, Math.min(200, val));
+  input.value = val;
+  
+  // Warnings
+  if (warnEl) {
+    const span = warnEl.querySelector('span');
+    if (val >= 100) {
+      span.textContent = `${val}シーンは処理に非常に長い時間がかかります。API費用も高額になります。`;
+      warnEl.classList.remove('hidden');
+      if (!confirm(`${val}シーンの生成を開始しますか？\n\n注意:\n・処理に長時間かかります（推定${Math.ceil(val*0.5)}分以上）\n・API費用が高額になる可能性があります\n\n本当に続行しますか？`)) return;
+    } else if (val >= 30) {
+      span.textContent = `${val}シーンは標準より多いため、処理時間が長くなります。`;
+      warnEl.classList.remove('hidden');
+    } else {
+      warnEl.classList.add('hidden');
+    }
+  }
+  
+  MC.selectedSceneCount = val;
+  // Deactivate preset buttons, highlight custom
+  document.querySelectorAll('#mcSceneCountList .voice-chip').forEach(c => c.classList.remove('active'));
+  const customBtn = document.querySelector('#mcSceneCountList .voice-chip[data-scenes="custom"]');
+  if (customBtn) customBtn.classList.add('active');
 }
 
 // ============================================================

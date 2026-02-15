@@ -1544,8 +1544,8 @@ marunage.post('/start', async (c) => {
     return errorJson(c, MARUNAGE_ERRORS.INVALID_REQUEST, 'Invalid output_preset')
   }
 
-  // Target scene count (3-10, default 5)
-  const targetSceneCount = Math.max(3, Math.min(10, body.target_scene_count || 5))
+  // Target scene count (1-200, default 5) — P-1: expanded from 3-10
+  const targetSceneCount = Math.max(1, Math.min(200, body.target_scene_count || 5))
 
   // Narration voice
   const narrationVoice = {

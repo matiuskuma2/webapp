@@ -4777,7 +4777,7 @@ app.get('/marunage-chat', (c) => {
                         </div>
                         <div>
                             <span class="text-[10px] text-gray-500 block mb-1">シーン数</span>
-                            <div id="mcSceneCountList" class="flex gap-1.5">
+                            <div id="mcSceneCountList" class="flex flex-wrap gap-1.5">
                                 <button class="voice-chip" data-scenes="3" onclick="selectSceneCount(this)">
                                     3枚 <span class="text-[10px] ml-0.5 opacity-60">速い</span>
                                 </button>
@@ -4788,8 +4788,24 @@ app.get('/marunage-chat', (c) => {
                                     7枚
                                 </button>
                                 <button class="voice-chip" data-scenes="10" onclick="selectSceneCount(this)">
-                                    10枚 <span class="text-[10px] ml-0.5 opacity-60">高品質</span>
+                                    10枚
                                 </button>
+                                <button class="voice-chip" data-scenes="custom" onclick="mcShowCustomSceneCount()" title="カスタムシーン数">
+                                    <i class="fas fa-sliders-h text-[10px]"></i>
+                                </button>
+                            </div>
+                            <!-- P-1: Custom scene count input (hidden by default) -->
+                            <div id="mcCustomSceneCount" class="hidden mt-1.5">
+                                <div class="flex items-center gap-1.5">
+                                    <input type="number" id="mcCustomSceneInput" min="1" max="200" value="15"
+                                           class="w-16 px-2 py-0.5 text-xs border border-gray-300 rounded focus:outline-none focus:border-purple-400"
+                                           onchange="mcApplyCustomSceneCount()">
+                                    <span class="text-[10px] text-gray-400">枚 (1-200)</span>
+                                    <button onclick="mcApplyCustomSceneCount()" class="text-[10px] px-2 py-0.5 bg-purple-100 text-purple-700 rounded hover:bg-purple-200">適用</button>
+                                </div>
+                                <div id="mcSceneCountWarning" class="hidden text-[10px] text-amber-600 mt-1">
+                                    <i class="fas fa-exclamation-triangle mr-0.5"></i><span></span>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -4839,6 +4855,41 @@ app.get('/marunage-chat', (c) => {
                         <!-- Scene cards (populated dynamically) -->
                         <div id="mcSceneCards" class="space-y-3 hidden">
                             <!-- Rendered by JS -->
+                        </div>
+                        
+                        <!-- P-0: Video Preview (shown when video is done) -->
+                        <div id="mcBoardVideoPreview" class="hidden mt-3">
+                            <div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200 p-3">
+                                <div class="flex items-center justify-between mb-2">
+                                    <span class="text-xs font-bold text-green-700">
+                                        <i class="fas fa-film mr-1"></i>完成動画
+                                    </span>
+                                    <a id="mcBoardVideoDL" href="#" target="_blank" rel="noopener"
+                                       class="text-xs text-green-600 hover:text-green-800 no-underline">
+                                        <i class="fas fa-download mr-1"></i>DL
+                                    </a>
+                                </div>
+                                <video id="mcBoardVideoPlayer" controls playsinline preload="metadata"
+                                       class="w-full rounded-lg bg-black" style="max-height: 220px;">
+                                </video>
+                                <div id="mcBoardVideoStatus" class="text-[10px] text-green-600 mt-1.5 text-center">
+                                    <!-- Updated dynamically -->
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- P-0: Video Building Progress (shown during build) -->
+                        <div id="mcBoardVideoBuildProgress" class="hidden mt-3">
+                            <div class="bg-blue-50 rounded-xl border border-blue-200 p-3">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <i class="fas fa-spinner fa-spin text-blue-500 text-xs"></i>
+                                    <span class="text-xs font-semibold text-blue-700" id="mcBoardVideoBuildLabel">動画レンダリング中...</span>
+                                </div>
+                                <div class="w-full bg-blue-200 rounded-full h-1.5">
+                                    <div id="mcBoardVideoBuildBar" class="bg-blue-600 h-1.5 rounded-full transition-all duration-500" style="width:0%"></div>
+                                </div>
+                                <div id="mcBoardVideoBuildPct" class="text-[10px] text-blue-500 mt-1 text-right">0%</div>
+                            </div>
                         </div>
                     </div>
                 </div>

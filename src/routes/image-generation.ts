@@ -892,8 +892,22 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     
     // 6. Phase X-2: Fetch world settings and character info (Optional - no error if missing)
     // Phase X-4: If prompt is customized, skip text enhancement but still load reference images
+    // P-2: Support prompt_override from request body (chat-driven regeneration)
+    let bodyPromptOverride: string | null = null;
+    try {
+      const body = await c.req.json().catch(() => ({})) as { prompt_override?: string; regenerate?: boolean };
+      if (body.prompt_override && typeof body.prompt_override === 'string') {
+        bodyPromptOverride = body.prompt_override.trim();
+        console.log(`[Image Gen] P-2: prompt_override received for scene ${sceneId}: "${bodyPromptOverride.substring(0, 100)}"`)
+      }
+    } catch {}
+    
     const isPromptCustomized = scene.is_prompt_customized === 1;
+    // P-2: If prompt_override provided, append it as a modification instruction to the base prompt
     let enhancedPrompt = buildImagePrompt(scene.image_prompt as string);
+    if (bodyPromptOverride) {
+      enhancedPrompt = enhancedPrompt + '\n\n[User modification instruction]: ' + bodyPromptOverride;
+    }
     let referenceImages: ReferenceImage[] = [];
     
     try {
