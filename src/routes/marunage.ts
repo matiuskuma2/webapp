@@ -1268,12 +1268,24 @@ marunage.get('/runs', async (c) => {
       mr.updated_at,
       mr.completed_at,
       mr.is_archived,
+      mr.video_build_id,
       p.title AS project_title,
       p.status AS project_status,
       (SELECT COUNT(*) FROM scenes s WHERE s.project_id = mr.project_id AND (s.is_hidden = 0 OR s.is_hidden IS NULL)) AS scene_count,
       (SELECT COUNT(*) FROM scenes s
        LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
-       WHERE s.project_id = mr.project_id AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.status = 'completed') AS images_done
+       WHERE s.project_id = mr.project_id AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.status = 'completed') AS images_done,
+      (SELECT COUNT(DISTINCT su.scene_id) FROM scene_utterances su
+       JOIN scenes s2 ON s2.id = su.scene_id
+       JOIN audio_generations ag ON ag.id = su.audio_generation_id AND ag.status = 'completed'
+       WHERE s2.project_id = mr.project_id AND (s2.is_hidden = 0 OR s2.is_hidden IS NULL)) AS audio_done,
+      (SELECT ig2.r2_key FROM scenes s3
+       LEFT JOIN image_generations ig2 ON ig2.scene_id = s3.id AND ig2.is_active = 1 AND ig2.status = 'completed'
+       WHERE s3.project_id = mr.project_id AND (s3.is_hidden = 0 OR s3.is_hidden IS NULL) AND ig2.r2_key IS NOT NULL
+       ORDER BY s3.scene_order ASC LIMIT 1) AS first_image_key,
+      (SELECT vb.status FROM video_builds vb WHERE vb.id = mr.video_build_id) AS video_build_status,
+      (SELECT vb.progress_percent FROM video_builds vb WHERE vb.id = mr.video_build_id) AS video_progress_percent,
+      (SELECT vb.download_url FROM video_builds vb WHERE vb.id = mr.video_build_id) AS video_download_url
     FROM marunage_runs mr
     JOIN projects p ON p.id = mr.project_id
     WHERE mr.started_by_user_id = ?
@@ -1291,6 +1303,7 @@ marunage.get('/runs', async (c) => {
       project_status: r.project_status,
       scene_count: r.scene_count || 0,
       images_done: r.images_done || 0,
+      audio_done: r.audio_done || 0,
       error_code: r.error_code,
       error_message: r.error_message,
       created_at: r.created_at,
@@ -1298,6 +1311,11 @@ marunage.get('/runs', async (c) => {
       completed_at: r.completed_at,
       is_active: !['ready', 'failed', 'canceled'].includes(r.phase),
       is_archived: r.is_archived === 1,
+      video_build_id: r.video_build_id || null,
+      video_build_status: r.video_build_status || null,
+      video_progress_percent: r.video_progress_percent || 0,
+      video_download_url: r.video_download_url || null,
+      first_image_url: r.first_image_key ? `/images/${r.first_image_key}` : null,
     })),
   })
 })
