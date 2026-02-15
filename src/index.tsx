@@ -4723,6 +4723,25 @@ app.get('/marunage-chat', (c) => {
                         <div id="mcVoiceList" class="max-h-28 overflow-y-auto mc-scroll flex flex-wrap gap-1">
                             <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
                         </div>
+                        <!-- Fish Custom ID Input -->
+                        <div id="mcFishCustom" class="mt-1.5 border border-dashed border-purple-200 rounded-md p-2 bg-purple-50/30">
+                            <div class="flex items-center gap-1 mb-1">
+                                <i class="fas fa-fish text-purple-400 text-[10px]"></i>
+                                <span class="text-[10px] font-medium text-purple-600">カスタム Fish Audio ID</span>
+                            </div>
+                            <div class="flex gap-1">
+                                <input type="text" id="mcFishIdInput" placeholder="例: 71bf4cb71cd44df6aa603d51db8f92ff"
+                                       class="flex-1 px-2 py-1 text-[11px] border border-gray-200 rounded font-mono focus:outline-none focus:ring-1 focus:ring-purple-300"
+                                       oninput="mcValidateFishId(this.value)">
+                                <button id="mcFishIdApply" onclick="mcApplyFishId()" disabled
+                                        class="px-2 py-1 text-[10px] bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors whitespace-nowrap">
+                                    適用
+                                </button>
+                            </div>
+                            <p class="text-[9px] text-gray-400 mt-0.5">
+                                <a href="https://fish.audio/models" target="_blank" class="text-purple-400 hover:underline">fish.audio/models</a> からIDをコピー
+                            </p>
+                        </div>
                         <!-- Selected indicator -->
                         <div id="mcVoiceSelected" class="text-[10px] text-purple-600 mt-1 hidden">
                             <i class="fas fa-check-circle mr-0.5"></i><span id="mcVoiceSelectedName">-</span>

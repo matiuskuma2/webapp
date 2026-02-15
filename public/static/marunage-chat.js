@@ -1326,6 +1326,11 @@ function mcStartNew() {
   MC._voiceSearch = '';
   const searchInput = document.getElementById('mcVoiceSearch');
   if (searchInput) searchInput.value = '';
+  // Reset Fish custom ID input
+  const fishIdInput = document.getElementById('mcFishIdInput');
+  if (fishIdInput) fishIdInput.value = '';
+  const fishIdApply = document.getElementById('mcFishIdApply');
+  if (fishIdApply) { fishIdApply.disabled = true; fishIdApply.textContent = '適用'; }
   document.querySelectorAll('.voice-prov-tab').forEach((t, i) => {
     if (i === 0) t.classList.add('active');
     else t.classList.remove('active');
@@ -1614,6 +1619,43 @@ function mcFilterVoicesBySearch(val) {
   mcRenderVoiceList();
 }
 
+// ============================================================
+// Fish Audio Custom ID — allow user to enter any Fish model ID
+// ============================================================
+
+function mcValidateFishId(val) {
+  const btn = document.getElementById('mcFishIdApply');
+  // Valid Fish ID: 32-char hex
+  btn.disabled = !/^[a-f0-9]{32}$/i.test(val.trim());
+}
+
+function mcApplyFishId() {
+  const input = document.getElementById('mcFishIdInput');
+  const fishId = input.value.trim();
+  if (!/^[a-f0-9]{32}$/i.test(fishId)) return;
+
+  // Set voice to fish with custom ID — backend supports 'fish:REFERENCE_ID' format
+  MC.selectedVoice = { provider: 'fish', voice_id: 'fish:' + fishId };
+
+  // Deselect all voice chips
+  document.querySelectorAll('#mcVoiceList .voice-item').forEach(c => c.classList.remove('active'));
+
+  // Show selected
+  const selEl = document.getElementById('mcVoiceSelectedName');
+  if (selEl) selEl.textContent = 'Fish Custom (' + fishId.substring(0, 8) + '…)';
+  const selWrap = document.getElementById('mcVoiceSelected');
+  if (selWrap) selWrap.classList.remove('hidden');
+
+  // Brief visual feedback
+  const btn = document.getElementById('mcFishIdApply');
+  btn.textContent = '✓ 適用済み';
+  btn.classList.add('bg-green-500');
+  setTimeout(() => {
+    btn.textContent = '適用';
+    btn.classList.remove('bg-green-500');
+  }, 1500);
+}
+
 // Legacy compat — old selectVoice calls from HTML (if any remain)
 function selectVoice(el) {
   if (el.dataset.voice) {
@@ -1739,7 +1781,12 @@ async function mcLoadUserCharacters() {
     hint.classList.remove('hidden');
   } catch (err) {
     console.warn('[MC] Failed to load user characters:', err);
-    container.innerHTML = '<span class="text-xs text-gray-400">読み込み失敗</span>';
+    // 401 = not logged in — show friendly message instead of generic error
+    if (err.response && err.response.status === 401) {
+      container.innerHTML = '<span class="text-xs text-gray-400"><i class="fas fa-sign-in-alt mr-1"></i>ログインするとキャラクターが使えます</span>';
+    } else {
+      container.innerHTML = '<span class="text-xs text-gray-400">読み込み失敗</span>';
+    }
     hint.classList.remove('hidden');
   }
 }
