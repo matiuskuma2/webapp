@@ -4470,7 +4470,7 @@ app.get('/marunage', (c) => {
         var thumb;
         if (r.first_image_url) {
           thumb = '<div class="w-full aspect-video rounded-xl overflow-hidden bg-gray-100 mb-3">'
-            + '<img src="' + r.first_image_url + '" alt="" class="w-full h-full object-cover" onerror="this.style.display=\'none\';this.parentElement.classList.add(\'thumb-placeholder\',\'flex\',\'items-center\',\'justify-center\');this.parentElement.innerHTML=\'<i class=fas fa-film text-3xl text-purple-300></i>\'">'
+            + '<img src="' + r.first_image_url + '" alt="" class="w-full h-full object-cover" onerror="mgThumbError(this)">'
             + '</div>';
         } else {
           thumb = '<div class="w-full aspect-video rounded-xl thumb-placeholder flex items-center justify-center mb-3">'
@@ -4560,6 +4560,11 @@ app.get('/marunage', (c) => {
         var div = document.createElement('div');
         div.textContent = str;
         return div.innerHTML;
+      }
+
+      function mgThumbError(img) {
+        var p = img.parentElement;
+        p.innerHTML = '<div class="w-full h-full thumb-placeholder flex items-center justify-center"><i class="fas fa-film text-3xl text-purple-300"></i></div>';
       }
 
       mgInit();
