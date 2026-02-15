@@ -203,6 +203,17 @@ export interface MarunageStatusResponse {
       progress_percent: number | null
       download_url: string | null
     }
+    // P2: Assets summary for left board display
+    assets_summary?: {
+      scenes_total: number
+      images_done: number
+      images_state: string
+      audio_done: number
+      audio_total: number
+      audio_state: string
+      video_state: string
+      video_percent: number | null
+    }
   }
   timestamps: {
     created_at: string
@@ -214,7 +225,11 @@ export interface MarunageStatusResponse {
     characters: Array<{
       character_key: string
       character_name: string
-      voice_preset_id: number | null
+      voice_preset_id: string | null
+      // P2: character stats for left board display
+      appear_scenes: number
+      utterance_count: number
+      voice_provider: 'google' | 'elevenlabs' | 'fish'
     }>
     style: {
       preset_id: number | null

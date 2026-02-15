@@ -2004,12 +2004,31 @@ marunage.get('/:projectId/status', async (c) => {
     videoState = 'off'
   }
 
-  // 6. Confirmed selections for left board (B-spec)
+  // 6. Confirmed selections for left board (B-spec + P2: character stats)
   const { results: confirmedCharacters } = await c.env.DB.prepare(`
-    SELECT character_key, character_name, voice_preset_id
-    FROM project_character_models
-    WHERE project_id = ?
-    ORDER BY id ASC
+    SELECT 
+      pcm.character_key, 
+      pcm.character_name, 
+      pcm.voice_preset_id,
+      (SELECT COUNT(DISTINCT su.scene_id)
+       FROM scene_utterances su
+       JOIN scenes s ON s.id = su.scene_id
+       WHERE su.character_key = pcm.character_key
+         AND s.project_id = pcm.project_id
+         AND su.role = 'dialogue'
+         AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+      ) AS appear_scenes,
+      (SELECT COUNT(*)
+       FROM scene_utterances su
+       JOIN scenes s ON s.id = su.scene_id
+       WHERE su.character_key = pcm.character_key
+         AND s.project_id = pcm.project_id
+         AND su.role = 'dialogue'
+         AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+      ) AS utterance_count
+    FROM project_character_models pcm
+    WHERE pcm.project_id = ?
+    ORDER BY pcm.id ASC
   `).bind(projectId).all()
 
   const styleSettings = await c.env.DB.prepare(`
@@ -2089,19 +2108,39 @@ marunage.get('/:projectId/status', async (c) => {
         error: run.video_build_error || null,
         attempted_at: run.video_build_attempted_at || null,
       },
+      // P2: Assets summary for left board 3-column display
+      assets_summary: {
+        scenes_total: visibleScenes.length,
+        images_done: imagesCompleted,
+        images_state: imagesState,
+        audio_done: audioCompleted,
+        audio_total: audioTotalUtterances,
+        audio_state: audioState,
+        video_state: videoState,
+        video_percent: videoProgressPercent,
+      },
     },
     timestamps: {
       created_at: run.created_at,
       updated_at: run.updated_at,
       completed_at: run.completed_at,
     },
-    // B-spec: confirmed selections for left board display
+    // B-spec + P2: confirmed selections for left board display
     confirmed: {
-      characters: (confirmedCharacters || []).map((ch: any) => ({
-        character_key: ch.character_key,
-        character_name: ch.character_name,
-        voice_preset_id: ch.voice_preset_id,
-      })),
+      characters: (confirmedCharacters || []).map((ch: any) => {
+        const vid = (ch.voice_preset_id || '') as string
+        const voiceProvider = vid.startsWith('el-') || vid.startsWith('elevenlabs:') ? 'elevenlabs'
+          : vid.startsWith('fish:') || vid.startsWith('fish-') ? 'fish'
+          : 'google'
+        return {
+          character_key: ch.character_key,
+          character_name: ch.character_name,
+          voice_preset_id: ch.voice_preset_id,
+          appear_scenes: ch.appear_scenes || 0,
+          utterance_count: ch.utterance_count || 0,
+          voice_provider: voiceProvider,
+        }
+      }),
       style: styleSettings ? {
         preset_id: styleSettings.default_style_preset_id,
         name: styleSettings.style_name,

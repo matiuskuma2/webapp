@@ -572,6 +572,9 @@ function mcUpdateFromStatus(data) {
   const phase = data.phase;
   const p = data.progress;
   
+  // P2: Store status early so mcUpdateBoardFromConfirmed can read scene_count
+  MC._lastStatus = data;
+  
   // Update phase badge (pass video.state for ready phase)
   mcUpdatePhaseBadge(phase, p?.video?.state);
   
@@ -589,6 +592,9 @@ function mcUpdateFromStatus(data) {
     mcUpdateBoardFromConfirmed(data.confirmed);
   }
   
+  // P2: Update assets summary on left board
+  mcUpdateAssetsSummary(data.progress);
+  
   // Update timestamp
   if (data.timestamps.updated_at) {
     const d = new Date(data.timestamps.updated_at);
@@ -603,9 +609,8 @@ function mcUpdateFromStatus(data) {
     }
   }
   
-  // Handle ready — store latest status for Result View
+  // Handle ready — Result View + video panel
   if (phase === 'ready') {
-    MC._lastStatus = data;
     mcSetUIState('ready');
     // Update video status panel if already shown
     mcUpdateVideoPanel(data.progress?.video);
@@ -1320,6 +1325,12 @@ function mcStartNew() {
   // Unlock left board for new creation
   mcUnlockBoard();
   
+  // P2: Reset assets summary
+  const assetsSummary = document.getElementById('mcAssetsSummary');
+  if (assetsSummary) assetsSummary.classList.add('hidden');
+  const boardIdle = document.getElementById('mcBoardIdle');
+  if (boardIdle) boardIdle.classList.remove('hidden');
+  
   mcSetUIState('idle');
 }
 
@@ -1330,15 +1341,22 @@ function mcStartNew() {
 function mcUpdateBoardFromConfirmed(confirmed) {
   if (!confirmed) return;
   
-  // Characters (from server SSOT)
+  // Characters (from server SSOT — P2: include appear_scenes + voice label)
   const charConfirmed = document.getElementById('mcCharacterConfirmed');
   const charLocked = document.getElementById('mcCharacterLocked');
   if (charConfirmed && charLocked && confirmed.characters) {
     if (confirmed.characters.length > 0) {
-      charConfirmed.innerHTML = confirmed.characters.map(ch =>
-        '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">' +
-        '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(ch.character_name) + '</span>'
-      ).join('');
+      charConfirmed.innerHTML = confirmed.characters.map(ch => {
+        const voiceLabel = ch.voice_provider === 'elevenlabs' ? '🎤EL'
+          : ch.voice_provider === 'fish' ? '🎤Fish' : '🔊Google';
+        const scenesTotal = MC._lastStatus?.progress?.format?.scene_count || 0;
+        const appear = ch.appear_scenes || 0;
+        const statsText = scenesTotal > 0 ? ' ' + appear + '/' + scenesTotal : '';
+        return '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">'
+          + '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(ch.character_name)
+          + '<span class="text-[9px] text-gray-400 ml-0.5">' + statsText + ' ' + voiceLabel + '</span>'
+          + '</span>';
+      }).join('');
     } else {
       charConfirmed.innerHTML = '<span class="text-xs text-gray-400">キャラクターなし</span>';
     }
@@ -1379,6 +1397,61 @@ function mcUpdateBoardFromConfirmed(confirmed) {
       const voiceSelected = document.getElementById('mcVoiceSelected');
       if (voiceSelected) voiceSelected.classList.add('hidden');
     }
+  }
+}
+
+// ============================================================
+// P2: Assets Summary — 3-column display (images/audio/video)
+// ============================================================
+
+function mcAssetStateColor(state) {
+  if (state === 'done') return 'text-green-600';
+  if (state === 'running') return 'text-blue-600';
+  if (state === 'failed') return 'text-red-600';
+  return 'text-gray-600';
+}
+
+function mcUpdateAssetsSummary(progress) {
+  const el = document.getElementById('mcAssetsSummary');
+  if (!el || !progress) return;
+
+  const summary = progress.assets_summary;
+  if (!summary) return;
+
+  // Show summary, hide idle placeholder
+  el.classList.remove('hidden');
+  const idle = document.getElementById('mcBoardIdle');
+  if (idle) idle.classList.add('hidden');
+
+  // Images: "3/5"
+  const imgEl = document.getElementById('mcAssetsImages');
+  if (imgEl) {
+    imgEl.textContent = summary.images_done + '/' + summary.scenes_total;
+    imgEl.className = 'text-sm font-bold ' + mcAssetStateColor(summary.images_state);
+  }
+
+  // Audio: "12/12"
+  const audEl = document.getElementById('mcAssetsAudio');
+  if (audEl) {
+    audEl.textContent = summary.audio_done + '/' + summary.audio_total;
+    audEl.className = 'text-sm font-bold ' + mcAssetStateColor(summary.audio_state);
+  }
+
+  // Video: state label
+  const vidEl = document.getElementById('mcAssetsVideo');
+  if (vidEl) {
+    if (summary.video_state === 'done') vidEl.textContent = '完了';
+    else if (summary.video_state === 'running') vidEl.textContent = (summary.video_percent || 0) + '%';
+    else if (summary.video_state === 'failed') vidEl.textContent = '失敗';
+    else if (summary.video_state === 'off') vidEl.textContent = 'OFF';
+    else vidEl.textContent = '待機中';
+    vidEl.className = 'text-sm font-bold ' + mcAssetStateColor(summary.video_state);
+  }
+
+  // Hide hint once generation is underway
+  const hint = document.getElementById('mcAssetsHint');
+  if (hint && (summary.images_state !== 'pending' || summary.audio_state !== 'pending')) {
+    hint.classList.add('hidden');
   }
 }
 

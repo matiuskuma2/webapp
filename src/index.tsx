@@ -4658,7 +4658,7 @@ app.get('/marunage-chat', (c) => {
                             <i class="fas fa-users mr-1 text-blue-500"></i>キャラクター
                             <span class="text-[10px] text-gray-400 font-normal ml-1">任意・最大3名</span>
                         </span>
-                        <span id="mcBoardCharLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                        <span id="mcBoardCharLock" class="mc-lock-badge hidden" title="生成中のため変更できません（再生成はv2）">
                             <i class="fas fa-lock text-[10px]"></i>
                         </span>
                     </div>
@@ -4682,7 +4682,7 @@ app.get('/marunage-chat', (c) => {
                         <span class="text-xs font-semibold text-gray-600">
                             <i class="fas fa-palette mr-1 text-pink-500"></i>スタイル
                         </span>
-                        <span id="mcBoardStyleLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                        <span id="mcBoardStyleLock" class="mc-lock-badge hidden" title="生成中のため変更できません（再生成はv2）">
                             <i class="fas fa-lock text-[10px]"></i>
                         </span>
                     </div>
@@ -4703,7 +4703,7 @@ app.get('/marunage-chat', (c) => {
                         <span class="text-xs font-semibold text-gray-600">
                             <i class="fas fa-microphone-alt mr-1 text-purple-500"></i>ナレーション音声
                         </span>
-                        <span id="mcBoardVoiceLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                        <span id="mcBoardVoiceLock" class="mc-lock-badge hidden" title="生成中のため変更できません（再生成はv2）">
                             <i class="fas fa-lock text-[10px]"></i>
                         </span>
                     </div>
@@ -4740,7 +4740,7 @@ app.get('/marunage-chat', (c) => {
                         <span class="text-xs font-semibold text-gray-600">
                             <i class="fas fa-sliders-h mr-1 text-indigo-500"></i>出力設定
                         </span>
-                        <span id="mcBoardOutputLock" class="mc-lock-badge hidden" title="処理中は変更できません">
+                        <span id="mcBoardOutputLock" class="mc-lock-badge hidden" title="生成中のため変更できません（再生成はv2）">
                             <i class="fas fa-lock text-[10px]"></i>
                         </span>
                     </div>
@@ -4793,6 +4793,27 @@ app.get('/marunage-chat', (c) => {
                             <p class="text-xs text-gray-500 leading-relaxed">
                                 右のチャットにシナリオを貼り付けると、<br>
                                 画像 + ナレーション音声を自動生成します。
+                            </p>
+                        </div>
+                        
+                        <!-- P2: Assets Summary (3-column: images/audio/video) -->
+                        <div id="mcAssetsSummary" class="hidden mb-3">
+                            <div class="grid grid-cols-3 gap-2 text-center">
+                                <div class="bg-gray-50 rounded-lg p-2">
+                                    <div id="mcAssetsImages" class="text-sm font-bold text-gray-800">-/-</div>
+                                    <div class="text-[10px] text-gray-500"><i class="fas fa-image mr-0.5"></i>画像</div>
+                                </div>
+                                <div class="bg-gray-50 rounded-lg p-2">
+                                    <div id="mcAssetsAudio" class="text-sm font-bold text-gray-800">-/-</div>
+                                    <div class="text-[10px] text-gray-500"><i class="fas fa-volume-up mr-0.5"></i>音声</div>
+                                </div>
+                                <div class="bg-gray-50 rounded-lg p-2">
+                                    <div id="mcAssetsVideo" class="text-sm font-bold text-gray-800">--</div>
+                                    <div class="text-[10px] text-gray-500"><i class="fas fa-video mr-0.5"></i>動画</div>
+                                </div>
+                            </div>
+                            <p id="mcAssetsHint" class="text-[10px] text-gray-400 mt-1.5 text-center">
+                                <i class="fas fa-info-circle mr-0.5"></i>開始後はこのボードで進捗を確認します
                             </p>
                         </div>
                         
