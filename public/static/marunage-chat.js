@@ -996,6 +996,9 @@ function mcSetUIState(state) {
       input.placeholder = 'シナリオテキストを貼り付けてください...';
       mcUnlockBoard();
       boardIdle.classList.remove('hidden');
+      // P2: Hide assets summary when returning to idle
+      const assetsSummaryIdle = document.getElementById('mcAssetsSummary');
+      if (assetsSummaryIdle) assetsSummaryIdle.classList.add('hidden');
       document.getElementById('mcSceneCards').classList.add('hidden');
       MC.runId = null;
       MC.projectId = null;
@@ -1079,19 +1082,25 @@ function mcUnlockBoard() {
 }
 
 function mcShowConfirmedSelections() {
-  // Characters
+  // Characters — P2: include voice_provider from local state
   const charConfirmed = document.getElementById('mcCharacterConfirmed');
   const charLocked = document.getElementById('mcCharacterLocked');
   if (charConfirmed && charLocked) {
     if (MC.selectedCharacterIds.length > 0) {
-      const names = MC.selectedCharacterIds.map(id => {
+      charConfirmed.innerHTML = MC.selectedCharacterIds.map(id => {
         const ch = MC._userCharacters.find(c => c.id === id);
-        return ch ? ch.character_name : 'ID:' + id;
-      });
-      charConfirmed.innerHTML = names.map(n =>
-        '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">' +
-        '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(n) + '</span>'
-      ).join('');
+        const name = ch ? ch.character_name : 'ID:' + id;
+        let voiceLabel = '🔊Google';
+        if (ch && ch.voice_preset_id) {
+          const vid = ch.voice_preset_id;
+          if (vid.startsWith('el-') || vid.startsWith('elevenlabs:')) voiceLabel = '🎤EL';
+          else if (vid.startsWith('fish:') || vid.startsWith('fish-')) voiceLabel = '🎤Fish';
+        }
+        return '<span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium">'
+          + '<i class="fas fa-user text-[10px]"></i>' + escapeHtml(name)
+          + '<span class="text-[9px] text-gray-400 ml-0.5">' + voiceLabel + '</span>'
+          + '</span>';
+      }).join('');
     } else {
       charConfirmed.innerHTML = '<span class="text-xs text-gray-400">キャラクターなし</span>';
     }
