@@ -1529,6 +1529,17 @@ marunage.post('/start', async (c) => {
     voice_id: body.narration_voice?.voice_id || 'ja-JP-Neural2-B',
   }
 
+  // Pre-flight: Fish Audio token check for narration voice
+  if (narrationVoice.provider === 'fish' && !c.env.FISH_AUDIO_API_TOKEN) {
+    console.warn(`[Marunage:Start] Fish Audio selected as narration voice but FISH_AUDIO_API_TOKEN is not set`)
+    return c.json({
+      error: {
+        code: 'FISH_AUDIO_NOT_CONFIGURED',
+        message: 'Fish Audio の API トークンが未設定です。ナレーション音声を Google TTS または ElevenLabs に変更してください。',
+      }
+    }, 400)
+  }
+
   // Build config snapshot
   const config: MarunageConfig = {
     ...DEFAULT_CONFIG,
@@ -1587,6 +1598,33 @@ marunage.post('/start', async (c) => {
       await c.env.DB.prepare(`
         INSERT INTO project_style_settings (project_id, default_style_preset_id) VALUES (?, ?)
       `).bind(projectId, styleId).run()
+    }
+
+    // ===== Step 1.4.5: Pre-flight — Fish Audio token validation =====
+    // If any selected character uses Fish Audio voice, verify FISH_AUDIO_API_TOKEN is set.
+    // Fail fast here instead of silently failing during audio generation (矛盾 #3 対策).
+    if (body.selected_character_ids && body.selected_character_ids.length > 0) {
+      const { results: selectedChars } = await c.env.DB.prepare(`
+        SELECT id, character_name, voice_preset_id FROM user_characters
+        WHERE id IN (${body.selected_character_ids.map(() => '?').join(',')}) AND user_id = ?
+      `).bind(...body.selected_character_ids, user.id).all<{
+        id: number; character_name: string; voice_preset_id: string | null
+      }>()
+
+      const fishChars = (selectedChars || []).filter(
+        ch => ch.voice_preset_id && (ch.voice_preset_id.startsWith('fish:') || ch.voice_preset_id.startsWith('fish-'))
+      )
+
+      if (fishChars.length > 0 && !c.env.FISH_AUDIO_API_TOKEN) {
+        const names = fishChars.map(ch => ch.character_name).join(', ')
+        console.warn(`[Marunage:Start] Fish Audio voice used by [${names}] but FISH_AUDIO_API_TOKEN is not set`)
+        return c.json({
+          error: {
+            code: 'FISH_AUDIO_NOT_CONFIGURED',
+            message: `Fish Audio の API トークンが未設定です。キャラクター「${names}」は Fish Audio を使用しています。Google TTS または ElevenLabs の音声に変更するか、管理者に Fish Audio API トークンの設定を依頼してください。`,
+          }
+        }, 400)
+      }
     }
 
     // ===== Step 1.5: Copy selected characters to project (Phase 2: M-3) =====
