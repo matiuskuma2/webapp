@@ -8,7 +8,7 @@
 - **テクノロジー**: Hono + Cloudflare Pages/Workers + D1 Database + R2 Storage
 - **本番URL**: https://webapp-c7n.pages.dev
 - **GitHub**: https://github.com/matiuskuma2/webapp
-- **最終更新**: 2026-02-14（丸投げチャット動画パイプライン完全修復）
+- **最終更新**: 2026-02-15（丸投げチャット — キャラ固定・左ボード・音声矛盾修正）
 
 ---
 
@@ -40,6 +40,101 @@
 3. **auto-retry**: failed build → 5分クールダウン後に status API で自動再試行
 4. **toAbsoluteUrl 補正**: `/projects/...` パスに自動で `/images/` プレフィックス付加
 5. **UI flag 表示**: off (無効) / pending (準備中) / running (進行中) / done (完了) / failed (失敗)
+
+---
+
+## 🔧 2026-02-15 丸投げチャット — キャラ固定・左ボード改善・音声矛盾修正
+
+### 設計ドキュメント（凍結済み）
+- `docs/MARUNAGE_ABC_SPEC_v1.md` — 台本正規化 / 左ボード / キャラ固定の統合設計書（commit `2cb51af`）
+- `docs/VOICE_AND_CHARACTER_CONTRADICTIONS.md` — 音声・キャラフローの矛盾分析（commit `6ab0cdc`）
+- `docs/P2_LEFT_BOARD_DISPLAY_SPEC.md` — 左ボード表示仕様（commit `021aca2`）
+
+### A-spec: 台本正規化（commit `4359681`）
+- GPT プロンプトに「名前：セリフ」形式を強制する指示を追加
+- 3キャラ上限ガード: `selected_character_ids.length > 3` → 即座にエラー返却
+- `character_key=NULL` のセリフ → ナレーション音声にフォールバック
+
+### B-spec: 左ボード4セクション化（commit `ea6fa69`）
+- 丸投げチャットの左サイドボードを4セクションに分割:
+  - **Characters**: キャラ一覧 + ロックバッジ
+  - **Style**: スタイルプリセット名 + ロックバッジ
+  - **Voice**: ナレーション音声（プロバイダ + voice_id）+ ロックバッジ
+  - **Output Settings**: 出力設定 + ロックバッジ
+  - **Assets**: 進捗サマリー（画像/音声/動画）
+
+### P1: Fish Audio トークン検証（commit `6072f5d`）— 安全パッチ
+**矛盾 #3 の修正**: キャラクターに `fish:xxx` の音声が設定されているが、`FISH_AUDIO_API_TOKEN` が未設定の場合、`/api/marunage/start` で即座にエラーを返す。
+
+- ナレーション音声 (`narration_voice.provider === 'fish'`) のチェック追加
+- キャラクター音声 (`voice_preset_id.startsWith('fish')`) のチェック追加
+- エラーコード: `FISH_AUDIO_NOT_CONFIGURED`
+- メッセージ: Fish Audio未設定時の代替手段をガイド
+
+### P2: 左ボード表示改善（commit `b6e3cb9` + `7be1393`）
+
+#### Status API 拡張（ゼロブレイキングチェンジ）
+- `confirmed.characters[]` に追加:
+  - `appear_scenes`: キャラの登場シーン数（`scene_utterances` の distinct scene count）
+  - `utterance_count`: 総発話数
+  - `voice_provider`: `voice_preset_id` から導出（`google` / `elevenlabs` / `fish`）
+- `progress.assets_summary` 追加:
+  ```json
+  {
+    "scenes_total": 5,
+    "images_done": 5,
+    "audio_done": 12,
+    "audio_total": 12,
+    "video": { "state": "running", "percent": 42 }
+  }
+  ```
+
+#### 左ボード UI 変更
+- キャラチップ表示: `太郎 3/5 🎤EL │ 花子 2/5 🔊Google`
+- Assets サマリー: 3カラムグリッド（画像/音声/動画）
+- ロックツールチップ: `生成中のため変更できません（再生成はv2）`
+- idle 復帰時に `mcAssetsSummary` を hidden リセット
+- `mcShowConfirmedSelections()` でローカル state から voice_provider ラベルを表示
+
+### 微調整（commit `7be1393`）
+1. `mcSetUIState('idle')` で `mcAssetsSummary` が残る → hidden 追加
+2. `mcShowConfirmedSelections()` に voice_provider 推定ラベル追加（次ポーリングで SSOT 上書き）
+
+### 音声・キャラフロー矛盾のまとめ（5件）
+
+| # | 矛盾 | 重要度 | 対応 |
+|---|------|--------|------|
+| 1 | Fish ナレーションプリセットが "nanamin" のみ | 低 | v2 延期 |
+| 2 | キャラ追加がスタイル新規作成経由のみ | 中 | v2 延期 |
+| 3 | Fish トークン未設定でも音声生成に進む | **高** | **v1 修正済** (P1) |
+| 4 | 丸投げフロー中にキャラ音声変更不可 | 低 | 仕様（ロック設計） |
+| 5 | `VOICE_PRESETS` がハードコード | 低 | v3 延期 |
+
+### コミット一覧
+```
+7be1393 fix(P2): idle state resets assets summary, mcShowConfirmedSelections includes voice_provider label
+b6e3cb9 feat(P2): Left board display — character stats, assets 3-column summary, lock tooltip v2
+021aca2 docs: P2 left board display spec — character stats, assets summary, lock tooltip (design freeze)
+6072f5d fix(P1): Fish Audio token pre-flight validation at /start — fail fast before audio generation
+6ab0cdc docs: Voice & character flow contradictions — Fish audio / character creation / SSOT gap analysis
+ea6fa69 feat(B-spec): Left board 4-section layout — Characters/Style/Voice/Assets
+4359681 feat(A-spec): Script normalization — prompt strengthening + 3-char guard
+2cb51af docs: MARUNAGE_ABC_SPEC_v1 — 統合設計書（設計フリーズ）
+1c4ae58 docs+fix: Voice UI spec §10.5 in v2.1 + search/fallback improvements
+d1332ba feat: Narration voice UI — full provider SSOT via /api/tts/voices
+b11c00e feat: UI — style & character selection in marunage-chat
+1b986d8 feat: Character fixation & style selection (Phase 1-4)
+```
+
+### 未着手・保留
+
+| タスク | 状態 | 備考 |
+|--------|------|------|
+| ログイン E2E テスト | 保留 | sandbox → ログインリダイレクトのため本番で実施 |
+| P3: ロック UX テキスト改善 | 未着手 | 最低限のツールチップは P2 で対応済み |
+| v2: キャラ追加フロー（ボード直接追加） | 未着手 | 矛盾 #2 の UX 改善 |
+| v2: Fish カスタム ID をナレーション音声に | 未着手 | 矛盾 #1 の拡張 |
+| v3: VOICE_PRESETS の DB 管理化 | 未着手 | 矛盾 #5 の拡張 |
 
 ---
 
@@ -343,6 +438,7 @@ webapp/
 │   ├── index.tsx              # Honoアプリエントリーポイント
 │   ├── routes/                # APIルート
 │   │   ├── projects.ts        # プロジェクト管理
+│   │   ├── marunage.ts        # 丸投げチャット API（/start, /advance, /status）
 │   │   ├── parsing.ts         # テキスト分割
 │   │   ├── transcriptions.ts  # 音声文字起こし
 │   │   ├── formatting.ts      # シナリオ生成
@@ -360,6 +456,7 @@ webapp/
 │   └── static/
 │       ├── app.js             # フロントエンドメインロジック
 │       ├── project-editor.js  # プロジェクトエディタUI
+│       ├── marunage-chat.js   # 丸投げチャットUI（左ボード・進捗管理）
 │       └── styles.css         # TailwindCSSコンパイル済み
 ├── migrations/                # D1マイグレーション
 │   ├── 0001_initial_schema.sql
@@ -500,7 +597,10 @@ UIにはよく使う操作のテンプレートボタンがあります：
 - **04_DB_SCHEMA.md**: データベーススキーマ完全版
 - **05_API_SPEC.md**: APIエンドポイント仕様
 - **09_AI_DEV_RULES.md**: AI開発者向けルール
-- **BUTTON_PROGRESS_FIX.md**: 画像生成ボタンと進捗表示の完全修正ドキュメント ⭐ 重要
+- **MARUNAGE_ABC_SPEC_v1.md**: 丸投げチャット — 台本正規化・左ボード・キャラ固定設計書 ⭐
+- **VOICE_AND_CHARACTER_CONTRADICTIONS.md**: 音声・キャラフロー矛盾分析 ⭐
+- **P2_LEFT_BOARD_DISPLAY_SPEC.md**: 左ボード表示仕様 ⭐
+- **BUTTON_PROGRESS_FIX.md**: 画像生成ボタンと進捗表示の完全修正ドキュメント
 
 ---
 
@@ -509,7 +609,7 @@ Proprietary - All rights reserved
 
 ---
 
-最終更新: 2026-01-26
+最終更新: 2026-02-15
 
 ---
 
@@ -2451,6 +2551,9 @@ curl http://localhost:3000
 1. **音声途中切れ**: Scene 1338のduration修正済み（9888ms）、他シーンは再生成で修正
 2. **進捗時間表示**: 99%表示時の残り時間計算ロジックの改善が必要
 3. ~~**モーション自動適用**~~: ✅ 解決済み（Phase A+B: 全20プリセット対応、一括適用API、チャットコマンド対応）
+4. **丸投げチャット ログイン E2E**: sandbox ではログインリダイレクトのため本番環境での手動検証が必要
+5. **Fish Audio 拡張**: カスタム Fish ID のナレーション音声対応（v2）、VOICE_PRESETS の DB 管理化（v3）
+6. **キャラ追加フロー**: ボード直接追加の UX 改善（v2）
 
 ---
 
