@@ -627,9 +627,11 @@ Phase 4 (参照画像) ←────────── Phase 3 必須
 | 台本タグ（v1） | **不要**（AI が構造化、dialogue-parser が名前一致） |
 | キャラ選択タイミング | **丸投げ開始前に固定** |
 | スタイル選択タイミング | **丸投げ開始前に固定** |
-| ボイス UI | **全プロバイダー表示**（GET /api/tts/voices が唯一のソース） |
-| v1 ボイスモード | **A案: narration_only**（キャラは user_characters.voice_preset_id 自動） |
+| ボイス UI | **全プロバイダー表示**（GET /api/tts/voices が唯一のSSOT）→ 実装済み |
+| v1 ボイスモード | **A案: narration_only**（キャラは project_character_models.voice_preset_id 自動解決） |
+| v1 キャラ別ボイスUI | **なし**（v2で追加、SSOT = project_character_models.voice_preset_id 推奨） |
 | voice_policy 構造体 | **mode: narration_only / full_override** |
+| settings_json.character_voices | **v1では使用しない**（二重管理回避。resolveVoiceForUtterance は project_character_models が一次ソース） |
 | キャラデータの持ち方 | **コピー方式**（user_characters → project_character_models） |
 | 参照画像の graceful degradation | **取得失敗時はテキストのみで続行** |
 | 左ボード | **4セクション**（Characters, Style, Voice, Assets） |
@@ -640,7 +642,7 @@ Phase 4 (参照画像) ←────────── Phase 3 必須
 
 | 項目 | 優先度 | 前提 |
 |---|---|---|
-| `voice_policy.mode='full_override'` UI | 中 | バックエンドは Phase 2 で対応済み |
+| `voice_policy.mode='full_override'` UI | 中 | バックエンドは Phase 2 で対応済み。SSOT = project_character_models.voice_preset_id |
 | AI タグ付与方式（`@taro:` 形式） | 低 | dialogue-parser の拡張 |
 | キャラ登録画像アップロード UI 改善 | 中 | R2 アップロード API 既存 |
 | scene_character_traits (C層: 例外状態) | 低 | テーブル・ユーティリティ既存 |
@@ -691,6 +693,18 @@ UI 実装 (フロントエンド) — ~150行:
   [x] marunage-chat.js — MC.selectedStylePresetId, MC.selectedCharacterIds 追加
   [x] marunage-chat.js — mcSetUIState(): 全セレクタの show/hide 統一
   [x] marunage-chat.js — mcStartNew(): スタイル/キャラリセット
+  [x] ビルド成功確認（npm run build — 107 modules, 0 errors）
+
+ナレーション全ボイスUI (v1 narration_only) — ~120行:
+  [x] index.tsx — HTML: プロバイダタブ + 検索バー + voice-item リスト + selected表示
+  [x] index.tsx — CSS: voice-prov-tab, voice-item, prov-dot (Google青/ElevenLabs黒/Fish橙)
+  [x] marunage-chat.js — mcLoadVoices(): GET /api/tts/voices → 全プロバイダフラット配列化
+  [x] marunage-chat.js — mcRenderVoiceList(): フィルタ(provider+search)→ DOM描画
+  [x] marunage-chat.js — mcSelectVoice(): provider + voice_id ペア保存 → selected表示更新
+  [x] marunage-chat.js — mcFilterVoices(): タブ切替 + mcFilterVoicesBySearch(): テキスト検索
+  [x] marunage-chat.js — unavailable ボイス: opacity + lock アイコン + disabled
+  [x] marunage-chat.js — mcStartNew(): voice デフォルトリセット + フィルタクリア
+  [x] API確認: Google 8 + ElevenLabs 8 + Fish 0(条件付き) = 16ボイス表示
   [x] ビルド成功確認（npm run build — 107 modules, 0 errors）
 
 横断チェック:

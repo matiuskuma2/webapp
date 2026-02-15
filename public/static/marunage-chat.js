@@ -36,6 +36,9 @@ const MC = {
   // Loaded options cache
   _stylePresets: [],
   _userCharacters: [],
+  _allVoices: [],        // All loaded TTS voices (flat array)
+  _voiceFilter: 'all',   // Provider filter: 'all' | 'google' | 'elevenlabs' | 'fish'
+  _voiceSearch: '',      // Text search filter
   
   // Auth
   currentUser: null,
@@ -167,9 +170,10 @@ async function mcCheckAuth() {
     document.getElementById('mcAuthLoading').classList.add('hidden');
     document.getElementById('mcShell').classList.remove('hidden');
     
-    // Load style presets and user characters (non-blocking)
+    // Load style presets, user characters, and voices (non-blocking)
     mcLoadStylePresets();
     mcLoadUserCharacters();
+    mcLoadVoices();
     
     // Check URL for ?run=:runId (from dashboard)
     const urlParams = new URLSearchParams(window.location.search);
@@ -1209,6 +1213,17 @@ function mcStartNew() {
   document.querySelectorAll('#mcCharacterList .char-chip').forEach(c => {
     c.classList.remove('selected', 'disabled');
   });
+  // Reset voice to default & re-render list
+  MC.selectedVoice = { provider: 'google', voice_id: 'ja-JP-Neural2-B' };
+  MC._voiceFilter = 'all';
+  MC._voiceSearch = '';
+  const searchInput = document.getElementById('mcVoiceSearch');
+  if (searchInput) searchInput.value = '';
+  document.querySelectorAll('.voice-prov-tab').forEach((t, i) => {
+    if (i === 0) t.classList.add('active');
+    else t.classList.remove('active');
+  });
+  mcRenderVoiceList();
   // Show scene count section
   document.getElementById('mcSceneCount').classList.remove('hidden');
   
@@ -1216,15 +1231,153 @@ function mcStartNew() {
 }
 
 // ============================================================
-// Voice / Preset Selection
+// Voice / Preset Selection — SSOT: /api/tts/voices
 // ============================================================
 
-function selectVoice(el) {
-  document.querySelectorAll('#mcVoiceSelect .voice-chip').forEach(c => c.classList.remove('active'));
+// All loaded voices (flat array: [{id, name, provider, gender, voice_id?, unavailable}])
+
+async function mcLoadVoices() {
+  const container = document.getElementById('mcVoiceList');
+  try {
+    const res = await axios.get('/api/tts/voices');
+    const data = res.data;
+    const voices = [];
+    const providers = data.providers || {};
+
+    // Google
+    for (const v of (data.voices.google || [])) {
+      voices.push({
+        id: v.id,
+        voice_id: v.id,
+        name: v.name,
+        provider: 'google',
+        gender: v.gender,
+        unavailable: !providers.google,
+      });
+    }
+    // ElevenLabs
+    for (const v of (data.voices.elevenlabs || [])) {
+      voices.push({
+        id: v.id,
+        voice_id: v.voice_id || v.id,
+        name: v.name,
+        provider: 'elevenlabs',
+        gender: v.gender,
+        unavailable: !providers.elevenlabs,
+      });
+    }
+    // Fish
+    for (const v of (data.voices.fish || [])) {
+      voices.push({
+        id: v.id,
+        voice_id: v.id,
+        name: v.name,
+        provider: 'fish',
+        gender: v.gender,
+        unavailable: !providers.fish,
+      });
+    }
+
+    MC._allVoices = voices;
+
+    // Pre-select default (google:ja-JP-Neural2-B) if not yet set
+    if (!MC._allVoices.find(v => v.provider === MC.selectedVoice.provider && v.voice_id === MC.selectedVoice.voice_id)) {
+      // Keep current default — it might not be in the list if Neural2 voices aren't listed.
+      // Add it as a synthetic entry if needed.
+      const hasDefault = voices.some(v => v.id === 'ja-JP-Neural2-B');
+      if (!hasDefault) {
+        voices.push({
+          id: 'ja-JP-Neural2-B',
+          voice_id: 'ja-JP-Neural2-B',
+          name: 'Neural2-B（男性・デフォルト）',
+          provider: 'google',
+          gender: 'male',
+          unavailable: false,
+        });
+      }
+    }
+
+    mcRenderVoiceList();
+
+    // Show selected name
+    const sel = voices.find(v => v.provider === MC.selectedVoice.provider && v.voice_id === MC.selectedVoice.voice_id);
+    if (sel) {
+      document.getElementById('mcVoiceSelectedName').textContent = sel.name + ' (' + sel.provider + ')';
+      document.getElementById('mcVoiceSelected').classList.remove('hidden');
+    }
+
+  } catch (err) {
+    console.warn('[MC] Failed to load voices:', err);
+    container.innerHTML = '<span class="text-xs text-gray-400">ボイス読み込み失敗</span>';
+  }
+}
+
+function mcRenderVoiceList() {
+  const container = document.getElementById('mcVoiceList');
+  const filter = MC._voiceFilter;
+  const search = MC._voiceSearch.toLowerCase();
+
+  const filtered = MC._allVoices.filter(v => {
+    if (filter !== 'all' && v.provider !== filter) return false;
+    if (search && !v.name.toLowerCase().includes(search) && !v.id.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  if (filtered.length === 0) {
+    container.innerHTML = '<span class="text-xs text-gray-400">該当するボイスがありません</span>';
+    return;
+  }
+
+  container.innerHTML = filtered.map(v => {
+    const isActive = v.provider === MC.selectedVoice.provider && v.voice_id === MC.selectedVoice.voice_id;
+    const cls = 'voice-item' + (isActive ? ' active' : '') + (v.unavailable ? ' unavailable' : '');
+    const icon = v.gender === 'female' ? 'fa-female' : 'fa-male';
+    return '<button class="' + cls + '" data-provider="' + v.provider + '" data-voice-id="' + v.voice_id + '" '
+      + (v.unavailable ? 'title="プロバイダ未設定" disabled' : 'onclick="mcSelectVoice(this)"')
+      + '>'
+      + '<span class="prov-dot prov-' + v.provider + '"></span>'
+      + '<i class="fas ' + icon + '"></i>'
+      + '<span>' + escapeHtml(v.name) + '</span>'
+      + (v.unavailable ? '<i class="fas fa-lock text-gray-300 text-[8px] ml-0.5"></i>' : '')
+      + '</button>';
+  }).join('');
+}
+
+function mcSelectVoice(el) {
+  const provider = el.dataset.provider;
+  const voiceId = el.dataset.voiceId;
+  MC.selectedVoice = { provider: provider, voice_id: voiceId };
+
+  // Update active class
+  document.querySelectorAll('#mcVoiceList .voice-item').forEach(c => c.classList.remove('active'));
   el.classList.add('active');
-  
-  const [provider, voiceId] = el.dataset.voice.split(':');
-  MC.selectedVoice = { provider, voice_id: voiceId };
+
+  // Update selected display
+  const v = MC._allVoices.find(v => v.provider === provider && v.voice_id === voiceId);
+  if (v) {
+    document.getElementById('mcVoiceSelectedName').textContent = v.name + ' (' + v.provider + ')';
+    document.getElementById('mcVoiceSelected').classList.remove('hidden');
+  }
+}
+
+function mcFilterVoices(prov, tabEl) {
+  MC._voiceFilter = prov;
+  document.querySelectorAll('.voice-prov-tab').forEach(t => t.classList.remove('active'));
+  tabEl.classList.add('active');
+  mcRenderVoiceList();
+}
+
+function mcFilterVoicesBySearch(val) {
+  MC._voiceSearch = val;
+  mcRenderVoiceList();
+}
+
+// Legacy compat — old selectVoice calls from HTML (if any remain)
+function selectVoice(el) {
+  if (el.dataset.voice) {
+    const [provider, voiceId] = el.dataset.voice.split(':');
+    MC.selectedVoice = { provider, voice_id: voiceId };
+  }
 }
 
 function selectPreset(el) {

@@ -4574,6 +4574,18 @@ app.get('/marunage-chat', (c) => {
         .char-chip { padding: 0.3rem 0.65rem; border-radius: 0.5rem; font-size: 0.72rem; cursor: pointer; transition: all 0.2s; border: 2px solid #e5e7eb; background: #fff; display: inline-flex; align-items: center; gap: 0.25rem; }
         .char-chip.selected { border-color: #2563eb; background: #eff6ff; color: #1e40af; }
         .char-chip.disabled { opacity: 0.4; cursor: not-allowed; }
+        /* Voice provider tabs */
+        .voice-prov-tab { padding: 0.2rem 0.5rem; border-radius: 0.375rem; font-size: 0.65rem; cursor: pointer; transition: all 0.15s; background: #f3f4f6; color: #6b7280; border: 1px solid transparent; }
+        .voice-prov-tab.active { background: #7c3aed; color: #fff; }
+        .voice-prov-tab:hover:not(.active) { background: #e5e7eb; }
+        /* Voice item in list */
+        .voice-item { padding: 0.25rem 0.55rem; border-radius: 0.375rem; font-size: 0.68rem; cursor: pointer; transition: all 0.15s; border: 1.5px solid #e5e7eb; background: #fff; display: inline-flex; align-items: center; gap: 0.3rem; white-space: nowrap; }
+        .voice-item.active { border-color: #7c3aed; background: #ede9fe; color: #5b21b6; }
+        .voice-item.unavailable { opacity: 0.35; cursor: not-allowed; }
+        .voice-item .prov-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+        .prov-google { background: #4285f4; }
+        .prov-elevenlabs { background: #000; }
+        .prov-fish { background: #ff6b35; }
     </style>
 </head>
 <body class="bg-gray-50">
@@ -4716,24 +4728,29 @@ app.get('/marunage-chat', (c) => {
                 </p>
             </div>
             
-            <!-- Voice Selection (shown before start) -->
+            <!-- Voice Selection (shown before start) — SSOT: /api/tts/voices -->
             <div id="mcVoiceSelect" class="px-4 py-2 border-t border-gray-100 bg-gray-50">
-                <label class="text-xs font-semibold text-gray-600 mb-1 block">
+                <label class="text-xs font-semibold text-gray-600 mb-1.5 block">
                     <i class="fas fa-microphone-alt mr-1 text-purple-500"></i>ナレーション音声
                 </label>
-                <div class="flex flex-wrap gap-1.5">
-                    <button class="voice-chip active" data-voice="google:ja-JP-Neural2-B" onclick="selectVoice(this)">
-                        <i class="fas fa-male mr-1"></i>男性（落ち着き）
-                    </button>
-                    <button class="voice-chip" data-voice="google:ja-JP-Neural2-C" onclick="selectVoice(this)">
-                        <i class="fas fa-female mr-1"></i>女性（明るい）
-                    </button>
-                    <button class="voice-chip" data-voice="google:ja-JP-Neural2-D" onclick="selectVoice(this)">
-                        <i class="fas fa-male mr-1"></i>男性（若い）
-                    </button>
-                    <button class="voice-chip" data-voice="google:ja-JP-Wavenet-C" onclick="selectVoice(this)">
-                        <i class="fas fa-female mr-1"></i>女性（自然）
-                    </button>
+                <!-- Provider Tabs -->
+                <div class="flex gap-1 mb-1.5">
+                    <button class="voice-prov-tab active" data-prov="all" onclick="mcFilterVoices('all',this)">すべて</button>
+                    <button class="voice-prov-tab" data-prov="google" onclick="mcFilterVoices('google',this)">Google</button>
+                    <button class="voice-prov-tab" data-prov="elevenlabs" onclick="mcFilterVoices('elevenlabs',this)">ElevenLabs</button>
+                    <button class="voice-prov-tab" data-prov="fish" onclick="mcFilterVoices('fish',this)">Fish</button>
+                </div>
+                <!-- Search -->
+                <input type="text" id="mcVoiceSearch" placeholder="ボイス名で検索..." 
+                       class="w-full px-2 py-1 text-xs border border-gray-200 rounded-md mb-1.5 focus:outline-none focus:ring-1 focus:ring-purple-300"
+                       oninput="mcFilterVoicesBySearch(this.value)">
+                <!-- Voice List (populated by JS) -->
+                <div id="mcVoiceList" class="max-h-32 overflow-y-auto mc-scroll flex flex-wrap gap-1">
+                    <span class="text-xs text-gray-400"><i class="fas fa-spinner fa-spin mr-1"></i>読み込み中...</span>
+                </div>
+                <!-- Selected indicator -->
+                <div id="mcVoiceSelected" class="text-[10px] text-purple-600 mt-1 hidden">
+                    <i class="fas fa-check-circle mr-0.5"></i><span id="mcVoiceSelectedName">-</span>
                 </div>
             </div>
             
