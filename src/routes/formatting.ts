@@ -706,7 +706,23 @@ async function processTextChunks(
         WHERE id = ?
       `).bind(chunk.id).run()
       
-      console.log(`[AIMode] Processing chunk ${chunk.idx}: target ${chunkTargetScenes} scenes`)
+      const apiKeyPresent = !!c.env.OPENAI_API_KEY && c.env.OPENAI_API_KEY.length > 5
+      console.log(`[AIMode] Processing chunk ${chunk.idx}: target ${chunkTargetScenes} scenes, apiKey=${apiKeyPresent ? 'set(' + c.env.OPENAI_API_KEY.substring(0, 8) + '...)' : 'MISSING'}, textLen=${(chunk.text as string).length}`)
+
+      if (!apiKeyPresent) {
+        console.error(`[AIMode] OPENAI_API_KEY is missing or invalid!`)
+        await c.env.DB.prepare(`
+          UPDATE text_chunks 
+          SET status = 'failed',
+              scene_count = 0,
+              error_message = 'OPENAI_API_KEY is not configured',
+              processed_at = CURRENT_TIMESTAMP,
+              updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).bind(chunk.id).run()
+        failedCount++
+        continue
+      }
 
       // OpenAI API で MiniScene 生成（AI整理モード）
       const miniScenesResult = await generateMiniScenesAI(
@@ -714,9 +730,11 @@ async function processTextChunks(
         project.title as string,
         chunk.idx as number,
         c.env.OPENAI_API_KEY,
-        chunkTargetScenes,  // chunk単位の目標シーン数
-        characterPromptSection  // Phase 3 (M-6): character hints for AI
+        chunkTargetScenes,
+        characterPromptSection
       )
+
+      console.log(`[AIMode] Chunk ${chunk.idx} result: success=${miniScenesResult.success}, scenes=${miniScenesResult.scenes?.length || 0}, error=${miniScenesResult.error || 'none'}`)
 
       if (!miniScenesResult.success) {
         // 生成失敗 → chunk を 'failed' に（scene_count = 0）
@@ -1764,9 +1782,13 @@ ${chunkText}
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      const errorMessage = errorData.error?.message || `API error: ${response.status}`
-      console.error('OpenAI API error:', errorMessage)
+      const errorText = await response.text().catch(() => '')
+      let errorMessage = `OpenAI HTTP ${response.status}`
+      try {
+        const errorData = JSON.parse(errorText)
+        errorMessage = errorData.error?.message || `OpenAI HTTP ${response.status}: ${errorData.error?.type || 'unknown'}`
+      } catch { errorMessage += `: ${errorText.substring(0, 300)}` }
+      console.error(`[AIMode:OpenAI] chunk${chunkIdx} temp=${temperature} Error: ${errorMessage}`)
       return {
         success: false,
         error: errorMessage
@@ -2080,9 +2102,13 @@ ${rawText}
     })
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      const errorMessage = errorData.error?.message || `API error: ${response.status}`
-      console.error('OpenAI API error:', errorMessage)
+      const errorText = await response.text().catch(() => '')
+      let errorMessage = `OpenAI HTTP ${response.status}`
+      try {
+        const errorData = JSON.parse(errorText)
+        errorMessage = errorData.error?.message || `OpenAI HTTP ${response.status}: ${errorData.error?.type || 'unknown'}`
+      } catch { errorMessage += `: ${errorText.substring(0, 300)}` }
+      console.error(`[AIMode:OpenAI] chunk${chunkIdx} temp=${temperature} Error: ${errorMessage}`)
       return {
         success: false,
         error: errorMessage

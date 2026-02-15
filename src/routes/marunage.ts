@@ -2256,9 +2256,22 @@ marunage.post('/:projectId/advance', async (c) => {
         `).bind(projectId).all()
 
         if (!allScenes || allScenes.length === 0) {
+          // Gather chunk failure details
+          let chunkDebug = ''
+          try {
+            const { results: chunks } = await c.env.DB.prepare(
+              `SELECT idx, status, error_message FROM text_chunks WHERE project_id = ? ORDER BY idx ASC`
+            ).bind(projectId).all()
+            if (chunks && chunks.length > 0) {
+              chunkDebug = chunks.map((ch: any) => `chunk${ch.idx}:${ch.status}(${ch.error_message || '-'})`).join('; ')
+            }
+          } catch (_) {}
+          console.error(`[Marunage:Advance] NO_SCENES for project ${projectId}. Chunks: ${chunkDebug || 'none'}`)
           await transitionPhase(c.env.DB, run.id, currentPhase, 'failed', {
             error_code: 'NO_SCENES',
-            error_message: 'No scenes generated',
+            error_message: chunkDebug
+              ? `シーン生成失敗: ${chunkDebug}`
+              : 'シーンが生成されませんでした。テキストが短すぎるか、AI整形に失敗しました。',
             error_phase: 'formatting',
           })
           return c.json({
@@ -2266,7 +2279,9 @@ marunage.post('/:projectId/advance', async (c) => {
             previous_phase: currentPhase,
             new_phase: 'failed',
             action: 'failed_no_scenes',
-            message: 'シーンが生成されませんでした',
+            message: chunkDebug
+              ? `シーン生成失敗: ${chunkDebug}`
+              : 'シーンが生成されませんでした',
           })
         }
 
@@ -2856,6 +2871,37 @@ marunage.post('/:projectId/retry', async (c) => {
 
   if ((result.meta?.changes ?? 0) === 0) {
     return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run is no longer in failed state')
+  }
+
+  // ★ FIX: retry時にフォーマット関連の状態もリセットする
+  if (rollbackTo === 'formatting') {
+    // 1. failed チャンクを pending にリセット
+    await c.env.DB.prepare(`
+      UPDATE text_chunks
+      SET status = 'pending', error_message = NULL, scene_count = 0,
+          processed_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND status = 'failed'
+    `).bind(projectId).run()
+
+    // 2. done チャンクも pending にリセット（全てやり直し）
+    await c.env.DB.prepare(`
+      UPDATE text_chunks
+      SET status = 'pending', error_message = NULL, scene_count = 0,
+          processed_at = NULL, updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND status = 'done'
+    `).bind(projectId).run()
+
+    // 3. 既存シーンを削除（再生成するため）
+    await c.env.DB.prepare(`
+      DELETE FROM scenes WHERE project_id = ? AND chunk_id IS NOT NULL
+    `).bind(projectId).run()
+
+    // 4. project.status を formatting に戻す（format API が正しく動くように）
+    await c.env.DB.prepare(`
+      UPDATE projects SET status = 'formatting', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(projectId).run()
+
+    console.log(`[Marunage:Retry] Reset chunks + scenes + project status for project ${projectId}`)
   }
 
   try {
