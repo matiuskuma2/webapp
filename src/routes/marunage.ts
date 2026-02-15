@@ -2902,6 +2902,16 @@ marunage.post('/:projectId/retry', async (c) => {
     `).bind(projectId).run()
 
     console.log(`[Marunage:Retry] Reset chunks + scenes + project status for project ${projectId}`)
+
+    // ★ FIX: retry時にフォーマット処理を再起動する（start時と同じ waitUntil パターン）
+    const config: MarunageConfig = JSON.parse(run.config_json || '{}')
+    const sessionCookie = getCookie(c, 'session') || ''
+    const requestUrl = c.req.url
+    c.executionCtx.waitUntil(
+      marunageFormatStartup(c.env.DB, run.id, projectId, config, requestUrl, sessionCookie)
+        .catch(err => console.error(`[Marunage:Retry:Format] waitUntil error:`, err))
+    )
+    console.log(`[Marunage:Retry] Format startup triggered via waitUntil for project ${projectId}`)
   }
 
   try {
