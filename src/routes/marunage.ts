@@ -284,10 +284,20 @@ async function marunageFormatStartup(
         ).bind(projectId).first<{ cnt: number }>()
 
         if (!sceneCount || sceneCount.cnt === 0) {
-          console.error(`[Marunage:Format] Project ${projectId} formatted but 0 visible scenes — marking as failed`)
+          // Gather chunk failure details for debugging
+          let chunkDebug = ''
+          try {
+            const { results: failedChunks } = await db.prepare(
+              `SELECT idx, status, error_message FROM text_chunks WHERE project_id = ? ORDER BY idx ASC`
+            ).bind(projectId).all()
+            if (failedChunks && failedChunks.length > 0) {
+              chunkDebug = failedChunks.map((ch: any) => `chunk${ch.idx}:${ch.status}(${ch.error_message || 'no detail'})`).join('; ')
+            }
+          } catch (e) { /* ignore */ }
+          console.error(`[Marunage:Format] Project ${projectId} formatted but 0 visible scenes — marking as failed. Chunks: ${chunkDebug || 'unknown'}`)
           await transitionPhase(db, runId, 'formatting', 'failed', {
             error_code: 'FORMAT_EMPTY',
-            error_message: 'Format completed but no scenes were generated. Text may be too short or unstructured.',
+            error_message: `シーン生成に失敗しました。AI整形が全チャンクで失敗した可能性があります。${chunkDebug ? ' [' + chunkDebug + ']' : ' テキストが短すぎるか、構造が認識できませんでした。'}`,
             error_phase: 'formatting',
           })
           return
@@ -320,9 +330,18 @@ async function marunageFormatStartup(
         `SELECT COUNT(*) as cnt FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)`
       ).bind(projectId).first<{ cnt: number }>()
       if (!sceneCount || sceneCount.cnt === 0) {
+        let chunkDebug = ''
+        try {
+          const { results: failedChunks } = await db.prepare(
+            `SELECT idx, status, error_message FROM text_chunks WHERE project_id = ? ORDER BY idx ASC`
+          ).bind(projectId).all()
+          if (failedChunks && failedChunks.length > 0) {
+            chunkDebug = failedChunks.map((ch: any) => `chunk${ch.idx}:${ch.status}(${ch.error_message || 'no detail'})`).join('; ')
+          }
+        } catch (e) { /* ignore */ }
         await transitionPhase(db, runId, 'formatting', 'failed', {
           error_code: 'FORMAT_EMPTY',
-          error_message: 'Format completed but no scenes were generated',
+          error_message: `シーン生成に失敗しました。${chunkDebug ? ' [' + chunkDebug + ']' : ''}`,
           error_phase: 'formatting',
         })
         return
