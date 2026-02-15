@@ -1508,11 +1508,16 @@ marunage.post('/start', async (c) => {
   // Check for existing active run (user-level)
   const existingRun = await getActiveRunForUser(c.env.DB, user.id)
   if (existingRun) {
-    return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Active run already exists', {
-      run_id: existingRun.id,
-      project_id: existingRun.project_id,
-      phase: existingRun.phase,
-    })
+    // Auto-cancel stale runs that are stuck in non-terminal phases
+    // This happens when previous waitUntil formatting silently failed
+    console.log(`[Marunage:Start] Auto-canceling stale run ${existingRun.id} (project=${existingRun.project_id}, phase=${existingRun.phase}) for user ${user.id}`)
+    await c.env.DB.prepare(`
+      UPDATE marunage_runs
+      SET phase = 'canceled', error_code = 'AUTO_CANCELED', error_message = '新しいプロジェクト開始のため自動キャンセルされました',
+          updated_at = CURRENT_TIMESTAMP, completed_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(existingRun.id).run()
+    // Continue to create new run below
   }
 
   let body: MarunageStartRequest
