@@ -282,6 +282,51 @@ export function parseDialogueToUtterances(
     }
   }
   
+  // =========================================================================
+  // A-spec: 3キャラクター上限ガード（最後の砦）
+  // 1シーン内で distinct character_key > 3 の場合、
+  // 4人目以降の dialogue を narration に矯正する（絶対に落とさない）
+  // =========================================================================
+  const MAX_CHARACTERS_PER_SCENE = 3;
+  const distinctKeys = new Set<string>();
+  
+  // Pass 1: 登場順にキャラクターキーを収集
+  for (const utt of utterances) {
+    if (utt.role === 'dialogue' && utt.character_key) {
+      distinctKeys.add(utt.character_key);
+    }
+  }
+  
+  if (distinctKeys.size > MAX_CHARACTERS_PER_SCENE) {
+    // 上位3キャラ（登場順）を確定
+    const allowedKeys = new Set<string>();
+    for (const utt of utterances) {
+      if (utt.role === 'dialogue' && utt.character_key) {
+        allowedKeys.add(utt.character_key);
+        if (allowedKeys.size >= MAX_CHARACTERS_PER_SCENE) break;
+      }
+    }
+    
+    // 4人目以降 → ナレーションに矯正（テキストにキャラ名を含めて保持）
+    let correctedCount = 0;
+    for (const utt of utterances) {
+      if (utt.role === 'dialogue' && utt.character_key && !allowedKeys.has(utt.character_key)) {
+        const originalName = utt.character_name || utt.character_key;
+        utt.text = `${originalName} ${utt.text}`;  // キャラ名をナレーション文に含める
+        utt.role = 'narration';
+        utt.character_key = null;
+        utt.character_name = null;
+        correctedCount++;
+      }
+    }
+    
+    console.warn(
+      `[DialogueParser:A-spec] Exceeded ${MAX_CHARACTERS_PER_SCENE} characters ` +
+      `(found ${distinctKeys.size}). Corrected ${correctedCount} utterance(s) to narration. ` +
+      `Allowed: [${[...allowedKeys].join(', ')}]`
+    );
+  }
+  
   return utterances;
 }
 

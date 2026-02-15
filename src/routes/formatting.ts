@@ -340,7 +340,19 @@ formatting.post('/:id/format', async (c) => {
     const characterHints = body.character_hints
     let characterPromptSection = ''
     if (characterHints && characterHints.length > 0 && executionContext === 'marunage') {
-      characterPromptSection = `\n\n【登場キャラクター（固定）】\n以下のキャラクターが登場します。セリフは必ずこれらのキャラクター名を speaker として使用してください:\n${characterHints.map(ch => `- ${ch.name}（${ch.description || '説明なし'}）`).join('\n')}\n\n【セリフルール】\n- ナレーション（語り手）は speech_type="narration" としてください\n- キャラクターのセリフは speech_type="dialogue" とし、dialogue 内に「キャラ名：「セリフ」」形式で記載してください\n- 1シーンあたり最大3名のキャラクターが登場できます\n- キャラクター名は上記リストのいずれかに限定してください`
+      const castList = characterHints.map(ch => `- ${ch.name}（${ch.description || '説明なし'}）`).join('\n')
+      characterPromptSection = `\n\n【登場キャラクター（固定キャスト）】
+以下のキャラクターのみが登場できます。これ以外のキャラクター名を使用しないでください:
+${castList}
+
+【台詞の出力形式 — 厳守】
+- キャラクターの台詞は必ず「キャラ名：セリフ内容」の1行形式で出力してください
+  例: ${characterHints[0]?.name || '太郎'}：今日はいい天気ですね
+- ナレーション・地の文はキャラ名なしで記載してください（「ナレーション：」の接頭辞も不要）
+- 1シーンの dialogue 内で登場するキャラクターは最大3名までです
+  3名を超える場合、話者を絞るかナレーションに書き換えてください
+- 上記リスト以外のキャラクター名は使用禁止です（後工程でナレーション扱いに矯正されます）
+- speech_type は "dialogue"（キャラ台詞あり）または "narration"（ナレーションのみ）で判定してください`
       console.log(`[Format:M-6] Injecting ${characterHints.length} character(s) into AI prompt: ${characterHints.map(c => c.name).join(', ')}`)
     }
 
