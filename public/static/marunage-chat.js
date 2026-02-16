@@ -62,6 +62,7 @@ const MC = {
 
   // T2.5: Scene regeneration tracking
   _regeneratingSceneId: null,
+  _lastEditInstruction: null,
 };
 
 // ============================================================
@@ -905,7 +906,8 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       // Regeneration completed — clear state and update banner
       const regenIdx = scenes.indexOf(regenScene);
       MC._regeneratingSceneId = null;
-      mcSetEditBanner(`📍 編集中: シーン${regenIdx + 1}（画像 ✅ 更新済み）`, true);
+      const instrLine = MC._lastEditInstruction ? `<br><span class="text-[10px] text-green-600">指示: 「${MC._lastEditInstruction}」 → 反映済み</span>` : '';
+      mcSetEditBanner(`📍 編集中: シーン${regenIdx + 1}（画像 ✅ 更新済み）${instrLine}`, true);
       mcAddSystemMessage(`シーン${regenIdx + 1} の画像が更新されました。再ビルドで動画に反映できます。`, 'success');
     } else if (regenScene) {
       // Still regenerating — re-apply badge (was lost during innerHTML rebuild)
@@ -1069,8 +1071,10 @@ async function mcHandleSceneEdit(text) {
     
     if (res.data?.image_generation_id || res.data?.status === 'completed') {
       mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成を開始しました。更新まで少々お待ちください。`, 'success');
-      // T2: Update banner to "regenerating"
-      mcSetEditBanner(`📍 編集中: シーン${targetSceneIdx + 1}（画像再生成中…）`, true);
+      // T2: Update banner to "regenerating" + show last instruction
+      const shortInstruction = text.length > 20 ? text.substring(0, 20) + '…' : text;
+      MC._lastEditInstruction = shortInstruction;
+      mcSetEditBanner(`📍 編集中: シーン${targetSceneIdx + 1}（画像再生成中…）<br><span class="text-[10px] text-purple-500">指示: 「${shortInstruction}」</span>`, true);
       // T2.5: Mark scene card as regenerating + force immediate poll
       MC._regeneratingSceneId = targetSceneId;
       mcMarkSceneRegenerating(targetSceneId, true);
@@ -1671,11 +1675,32 @@ async function mcRebuildVideo() {
     // Reset video done notification so the new completion will trigger scroll+highlight
     MC._videoDoneNotified = false;
     MC._videoFailedNotified = false;
+    
+    // Instant UI: switch video frame to "generating 0%" immediately (no poll wait)
+    const player = document.getElementById('mcBoardVideoPlayer');
+    const placeholder = document.getElementById('mcBoardVideoPlaceholder');
+    const placeholderText = document.getElementById('mcBoardVideoPlaceholderText');
+    const dlBtn = document.getElementById('mcBoardVideoDL');
+    const statusEl = document.getElementById('mcBoardVideoStatus');
+    if (player) player.classList.add('hidden');
+    if (placeholder) placeholder.classList.remove('hidden');
+    if (placeholderText) placeholderText.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>動画生成中… 0%';
+    if (dlBtn) dlBtn.classList.add('hidden');
+    if (btn) btn.classList.add('hidden');
+    if (statusEl) statusEl.textContent = '再ビルド準備中...';
+    
+    // Trigger polls to pick up running state quickly
+    mcForcePollSoon();
   } catch (err) {
     const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
     mcAddSystemMessage(`再ビルドエラー: ${errMsg}`, 'error');
+    // Restore button on error
+    if (btn) {
+      btn.classList.remove('hidden');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-sync-alt mr-1"></i>修正を反映して再ビルド';
+    }
   }
-  // Note: button state will be updated by next status poll via mcUpdateRebuildButton()
 }
 
 function mcStartNew() {
@@ -1699,6 +1724,7 @@ function mcStartNew() {
   MC._selectedSceneId = null;
   MC._selectedSceneIdx = null;
   MC._regeneratingSceneId = null;
+  MC._lastEditInstruction = null;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   
   // Clear chat
