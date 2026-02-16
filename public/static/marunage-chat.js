@@ -288,6 +288,22 @@ async function mcSendMessage() {
       return;
     }
     
+    // P-5: Dialogue/utterance edit intent detection
+    const isDialogueIntent = /セリフ|台詞|発話|ナレーション|音声.?修正|音声.?変更|言い回し|言い方/i.test(text);
+    // P-5 "dialogue list" mode: if we're waiting for a dialogue edit, process it
+    if (MC._dialogueEditMode) {
+      await mcHandleDialogueEditReply(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    if (isDialogueIntent) {
+      await mcHandleDialogueIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
     const hasSceneRef = /(?:シーン|scene|Scene|)\s*\d+\s*(?:番|枚)?/i.test(text);
     if (MC._selectedSceneId || hasSceneRef) {
       await mcHandleSceneEdit(text);
@@ -1602,6 +1618,222 @@ function mcUpdateSeDisplay() {
 }
 
 // ============================================================
+// P-5: Dialogue / Utterance Edit via Chat
+// ============================================================
+
+MC._dialogueEditMode = null; // { sceneId, sceneIdx, utterances }
+
+// Show utterance list for a scene and enter edit mode
+async function mcHandleDialogueIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNumMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)/i);
+  let targetScene = null;
+  let sceneIdx = 0;
+  
+  if (sceneNumMatch) {
+    const idx = parseInt(sceneNumMatch[1], 10) - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+      sceneIdx = idx + 1;
+    } else {
+      mcAddSystemMessage(`シーン${sceneNumMatch[1]}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+    sceneIdx = scenes.indexOf(targetScene) + 1;
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage('対象のシーンを指定してください。\n例:「シーン3のセリフを修正」「シーン1の台詞を変更」', 'info');
+    return;
+  }
+  
+  // Check if the text contains a direct edit instruction like:
+  // "シーン3の1番目のセリフを〔新しいテキスト〕に変更"
+  const directEditMatch = text.match(/(\d+)\s*(?:番目?|つ目)\s*(?:の)?\s*(?:セリフ|台詞|発話|ナレーション)?\s*(?:を|は)?\s*(?:「|『|“|"|\[)?\s*(.+?)\s*(?:」|』|”|"|\])?\s*(?:に)?\s*(?:変更|修正|差し替え|書き換え)/i);
+  
+  // Fetch utterances for this scene
+  mcAddSystemMessage(`シーン${sceneIdx}のセリフ一覧を取得中...`, 'info');
+  
+  try {
+    const res = await axios.get(`/api/scenes/${targetScene.id}/utterances`);
+    const utterances = res.data?.utterances || [];
+    
+    if (utterances.length === 0) {
+      mcAddSystemMessage(`シーン${sceneIdx}にはセリフがありません。`, 'info');
+      return;
+    }
+    
+    // If direct edit instruction, process immediately
+    if (directEditMatch) {
+      const utteranceNum = parseInt(directEditMatch[1], 10);
+      const newText = directEditMatch[2].trim();
+      if (utteranceNum >= 1 && utteranceNum <= utterances.length && newText) {
+        await mcEditUtterance(targetScene.id, sceneIdx, utterances[utteranceNum - 1], utteranceNum, newText);
+        return;
+      }
+    }
+    
+    // Show utterance list
+    let listHtml = `<div class="text-sm font-semibold mb-2">📝 シーン${sceneIdx}のセリフ一覧:</div>`;
+    utterances.forEach((u, i) => {
+      const role = u.role === 'narration' ? '🎤ナレ' : `🗣️${u.character_name || u.character_key || 'キャラ'}`;
+      const truncText = u.text.length > 40 ? u.text.substring(0, 40) + '...' : u.text;
+      listHtml += `<div class="text-xs py-0.5 border-b border-gray-100">`;
+      listHtml += `<span class="font-mono text-purple-600 font-bold">${i + 1}.</span> `;
+      listHtml += `<span class="text-gray-400">${role}</span> `;
+      listHtml += `<span class="text-gray-700">"${escapeHtml(truncText)}"</span>`;
+      listHtml += `</div>`;
+    });
+    listHtml += `<div class="mt-2 text-[11px] text-purple-600">→ 修正したい番号と新しいテキストを入力してください</div>`;
+    listHtml += `<div class="text-[11px] text-gray-400">例:「1 ここに新しいセリフ」「2 別の言い方」</div>`;
+    mcAddSystemMessage(listHtml, 'info');
+    
+    // Enter dialogue edit mode
+    MC._dialogueEditMode = {
+      sceneId: targetScene.id,
+      sceneIdx: sceneIdx,
+      utterances: utterances,
+    };
+    
+    // Update input placeholder
+    const input = document.getElementById('mcChatInput');
+    if (input) input.placeholder = `セリフ編集中（例: 1 新しいセリフテキスト）`;
+    
+    mcSetEditBanner(`📝 セリフ編集中: シーン${sceneIdx}`, true);
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`セリフ取得エラー: ${errMsg}`, 'error');
+  }
+}
+
+// Handle reply in dialogue edit mode ("1 新しいセリフテキスト")
+async function mcHandleDialogueEditReply(text) {
+  const mode = MC._dialogueEditMode;
+  if (!mode) return;
+  
+  mcAddUserMessage(text);
+  
+  // Parse: "N 新しいテキスト" or just a number for cancel
+  const trimmed = text.trim();
+  
+  // Check for exit/cancel
+  if (/^やめ|キャンセル|戻る|cancel|exit|quit$/i.test(trimmed)) {
+    MC._dialogueEditMode = null;
+    const input = document.getElementById('mcChatInput');
+    if (input) input.placeholder = '完成しました（シーンをタップして画像再生成）';
+    mcSetEditBanner('', false);
+    mcAddSystemMessage('セリフ編集を終了しました。', 'info');
+    return;
+  }
+  
+  // Parse "N text" format
+  const match = trimmed.match(/^(\d+)\s+(.+)$/s);
+  if (!match) {
+    mcAddSystemMessage('番号と新しいテキストを入力してください。\n例:「1 新しいセリフ」「やめ」で終了', 'info');
+    return;
+  }
+  
+  const utteranceNum = parseInt(match[1], 10);
+  const newText = match[2].trim();
+  
+  if (utteranceNum < 1 || utteranceNum > mode.utterances.length) {
+    mcAddSystemMessage(`番号が範囲外です。1〜${mode.utterances.length}で指定してください。`, 'error');
+    return;
+  }
+  
+  const utterance = mode.utterances[utteranceNum - 1];
+  await mcEditUtterance(mode.sceneId, mode.sceneIdx, utterance, utteranceNum, newText);
+}
+
+// Actually edit an utterance and regenerate audio
+async function mcEditUtterance(sceneId, sceneIdx, utterance, utteranceNum, newText) {
+  mcAddSystemMessage(`シーン${sceneIdx}の${utteranceNum}番目のセリフを更新中...`, 'info');
+  mcSetEditBanner(`📝 シーン${sceneIdx} セリフ${utteranceNum}を修正中...`, true);
+  
+  try {
+    // Step 1: Update text
+    const updateRes = await axios.put(`/api/utterances/${utterance.id}`, {
+      text: newText
+    });
+    
+    if (!updateRes.data?.success) {
+      mcAddSystemMessage('セリフの更新に失敗しました。', 'error');
+      return;
+    }
+    
+    mcAddSystemMessage(`✅ テキストを更新しました。音声を再生成中...`, 'info');
+    
+    // Step 2: Regenerate audio with force=true
+    try {
+      const audioRes = await axios.post(`/api/utterances/${utterance.id}/generate-audio`, {
+        force: true
+      }, { timeout: 60000 });
+      
+      if (audioRes.data?.success || audioRes.data?.audio_generation_id) {
+        const shortText = newText.length > 20 ? newText.substring(0, 20) + '...' : newText;
+        mcAddSystemMessage(
+          `✅ シーン${sceneIdx}のセリフ${utteranceNum}を更新しました！` +
+          `\n新: 「${escapeHtml(shortText)}」` +
+          `\n音声も再生成しました。再ビルドで動画に反映されます。`,
+          'success'
+        );
+        MC._lastEditInstruction = `セリフ${utteranceNum}:「${shortText}」`;
+        mcSetEditBanner(`📝 シーン${sceneIdx} セリフ${utteranceNum} ✅ 更新済み`, true);
+      } else {
+        // Text updated but audio generation didn't start cleanly
+        mcAddSystemMessage(
+          `テキストは更新しましたが、音声再生成の確認ができませんでした。\n再ビルドでテキスト変更は反映されます。`,
+          'info'
+        );
+        mcSetEditBanner(`📝 シーン${sceneIdx} セリフ${utteranceNum} テキスト更新済み`, true);
+      }
+    } catch (audioErr) {
+      // Audio generation may be async or rate-limited
+      if (audioErr.response?.status === 409) {
+        mcAddSystemMessage(
+          `テキストを更新しました。音声生成は現在処理中です。\nしばらく待ってから再ビルドしてください。`,
+          'info'
+        );
+      } else {
+        const errMsg = audioErr.response?.data?.error?.message || audioErr.message || '';
+        mcAddSystemMessage(
+          `テキストは更新済みですが、音声再生成が失敗しました: ${errMsg}\n再ビルドでテキスト変更は反映されます。`,
+          'error'
+        );
+      }
+      mcSetEditBanner(`📝 シーン${sceneIdx} セリフ${utteranceNum} テキスト更新済み`, true);
+    }
+    
+    // Update the utterance in the local mode data
+    if (MC._dialogueEditMode) {
+      MC._dialogueEditMode.utterances[utteranceNum - 1].text = newText;
+    }
+    
+    // Force poll to pick up audio changes
+    mcForcePollSoon();
+    
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`セリフ更新エラー: ${errMsg}`, 'error');
+  }
+}
+
+// ============================================================
 // Chat Messages
 // ============================================================
 
@@ -2252,6 +2484,7 @@ function mcStartNew() {
   MC._currentBgm = null;
   MC._seChecked = false;
   MC._currentSeMap = {};
+  MC._dialogueEditMode = null;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();
