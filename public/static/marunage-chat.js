@@ -263,12 +263,16 @@ async function mcSendMessage() {
   
   if (!text) return;
   
-  // P-2: If in ready phase with a selected scene, treat as scene edit command
-  if (MC.phase === 'ready' && MC._selectedSceneId) {
-    await mcHandleSceneEdit(text);
-    input.value = '';
-    updateCharCount();
-    return;
+  // P-2: If in ready phase, check for scene edit commands
+  // Route to scene edit if: (a) a scene is selected, OR (b) text contains a scene reference like "シーン3", "scene 3", "3番"
+  if (MC.phase === 'ready') {
+    const hasSceneRef = /(?:シーン|scene|Scene|)\s*\d+\s*(?:番|枚)?/i.test(text);
+    if (MC._selectedSceneId || hasSceneRef) {
+      await mcHandleSceneEdit(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
   }
   
   if (text.length < 100) {
@@ -971,7 +975,7 @@ async function mcHandleSceneEdit(text) {
       regenerate: true
     }, { timeout: 60000 });
     
-    if (res.data?.success || res.data?.image_generation?.id) {
+    if (res.data?.image_generation_id || res.data?.status === 'completed') {
       mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成を開始しました。更新まで少々お待ちください。`, 'success');
     } else {
       mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成に失敗しました: ${res.data?.error?.message || '不明なエラー'}`, 'error');
@@ -1401,6 +1405,9 @@ function mcUpdateBoardVideoPreview(video) {
   const buildEl = document.getElementById('mcBoardVideoBuildProgress');
   if (!previewEl || !buildEl) return;
   
+  const rebuildBtn = document.getElementById('mcBoardVideoRebuild');
+  const dlBtn = document.getElementById('mcBoardVideoDL');
+  
   if (!video || video.state === 'off' || video.state === 'pending') {
     previewEl.classList.add('hidden');
     buildEl.classList.add('hidden');
@@ -1424,7 +1431,6 @@ function mcUpdateBoardVideoPreview(video) {
     buildEl.classList.add('hidden');
     previewEl.classList.remove('hidden');
     const player = document.getElementById('mcBoardVideoPlayer');
-    const dlLink = document.getElementById('mcBoardVideoDL');
     const statusEl = document.getElementById('mcBoardVideoStatus');
     
     // Only update src if changed (avoid reload flicker)
@@ -1433,19 +1439,81 @@ function mcUpdateBoardVideoPreview(video) {
       player.src = video.download_url;
       player.load();
     }
-    dlLink.href = video.download_url;
+    if (dlBtn) dlBtn.href = video.download_url;
     statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>動画完成 — タップで再生';
+    
+    // A-2 Guard: Update rebuild button state based on video state
+    mcUpdateRebuildButton(video);
     return;
   }
   
   if (video.state === 'failed') {
     buildEl.classList.add('hidden');
-    previewEl.classList.add('hidden');
+    // Show preview area with rebuild option for failed videos
+    previewEl.classList.remove('hidden');
+    const player = document.getElementById('mcBoardVideoPlayer');
+    const statusEl = document.getElementById('mcBoardVideoStatus');
+    if (player) { player.removeAttribute('src'); player.removeAttribute('data-src'); }
+    if (dlBtn) { dlBtn.classList.add('hidden'); }
+    statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1 text-red-500"></i><span class="text-red-600">動画生成に失敗しました</span>';
+    
+    // A-2 Guard: Show rebuild button in retry mode for failed state
+    mcUpdateRebuildButton(video);
     return;
   }
 }
 
-// ── A-2: Rebuild Video from left board ──
+// ── A-2 Guard: Update rebuild button state (cooldown / state control) ──
+function mcUpdateRebuildButton(video) {
+  const btn = document.getElementById('mcBoardVideoRebuild');
+  const dlBtn = document.getElementById('mcBoardVideoDL');
+  if (!btn) return;
+  
+  // Guard 3: While video is running, completely hide rebuild button
+  if (video.state === 'running') {
+    btn.classList.add('hidden');
+    return;
+  }
+  
+  btn.classList.remove('hidden');
+  
+  // Guard 1: Cooldown — if a rebuild was attempted recently (within 3 min), show countdown
+  const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes
+  if (video.attempted_at) {
+    const elapsed = Date.now() - new Date(video.attempted_at).getTime();
+    if (elapsed < COOLDOWN_MS && video.state !== 'failed') {
+      // Done but within cooldown (just completed) — show cooldown label
+      const remainSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+      const remainMin = Math.floor(remainSec / 60);
+      const remainSecPart = remainSec % 60;
+      btn.disabled = true;
+      btn.className = 'flex-1 text-xs px-3 py-1.5 bg-gray-100 text-gray-400 rounded-lg font-semibold cursor-not-allowed';
+      btn.innerHTML = `<i class="fas fa-clock mr-1"></i>${remainMin}:${String(remainSecPart).padStart(2,'0')} 後に再試行可`;
+      return;
+    }
+  }
+  
+  // Video state determines button style
+  if (video.state === 'done') {
+    // Successful completion: subtle rebuild button (not primary action)
+    btn.disabled = false;
+    btn.className = 'flex-1 text-xs px-3 py-1.5 bg-gray-100 text-gray-500 rounded-lg font-semibold hover:bg-gray-200';
+    btn.innerHTML = '<i class="fas fa-redo mr-1"></i>再ビルド';
+    if (dlBtn) dlBtn.classList.remove('hidden');
+  } else if (video.state === 'failed') {
+    // Failed: prominent retry button
+    btn.disabled = false;
+    btn.className = 'flex-1 text-xs px-3 py-1.5 bg-red-100 text-red-700 rounded-lg font-semibold hover:bg-red-200';
+    btn.innerHTML = '<i class="fas fa-redo mr-1"></i>リトライ';
+  } else {
+    // Default state (pending / off)
+    btn.disabled = false;
+    btn.className = 'flex-1 text-xs px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg font-semibold hover:bg-purple-200';
+    btn.innerHTML = '<i class="fas fa-redo mr-1"></i>再ビルド';
+  }
+}
+
+// ── A-2: Rebuild Video from left board (with guards) ──
 async function mcRebuildVideo() {
   if (!MC.projectId) {
     mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
@@ -1455,22 +1523,55 @@ async function mcRebuildVideo() {
     mcAddSystemMessage('動画の再ビルドはready状態でのみ可能です。', 'error');
     return;
   }
-  if (!confirm('現在の動画を破棄して再ビルドしますか？\n（素材はそのまま、動画だけ再レンダリングします）')) return;
+  
+  // Guard 1: Cooldown check — prevent spam
+  const lastVideo = MC._lastStatus?.progress?.video;
+  if (lastVideo?.attempted_at) {
+    const elapsed = Date.now() - new Date(lastVideo.attempted_at).getTime();
+    const COOLDOWN_MS = 3 * 60 * 1000;
+    if (elapsed < COOLDOWN_MS && lastVideo.state !== 'failed') {
+      const remainMin = Math.ceil((COOLDOWN_MS - elapsed) / 60000);
+      mcAddSystemMessage(`クールダウン中です。約${remainMin}分後に再試行できます。`, 'error');
+      return;
+    }
+  }
+  
+  // Guard 3: Prevent rebuild while running
+  if (lastVideo?.state === 'running') {
+    mcAddSystemMessage('動画ビルド中のため再ビルドはできません。', 'error');
+    return;
+  }
+  
+  // Confirm dialog — different message for failed vs done
+  const isRetry = lastVideo?.state === 'failed';
+  const confirmMsg = isRetry
+    ? '前回の動画生成が失敗しました。リトライしますか？\n（素材はそのまま、動画だけ再レンダリングします）'
+    : '現在の動画を破棄して再ビルドしますか？\n（素材はそのまま、動画だけ再レンダリングします）';
+  if (!confirm(confirmMsg)) return;
 
   const btn = document.getElementById('mcBoardVideoRebuild');
-  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>準備中...'; }
+  if (btn) {
+    btn.disabled = true;
+    btn.className = 'flex-1 text-xs px-3 py-1.5 bg-gray-100 text-gray-400 rounded-lg font-semibold cursor-not-allowed';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>準備中...';
+  }
 
   try {
-    const res = await axios.post(`/api/marunage/${MC.projectId}/rebuild-video`, {}, { timeout: 30000 });
-    mcAddSystemMessage('動画の再ビルドを開始しました。自動で進捗が更新されます。', 'success');
+    // Guard 2: Send reason for audit trail
+    const reason = isRetry ? 'manual_retry_after_failure' : 'manual_rebuild';
+    const res = await axios.post(`/api/marunage/${MC.projectId}/rebuild-video`, { reason }, { timeout: 30000 });
+    mcAddSystemMessage(
+      isRetry ? 'リトライを開始しました。自動で進捗が更新されます。' : '動画の再ビルドを開始しました。自動で進捗が更新されます。',
+      'success'
+    );
     // Reset video done notification so the new completion will trigger scroll+highlight
     MC._videoDoneNotified = false;
+    MC._videoFailedNotified = false;
   } catch (err) {
     const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
     mcAddSystemMessage(`再ビルドエラー: ${errMsg}`, 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-redo mr-1"></i>再ビルド'; }
   }
+  // Note: button state will be updated by next status poll via mcUpdateRebuildButton()
 }
 
 function mcStartNew() {

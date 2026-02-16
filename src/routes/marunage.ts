@@ -3116,6 +3116,28 @@ marunage.post('/:projectId/rebuild-video', async (c) => {
     return c.json({ error: { code: 'VIDEO_BUILD_DISABLED', message: '動画自動合成が無効です' } }, 400)
   }
 
+  // Guard: Prevent rebuild if video build is currently running
+  if (run.video_build_id) {
+    // Check if this build is still active
+    try {
+      const build = await c.env.DB.prepare(
+        `SELECT status FROM video_builds WHERE id = ?`
+      ).bind(run.video_build_id).first<{ status: string }>()
+      if (build && ['queued', 'processing', 'rendering', 'composing'].includes(build.status)) {
+        return c.json({ error: { code: 'VIDEO_BUILD_RUNNING', message: '動画ビルド中のため再ビルドはできません。完了後に再試行してください。' } }, 409)
+      }
+    } catch (_) {}
+  }
+
+  // Guard 2: Record rebuild reason from request body
+  let reason = 'manual_rebuild'
+  try {
+    const body = await c.req.json().catch(() => ({})) as { reason?: string }
+    if (body.reason && typeof body.reason === 'string') {
+      reason = body.reason.substring(0, 100) // truncate for safety
+    }
+  } catch (_) {}
+
   // Clear existing video build state to allow re-trigger
   await c.env.DB.prepare(`
     UPDATE marunage_runs
@@ -3124,14 +3146,14 @@ marunage.post('/:projectId/rebuild-video', async (c) => {
     WHERE id = ?
   `).bind(run.id).run()
 
-  console.log(`[Marunage:RebuildVideo] Cleared video build state for run ${run.id} (project ${projectId}) — next status poll will trigger new build`)
+  console.log(`[Marunage:RebuildVideo] Cleared video build state for run ${run.id} (project ${projectId}), reason: ${reason} — next status poll will trigger new build`)
 
   try {
     await logAudit({
       db: c.env.DB, userId: user.id, userRole: user.role,
       entityType: 'project', entityId: projectId, projectId,
       action: 'marunage.video_rebuild_requested',
-      details: { run_id: run.id, previous_build_id: run.video_build_id },
+      details: { run_id: run.id, previous_build_id: run.video_build_id, reason },
     })
   } catch (_) {}
 
