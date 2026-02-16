@@ -648,6 +648,11 @@ function mcUpdateFromStatus(data) {
         + '<div class="mt-1 text-sm">左ボードで再生できます。</div>',
         'success'
       );
+      // Update edit banner to reflect video completion
+      const instrDone = MC._lastEditInstruction
+        ? `<br><span class="text-[10px] text-green-600">指示:「${MC._lastEditInstruction}」→ 動画に反映済み ✅</span>`
+        : '';
+      mcSetEditBanner(`🎬 動画完成${instrDone}`, true);
       // A-1: One-shot smooth scroll + 10s highlight on video preview
       setTimeout(() => {
         const vp = document.getElementById('mcBoardVideoPreview');
@@ -1688,6 +1693,12 @@ async function mcRebuildVideo() {
     if (dlBtn) dlBtn.classList.add('hidden');
     if (btn) btn.classList.add('hidden');
     if (statusEl) statusEl.textContent = '再ビルド準備中...';
+    
+    // Instant UI: update edit banner to show rebuild status
+    const instrSuffix = MC._lastEditInstruction
+      ? `<br><span class="text-[10px] text-purple-500">指示:「${MC._lastEditInstruction}」→ 動画に反映中</span>`
+      : '';
+    mcSetEditBanner(`🎬 動画再ビルド中…${instrSuffix}`, true);
     
     // Trigger polls to pick up running state quickly
     mcForcePollSoon();
