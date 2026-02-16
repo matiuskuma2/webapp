@@ -63,6 +63,10 @@ const MC = {
   // T2.5: Scene regeneration tracking
   _regeneratingSceneId: null,
   _lastEditInstruction: null,
+
+  // T3: Production panel — dirty tracking & change log
+  _dirtyChanges: [],  // [{type, sceneIdx, label, ts}] — cleared on rebuild
+  _lastRebuildTs: null,
 };
 
 // ============================================================
@@ -910,8 +914,18 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
     // Determine audio badge
     let audioBadge = '';
     if (scene.has_audio) {
-      audioBadge = '<span class="scene-badge bg-green-100 text-green-700 ml-1"><i class="fas fa-check-circle mr-0.5"></i>音声OK</span>';
+      audioBadge = '<span class="scene-badge bg-green-100 text-green-700 ml-1"><i class="fas fa-check-circle mr-0.5"></i>音声</span>';
     }
+    
+    // T3: SE badge for this scene
+    const seList = MC._currentSeMap?.[scene.id];
+    const seBadge = seList && seList.length > 0
+      ? `<span class="scene-badge bg-indigo-100 text-indigo-700 ml-1"><i class="fas fa-volume-up mr-0.5"></i>SE×${seList.length}</span>`
+      : '';
+    
+    // T3: Dirty badge — check if this scene has pending changes since last rebuild
+    const hasDirty = MC._dirtyChanges?.some(d => d.sceneIdx === idx + 1);
+    const dirtyDot = hasDirty ? '<span class="inline-block w-1.5 h-1.5 bg-orange-500 rounded-full ml-1" title="動画に未反映の変更あり"></span>' : '';
     
     const imgContent = scene.image_url
       ? `<img src="${scene.image_url}" alt="Scene ${idx + 1}" class="scene-card-img" style="object-fit:cover;display:block;" loading="lazy"
@@ -934,10 +948,11 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
         ${imgContent}
         <div class="p-3">
           <div class="flex items-center justify-between mb-1">
-            <span class="text-xs font-bold text-gray-500">Scene ${idx + 1}</span>
-            <div class="flex items-center">
+            <span class="text-xs font-bold text-gray-500">Scene ${idx + 1}${dirtyDot}</span>
+            <div class="flex items-center flex-wrap gap-0.5">
               <span class="scene-badge ${imgBadgeClass}"><i class="fas ${imgBadgeIcon} mr-0.5"></i>${imgBadgeText}</span>
               ${audioBadge}
+              ${seBadge}
             </div>
           </div>
           <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || 'シーン ' + (idx + 1)}</p>
@@ -959,6 +974,7 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       const instrLine = MC._lastEditInstruction ? `<br><span class="text-[10px] text-green-600">指示: 「${MC._lastEditInstruction}」 → 反映済み</span>` : '';
       mcSetEditBanner(`📍 編集中: シーン${regenIdx + 1}（画像 ✅ 更新済み）${instrLine}`, true);
       mcAddSystemMessage(`シーン${regenIdx + 1} の画像が更新されました。再ビルドで動画に反映できます。`, 'success');
+      mcTrackChange('image', regenIdx + 1, '画像再生成');
     } else if (regenScene) {
       // Still regenerating — re-apply badge (was lost during innerHTML rebuild)
       mcMarkSceneRegenerating(MC._regeneratingSceneId, true);
@@ -1270,6 +1286,7 @@ async function mcHandleBgmIntent(text) {
         'success'
       );
       mcSetEditBanner(`♪ BGM: ${bgm.name}`, true);
+      mcTrackChange('bgm', 0, `BGM: ${bgm.name}`);
       // Update assets display
       mcUpdateBgmDisplay(bgm);
     } else {
@@ -1301,6 +1318,7 @@ async function mcRemoveBgm() {
     removed > 0 ? 'BGMを削除しました。再ビルドで反映されます。' : 'BGMは設定されていません。',
     removed > 0 ? 'success' : 'info'
   );
+  if (removed > 0) mcTrackChange('bgm', 0, 'BGM削除');
 }
 
 // Update left board BGM display
@@ -1500,6 +1518,7 @@ async function mcHandleSeIntent(text) {
         'success'
       );
       mcSetEditBanner(`🔊 SE: シーン${sceneIdx} — ${se.name}`, true);
+      mcTrackChange('se', sceneIdx, `SE: ${se.name}`);
       mcUpdateSeDisplay();
     } else {
       mcAddSystemMessage('効果音の設定に失敗しました。', 'error');
@@ -1543,6 +1562,7 @@ async function mcRemoveSe(text) {
     removed > 0 ? `${scopeLabel}効果音を削除しました（${removed}件）。再ビルドで反映されます。` : `${scopeLabel}効果音は設定されていません。`,
     removed > 0 ? 'success' : 'info'
   );
+  if (removed > 0) mcTrackChange('se', sceneNum || 0, `SE削除 ${removed}件`);
 }
 
 // Remove a specific SE from the board display
@@ -1556,6 +1576,9 @@ async function mcRemoveSeFromBoard(sceneId, assignmentId) {
     }
     mcUpdateSeDisplay();
     mcAddSystemMessage('効果音を削除しました。再ビルドで反映されます。', 'success');
+    const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+    const sIdx = scenes.findIndex(s => String(s.id) === String(sceneId)) + 1;
+    mcTrackChange('se', sIdx, 'SE削除');
   } catch (err) {
     mcAddSystemMessage('効果音の削除に失敗しました。', 'error');
   }
@@ -1615,6 +1638,95 @@ function mcUpdateSeDisplay() {
       ${seHtml}
     </div>
   `;
+}
+
+// ============================================================
+// T3: Production Panel — Dirty Tracking & Change Log
+// ============================================================
+
+// Track a change (called by image regen, SE add, BGM add, dialogue edit etc.)
+function mcTrackChange(type, sceneIdx, label) {
+  MC._dirtyChanges.push({
+    type: type,       // 'image' | 'audio' | 'se' | 'bgm' | 'dialogue'
+    sceneIdx: sceneIdx, // 1-based, or 0 for project-level
+    label: label,
+    ts: Date.now(),
+  });
+  // Keep only last 20
+  if (MC._dirtyChanges.length > 20) MC._dirtyChanges = MC._dirtyChanges.slice(-20);
+  mcUpdateChangeLog();
+}
+
+// Clear dirty changes on rebuild
+function mcClearDirtyOnRebuild() {
+  MC._lastRebuildTs = Date.now();
+  MC._dirtyChanges = [];
+  mcUpdateChangeLog();
+}
+
+// Update the change log display in the left board
+function mcUpdateChangeLog() {
+  let el = document.getElementById('mcChangeLog');
+  if (!el) {
+    // Create change log after SE display (or BGM, or Assets summary)
+    const seEl = document.getElementById('mcSeDisplay');
+    const bgmEl = document.getElementById('mcBgmDisplay');
+    const anchor = seEl || bgmEl || document.getElementById('mcAssetsSummary');
+    if (!anchor) return;
+    el = document.createElement('div');
+    el.id = 'mcChangeLog';
+    el.className = 'mb-2';
+    anchor.insertAdjacentElement('afterend', el);
+  }
+  
+  const changes = MC._dirtyChanges || [];
+  if (changes.length === 0) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  
+  const typeIcons = {
+    image: '<i class="fas fa-image text-purple-500"></i>',
+    audio: '<i class="fas fa-microphone text-blue-500"></i>',
+    se: '<i class="fas fa-volume-up text-indigo-500"></i>',
+    bgm: '<i class="fas fa-music text-purple-500"></i>',
+    dialogue: '<i class="fas fa-comment-dots text-green-500"></i>',
+  };
+  
+  // Show most recent 5 changes (newest first)
+  const recent = changes.slice(-5).reverse();
+  const logsHtml = recent.map(c => {
+    const icon = typeIcons[c.type] || '<i class="fas fa-edit"></i>';
+    const scope = c.sceneIdx > 0 ? `S${c.sceneIdx}` : '\u5168\u4f53';
+    const ago = mcTimeAgo(c.ts);
+    return `<div class="flex items-center gap-1.5 text-[10px] py-0.5">
+      ${icon}
+      <span class="text-gray-500">${scope}</span>
+      <span class="text-gray-700 flex-1 truncate">${escapeHtml(c.label)}</span>
+      <span class="text-gray-300 shrink-0">${ago}</span>
+    </div>`;
+  }).join('');
+  
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="bg-orange-50 rounded-lg border border-orange-200 px-3 py-2">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-[11px] font-semibold text-orange-700">
+          <i class="fas fa-exclamation-circle mr-1"></i>\u672a\u53cd\u6620\u306e\u5909\u66f4: ${changes.length}\u4ef6
+        </span>
+        <span class="text-[9px] text-orange-400">\u518d\u30d3\u30eb\u30c9\u3067\u53cd\u6620</span>
+      </div>
+      ${logsHtml}
+    </div>
+  `;
+}
+
+function mcTimeAgo(ts) {
+  const sec = Math.floor((Date.now() - ts) / 1000);
+  if (sec < 60) return '\u305f\u3063\u305f\u4eca';
+  if (sec < 3600) return `${Math.floor(sec / 60)}\u5206\u524d`;
+  return `${Math.floor(sec / 3600)}\u6642\u9593\u524d`;
 }
 
 // ============================================================
@@ -1794,6 +1906,7 @@ async function mcEditUtterance(sceneId, sceneIdx, utterance, utteranceNum, newTe
         );
         MC._lastEditInstruction = `セリフ${utteranceNum}:「${shortText}」`;
         mcSetEditBanner(`📝 シーン${sceneIdx} セリフ${utteranceNum} ✅ 更新済み`, true);
+        mcTrackChange('dialogue', sceneIdx, `セリフ${utteranceNum}: 「${shortText}」`);
       } else {
         // Text updated but audio generation didn't start cleanly
         mcAddSystemMessage(
@@ -2425,6 +2538,9 @@ async function mcRebuildVideo() {
     MC._videoDoneNotified = false;
     MC._videoFailedNotified = false;
     
+    // T3: Clear dirty changes on rebuild
+    mcClearDirtyOnRebuild();
+    
     // Instant UI: switch video frame to "generating 0%" immediately (no poll wait)
     const player = document.getElementById('mcBoardVideoPlayer');
     const placeholder = document.getElementById('mcBoardVideoPlaceholder');
@@ -2485,6 +2601,8 @@ function mcStartNew() {
   MC._seChecked = false;
   MC._currentSeMap = {};
   MC._dialogueEditMode = null;
+  MC._dirtyChanges = [];
+  MC._lastRebuildTs = null;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();
