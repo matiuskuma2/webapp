@@ -72,6 +72,9 @@ const MC = {
   // { sceneId, sceneIdx, videoId, pollTimer }
   _i2vGenerating: null,
   _i2vChecked: false,
+
+  // Comic: Comic generation state
+  _comicGenerating: null, // { sceneId, sceneIdx }
 };
 
 // ============================================================
@@ -318,6 +321,16 @@ async function mcSendMessage() {
       || /(?:動画化|I2V|i2v|動画生成|ビデオ生成|ショート動画生成|映像化|アニメーション化)/i.test(text);
     if (isI2vIntent) {
       await mcHandleI2vIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
+    // Comic: Comic generation intent (漫画化 / コミック化 / 吹き出し付き)
+    const isComicIntent = /(?:シーン|scene|Scene)\s*\d+\s*(?:を|の)?\s*(?:漫画化|コミック化|漫画にして|コミックにして|吹き出し|吹き出し付き)/i.test(text)
+      || /(?:漫画化|コミック化|吹き出しつけて|吹き出し付きにして|吹き出しをつけて)/i.test(text);
+    if (isComicIntent) {
+      await mcHandleComicIntent(text);
       input.value = '';
       updateCharCount();
       return;
@@ -968,6 +981,12 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       ? '<span class="scene-badge bg-violet-100 text-violet-700 ml-1"><i class="fas fa-spinner fa-spin mr-0.5"></i>I2V中</span>'
       : '';
     
+    // Comic: Show generating badge if this scene has comic generation in progress
+    const isComicScene = MC._comicGenerating && MC._comicGenerating.sceneId === scene.id;
+    const comicBadge = isComicScene
+      ? '<span class="scene-badge bg-pink-100 text-pink-700 ml-1"><i class="fas fa-spinner fa-spin mr-0.5"></i>漫画化中</span>'
+      : '';
+    
     // T3: Dirty badge — check if this scene has pending changes since last rebuild
     const hasDirty = MC._dirtyChanges?.some(d => d.sceneIdx === idx + 1);
     const dirtyDot = hasDirty ? '<span class="inline-block w-1.5 h-1.5 bg-orange-500 rounded-full ml-1" title="動画に未反映の変更あり"></span>' : '';
@@ -1000,6 +1019,7 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
               ${seBadge}
               ${datBadge}
               ${i2vBadge}
+              ${comicBadge}
             </div>
           </div>
           <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || 'シーン ' + (idx + 1)}</p>
@@ -2140,6 +2160,367 @@ async function mcCheckExistingI2v() {
 }
 
 // ============================================================
+// Comic: 漫画化（吹き出し付き画像生成）via Chat
+// Uses: GET utterances → build draft → offscreen canvas render → POST publish → DAT switch
+// SSOT: scenes.comic_data (draft/published), image_generations(asset_type='comic'), scenes.display_asset_type
+// ============================================================
+
+async function mcHandleComicIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  if (MC._comicGenerating) {
+    mcAddSystemMessage(`シーン${MC._comicGenerating.sceneIdx}の漫画化を処理中です。完了までお待ちください。`, 'info');
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNumMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)/i);
+  let targetScene = null;
+  let sceneIdx = 0;
+  
+  if (sceneNumMatch) {
+    const idx = parseInt(sceneNumMatch[1], 10) - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+      sceneIdx = idx + 1;
+    } else {
+      mcAddSystemMessage(`シーン${sceneNumMatch[1]}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+    if (targetScene) sceneIdx = scenes.indexOf(targetScene) + 1;
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage(
+      '対象のシーンを指定してください。\n例:「シーン3を漫画化して」「シーン1に吹き出しをつけて」',
+      'info'
+    );
+    return;
+  }
+  
+  // Check scene has a completed image
+  if (!targetScene.has_image || targetScene.image_status !== 'completed') {
+    mcAddSystemMessage(
+      `シーン${sceneIdx}にはまだ画像が完成していません。\n画像が完成してから漫画化を実行してください。`,
+      'error'
+    );
+    return;
+  }
+  
+  MC._comicGenerating = { sceneId: targetScene.id, sceneIdx: sceneIdx };
+  mcAddSystemMessage(`📖 シーン${sceneIdx}の漫画化を開始します...`, 'info');
+  mcSetEditBanner(`📖 シーン${sceneIdx}: 漫画化中...`, true);
+  
+  try {
+    // Step 1: Fetch scene utterances for bubble text
+    const uttRes = await axios.get(`/api/scenes/${targetScene.id}/utterances`, { timeout: 15000 });
+    const utterances = uttRes.data?.utterances || [];
+    
+    if (utterances.length === 0) {
+      mcAddSystemMessage(
+        `シーン${sceneIdx}にはセリフがありません。\nセリフがあるシーンで漫画化を実行してください。`,
+        'error'
+      );
+      MC._comicGenerating = null;
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    // Step 2: Get the scene's active image URL
+    const imageUrl = targetScene.image_url;
+    if (!imageUrl) {
+      mcAddSystemMessage(`シーン${sceneIdx}の画像URLが取得できません。`, 'error');
+      MC._comicGenerating = null;
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    mcAddSystemMessage(`📝 ${utterances.length}件のセリフから吹き出しを配置中...`, 'info');
+    
+    // Step 3: Build draft with auto-positioned bubbles
+    // Take up to 5 utterances, position them evenly across the image
+    const maxBubbles = Math.min(utterances.length, 5);
+    const draftUtterances = [];
+    const draftBubbles = [];
+    
+    for (let i = 0; i < maxBubbles; i++) {
+      const utt = utterances[i];
+      const uttId = `utt_${i}`;
+      
+      draftUtterances.push({
+        id: uttId,
+        text: utt.text || '',
+        role: utt.role || 'narrator',
+        character_key: utt.character_key || null,
+      });
+      
+      // Auto-position: distribute bubbles top-to-bottom, alternating left/right
+      const yPos = 0.1 + (0.8 * i / Math.max(maxBubbles - 1, 1));
+      const xPos = (i % 2 === 0) ? 0.25 : 0.65;
+      
+      // Choose bubble type based on role
+      const isNarrator = (utt.role === 'narrator' || utt.role === 'narration');
+      const bubbleType = isNarrator ? 'caption' : 'speech_round';
+      
+      draftBubbles.push({
+        id: `b_${i}`,
+        utterance_id: uttId,
+        type: bubbleType,
+        size: 'M',
+        position: { x: xPos, y: yPos },
+        textStyle: {
+          writingMode: 'horizontal',
+          fontFamily: 'gothic',
+          fontWeight: 'normal',
+          fontScale: 1.0,
+          textAlign: 'center',
+          lineHeight: 1.4,
+        },
+        timing: {
+          show_from_ms: 0,
+          show_until_ms: -1,
+          mode: 'scene_duration',
+        },
+      });
+    }
+    
+    const draft = {
+      utterances: draftUtterances,
+      bubbles: draftBubbles,
+    };
+    
+    // Step 4: Render offscreen canvas
+    mcAddSystemMessage('🎨 漫画画像をレンダリング中...', 'info');
+    
+    const imageData = await mcRenderComicOffscreen(imageUrl, draft);
+    
+    if (!imageData) {
+      mcAddSystemMessage('漫画画像のレンダリングに失敗しました。', 'error');
+      MC._comicGenerating = null;
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    // Step 5: Get base image generation ID (for audit)
+    let baseImageGenId = null;
+    try {
+      const comicRes = await axios.get(`/api/scenes/${targetScene.id}/comic`, { timeout: 10000 });
+      baseImageGenId = comicRes.data?.comic_data?.base_image_generation_id || null;
+    } catch { /* ok */ }
+    
+    // Step 6: Publish comic
+    mcAddSystemMessage('📤 漫画を公開中...', 'info');
+    
+    const publishRes = await axios.post(`/api/scenes/${targetScene.id}/comic/publish`, {
+      image_data: imageData,
+      base_image_generation_id: baseImageGenId,
+      draft: draft,
+    }, { timeout: 30000 });
+    
+    if (!publishRes.data?.success) {
+      mcAddSystemMessage('漫画の公開に失敗しました。', 'error');
+      MC._comicGenerating = null;
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    // Step 7: Auto-switch DAT to 'comic'
+    try {
+      await axios.put(`/api/scenes/${targetScene.id}/display-asset-type`, {
+        display_asset_type: 'comic',
+      });
+      mcAddSystemMessage(
+        `✅ シーン${sceneIdx}を漫画化しました！\n${draftBubbles.length}個の吹き出しを配置。表示タイプを「漫画」に切り替えました。\n再ビルドで全体動画に反映されます。`,
+        'success'
+      );
+      // Update local cache
+      targetScene.display_asset_type = 'comic';
+      mcTrackChange('image', sceneIdx, '漫画化完了 → 漫画表示');
+    } catch (datErr) {
+      console.warn('[Comic] Auto DAT switch failed:', datErr);
+      mcAddSystemMessage(
+        `✅ シーン${sceneIdx}の漫画を公開しました！\n表示切替に失敗しました。「シーン${sceneIdx}を漫画表示にして」と入力してください。`,
+        'info'
+      );
+      mcTrackChange('image', sceneIdx, '漫画化完了');
+    }
+    
+    mcSetEditBanner(`✅ シーン${sceneIdx}: 漫画化完了！再ビルドで反映`, true);
+    MC._comicGenerating = null;
+    mcForcePollSoon();
+    
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`漫画化エラー: ${errMsg}`, 'error');
+    mcSetEditBanner('', false);
+    MC._comicGenerating = null;
+  }
+}
+
+// Comic: Offscreen canvas rendering — draws base image + speech bubbles
+async function mcRenderComicOffscreen(imageUrl, draft) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        
+        canvas.width = w;
+        canvas.height = h;
+        
+        // Draw base image
+        ctx.drawImage(img, 0, 0, w, h);
+        
+        // Draw bubbles
+        const scale = w / 1000;
+        const bubbles = draft.bubbles || [];
+        
+        for (const bubble of bubbles) {
+          const utt = draft.utterances.find(u => u.id === bubble.utterance_id);
+          const text = utt?.text || '';
+          if (!text) continue;
+          
+          const bx = bubble.position.x * w;
+          const by = bubble.position.y * h;
+          
+          ctx.save();
+          ctx.translate(bx, by);
+          mcDrawSimpleBubble(ctx, bubble, text, scale);
+          ctx.restore();
+        }
+        
+        // Convert to base64
+        canvas.toBlob((blob) => {
+          if (!blob) { reject(new Error('Blob作成失敗')); return; }
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result);
+          reader.onerror = () => reject(new Error('Blob読み込み失敗'));
+          reader.readAsDataURL(blob);
+        }, 'image/png', 1.0);
+        
+      } catch (e) {
+        reject(e);
+      }
+    };
+    
+    img.onerror = () => reject(new Error('画像読み込み失敗'));
+    img.src = imageUrl;
+  });
+}
+
+// Comic: Simple bubble drawing (speech_round, caption, etc.)
+function mcDrawSimpleBubble(ctx, bubble, text, scale) {
+  const type = bubble.type || 'speech_round';
+  const fontSize = Math.round(14 * scale);
+  const padding = Math.round(12 * scale);
+  const maxCharsPerLine = 12;
+  
+  // Wrap text
+  const lines = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    lines.push(remaining.substring(0, maxCharsPerLine));
+    remaining = remaining.substring(maxCharsPerLine);
+  }
+  if (lines.length > 5) lines.length = 5; // max 5 lines
+  
+  const lineHeight = fontSize * 1.4;
+  const textWidth = Math.min(text.length, maxCharsPerLine) * fontSize * 0.6;
+  const bw = textWidth + padding * 2;
+  const bh = lines.length * lineHeight + padding * 2;
+  
+  const isCaption = (type === 'caption' || type === 'telop');
+  const isThought = (type === 'thought');
+  
+  // Center the bubble on position
+  const x = -bw / 2;
+  const y = -bh / 2;
+  
+  ctx.save();
+  
+  if (isCaption) {
+    // Caption: dark semi-transparent rectangle
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+    ctx.fillRect(x, y, bw, bh);
+    ctx.fillStyle = '#ffffff';
+  } else {
+    // Speech/thought bubble
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+    ctx.strokeStyle = '#333333';
+    ctx.lineWidth = Math.max(2, scale * 2);
+    
+    if (isThought) {
+      // Thought bubble: rounded with dashed border
+      ctx.setLineDash([4 * scale, 3 * scale]);
+    }
+    
+    // Draw rounded rectangle
+    const radius = Math.round(10 * scale);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + bw - radius, y);
+    ctx.quadraticCurveTo(x + bw, y, x + bw, y + radius);
+    ctx.lineTo(x + bw, y + bh - radius);
+    ctx.quadraticCurveTo(x + bw, y + bh, x + bw - radius, y + bh);
+    ctx.lineTo(x + radius, y + bh);
+    ctx.quadraticCurveTo(x, y + bh, x, y + bh - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    
+    if (isThought) ctx.setLineDash([]);
+    
+    // Tail for speech bubbles
+    if (!isThought) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+      ctx.strokeStyle = '#333333';
+      ctx.beginPath();
+      const tailX = bw * 0.3;
+      ctx.moveTo(x + tailX, y + bh);
+      ctx.lineTo(x + tailX - 5 * scale, y + bh + 15 * scale);
+      ctx.lineTo(x + tailX + 10 * scale, y + bh);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+    
+    ctx.fillStyle = '#1a1a1a';
+  }
+  
+  // Draw text
+  ctx.font = `${fontSize}px "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  
+  for (let i = 0; i < lines.length; i++) {
+    const ty = y + padding + (i + 0.5) * lineHeight;
+    ctx.fillText(lines[i], 0, ty);
+  }
+  
+  ctx.restore();
+}
+
+// ============================================================
 // P-5: Dialogue / Utterance Edit via Chat
 // ============================================================
 
@@ -3017,6 +3398,8 @@ function mcStartNew() {
   mcStopI2vPolling();
   MC._i2vGenerating = null;
   MC._i2vChecked = false;
+  // Comic: Clear state
+  MC._comicGenerating = null;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();
