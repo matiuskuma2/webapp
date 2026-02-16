@@ -279,6 +279,15 @@ async function mcSendMessage() {
       return;
     }
     
+    // P-4.5: SE (sound effect) intent detection
+    const isSeIntent = /効果音|SE |se |サウンドエフェクト|足音|ドア|爆発|風|雷|鐘|拍手|水|波|鳥|虫|ベル|チャイム|クラクション|sfx/i.test(text);
+    if (isSeIntent) {
+      await mcHandleSeIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
     const hasSceneRef = /(?:シーン|scene|Scene|)\s*\d+\s*(?:番|枚)?/i.test(text);
     if (MC._selectedSceneId || hasSceneRef) {
       await mcHandleSceneEdit(text);
@@ -652,6 +661,11 @@ function mcUpdateFromStatus(data) {
     if (!MC._bgmChecked) {
       MC._bgmChecked = true;
       mcCheckExistingBgm();
+    }
+    // P-4.5: Check and display SE on first ready (one-shot)
+    if (!MC._seChecked) {
+      MC._seChecked = true;
+      mcCheckExistingSe();
     }
     
     // One-shot chat bubble when video.state transitions to done/failed
@@ -1311,6 +1325,283 @@ async function mcRemoveBgmFromBoard() {
 }
 
 // ============================================================
+// P-4.5: SE (Sound Effects) Management via Chat
+// ============================================================
+
+MC._seLibrary = null;
+MC._seChecked = false;
+MC._currentSeMap = {}; // { sceneId: [{ id, name, assignmentId }] }
+
+// Check existing SE on project load (one-shot)
+async function mcCheckExistingSe() {
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) return;
+  
+  MC._currentSeMap = {};
+  let totalSe = 0;
+  try {
+    for (const scene of scenes) {
+      const res = await axios.get(`/api/scenes/${scene.id}/audio-assignments?audio_type=sfx`);
+      const sfxList = res.data?.sfx || [];
+      if (sfxList.length > 0) {
+        MC._currentSeMap[scene.id] = sfxList.map(s => ({
+          id: s.system_audio_id || s.id,
+          name: s.system_name || s.user_name || s.direct_name || 'SE',
+          assignmentId: s.id,
+        }));
+        totalSe += sfxList.length;
+      }
+    }
+    mcUpdateSeDisplay();
+  } catch (_) {}
+}
+
+async function mcLoadSeLibrary() {
+  if (MC._seLibrary) return MC._seLibrary;
+  try {
+    const res = await axios.get('/api/audio-library/system?category=sfx&limit=100');
+    MC._seLibrary = res.data?.items || res.data?.results || [];
+    return MC._seLibrary;
+  } catch (err) {
+    console.warn('[SE] Failed to load library:', err);
+    return [];
+  }
+}
+
+// Extract scene number from text (e.g. "シーン3にドア音" → 3)
+function mcExtractSeSceneNum(text) {
+  const m = text.match(/(?:シーン|scene|Scene)\s*(\d+)/i);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// Simple keyword matching for SE selection
+function mcMatchSe(text, library) {
+  const t = text.toLowerCase();
+  // Direct name/tag match
+  const scored = library.map(item => {
+    let score = 0;
+    const name = (item.name || '').toLowerCase();
+    const tags = (item.tags || '').toLowerCase();
+    const desc = (item.description || '').toLowerCase();
+    // Check each keyword in user text against item metadata
+    const words = t.replace(/[シーン|scene]\s*\d+/gi, '').replace(/効果音|se |sfx|追加|入れ|つけ/gi, '').trim().split(/\s+/);
+    for (const w of words) {
+      if (w.length < 2) continue;
+      if (name.includes(w)) score += 3;
+      if (tags.includes(w)) score += 2;
+      if (desc.includes(w)) score += 1;
+    }
+    return { item, score };
+  });
+  scored.sort((a, b) => b.score - a.score);
+  if (scored[0]?.score > 0) return scored[0].item;
+  // Fallback: random
+  return library[Math.floor(Math.random() * library.length)];
+}
+
+async function mcHandleSeIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  // Check for "SEを削除/外す/消す" intent
+  if (/削除|外す|消す|なくす|なし|全部.?消|remove|off/i.test(text)) {
+    await mcRemoveSe(text);
+    return;
+  }
+  
+  mcAddSystemMessage('効果音ライブラリを検索中...', 'info');
+  
+  // Load SE library
+  const library = await mcLoadSeLibrary();
+  if (!library || library.length === 0) {
+    mcAddSystemMessage('効果音ライブラリが空です。管理画面からSEを登録してください。', 'error');
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNum = mcExtractSeSceneNum(text);
+  let targetScene = null;
+  if (sceneNum) {
+    const idx = sceneNum - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+    } else {
+      mcAddSystemMessage(`シーン${sceneNum}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage('対象のシーンを指定してください。\n例:「シーン3にドアの効果音を追加」「シーン1に足音」', 'info');
+    return;
+  }
+  
+  // Match SE from library based on user text
+  const se = mcMatchSe(text, library);
+  if (!se) {
+    mcAddSystemMessage('マッチする効果音が見つかりませんでした。', 'error');
+    return;
+  }
+  
+  const sceneIdx = scenes.indexOf(targetScene) + 1;
+  mcAddSystemMessage(`シーン${sceneIdx}に「${se.name}」を設定中...`, 'info');
+  
+  try {
+    const res = await axios.post(`/api/scenes/${targetScene.id}/audio-assignments`, {
+      audio_library_type: 'system',
+      audio_type: 'sfx',
+      system_audio_id: se.id,
+      start_ms: 0,
+      volume_override: 0.5,
+      loop_override: false,
+      fade_in_ms_override: 100,
+      fade_out_ms_override: 200,
+    });
+    
+    if (res.data?.id || res.data?.assignment) {
+      // Update local SE map
+      if (!MC._currentSeMap[targetScene.id]) MC._currentSeMap[targetScene.id] = [];
+      MC._currentSeMap[targetScene.id].push({
+        id: se.id,
+        name: se.name,
+        assignmentId: res.data.id || res.data.assignment?.id,
+      });
+      mcAddSystemMessage(
+        `🔊 シーン${sceneIdx}に効果音「${se.name}」を追加しました！` +
+        `\n再ビルドで動画に反映されます。`,
+        'success'
+      );
+      mcSetEditBanner(`🔊 SE: シーン${sceneIdx} — ${se.name}`, true);
+      mcUpdateSeDisplay();
+    } else {
+      mcAddSystemMessage('効果音の設定に失敗しました。', 'error');
+    }
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`SE設定エラー: ${errMsg}`, 'error');
+  }
+}
+
+async function mcRemoveSe(text) {
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  const sceneNum = mcExtractSeSceneNum(text);
+  let targetScenes = scenes;
+  
+  // If a specific scene is mentioned, only remove from that scene
+  if (sceneNum) {
+    const idx = sceneNum - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScenes = [scenes[idx]];
+    }
+  }
+  
+  let removed = 0;
+  for (const scene of targetScenes) {
+    try {
+      const existing = await axios.get(`/api/scenes/${scene.id}/audio-assignments?audio_type=sfx`);
+      const sfxList = existing.data?.sfx || [];
+      for (const s of sfxList) {
+        await axios.delete(`/api/scenes/${scene.id}/audio-assignments/${s.id}`);
+        removed++;
+      }
+      delete MC._currentSeMap[scene.id];
+    } catch (_) {}
+  }
+  
+  mcUpdateSeDisplay();
+  mcSetEditBanner('', false);
+  const scopeLabel = sceneNum ? `シーン${sceneNum}の` : '全ての';
+  mcAddSystemMessage(
+    removed > 0 ? `${scopeLabel}効果音を削除しました（${removed}件）。再ビルドで反映されます。` : `${scopeLabel}効果音は設定されていません。`,
+    removed > 0 ? 'success' : 'info'
+  );
+}
+
+// Remove a specific SE from the board display
+async function mcRemoveSeFromBoard(sceneId, assignmentId) {
+  try {
+    await axios.delete(`/api/scenes/${sceneId}/audio-assignments/${assignmentId}`);
+    // Update local map
+    if (MC._currentSeMap[sceneId]) {
+      MC._currentSeMap[sceneId] = MC._currentSeMap[sceneId].filter(s => s.assignmentId !== assignmentId);
+      if (MC._currentSeMap[sceneId].length === 0) delete MC._currentSeMap[sceneId];
+    }
+    mcUpdateSeDisplay();
+    mcAddSystemMessage('効果音を削除しました。再ビルドで反映されます。', 'success');
+  } catch (err) {
+    mcAddSystemMessage('効果音の削除に失敗しました。', 'error');
+  }
+}
+
+// Update left board SE display
+function mcUpdateSeDisplay() {
+  let el = document.getElementById('mcSeDisplay');
+  if (!el) {
+    // Create SE display element after BGM display (or after Assets summary)
+    const bgmEl = document.getElementById('mcBgmDisplay');
+    const anchor = bgmEl || document.getElementById('mcAssetsSummary');
+    if (!anchor) return;
+    el = document.createElement('div');
+    el.id = 'mcSeDisplay';
+    el.className = 'mb-2';
+    anchor.insertAdjacentElement('afterend', el);
+  }
+  
+  const allSe = Object.entries(MC._currentSeMap);
+  const totalSe = allSe.reduce((sum, [, arr]) => sum + arr.length, 0);
+  
+  if (totalSe === 0) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  
+  let seHtml = '';
+  for (const [sceneId, seList] of allSe) {
+    const sceneIdx = scenes.findIndex(s => String(s.id) === String(sceneId)) + 1;
+    for (const se of seList) {
+      seHtml += `
+        <div class="flex items-center justify-between py-0.5">
+          <span class="text-[11px] text-indigo-700">
+            <i class="fas fa-volume-up text-[9px] mr-1"></i>
+            S${sceneIdx}: ${escapeHtml(se.name)}
+          </span>
+          <button onclick="mcRemoveSeFromBoard('${sceneId}', '${se.assignmentId}')" 
+                  class="text-[9px] text-indigo-300 hover:text-indigo-600 ml-1" title="削除">
+            <i class="fas fa-times"></i>
+          </button>
+        </div>`;
+    }
+  }
+  
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="bg-indigo-50 rounded-lg border border-indigo-200 px-3 py-2">
+      <div class="flex items-center justify-between mb-1">
+        <span class="text-[11px] font-semibold text-indigo-700">
+          <i class="fas fa-volume-up mr-1"></i>効果音: ${totalSe}件
+        </span>
+      </div>
+      ${seHtml}
+    </div>
+  `;
+}
+
+// ============================================================
 // Chat Messages
 // ============================================================
 
@@ -1959,8 +2250,11 @@ function mcStartNew() {
   MC._lastEditInstruction = null;
   MC._bgmChecked = false;
   MC._currentBgm = null;
+  MC._seChecked = false;
+  MC._currentSeMap = {};
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
+  if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
