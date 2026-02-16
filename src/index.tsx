@@ -4860,51 +4860,60 @@ app.get('/marunage-chat', (c) => {
                             </p>
                         </div>
                         
+                        <!-- T2: Edit banner (shown when scene is selected for editing) -->
+                        <div id="mcEditBanner" class="hidden mb-2">
+                            <div class="bg-purple-50 border border-purple-200 rounded-lg px-3 py-2 text-xs text-purple-800 flex items-center justify-between">
+                                <div id="mcEditBannerText" class="flex items-center gap-1">
+                                    <i class="fas fa-crosshairs text-purple-500"></i>
+                                    <span>編集中: -</span>
+                                </div>
+                                <button id="mcEditBannerClear" onclick="mcClearSceneSelection()"
+                                        class="text-[11px] text-purple-400 hover:text-purple-700 transition-colors">
+                                    <i class="fas fa-times mr-0.5"></i>解除
+                                </button>
+                            </div>
+                        </div>
+                        
                         <!-- Scene cards (populated dynamically) -->
                         <div id="mcSceneCards" class="space-y-3 hidden">
                             <!-- Rendered by JS -->
                         </div>
                         
-                        <!-- P-0: Video Preview (shown when video is done) -->
+                        <!-- T1: Video Preview (always present in ready phase, content controlled by JS) -->
                         <div id="mcBoardVideoPreview" class="hidden mt-3 transition-all duration-300">
                             <div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200 p-3">
                                 <div class="flex items-center justify-between mb-2">
                                     <span class="text-xs font-bold text-green-700">
-                                        <i class="fas fa-film mr-1"></i>完成動画
+                                        <i class="fas fa-film mr-1"></i>動画
                                     </span>
                                     <span id="mcBoardVideoTimestamp" class="text-[10px] text-green-500"></span>
                                 </div>
+                                <!-- Video player (shown when done) -->
                                 <video id="mcBoardVideoPlayer" controls playsinline preload="metadata"
-                                       class="w-full rounded-lg bg-black" style="max-height: 220px;">
+                                       class="w-full rounded-lg bg-black hidden" style="max-height: 220px;">
                                 </video>
+                                <!-- T1: Placeholder (shown when no video yet / running / failed) -->
+                                <div id="mcBoardVideoPlaceholder" class="w-full rounded-lg bg-gray-900/90 text-white/80 text-xs flex items-center justify-center"
+                                     style="height: 160px;">
+                                    <div class="text-center">
+                                        <div class="mb-2 text-lg"><i class="fas fa-film"></i></div>
+                                        <div id="mcBoardVideoPlaceholderText">動画未生成</div>
+                                    </div>
+                                </div>
                                 <div id="mcBoardVideoStatus" class="text-[10px] text-green-600 mt-1.5 text-center">
                                     <!-- Updated dynamically -->
                                 </div>
                                 <!-- A-2: Action buttons -->
                                 <div id="mcBoardVideoActions" class="flex items-center gap-2 mt-2">
                                     <a id="mcBoardVideoDL" href="#" target="_blank" rel="noopener"
-                                       class="flex-1 text-center text-xs px-3 py-1.5 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 no-underline">
+                                       class="flex-1 text-center text-xs px-3 py-1.5 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 no-underline hidden">
                                         <i class="fas fa-download mr-1"></i>ダウンロード
                                     </a>
                                     <button id="mcBoardVideoRebuild" onclick="mcRebuildVideo()"
-                                            class="flex-1 text-xs px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg font-semibold hover:bg-purple-200">
+                                            class="flex-1 text-xs px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg font-semibold hover:bg-purple-200 hidden">
                                         <i class="fas fa-redo mr-1"></i>再ビルド
                                     </button>
                                 </div>
-                            </div>
-                        </div>
-                        
-                        <!-- P-0: Video Building Progress (shown during build) -->
-                        <div id="mcBoardVideoBuildProgress" class="hidden mt-3">
-                            <div class="bg-blue-50 rounded-xl border border-blue-200 p-3">
-                                <div class="flex items-center gap-2 mb-2">
-                                    <i class="fas fa-spinner fa-spin text-blue-500 text-xs"></i>
-                                    <span class="text-xs font-semibold text-blue-700" id="mcBoardVideoBuildLabel">動画レンダリング中...</span>
-                                </div>
-                                <div class="w-full bg-blue-200 rounded-full h-1.5">
-                                    <div id="mcBoardVideoBuildBar" class="bg-blue-600 h-1.5 rounded-full transition-all duration-500" style="width:0%"></div>
-                                </div>
-                                <div id="mcBoardVideoBuildPct" class="text-[10px] text-blue-500 mt-1 text-right">0%</div>
                             </div>
                         </div>
                     </div>

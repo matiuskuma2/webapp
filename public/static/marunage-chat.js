@@ -59,6 +59,9 @@ const MC = {
   // One-shot notification guards (video build)
   _videoDoneNotified: false,
   _videoFailedNotified: false,
+
+  // T2.5: Scene regeneration tracking
+  _regeneratingSceneId: null,
 };
 
 // ============================================================
@@ -894,6 +897,32 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       </div>
     `;
   }).join('');
+  
+  // T2.5: After re-render, check if a regenerating scene has completed
+  if (MC._regeneratingSceneId) {
+    const regenScene = scenes.find(s => s.id === MC._regeneratingSceneId);
+    if (regenScene && regenScene.has_image && regenScene.image_status !== 'generating') {
+      // Regeneration completed — clear state and update banner
+      const regenIdx = scenes.indexOf(regenScene);
+      MC._regeneratingSceneId = null;
+      mcSetEditBanner(`📍 編集中: シーン${regenIdx + 1}（画像 ✅ 更新済み）`, true);
+      mcAddSystemMessage(`シーン${regenIdx + 1} の画像が更新されました。再ビルドで動画に反映できます。`, 'success');
+    } else if (regenScene) {
+      // Still regenerating — re-apply badge (was lost during innerHTML rebuild)
+      mcMarkSceneRegenerating(MC._regeneratingSceneId, true);
+    }
+  }
+  
+  // T2: Re-apply selection highlight after re-render
+  if (MC._selectedSceneId) {
+    document.querySelectorAll('#mcSceneCards .scene-card').forEach(card => {
+      if (parseInt(card.dataset.sceneId) === MC._selectedSceneId) {
+        card.style.outline = '2px solid #7c3aed';
+        card.style.outlineOffset = '-2px';
+        card.style.borderRadius = '8px';
+      }
+    });
+  }
 }
 
 // ============================================================
@@ -907,12 +936,12 @@ MC._selectedSceneIdx = null;
 function mcSelectScene(sceneId, idx) {
   // Toggle selection
   if (MC._selectedSceneId === sceneId) {
-    MC._selectedSceneId = null;
-    MC._selectedSceneIdx = null;
-  } else {
-    MC._selectedSceneId = sceneId;
-    MC._selectedSceneIdx = idx;
+    mcClearSceneSelection();
+    return;
   }
+  
+  MC._selectedSceneId = sceneId;
+  MC._selectedSceneIdx = idx;
   
   // Update visual highlight
   document.querySelectorAll('#mcSceneCards .scene-card').forEach(card => {
@@ -925,14 +954,71 @@ function mcSelectScene(sceneId, idx) {
     }
   });
   
+  // T2: Update edit banner
+  mcSetEditBanner(`📍 編集中: シーン${idx + 1}（画像）`, true);
+  
   // Update input placeholder based on selection
   const input = document.getElementById('mcChatInput');
-  if (MC._selectedSceneId && MC.phase === 'ready') {
+  if (MC.phase === 'ready') {
     input.disabled = false;
     document.getElementById('mcSendBtn').disabled = false;
-    input.placeholder = `シーン${MC._selectedSceneIdx + 1} 選択中: 「もっと明るく」等の指示を入力...`;
-  } else if (MC.phase === 'ready') {
+    input.placeholder = `シーン${idx + 1} 選択中: 「もっと明るく」等の指示を入力...`;
+  }
+}
+
+// T2: Edit banner management
+function mcSetEditBanner(text, show) {
+  const wrap = document.getElementById('mcEditBanner');
+  const t = document.getElementById('mcEditBannerText');
+  if (!wrap || !t) return;
+  if (show) {
+    t.innerHTML = text;
+    wrap.classList.remove('hidden');
+  } else {
+    wrap.classList.add('hidden');
+  }
+}
+
+function mcClearSceneSelection() {
+  MC._selectedSceneId = null;
+  MC._selectedSceneIdx = null;
+  
+  // Remove visual highlight
+  document.querySelectorAll('#mcSceneCards .scene-card').forEach(card => {
+    card.style.outline = 'none';
+  });
+  
+  // T2: Hide banner
+  mcSetEditBanner('', false);
+  
+  const input = document.getElementById('mcChatInput');
+  if (input && MC.phase === 'ready') {
     input.placeholder = '完成しました（シーンをタップして画像再生成）';
+  }
+}
+
+// T2.5: Mark scene card as regenerating (spinner badge)
+function mcMarkSceneRegenerating(sceneId, isOn) {
+  const card = document.querySelector(`.scene-card[data-scene-id="${sceneId}"]`);
+  if (!card) return;
+  card.classList.toggle('opacity-60', isOn);
+  let badge = card.querySelector('.mc-regen-badge');
+  if (isOn && !badge) {
+    badge = document.createElement('div');
+    badge.className = 'mc-regen-badge text-[10px] text-purple-700 bg-purple-50 border border-purple-200 rounded px-2 py-0.5 mt-1 mx-3 mb-2 inline-flex items-center gap-1';
+    badge.innerHTML = '<i class="fas fa-spinner fa-spin"></i> 再生成中';
+    card.appendChild(badge);
+  } else if (!isOn && badge) {
+    badge.remove();
+    card.classList.remove('opacity-60');
+  }
+}
+
+// T2.5: Force an immediate status poll (don't wait for next interval)
+function mcForcePollSoon() {
+  if (typeof mcPoll === 'function') {
+    setTimeout(() => mcPoll().catch(()=>{}), 800);
+    setTimeout(() => mcPoll().catch(()=>{}), 2500);
   }
 }
 
@@ -942,6 +1028,12 @@ async function mcHandleSceneEdit(text) {
   const activePhases = ['formatting', 'awaiting_ready', 'generating_images', 'generating_audio'];
   if (activePhases.includes(MC.phase)) {
     mcAddSystemMessage('生成中のため画像再生成はできません。完了後に再試行してください。', 'error');
+    return;
+  }
+  
+  // Guard: if a scene is already regenerating, prevent overlapping requests
+  if (MC._regeneratingSceneId) {
+    mcAddSystemMessage(`シーンの再生成中です。完了後に再試行してください。`, 'error');
     return;
   }
   
@@ -977,6 +1069,12 @@ async function mcHandleSceneEdit(text) {
     
     if (res.data?.image_generation_id || res.data?.status === 'completed') {
       mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成を開始しました。更新まで少々お待ちください。`, 'success');
+      // T2: Update banner to "regenerating"
+      mcSetEditBanner(`📍 編集中: シーン${targetSceneIdx + 1}（画像再生成中…）`, true);
+      // T2.5: Mark scene card as regenerating + force immediate poll
+      MC._regeneratingSceneId = targetSceneId;
+      mcMarkSceneRegenerating(targetSceneId, true);
+      mcForcePollSoon();
     } else {
       mcAddSystemMessage(`シーン${targetSceneIdx + 1} の画像再生成に失敗しました: ${res.data?.error?.message || '不明なエラー'}`, 'error');
     }
@@ -1125,8 +1223,8 @@ function mcSetUIState(state) {
       // P-0: Hide video preview
       const vpIdle = document.getElementById('mcBoardVideoPreview');
       if (vpIdle) vpIdle.classList.add('hidden');
-      const vbIdle = document.getElementById('mcBoardVideoBuildProgress');
-      if (vbIdle) vbIdle.classList.add('hidden');
+      // T2: Clear edit banner on idle
+      mcSetEditBanner('', false);
       MC.runId = null;
       MC.projectId = null;
       MC.phase = null;
@@ -1399,65 +1497,74 @@ function mcUpdateVideoPanel(video) {
   panel.innerHTML = mcRenderVideoPanel(video);
 }
 
-// ── P-0: Left Board Video Preview ──
+// ── T1: Left Board Video Preview (always present in ready phase) ──
 function mcUpdateBoardVideoPreview(video) {
   const previewEl = document.getElementById('mcBoardVideoPreview');
-  const buildEl = document.getElementById('mcBoardVideoBuildProgress');
-  if (!previewEl || !buildEl) return;
-  
-  const rebuildBtn = document.getElementById('mcBoardVideoRebuild');
+  if (!previewEl) return;
+
+  const player = document.getElementById('mcBoardVideoPlayer');
+  const placeholder = document.getElementById('mcBoardVideoPlaceholder');
+  const placeholderText = document.getElementById('mcBoardVideoPlaceholderText');
   const dlBtn = document.getElementById('mcBoardVideoDL');
-  
-  if (!video || video.state === 'off' || video.state === 'pending') {
-    previewEl.classList.add('hidden');
-    buildEl.classList.add('hidden');
-    return;
-  }
-  
-  if (video.state === 'running') {
-    // Show build progress bar on left board
-    previewEl.classList.add('hidden');
-    buildEl.classList.remove('hidden');
-    const pct = video.progress_percent || 0;
-    const stage = video.build_status || 'レンダリング';
-    document.getElementById('mcBoardVideoBuildLabel').textContent = `動画${stage}中...`;
-    document.getElementById('mcBoardVideoBuildBar').style.width = pct + '%';
-    document.getElementById('mcBoardVideoBuildPct').textContent = pct + '%';
-    return;
-  }
-  
-  if (video.state === 'done' && video.download_url) {
-    // Show completed video player
-    buildEl.classList.add('hidden');
+  const rebuildBtn = document.getElementById('mcBoardVideoRebuild');
+  const statusEl = document.getElementById('mcBoardVideoStatus');
+
+  // T1: Show video section whenever phase is ready (or later), hide during idle/processing
+  if (MC.phase === 'ready' || MC.phase === 'canceled') {
     previewEl.classList.remove('hidden');
-    const player = document.getElementById('mcBoardVideoPlayer');
-    const statusEl = document.getElementById('mcBoardVideoStatus');
-    
-    // Only update src if changed (avoid reload flicker)
-    if (player.getAttribute('data-src') !== video.download_url) {
-      player.setAttribute('data-src', video.download_url);
-      player.src = video.download_url;
-      player.load();
+  } else if (!video || !['running','done','failed'].includes(video?.state)) {
+    previewEl.classList.add('hidden');
+    return;
+  } else {
+    // Active phases with video state — show
+    previewEl.classList.remove('hidden');
+  }
+
+  // Reset visibility
+  if (player) player.classList.add('hidden');
+  if (placeholder) placeholder.classList.add('hidden');
+  if (dlBtn) dlBtn.classList.add('hidden');
+  if (rebuildBtn) rebuildBtn.classList.add('hidden');
+  if (statusEl) statusEl.textContent = '';
+
+  // No video info or waiting states
+  if (!video || video.state === 'off' || video.state === 'pending') {
+    if (placeholder) { placeholder.classList.remove('hidden'); }
+    if (placeholderText) placeholderText.textContent = '動画未生成（待機中）';
+    return;
+  }
+
+  // Running — show progress in placeholder
+  if (video.state === 'running') {
+    if (placeholder) { placeholder.classList.remove('hidden'); }
+    const pct = video.progress_percent || 0;
+    if (placeholderText) placeholderText.innerHTML = `<i class="fas fa-spinner fa-spin mr-1"></i>動画生成中… ${pct}%`;
+    if (statusEl) statusEl.textContent = `レンダリング ${pct}%`;
+    return;
+  }
+
+  // Done — show video player
+  if (video.state === 'done' && video.download_url) {
+    if (placeholder) placeholder.classList.add('hidden');
+    if (player) {
+      player.classList.remove('hidden');
+      if (player.getAttribute('data-src') !== video.download_url) {
+        player.setAttribute('data-src', video.download_url);
+        player.src = video.download_url;
+        player.load();
+      }
     }
-    if (dlBtn) dlBtn.href = video.download_url;
-    statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>動画完成 — タップで再生';
-    
-    // A-2 Guard: Update rebuild button state based on video state
+    if (dlBtn) { dlBtn.classList.remove('hidden'); dlBtn.href = video.download_url; }
+    if (statusEl) statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>動画完成 — タップで再生';
     mcUpdateRebuildButton(video);
     return;
   }
-  
+
+  // Failed — show error in placeholder + retry
   if (video.state === 'failed') {
-    buildEl.classList.add('hidden');
-    // Show preview area with rebuild option for failed videos
-    previewEl.classList.remove('hidden');
-    const player = document.getElementById('mcBoardVideoPlayer');
-    const statusEl = document.getElementById('mcBoardVideoStatus');
-    if (player) { player.removeAttribute('src'); player.removeAttribute('data-src'); }
-    if (dlBtn) { dlBtn.classList.add('hidden'); }
-    statusEl.innerHTML = '<i class="fas fa-exclamation-triangle mr-1 text-red-500"></i><span class="text-red-600">動画生成に失敗しました</span>';
-    
-    // A-2 Guard: Show rebuild button in retry mode for failed state
+    if (placeholder) { placeholder.classList.remove('hidden'); }
+    if (placeholderText) placeholderText.innerHTML = '<i class="fas fa-exclamation-triangle mr-1"></i>動画生成に失敗しました';
+    if (statusEl) statusEl.innerHTML = '<span class="text-red-500"><i class="fas fa-exclamation-triangle mr-1"></i>失敗</span>';
     mcUpdateRebuildButton(video);
     return;
   }
@@ -1468,21 +1575,20 @@ function mcUpdateRebuildButton(video) {
   const btn = document.getElementById('mcBoardVideoRebuild');
   const dlBtn = document.getElementById('mcBoardVideoDL');
   if (!btn) return;
-  
-  // Guard 3: While video is running, completely hide rebuild button
+
+  // Guard: While video is running, hide rebuild
   if (video.state === 'running') {
     btn.classList.add('hidden');
     return;
   }
-  
+
   btn.classList.remove('hidden');
-  
-  // Guard 1: Cooldown — if a rebuild was attempted recently (within 3 min), show countdown
-  const COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes
+
+  // Guard: Cooldown — 3min after last attempt
+  const COOLDOWN_MS = 3 * 60 * 1000;
   if (video.attempted_at) {
     const elapsed = Date.now() - new Date(video.attempted_at).getTime();
     if (elapsed < COOLDOWN_MS && video.state !== 'failed') {
-      // Done but within cooldown (just completed) — show cooldown label
       const remainSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
       const remainMin = Math.floor(remainSec / 60);
       const remainSecPart = remainSec % 60;
@@ -1492,21 +1598,19 @@ function mcUpdateRebuildButton(video) {
       return;
     }
   }
-  
-  // Video state determines button style
+
+  // Style by state
   if (video.state === 'done') {
-    // Successful completion: subtle rebuild button (not primary action)
+    // "修正反映" rebuild — subtle style (primary action is download)
     btn.disabled = false;
-    btn.className = 'flex-1 text-xs px-3 py-1.5 bg-gray-100 text-gray-500 rounded-lg font-semibold hover:bg-gray-200';
-    btn.innerHTML = '<i class="fas fa-redo mr-1"></i>再ビルド';
-    if (dlBtn) dlBtn.classList.remove('hidden');
+    btn.className = 'flex-1 text-xs px-3 py-1.5 bg-purple-50 text-purple-600 rounded-lg font-semibold hover:bg-purple-100 border border-purple-200';
+    btn.innerHTML = '<i class="fas fa-sync-alt mr-1"></i>修正を反映して再ビルド';
   } else if (video.state === 'failed') {
-    // Failed: prominent retry button
+    // Retry — prominent
     btn.disabled = false;
     btn.className = 'flex-1 text-xs px-3 py-1.5 bg-red-100 text-red-700 rounded-lg font-semibold hover:bg-red-200';
     btn.innerHTML = '<i class="fas fa-redo mr-1"></i>リトライ';
   } else {
-    // Default state (pending / off)
     btn.disabled = false;
     btn.className = 'flex-1 text-xs px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg font-semibold hover:bg-purple-200';
     btn.innerHTML = '<i class="fas fa-redo mr-1"></i>再ビルド';
@@ -1542,11 +1646,11 @@ async function mcRebuildVideo() {
     return;
   }
   
-  // Confirm dialog — different message for failed vs done
+  // Confirm dialog — different message for failed (retry) vs done (modification reflection)
   const isRetry = lastVideo?.state === 'failed';
   const confirmMsg = isRetry
     ? '前回の動画生成が失敗しました。リトライしますか？\n（素材はそのまま、動画だけ再レンダリングします）'
-    : '現在の動画を破棄して再ビルドしますか？\n（素材はそのまま、動画だけ再レンダリングします）';
+    : '修正内容を反映して動画を再ビルドしますか？\n（画像や音声の変更が動画に反映されます）';
   if (!confirm(confirmMsg)) return;
 
   const btn = document.getElementById('mcBoardVideoRebuild');
@@ -1561,7 +1665,7 @@ async function mcRebuildVideo() {
     const reason = isRetry ? 'manual_retry_after_failure' : 'manual_rebuild';
     const res = await axios.post(`/api/marunage/${MC.projectId}/rebuild-video`, { reason }, { timeout: 30000 });
     mcAddSystemMessage(
-      isRetry ? 'リトライを開始しました。自動で進捗が更新されます。' : '動画の再ビルドを開始しました。自動で進捗が更新されます。',
+      isRetry ? 'リトライを開始しました。自動で進捗が更新されます。' : '修正を反映して動画を再ビルド中です。自動で進捗が更新されます。',
       'success'
     );
     // Reset video done notification so the new completion will trigger scroll+highlight
@@ -1594,6 +1698,8 @@ function mcStartNew() {
   // P-2: Reset scene selection
   MC._selectedSceneId = null;
   MC._selectedSceneIdx = null;
+  MC._regeneratingSceneId = null;
+  if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
@@ -1654,8 +1760,9 @@ function mcStartNew() {
   // P-0: Reset video preview
   const videoPreview = document.getElementById('mcBoardVideoPreview');
   if (videoPreview) videoPreview.classList.add('hidden');
-  const videoBuildProgress = document.getElementById('mcBoardVideoBuildProgress');
-  if (videoBuildProgress) videoBuildProgress.classList.add('hidden');
+  // T2: Clear edit banner on reset
+  if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
+  MC._regeneratingSceneId = null;
   
   // P-1: Reset custom scene count
   const customScene = document.getElementById('mcCustomSceneCount');
