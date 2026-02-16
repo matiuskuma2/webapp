@@ -4,8 +4,12 @@ import { serveStatic } from 'hono/cloudflare-workers'
 import type { Bindings } from './types/bindings'
 
 // Asset version for cache busting
-// Priority: 1) env.ASSET_VERSION (set by CI/CD), 2) __BUILD_VERSION__ (set at build time), 3) fallback
-// This ensures fresh assets are loaded after each deployment
+// Priority: 1) CF_PAGES_COMMIT_SHA (Cloudflare Pages git deploy)
+//           2) env.ASSET_VERSION (CI/CD or wrangler secret)
+//           3) __BUILD_VERSION__ (Vite build-time git hash)
+//           4) 'dev' fallback
+// IMPORTANT: Always run `npm run build` AFTER the final git commit, BEFORE deploy.
+// The build bakes `git rev-parse --short HEAD` into the bundle.
 
 // __BUILD_VERSION__ is replaced by Vite's define at build time with git hash or timestamp
 declare const __BUILD_VERSION__: string;
@@ -16,11 +20,15 @@ declare const __BUILD_VERSION__: string;
  * @returns version string for ?v= query parameter
  */
 function getAssetVersion(env?: Bindings): string {
-  // 1. Environment variable (highest priority - set by CI/CD)
+  // 1. CF_PAGES_COMMIT_SHA (highest priority - set by Cloudflare Pages on git-connected deploys)
+  if (env?.CF_PAGES_COMMIT_SHA) {
+    return (env.CF_PAGES_COMMIT_SHA as string).substring(0, 7);
+  }
+  // 2. Environment variable (set by CI/CD or wrangler secret)
   if (env?.ASSET_VERSION) {
     return env.ASSET_VERSION;
   }
-  // 2. Build version (replaced during build with git hash)
+  // 3. Build version (replaced during build with git hash)
   try {
     if (typeof __BUILD_VERSION__ !== 'undefined' && __BUILD_VERSION__) {
       return __BUILD_VERSION__;
@@ -28,7 +36,7 @@ function getAssetVersion(env?: Bindings): string {
   } catch {
     // __BUILD_VERSION__ not defined (development mode)
   }
-  // 3. Fallback (development)
+  // 4. Fallback (development)
   return 'dev';
 }
 import projects from './routes/projects'
