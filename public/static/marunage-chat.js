@@ -640,11 +640,16 @@ function mcUpdateFromStatus(data) {
         + '<div class="mt-1 text-sm">左ボードで再生できます。</div>',
         'success'
       );
-      // P-0: One-shot smooth scroll to video preview on left board
+      // A-1: One-shot smooth scroll + 10s highlight on video preview
       setTimeout(() => {
         const vp = document.getElementById('mcBoardVideoPreview');
         if (vp && !vp.classList.contains('hidden')) {
           vp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          // Add highlight ring (10s)
+          vp.classList.add('ring-2', 'ring-purple-400', 'ring-offset-2');
+          setTimeout(() => {
+            vp.classList.remove('ring-2', 'ring-purple-400', 'ring-offset-2');
+          }, 10000);
         }
       }, 500);
     }
@@ -1437,6 +1442,34 @@ function mcUpdateBoardVideoPreview(video) {
     buildEl.classList.add('hidden');
     previewEl.classList.add('hidden');
     return;
+  }
+}
+
+// ── A-2: Rebuild Video from left board ──
+async function mcRebuildVideo() {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  if (MC.phase !== 'ready') {
+    mcAddSystemMessage('動画の再ビルドはready状態でのみ可能です。', 'error');
+    return;
+  }
+  if (!confirm('現在の動画を破棄して再ビルドしますか？\n（素材はそのまま、動画だけ再レンダリングします）')) return;
+
+  const btn = document.getElementById('mcBoardVideoRebuild');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-1"></i>準備中...'; }
+
+  try {
+    const res = await axios.post(`/api/marunage/${MC.projectId}/rebuild-video`, {}, { timeout: 30000 });
+    mcAddSystemMessage('動画の再ビルドを開始しました。自動で進捗が更新されます。', 'success');
+    // Reset video done notification so the new completion will trigger scroll+highlight
+    MC._videoDoneNotified = false;
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`再ビルドエラー: ${errMsg}`, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-redo mr-1"></i>再ビルド'; }
   }
 }
 

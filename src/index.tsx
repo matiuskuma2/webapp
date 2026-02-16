@@ -4866,22 +4866,30 @@ app.get('/marunage-chat', (c) => {
                         </div>
                         
                         <!-- P-0: Video Preview (shown when video is done) -->
-                        <div id="mcBoardVideoPreview" class="hidden mt-3">
+                        <div id="mcBoardVideoPreview" class="hidden mt-3 transition-all duration-300">
                             <div class="bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl border border-green-200 p-3">
                                 <div class="flex items-center justify-between mb-2">
                                     <span class="text-xs font-bold text-green-700">
                                         <i class="fas fa-film mr-1"></i>完成動画
                                     </span>
-                                    <a id="mcBoardVideoDL" href="#" target="_blank" rel="noopener"
-                                       class="text-xs text-green-600 hover:text-green-800 no-underline">
-                                        <i class="fas fa-download mr-1"></i>DL
-                                    </a>
+                                    <span id="mcBoardVideoTimestamp" class="text-[10px] text-green-500"></span>
                                 </div>
                                 <video id="mcBoardVideoPlayer" controls playsinline preload="metadata"
                                        class="w-full rounded-lg bg-black" style="max-height: 220px;">
                                 </video>
                                 <div id="mcBoardVideoStatus" class="text-[10px] text-green-600 mt-1.5 text-center">
                                     <!-- Updated dynamically -->
+                                </div>
+                                <!-- A-2: Action buttons -->
+                                <div id="mcBoardVideoActions" class="flex items-center gap-2 mt-2">
+                                    <a id="mcBoardVideoDL" href="#" target="_blank" rel="noopener"
+                                       class="flex-1 text-center text-xs px-3 py-1.5 bg-green-600 text-white rounded-lg font-semibold hover:bg-green-700 no-underline">
+                                        <i class="fas fa-download mr-1"></i>ダウンロード
+                                    </a>
+                                    <button id="mcBoardVideoRebuild" onclick="mcRebuildVideo()"
+                                            class="flex-1 text-xs px-3 py-1.5 bg-purple-100 text-purple-700 rounded-lg font-semibold hover:bg-purple-200">
+                                        <i class="fas fa-redo mr-1"></i>再ビルド
+                                    </button>
                                 </div>
                             </div>
                         </div>

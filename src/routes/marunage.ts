@@ -3088,4 +3088,58 @@ marunage.post('/:projectId/cancel', async (c) => {
   })
 })
 
+// ============================================================
+// A-2: POST /:projectId/rebuild-video — Clear video build state to trigger re-build
+// ============================================================
+marunage.post('/:projectId/rebuild-video', async (c) => {
+  const user = await getSessionUser(c.env.DB, getCookie(c, 'session'))
+  if (!user) return errorJson(c, MARUNAGE_ERRORS.UNAUTHORIZED, 'Session required')
+
+  const projectId = parseInt(c.req.param('projectId'))
+  
+  // Get the latest run (active or ready)
+  const run = await c.env.DB.prepare(`
+    SELECT mr.* FROM marunage_runs mr
+    JOIN projects p ON p.id = mr.project_id
+    WHERE mr.project_id = ? AND mr.started_by_user_id = ?
+    ORDER BY mr.created_at DESC LIMIT 1
+  `).bind(projectId, user.id).first<any>()
+  
+  if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No run found')
+  if (run.phase !== 'ready') {
+    return errorJson(c, MARUNAGE_ERRORS.CONFLICT, 'Run must be in ready phase to rebuild video')
+  }
+
+  // Check if video build feature is enabled
+  const videoBuildEnabled = await isVideoBuildEnabled(c.env.DB)
+  if (!videoBuildEnabled) {
+    return c.json({ error: { code: 'VIDEO_BUILD_DISABLED', message: '動画自動合成が無効です' } }, 400)
+  }
+
+  // Clear existing video build state to allow re-trigger
+  await c.env.DB.prepare(`
+    UPDATE marunage_runs
+    SET video_build_id = NULL, video_build_error = NULL, video_build_attempted_at = NULL,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).bind(run.id).run()
+
+  console.log(`[Marunage:RebuildVideo] Cleared video build state for run ${run.id} (project ${projectId}) — next status poll will trigger new build`)
+
+  try {
+    await logAudit({
+      db: c.env.DB, userId: user.id, userRole: user.role,
+      entityType: 'project', entityId: projectId, projectId,
+      action: 'marunage.video_rebuild_requested',
+      details: { run_id: run.id, previous_build_id: run.video_build_id },
+    })
+  } catch (_) {}
+
+  return c.json({
+    run_id: run.id,
+    action: 'video_rebuild_queued',
+    message: '動画の再ビルドを準備中です。数秒後に自動で開始されます。',
+  })
+})
+
 export default marunage
