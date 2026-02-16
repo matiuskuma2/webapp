@@ -308,6 +308,17 @@ async function mcSendMessage() {
       return;
     }
     
+    // DAT: display_asset_type switch intent
+    const isDatIntent = /(?:漫画|コミック|comic)\s*(?:表示|モード|に切替|にして|に変更)/i.test(text)
+      || /(?:画像|image)\s*(?:表示|モード)?\s*(?:に切替|にして|に変更|に戻)/i.test(text)
+      || /(?:動画|video|ビデオ)\s*(?:表示|モード)?\s*(?:に切替|にして|に変更)/i.test(text);
+    if (isDatIntent) {
+      await mcHandleDatIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
     const hasSceneRef = /(?:シーン|scene|Scene|)\s*\d+\s*(?:番|枚)?/i.test(text);
     if (MC._selectedSceneId || hasSceneRef) {
       await mcHandleSceneEdit(text);
@@ -923,6 +934,14 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       ? `<span class="scene-badge bg-indigo-100 text-indigo-700 ml-1"><i class="fas fa-volume-up mr-0.5"></i>SE×${seList.length}</span>`
       : '';
     
+    // DAT: display_asset_type badge (only show if not default 'image')
+    const dat = scene.display_asset_type || 'image';
+    const datBadge = dat === 'comic'
+      ? '<span class="scene-badge bg-pink-100 text-pink-700 ml-1"><i class="fas fa-book-open mr-0.5"></i>漫画</span>'
+      : dat === 'video'
+      ? '<span class="scene-badge bg-cyan-100 text-cyan-700 ml-1"><i class="fas fa-play-circle mr-0.5"></i>動画</span>'
+      : '';
+    
     // T3: Dirty badge — check if this scene has pending changes since last rebuild
     const hasDirty = MC._dirtyChanges?.some(d => d.sceneIdx === idx + 1);
     const dirtyDot = hasDirty ? '<span class="inline-block w-1.5 h-1.5 bg-orange-500 rounded-full ml-1" title="動画に未反映の変更あり"></span>' : '';
@@ -953,6 +972,7 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
               <span class="scene-badge ${imgBadgeClass}"><i class="fas ${imgBadgeIcon} mr-0.5"></i>${imgBadgeText}</span>
               ${audioBadge}
               ${seBadge}
+              ${datBadge}
             </div>
           </div>
           <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || 'シーン ' + (idx + 1)}</p>
@@ -1727,6 +1747,114 @@ function mcTimeAgo(ts) {
   if (sec < 60) return '\u305f\u3063\u305f\u4eca';
   if (sec < 3600) return `${Math.floor(sec / 60)}\u5206\u524d`;
   return `${Math.floor(sec / 3600)}\u6642\u9593\u524d`;
+}
+
+// ============================================================
+// DAT: display_asset_type Switch via Chat
+// ============================================================
+
+const DAT_LABELS = {
+  image: { icon: 'fa-image', color: 'text-green-700', label: '\u753b\u50cf\u8868\u793a' },
+  comic: { icon: 'fa-book-open', color: 'text-pink-700', label: '\u6f2b\u753b\u8868\u793a' },
+  video: { icon: 'fa-play-circle', color: 'text-cyan-700', label: '\u52d5\u753b\u8868\u793a' },
+};
+
+async function mcHandleDatIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('\u30d7\u30ed\u30b8\u30a7\u30af\u30c8\u304c\u9078\u629e\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('\u30b7\u30fc\u30f3\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3002', 'error');
+    return;
+  }
+  
+  // Determine target type
+  let targetType = null;
+  if (/\u6f2b\u753b|\u30b3\u30df\u30c3\u30af|comic/i.test(text)) targetType = 'comic';
+  else if (/\u52d5\u753b|video|\u30d3\u30c7\u30aa|\u30e0\u30fc\u30d3\u30fc/i.test(text)) targetType = 'video';
+  else if (/\u753b\u50cf|image|\u30a4\u30e1\u30fc\u30b8|\u5199\u771f|\u623b/i.test(text)) targetType = 'image';
+  
+  if (!targetType) {
+    mcAddSystemMessage('\u8868\u793a\u30bf\u30a4\u30d7\u3092\u6307\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u4f8b:\u300c\u30b7\u30fc\u30f33\u3092\u6f2b\u753b\u8868\u793a\u306b\u3057\u3066\u300d\u300c\u30b7\u30fc\u30f32\u3092\u753b\u50cf\u306b\u623b\u3057\u3066\u300d', 'info');
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNumMatch = text.match(/(?:\u30b7\u30fc\u30f3|scene|Scene)\s*(\d+)/i);
+  let targetScene = null;
+  let sceneIdx = 0;
+  
+  if (sceneNumMatch) {
+    const idx = parseInt(sceneNumMatch[1], 10) - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+      sceneIdx = idx + 1;
+    } else {
+      mcAddSystemMessage(`\u30b7\u30fc\u30f3${sceneNumMatch[1]}\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\uff08\u5168${scenes.length}\u30b7\u30fc\u30f3\uff09\u3002`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+    sceneIdx = scenes.indexOf(targetScene) + 1;
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage('\u5bfe\u8c61\u306e\u30b7\u30fc\u30f3\u3092\u6307\u5b9a\u3057\u3066\u304f\u3060\u3055\u3044\u3002\n\u4f8b:\u300c\u30b7\u30fc\u30f33\u3092\u6f2b\u753b\u8868\u793a\u306b\u3057\u3066\u300d\u300c\u30b7\u30fc\u30f31\u3092\u52d5\u753b\u8868\u793a\u306b\u3057\u3066\u300d', 'info');
+    return;
+  }
+  
+  const currentType = targetScene.display_asset_type || 'image';
+  if (currentType === targetType) {
+    const label = DAT_LABELS[targetType]?.label || targetType;
+    mcAddSystemMessage(`\u30b7\u30fc\u30f3${sceneIdx}\u306f\u65e2\u306b${label}\u3067\u3059\u3002`, 'info');
+    return;
+  }
+  
+  const label = DAT_LABELS[targetType]?.label || targetType;
+  mcAddSystemMessage(`\u30b7\u30fc\u30f3${sceneIdx}\u3092${label}\u306b\u5207\u308a\u66ff\u3048\u4e2d...`, 'info');
+  
+  try {
+    const res = await axios.put(`/api/scenes/${targetScene.id}/display-asset-type`, {
+      display_asset_type: targetType,
+    });
+    
+    if (res.data?.success) {
+      mcAddSystemMessage(
+        `\u2705 \u30b7\u30fc\u30f3${sceneIdx}\u3092${label}\u306b\u5207\u308a\u66ff\u3048\u307e\u3057\u305f\uff01\n\u518d\u30d3\u30eb\u30c9\u3067\u52d5\u753b\u306b\u53cd\u6620\u3055\u308c\u307e\u3059\u3002`,
+        'success'
+      );
+      mcSetEditBanner(`\ud83d\udd04 \u30b7\u30fc\u30f3${sceneIdx}: ${label}\u306b\u5207\u66ff`, true);
+      mcTrackChange('image', sceneIdx, `\u8868\u793a\u5207\u66ff: ${label}`);
+      // Update local cache for immediate badge update
+      targetScene.display_asset_type = targetType;
+      // Force re-render of scene cards
+      mcForcePollSoon();
+    } else {
+      mcAddSystemMessage(`\u8868\u793a\u5207\u66ff\u306b\u5931\u6557\u3057\u307e\u3057\u305f\u3002`, 'error');
+    }
+  } catch (err) {
+    const errCode = err.response?.data?.error?.code;
+    const errMsg = err.response?.data?.error?.message || err.message || '\u901a\u4fe1\u30a8\u30e9\u30fc';
+    
+    if (errCode === 'NO_PUBLISHED_COMIC') {
+      mcAddSystemMessage(
+        `\u30b7\u30fc\u30f3${sceneIdx}\u306b\u306f\u307e\u3060\u6f2b\u753b\u304c\u751f\u6210\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002\n\u6f2b\u753b\u5316\u3092\u5148\u306b\u5b9f\u884c\u3057\u3066\u304b\u3089\u5207\u308a\u66ff\u3048\u3066\u304f\u3060\u3055\u3044\u3002`,
+        'error'
+      );
+    } else if (errCode === 'NO_COMPLETED_VIDEO') {
+      mcAddSystemMessage(
+        `\u30b7\u30fc\u30f3${sceneIdx}\u306b\u306f\u307e\u3060\u52d5\u753b\uff08I2V\uff09\u304c\u751f\u6210\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002\nI2V\u751f\u6210\u3092\u5148\u306b\u5b9f\u884c\u3057\u3066\u304b\u3089\u5207\u308a\u66ff\u3048\u3066\u304f\u3060\u3055\u3044\u3002`,
+        'error'
+      );
+    } else {
+      mcAddSystemMessage(`\u8868\u793a\u5207\u66ff\u30a8\u30e9\u30fc: ${errMsg}`, 'error');
+    }
+  }
 }
 
 // ============================================================

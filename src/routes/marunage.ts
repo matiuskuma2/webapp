@@ -1845,7 +1845,7 @@ marunage.get('/:projectId/status', async (c) => {
   // 2. Scenes + utterance counts + audio completion status
   const { results: scenesData } = await c.env.DB.prepare(`
     SELECT
-      s.id, s.idx, s.title,
+      s.id, s.idx, s.title, s.display_asset_type,
       (SELECT COUNT(*) FROM scene_utterances su WHERE su.scene_id = s.id) AS utterance_count,
       (SELECT COUNT(*) FROM scene_utterances su
        JOIN audio_generations ag ON ag.id = su.audio_generation_id AND ag.status = 'completed'
@@ -2095,6 +2095,7 @@ marunage.get('/:projectId/status', async (c) => {
           id: s.id,
           idx: s.idx,
           title: s.title,
+          display_asset_type: s.display_asset_type || 'image',
           has_image: s.image_status === 'completed',
           image_status: s.image_status || 'pending', // pending | generating | completed | failed
           image_url: s.image_r2_key ? `/images/${s.image_r2_key}` : null,
