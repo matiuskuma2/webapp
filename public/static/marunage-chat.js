@@ -270,6 +270,15 @@ async function mcSendMessage() {
   // P-2: If in ready phase, check for scene edit commands
   // Route to scene edit if: (a) a scene is selected, OR (b) text contains a scene reference like "シーン3", "scene 3", "3番"
   if (MC.phase === 'ready') {
+    // P-4: BGM intent detection
+    const isBgmIntent = /bgm|BGM|音楽|ミュージック|曲|サウンド|バック.?ミュージック/i.test(text);
+    if (isBgmIntent) {
+      await mcHandleBgmIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
     const hasSceneRef = /(?:シーン|scene|Scene|)\s*\d+\s*(?:番|枚)?/i.test(text);
     if (MC._selectedSceneId || hasSceneRef) {
       await mcHandleSceneEdit(text);
@@ -638,6 +647,12 @@ function mcUpdateFromStatus(data) {
     mcSetUIState('ready');
     // Update video status panel if already shown
     mcUpdateVideoPanel(data.progress?.video);
+    
+    // P-4: Check and display BGM on first ready (one-shot)
+    if (!MC._bgmChecked) {
+      MC._bgmChecked = true;
+      mcCheckExistingBgm();
+    }
     
     // One-shot chat bubble when video.state transitions to done/failed
     const vs = data.progress?.video?.state;
@@ -1094,6 +1109,208 @@ async function mcHandleSceneEdit(text) {
 }
 
 // ============================================================
+// P-4: BGM Management via Chat
+// ============================================================
+
+// Cached system BGM library
+MC._bgmLibrary = null;
+MC._bgmChecked = false;
+MC._currentBgm = null;
+
+// Check existing BGM on project load (one-shot)
+async function mcCheckExistingBgm() {
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) return;
+  
+  try {
+    // Check first scene for BGM assignment
+    const res = await axios.get(`/api/scenes/${scenes[0].id}/audio-assignments`);
+    const bgmAssignment = (res.data?.assignments || []).find(a => a.audio_type === 'bgm' && a.is_active);
+    if (bgmAssignment) {
+      const bgmName = bgmAssignment.system_name || bgmAssignment.user_name || bgmAssignment.direct_name || 'BGM';
+      MC._currentBgm = { name: bgmName, id: bgmAssignment.system_audio_id || bgmAssignment.id };
+      mcUpdateBgmDisplay(MC._currentBgm);
+    }
+  } catch (_) {}
+}
+
+async function mcLoadBgmLibrary() {
+  if (MC._bgmLibrary) return MC._bgmLibrary;
+  try {
+    const res = await axios.get('/api/audio-library/system?category=bgm&limit=50');
+    MC._bgmLibrary = res.data?.items || res.data?.results || [];
+    return MC._bgmLibrary;
+  } catch (err) {
+    console.warn('[BGM] Failed to load library:', err);
+    return [];
+  }
+}
+
+// Simple mood matching from user text
+function mcGuessBgmMood(text) {
+  const t = text.toLowerCase();
+  if (/明る|楽し|ポップ|元気|アップ|upbeat|happy|bright/i.test(t)) return 'upbeat';
+  if (/落ち着|穏やか|リラックス|ゆったり|calm|relaxed|gentle/i.test(t)) return 'calm';
+  if (/悲し|切な|感動|emotional|sad|melancholy/i.test(t)) return 'emotional';
+  if (/怖|ホラー|緊張|tension|horror|suspense|dark/i.test(t)) return 'dark';
+  if (/壮大|epic|cinematic|ドラマ|drama/i.test(t)) return 'epic';
+  if (/ジャズ|jazz|ピアノ|piano|おしゃれ|stylish/i.test(t)) return 'jazz';
+  if (/ロック|rock|激し/i.test(t)) return 'rock';
+  return null; // No specific mood detected
+}
+
+async function mcHandleBgmIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  mcAddSystemMessage('BGMライブラリを検索中...', 'info');
+  
+  // Load BGM library
+  const library = await mcLoadBgmLibrary();
+  if (!library || library.length === 0) {
+    mcAddSystemMessage('BGMライブラリが空です。管理画面からBGMを登録してください。', 'error');
+    return;
+  }
+  
+  // Check for "BGMを削除/外す/消す" intent
+  if (/削除|外す|消す|なくす|なし|remove|off/i.test(text)) {
+    await mcRemoveBgm();
+    return;
+  }
+  
+  // Match mood from user text
+  const mood = mcGuessBgmMood(text);
+  let candidates = library;
+  if (mood) {
+    const moodMatches = library.filter(b => 
+      (b.mood && b.mood.toLowerCase().includes(mood)) ||
+      (b.tags && b.tags.toLowerCase().includes(mood)) ||
+      (b.name && b.name.toLowerCase().includes(mood))
+    );
+    if (moodMatches.length > 0) candidates = moodMatches;
+  }
+  
+  // Pick a random candidate
+  const bgm = candidates[Math.floor(Math.random() * candidates.length)];
+  
+  // Get first visible scene to attach BGM
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  const firstSceneId = scenes[0].id;
+  
+  mcAddSystemMessage(`「${bgm.name}」をBGMとして設定中...`, 'info');
+  
+  try {
+    // First deactivate any existing BGM assignments on all scenes
+    for (const scene of scenes) {
+      try {
+        // Get existing BGM assignments
+        const existing = await axios.get(`/api/scenes/${scene.id}/audio-assignments`);
+        const bgmAssignments = (existing.data?.assignments || []).filter(a => a.audio_type === 'bgm' && a.is_active);
+        for (const a of bgmAssignments) {
+          await axios.delete(`/api/scenes/${scene.id}/audio-assignments/${a.id}`);
+        }
+      } catch (_) {}
+    }
+    
+    // Assign BGM to first scene (loop=true so it plays across all scenes)
+    const res = await axios.post(`/api/scenes/${firstSceneId}/audio-assignments`, {
+      audio_library_type: 'system',
+      audio_type: 'bgm',
+      system_audio_id: bgm.id,
+      start_ms: 0,
+      volume_override: 0.2,
+      loop_override: true,
+      fade_in_ms_override: 1000,
+      fade_out_ms_override: 1500,
+    });
+    
+    if (res.data?.id || res.data?.assignment) {
+      MC._currentBgm = bgm;
+      mcAddSystemMessage(
+        `♪ BGM「${bgm.name}」を設定しました！` +
+        (mood ? ` (${mood}系)` : '') +
+        `\n再ビルドで動画に反映されます。`,
+        'success'
+      );
+      mcSetEditBanner(`♪ BGM: ${bgm.name}`, true);
+      // Update assets display
+      mcUpdateBgmDisplay(bgm);
+    } else {
+      mcAddSystemMessage('BGMの設定に失敗しました。', 'error');
+    }
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`BGM設定エラー: ${errMsg}`, 'error');
+  }
+}
+
+async function mcRemoveBgm() {
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  let removed = 0;
+  for (const scene of scenes) {
+    try {
+      const existing = await axios.get(`/api/scenes/${scene.id}/audio-assignments`);
+      const bgmAssignments = (existing.data?.assignments || []).filter(a => a.audio_type === 'bgm' && a.is_active);
+      for (const a of bgmAssignments) {
+        await axios.delete(`/api/scenes/${scene.id}/audio-assignments/${a.id}`);
+        removed++;
+      }
+    } catch (_) {}
+  }
+  MC._currentBgm = null;
+  mcUpdateBgmDisplay(null);
+  mcSetEditBanner('', false);
+  mcAddSystemMessage(
+    removed > 0 ? 'BGMを削除しました。再ビルドで反映されます。' : 'BGMは設定されていません。',
+    removed > 0 ? 'success' : 'info'
+  );
+}
+
+// Update left board BGM display
+function mcUpdateBgmDisplay(bgm) {
+  let el = document.getElementById('mcBgmDisplay');
+  if (!el) {
+    // Create BGM display element after Assets summary
+    const summary = document.getElementById('mcAssetsSummary');
+    if (!summary) return;
+    el = document.createElement('div');
+    el.id = 'mcBgmDisplay';
+    el.className = 'mb-2';
+    summary.insertAdjacentElement('afterend', el);
+  }
+  
+  if (!bgm) {
+    el.classList.add('hidden');
+    el.innerHTML = '';
+    return;
+  }
+  
+  el.classList.remove('hidden');
+  el.innerHTML = `
+    <div class="bg-purple-50 rounded-lg border border-purple-200 px-3 py-2 flex items-center justify-between">
+      <div class="flex items-center gap-2 text-xs text-purple-700">
+        <i class="fas fa-music"></i>
+        <span class="font-semibold">BGM: ${bgm.name}</span>
+      </div>
+      <button onclick="mcRemoveBgmFromBoard()" class="text-[10px] text-purple-400 hover:text-purple-700">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+  `;
+}
+
+async function mcRemoveBgmFromBoard() {
+  await mcRemoveBgm();
+}
+
+// ============================================================
 // Chat Messages
 // ============================================================
 
@@ -1234,6 +1451,10 @@ function mcSetUIState(state) {
       if (vpIdle) vpIdle.classList.add('hidden');
       // T2: Clear edit banner on idle
       mcSetEditBanner('', false);
+      // P-4: Clear BGM display on idle
+      MC._bgmChecked = false;
+      MC._currentBgm = null;
+      if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
       MC.runId = null;
       MC.projectId = null;
       MC.phase = null;
@@ -1736,7 +1957,10 @@ function mcStartNew() {
   MC._selectedSceneIdx = null;
   MC._regeneratingSceneId = null;
   MC._lastEditInstruction = null;
+  MC._bgmChecked = false;
+  MC._currentBgm = null;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
+  if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   
   // Clear chat
   const container = document.getElementById('mcChatMessages');
