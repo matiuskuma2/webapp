@@ -690,9 +690,9 @@ async function processTextChunks(
   const remainingTarget = Math.max(1, targetSceneCount - existingScenesCount)
   const remainingChunks = Math.max(1, pendingChunks.length)  // ★ 修正: pendingChunks.lengthを使用
   
-  // chunk単位の目標シーン数（上限10シーンに制限）
-  // NOTE: 200シーン対応のため5→10に緩和（2026-01-28）
-  const MAX_SCENES_PER_CHUNK = 10
+  // chunk単位の目標シーン数（上限20シーンに制限）
+  // NOTE: P-1で200シーン対応のため10→20に緩和
+  const MAX_SCENES_PER_CHUNK = 20
   const baseChunkTarget = Math.ceil(remainingTarget / remainingChunks)
   const chunkTargetScenes = Math.min(baseChunkTarget, MAX_SCENES_PER_CHUNK)
   
@@ -1726,7 +1726,7 @@ ${chunkText}
         scenes: {
           type: 'array',
           minItems: 1,
-          maxItems: 10,  // NOTE: 200シーン対応のため5→10に緩和（2026-01-28）
+          maxItems: 20,  // NOTE: P-1で200シーン対応のため10→20に緩和
           items: {
             type: 'object',
             properties: {
@@ -1875,7 +1875,7 @@ ${brokenJson}`
         scenes: {
           type: 'array',
           minItems: 1,
-          maxItems: 10,  // NOTE: 200シーン対応（2026-01-28）
+          maxItems: 20,  // NOTE: P-1で200シーン対応のため10→20に緩和
           items: {
             type: 'object',
             properties: {

@@ -637,9 +637,16 @@ function mcUpdateFromStatus(data) {
       MC._videoDoneNotified = true;
       mcAddSystemMessage(
         '<div>✅ 動画が完成しました！</div>'
-        + '<div class="mt-1 text-sm">下のパネルからダウンロードできます。</div>',
+        + '<div class="mt-1 text-sm">左ボードで再生できます。</div>',
         'success'
       );
+      // P-0: One-shot smooth scroll to video preview on left board
+      setTimeout(() => {
+        const vp = document.getElementById('mcBoardVideoPreview');
+        if (vp && !vp.classList.contains('hidden')) {
+          vp.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      }, 500);
     }
     if (vs === 'failed' && !MC._videoFailedNotified) {
       MC._videoFailedNotified = true;
@@ -922,6 +929,13 @@ function mcSelectScene(sceneId, idx) {
 
 // P-2: Handle chat input during ready phase (scene editing commands)
 async function mcHandleSceneEdit(text) {
+  // P-2 Lock check: only allow regeneration in 'ready' phase
+  const activePhases = ['formatting', 'awaiting_ready', 'generating_images', 'generating_audio'];
+  if (activePhases.includes(MC.phase)) {
+    mcAddSystemMessage('生成中のため画像再生成はできません。完了後に再試行してください。', 'error');
+    return;
+  }
+  
   // Parse which scene to edit — explicit reference or selected scene
   let targetSceneId = MC._selectedSceneId;
   let targetSceneIdx = MC._selectedSceneIdx;
