@@ -67,6 +67,11 @@ const MC = {
   // T3: Production panel — dirty tracking & change log
   _dirtyChanges: [],  // [{type, sceneIdx, label, ts}] — cleared on rebuild
   _lastRebuildTs: null,
+
+  // I2V: Image-to-Video generation tracking
+  // { sceneId, sceneIdx, videoId, pollTimer }
+  _i2vGenerating: null,
+  _i2vChecked: false,
 };
 
 // ============================================================
@@ -303,6 +308,16 @@ async function mcSendMessage() {
     }
     if (isDialogueIntent) {
       await mcHandleDialogueIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
+    // I2V: Image-to-Video generation intent
+    const isI2vIntent = /(?:シーン|scene|Scene)\s*\d+\s*(?:を|の)?\s*(?:動画化|動画にして|動画生成|I2V|i2v|ショート動画|短尺動画|ビデオ化|映像化|アニメーション化|動く|動かして)/i.test(text)
+      || /(?:動画化|I2V|i2v|動画生成|ビデオ生成|ショート動画生成|映像化|アニメーション化)/i.test(text);
+    if (isI2vIntent) {
+      await mcHandleI2vIntent(text);
       input.value = '';
       updateCharCount();
       return;
@@ -698,6 +713,11 @@ function mcUpdateFromStatus(data) {
       MC._seChecked = true;
       mcCheckExistingSe();
     }
+    // I2V: Check for in-progress I2V jobs on first ready (one-shot resume)
+    if (!MC._i2vChecked) {
+      MC._i2vChecked = true;
+      mcCheckExistingI2v();
+    }
     
     // One-shot chat bubble when video.state transitions to done/failed
     const vs = data.progress?.video?.state;
@@ -942,6 +962,12 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
       ? '<span class="scene-badge bg-cyan-100 text-cyan-700 ml-1"><i class="fas fa-play-circle mr-0.5"></i>動画</span>'
       : '';
     
+    // I2V: Show generating badge if this scene has I2V in progress
+    const isI2vScene = MC._i2vGenerating && MC._i2vGenerating.sceneId === scene.id;
+    const i2vBadge = isI2vScene
+      ? '<span class="scene-badge bg-violet-100 text-violet-700 ml-1"><i class="fas fa-spinner fa-spin mr-0.5"></i>I2V中</span>'
+      : '';
+    
     // T3: Dirty badge — check if this scene has pending changes since last rebuild
     const hasDirty = MC._dirtyChanges?.some(d => d.sceneIdx === idx + 1);
     const dirtyDot = hasDirty ? '<span class="inline-block w-1.5 h-1.5 bg-orange-500 rounded-full ml-1" title="動画に未反映の変更あり"></span>' : '';
@@ -973,6 +999,7 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
               ${audioBadge}
               ${seBadge}
               ${datBadge}
+              ${i2vBadge}
             </div>
           </div>
           <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || 'シーン ' + (idx + 1)}</p>
@@ -1848,12 +1875,267 @@ async function mcHandleDatIntent(text) {
       );
     } else if (errCode === 'NO_COMPLETED_VIDEO') {
       mcAddSystemMessage(
-        `\u30b7\u30fc\u30f3${sceneIdx}\u306b\u306f\u307e\u3060\u52d5\u753b\uff08I2V\uff09\u304c\u751f\u6210\u3055\u308c\u3066\u3044\u307e\u305b\u3093\u3002\nI2V\u751f\u6210\u3092\u5148\u306b\u5b9f\u884c\u3057\u3066\u304b\u3089\u5207\u308a\u66ff\u3048\u3066\u304f\u3060\u3055\u3044\u3002`,
+        `シーン${sceneIdx}にはまだ動画（I2V）が生成されていません。\n「シーン${sceneIdx}を動画にして」でI2V生成を開始できます。`,
         'error'
       );
     } else {
       mcAddSystemMessage(`\u8868\u793a\u5207\u66ff\u30a8\u30e9\u30fc: ${errMsg}`, 'error');
     }
+  }
+}
+
+// ============================================================
+// I2V: Image-to-Video Generation via Chat
+// Uses: POST /api/scenes/:sceneId/generate-video → poll status → auto-switch DAT to 'video'
+// ============================================================
+
+async function mcHandleI2vIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  // Already generating?
+  if (MC._i2vGenerating) {
+    const g = MC._i2vGenerating;
+    mcAddSystemMessage(
+      `シーン${g.sceneIdx}のI2V動画を生成中です。完了までお待ちください。`,
+      'info'
+    );
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNumMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)/i);
+  let targetScene = null;
+  let sceneIdx = 0;
+  
+  if (sceneNumMatch) {
+    const idx = parseInt(sceneNumMatch[1], 10) - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+      sceneIdx = idx + 1;
+    } else {
+      mcAddSystemMessage(`シーン${sceneNumMatch[1]}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+    if (targetScene) sceneIdx = scenes.indexOf(targetScene) + 1;
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage(
+      '対象のシーンを指定してください。\n例:「シーン3を動画にして」「シーン1をI2V生成」',
+      'info'
+    );
+    return;
+  }
+  
+  // Check scene has an image
+  if (!targetScene.has_image || targetScene.image_status !== 'completed') {
+    mcAddSystemMessage(
+      `シーン${sceneIdx}にはまだ画像が完成していません。\n画像が完成してからI2V生成を実行してください。`,
+      'error'
+    );
+    return;
+  }
+  
+  // Extract optional prompt from text (after keywords)
+  let userPrompt = null;
+  const promptMatch = text.match(/(?:プロンプト|prompt|指示|動き)[：:]\s*(.+)/i);
+  if (promptMatch) {
+    userPrompt = promptMatch[1].trim();
+  }
+  
+  mcAddSystemMessage(`🎥 シーン${sceneIdx}のI2V動画生成を開始します...`, 'info');
+  mcSetEditBanner(`🎥 シーン${sceneIdx}: I2V動画生成中...`, true);
+  
+  try {
+    const reqBody = {};
+    if (userPrompt) reqBody.prompt = userPrompt;
+    
+    const res = await axios.post(`/api/scenes/${targetScene.id}/generate-video`, reqBody, { timeout: 30000 });
+    const videoId = res.data?.video_generation?.id || res.data?.id;
+    
+    if (!videoId) {
+      mcAddSystemMessage('I2V生成レスポンスからvideo IDを取得できませんでした。', 'error');
+      return;
+    }
+    
+    mcAddSystemMessage(
+      `🎬 シーン${sceneIdx}のI2V動画生成を開始しました！（ID: ${videoId}）\n自動でステータスを監視します。完了まで数分かかります。`,
+      'success'
+    );
+    
+    // Set I2V generating state
+    MC._i2vGenerating = {
+      sceneId: targetScene.id,
+      sceneIdx: sceneIdx,
+      videoId: videoId,
+      pollTimer: null,
+    };
+    
+    // Start polling
+    mcStartI2vPolling();
+    
+    // Track change
+    mcTrackChange('image', sceneIdx, 'I2V動画生成開始');
+    
+    // Force poll to update scene card badges
+    mcForcePollSoon();
+    
+  } catch (err) {
+    const errCode = err.response?.data?.error?.code;
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    
+    if (errCode === 'GENERATION_IN_PROGRESS') {
+      mcAddSystemMessage(
+        `シーン${sceneIdx}のI2V動画は既に生成中です。完了までお待ちください。`,
+        'info'
+      );
+    } else if (errCode === 'NO_ACTIVE_IMAGE') {
+      mcAddSystemMessage(
+        `シーン${sceneIdx}にアクティブな画像がありません。\n画像を生成してからI2V生成を実行してください。`,
+        'error'
+      );
+    } else {
+      mcAddSystemMessage(`I2V生成エラー: ${errMsg}`, 'error');
+    }
+    mcSetEditBanner('', false);
+  }
+}
+
+// I2V: Polling for video generation status
+function mcStartI2vPolling() {
+  if (!MC._i2vGenerating) return;
+  
+  // Clear any existing timer
+  if (MC._i2vGenerating.pollTimer) {
+    clearInterval(MC._i2vGenerating.pollTimer);
+  }
+  
+  const pollInterval = 6000; // 6 seconds
+  MC._i2vGenerating.pollTimer = setInterval(async () => {
+    await mcPollI2vStatus();
+  }, pollInterval);
+  
+  // Also poll immediately
+  mcPollI2vStatus();
+}
+
+async function mcPollI2vStatus() {
+  if (!MC._i2vGenerating) return;
+  
+  const { sceneId, sceneIdx, videoId } = MC._i2vGenerating;
+  
+  try {
+    const res = await axios.get(`/api/scenes/${sceneId}/videos/${videoId}/status`, { timeout: 15000 });
+    const status = res.data?.status;
+    const progressStage = res.data?.progress_stage || '';
+    const elapsed = res.data?.elapsed_minutes || 0;
+    
+    if (status === 'completed') {
+      // Success! Stop polling
+      mcStopI2vPolling();
+      
+      const videoUrl = res.data?.r2_url;
+      mcAddSystemMessage(
+        `✅ シーン${sceneIdx}のI2V動画が完成しました！\n表示タイプを「動画」に自動切替します。`,
+        'success'
+      );
+      
+      // Auto-switch display_asset_type to 'video'
+      try {
+        await axios.put(`/api/scenes/${sceneId}/display-asset-type`, { display_asset_type: 'video' });
+        mcAddSystemMessage(
+          `🔄 シーン${sceneIdx}を動画表示に切り替えました。再ビルドで全体動画に反映されます。`,
+          'success'
+        );
+        mcTrackChange('image', sceneIdx, 'I2V完了 → 動画表示');
+      } catch (datErr) {
+        console.warn('[I2V] Auto DAT switch failed:', datErr);
+        mcAddSystemMessage(
+          `I2V動画は完成しましたが、表示切替に失敗しました。\n「シーン${sceneIdx}を動画表示にして」と入力してください。`,
+          'info'
+        );
+      }
+      
+      mcSetEditBanner(`✅ シーン${sceneIdx}: I2V動画完成！再ビルドで反映`, true);
+      MC._i2vGenerating = null;
+      mcForcePollSoon();
+      
+    } else if (status === 'failed') {
+      // Failed — stop polling
+      mcStopI2vPolling();
+      
+      const errMsg = res.data?.error?.message || '不明なエラー';
+      mcAddSystemMessage(
+        `⚠️ シーン${sceneIdx}のI2V動画生成に失敗しました。\nエラー: ${errMsg}\n再度「シーン${sceneIdx}を動画にして」で再試行できます。`,
+        'error'
+      );
+      mcSetEditBanner(`⚠️ シーン${sceneIdx}: I2V失敗 — 再試行可能`, true);
+      MC._i2vGenerating = null;
+      mcForcePollSoon();
+      
+    } else {
+      // Still generating — update banner
+      let progress = '生成中';
+      if (elapsed > 0) progress += `（${elapsed}分経過）`;
+      if (progressStage && progressStage !== 'generating') progress += ` [${progressStage}]`;
+      mcSetEditBanner(`🎥 シーン${sceneIdx}: I2V ${progress}...`, true);
+    }
+  } catch (err) {
+    console.warn('[I2V] Poll error:', err.message);
+    // Don't stop polling on transient errors
+  }
+}
+
+function mcStopI2vPolling() {
+  if (MC._i2vGenerating?.pollTimer) {
+    clearInterval(MC._i2vGenerating.pollTimer);
+    MC._i2vGenerating.pollTimer = null;
+  }
+}
+
+// I2V: Check for in-progress I2V jobs on project load (resume polling)
+async function mcCheckExistingI2v() {
+  if (!MC.projectId) return;
+  try {
+    const res = await axios.get(`/api/projects/${MC.projectId}/generating-videos`, { timeout: 10000 });
+    const generating = res.data?.generating_videos || [];
+    
+    if (generating.length > 0) {
+      const job = generating[0]; // Resume the most recent
+      const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+      const targetScene = scenes.find(s => s.id === job.scene_id);
+      const sceneIdx = targetScene ? scenes.indexOf(targetScene) + 1 : 0;
+      
+      if (sceneIdx > 0) {
+        MC._i2vGenerating = {
+          sceneId: job.scene_id,
+          sceneIdx: sceneIdx,
+          videoId: job.id,
+          pollTimer: null,
+        };
+        mcAddSystemMessage(
+          `🎥 シーン${sceneIdx}のI2V動画生成が進行中です。自動で監視を再開します。`,
+          'info'
+        );
+        mcSetEditBanner(`🎥 シーン${sceneIdx}: I2V生成中...`, true);
+        mcStartI2vPolling();
+      }
+    }
+  } catch (err) {
+    console.warn('[I2V] Existing check failed:', err.message);
   }
 }
 
@@ -2731,6 +3013,10 @@ function mcStartNew() {
   MC._dialogueEditMode = null;
   MC._dirtyChanges = [];
   MC._lastRebuildTs = null;
+  // I2V: Stop polling and clear state
+  mcStopI2vPolling();
+  MC._i2vGenerating = null;
+  MC._i2vChecked = false;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();
