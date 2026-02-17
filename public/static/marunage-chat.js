@@ -2590,6 +2590,9 @@ async function mcHandleComicEditIntent(text) {
   // Check for direct edit command: "吹き出し2を〇〇に" or "吹き出し1の文を〇〇に変更"
   const directEditMatch = text.match(/吹き出し\s*(\d+)\s*(?:を|の文を|の文字を|のテキストを)\s*[「『]?(.+?)[」』]?\s*(?:に変更|にして|に修正)?$/);
   
+  // v3: Check for direct position command: "吹き出し2を上に" etc.
+  const directPosMatch = text.match(/吹き出し\s*(\d+)\s*(?:を)?\s*(上|下|左|右|左上|右上|左下|右下|中央|真ん中|少し上|少し下|少し左|少し右)\s*(?:に|へ)?(?:移動|動かし)?/);
+  
   // Fetch existing comic data
   try {
     const comicRes = await axios.get(`/api/scenes/${targetScene.id}/comic`, { timeout: 10000 });
@@ -2638,6 +2641,26 @@ async function mcHandleComicEditIntent(text) {
       return;
     }
     
+    // v3: If direct position command was matched, process it immediately
+    if (directPosMatch) {
+      const bubbleNum = parseInt(directPosMatch[1], 10);
+      const direction = directPosMatch[2];
+      
+      if (bubbleNum < 1 || bubbleNum > bubbles.length) {
+        mcAddSystemMessage(`吹き出し${bubbleNum}は存在しません（全${bubbles.length}個）。`, 'error');
+        return;
+      }
+      
+      await mcMoveComicBubble(
+        targetScene.id, sceneIdx,
+        { ...comicData, draft: JSON.parse(JSON.stringify(draft)) },
+        targetScene.image_url,
+        comicRes.data?.comic_data?.base_image_generation_id,
+        bubbleNum, direction
+      );
+      return;
+    }
+    
     // Show bubble list and enter edit mode
     let listHtml = `📖 シーン${sceneIdx}の吹き出し一覧（${bubbles.length}個）:\n\n`;
     
@@ -2654,7 +2677,8 @@ async function mcHandleComicEditIntent(text) {
     }
     
     listHtml += `\n✏️ 編集方法:\n`;
-    listHtml += `• 番号とテキストを入力: 「2 新しいテキスト」\n`;
+    listHtml += `• テキスト: 「番号 新しいテキスト」\n`;
+    listHtml += `• 位置移動: 「番号 上/下/左/右/少し上/中央」\n`;
     listHtml += `• やめる場合: 「やめ」「キャンセル」`;
     
     mcAddSystemMessage(listHtml, 'info');
@@ -2688,29 +2712,49 @@ async function mcHandleComicEditReply(text) {
     return;
   }
   
-  // Parse: "番号 新テキスト" or "番号「新テキスト」"
+  const draft = mode.comicData.draft;
+  const bubbles = draft?.bubbles || [];
+  
+  // v3: Position command — "番号 方向" (e.g., "2 上", "1 少し右", "3 中央")
+  const posMatch = text.match(/^(\d+)\s+(上|下|左|右|左上|右上|左下|右下|中央|真ん中|少し上|少し下|少し左|少し右)$/);
+  if (posMatch) {
+    const bubbleNum = parseInt(posMatch[1], 10);
+    const direction = posMatch[2];
+    
+    if (bubbleNum < 1 || bubbleNum > bubbles.length) {
+      mcAddSystemMessage(`吹き出し${bubbleNum}は存在しません（全${bubbles.length}個）。`, 'error');
+      return;
+    }
+    
+    await mcMoveComicBubble(
+      mode.sceneId, mode.sceneIdx,
+      mode.comicData, mode.imageUrl, mode.baseImageGenId,
+      bubbleNum, direction
+    );
+    // Stay in edit mode for further edits
+    return;
+  }
+  
+  // Parse text edit: "番号 新テキスト" or "番号「新テキスト」"
   const editMatch = text.match(/^(\d+)\s+(.+)$/) || text.match(/^(\d+)\s*[「『](.+?)[」』]$/);
   
   if (!editMatch) {
     mcAddSystemMessage(
-      '入力形式: 「番号 新しいテキスト」\n例: 「2 こんにちは！」\nやめる: 「やめ」',
+      '入力形式:\n• テキスト: 「番号 新しいテキスト」\n• 位置: 「番号 上/下/左/右/少し上/中央」\n例: 「2 こんにちは！」「1 少し右」\nやめる: 「やめ」',
       'info'
     );
     return;
   }
   
   const bubbleNum = parseInt(editMatch[1], 10);
-  const newText = editMatch[2].trim();
-  
-  const draft = mode.comicData.draft;
-  const bubbles = draft?.bubbles || [];
+  const inputText = editMatch[2].trim();
   
   if (bubbleNum < 1 || bubbleNum > bubbles.length) {
     mcAddSystemMessage(`吹き出し${bubbleNum}は存在しません（全${bubbles.length}個）。`, 'error');
     return;
   }
   
-  if (!newText) {
+  if (!inputText) {
     mcAddSystemMessage('テキストが空です。', 'error');
     return;
   }
@@ -2718,11 +2762,10 @@ async function mcHandleComicEditReply(text) {
   await mcEditComicBubbleText(
     mode.sceneId, mode.sceneIdx,
     mode.comicData, mode.imageUrl, mode.baseImageGenId,
-    bubbleNum, newText
+    bubbleNum, inputText
   );
   
-  // Exit edit mode after successful edit
-  MC._comicEditMode = null;
+  // Stay in edit mode for further edits
 }
 
 // Core: Edit a bubble's text → re-render → re-publish
@@ -2785,6 +2828,101 @@ async function mcEditComicBubbleText(sceneId, sceneIdx, comicData, imageUrl, bas
   } catch (err) {
     const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
     mcAddSystemMessage(`吹き出し更新エラー: ${errMsg}`, 'error');
+    mcSetEditBanner('', false);
+  }
+}
+
+// Comic v3: Move a bubble's position → re-render → re-publish
+async function mcMoveComicBubble(sceneId, sceneIdx, comicData, imageUrl, baseImageGenId, bubbleNum, direction) {
+  const draft = comicData.draft;
+  const bubbles = draft.bubbles || [];
+  const bubble = bubbles[bubbleNum - 1];
+  
+  if (!bubble || !bubble.position) {
+    mcAddSystemMessage(`吹き出し${bubbleNum}の位置データがありません。`, 'error');
+    return;
+  }
+  
+  const pos = bubble.position;
+  const oldX = pos.x;
+  const oldY = pos.y;
+  
+  // Movement amounts
+  const step = 0.10;     // normal move
+  const smallStep = 0.05; // "少し" prefix
+  
+  const isSmall = direction.startsWith('少し');
+  const dir = isSmall ? direction.replace('少し', '') : direction;
+  const delta = isSmall ? smallStep : step;
+  
+  switch (dir) {
+    case '上':    pos.y = Math.max(0.05, pos.y - delta); break;
+    case '下':    pos.y = Math.min(0.95, pos.y + delta); break;
+    case '左':    pos.x = Math.max(0.05, pos.x - delta); break;
+    case '右':    pos.x = Math.min(0.95, pos.x + delta); break;
+    case '左上':  pos.x = Math.max(0.05, pos.x - delta); pos.y = Math.max(0.05, pos.y - delta); break;
+    case '右上':  pos.x = Math.min(0.95, pos.x + delta); pos.y = Math.max(0.05, pos.y - delta); break;
+    case '左下':  pos.x = Math.max(0.05, pos.x - delta); pos.y = Math.min(0.95, pos.y + delta); break;
+    case '右下':  pos.x = Math.min(0.95, pos.x + delta); pos.y = Math.min(0.95, pos.y + delta); break;
+    case '中央':
+    case '真ん中':
+      pos.x = 0.5;
+      pos.y = 0.5;
+      break;
+    default:
+      mcAddSystemMessage(`方向「${direction}」は認識できません。上/下/左/右/少し上/中央 等を使ってください。`, 'error');
+      return;
+  }
+  
+  // Round to 2 decimal places
+  pos.x = Math.round(pos.x * 100) / 100;
+  pos.y = Math.round(pos.y * 100) / 100;
+  
+  const dirLabel = direction;
+  mcAddSystemMessage(`↕️ 吹き出し${bubbleNum}を${dirLabel}に移動中...`, 'info');
+  mcSetEditBanner(`📖 シーン${sceneIdx}: 吹き出し${bubbleNum}移動中...`, true);
+  
+  try {
+    // Re-render offscreen
+    const imageData = await mcRenderComicOffscreen(imageUrl, draft);
+    
+    if (!imageData) {
+      // Revert position
+      pos.x = oldX;
+      pos.y = oldY;
+      mcAddSystemMessage('漫画画像のレンダリングに失敗しました。', 'error');
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    // Re-publish
+    const publishRes = await axios.post(`/api/scenes/${sceneId}/comic/publish`, {
+      image_data: imageData,
+      base_image_generation_id: baseImageGenId,
+      draft: draft,
+    }, { timeout: 30000 });
+    
+    if (!publishRes.data?.success) {
+      pos.x = oldX;
+      pos.y = oldY;
+      mcAddSystemMessage('漫画の再公開に失敗しました。', 'error');
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    mcAddSystemMessage(
+      `✅ 吹き出し${bubbleNum}を${dirLabel}に移動しました！\n続けて編集できます（「やめ」で終了）。`,
+      'success'
+    );
+    mcSetEditBanner(`✅ シーン${sceneIdx}: 吹き出し${bubbleNum}移動完了`, true);
+    mcTrackChange('image', sceneIdx, `吹き出し${bubbleNum}位置移動(${dirLabel})`);
+    mcForcePollSoon();
+    
+  } catch (err) {
+    pos.x = oldX;
+    pos.y = oldY;
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`吹き出し移動エラー: ${errMsg}`, 'error');
     mcSetEditBanner('', false);
   }
 }
