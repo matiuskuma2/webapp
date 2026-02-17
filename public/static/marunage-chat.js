@@ -4093,25 +4093,28 @@ async function mcUpdateBoardVideoPreview(video) {
     return;
   }
 
-  // Done — show video player (fetch fresh URL if needed for presigned URL expiry)
+  // Done — show video player (status API now returns fresh presigned URL each poll)
   if (video.state === 'done' && (video.download_url || video.build_id)) {
     if (placeholder) placeholder.classList.add('hidden');
     
-    // Try to get a fresh URL via video-builds endpoint (handles presigned URL expiry)
     let videoUrl = video.download_url;
-    if (video.build_id && player && player.getAttribute('data-build-id') !== String(video.build_id)) {
+    
+    // Fallback: if no download_url from status but build_id exists, fetch fresh URL
+    if (!videoUrl && video.build_id) {
       try {
         const freshRes = await axios.get(`/api/video-builds/${video.build_id}`, { timeout: 10000 });
         const freshUrl = freshRes.data?.build?.download_url;
         if (freshUrl) videoUrl = freshUrl;
       } catch (e) {
-        console.warn('[Video] Fresh URL fetch failed, using cached URL:', e.message);
+        console.warn('[Video] Fresh URL fetch failed:', e.message);
       }
     }
     
     if (player && videoUrl) {
       player.classList.remove('hidden');
-      if (player.getAttribute('data-src') !== videoUrl) {
+      // Always update src — status API returns fresh presigned URL each poll
+      const currentSrc = player.getAttribute('data-src');
+      if (currentSrc !== videoUrl) {
         player.setAttribute('data-src', videoUrl);
         player.setAttribute('data-build-id', String(video.build_id || ''));
         player.src = videoUrl;

@@ -3705,32 +3705,25 @@ videoGeneration.get('/video-builds/:buildId', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Build not found' } }, 404);
     }
     
-    // download_url が CloudFront URL で 403 になるケース対応:
-    // Remotion Lambda バケット (remotionlambda-*) は CloudFront 未設定のため
-    // s3_output_key + s3_bucket から presigned URL を動的生成
-    if (build.status === 'completed' && build.download_url && build.s3_output_key) {
-      const dlUrl = build.download_url as string;
-      const isCloudFrontUrl = dlUrl.includes('.cloudfront.net');
-      const isRemotionBucket = (build.s3_bucket as string || '').startsWith('remotionlambda-');
-      
-      if (isCloudFrontUrl && isRemotionBucket) {
-        // CloudFront が Remotion Lambda バケットをカバーしていないため presigned URL を生成
-        try {
-          const freshUrl = await generateS3PresignedUrl(
-            build.s3_output_key as string,
-            c.env,
-            { bucket: build.s3_bucket as string, expiresIn: 86400 }
-          );
-          if (freshUrl) {
-            build.download_url = freshUrl;
-            // DB も更新（fire-and-forget）
-            c.env.DB.prepare(`
-              UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).bind(freshUrl, buildId).run().catch(() => {});
-          }
-        } catch (e) {
-          console.error(`[VideoBuild] Presigned URL generation failed for build ${buildId}:`, e);
+    // Presigned URL 期限切れ対策:
+    // download_url は S3 presigned URL (86400秒有効) のため、
+    // 完了済みビルドでは常に s3_output_key + s3_bucket から新規 presigned URL を生成
+    if (build.status === 'completed' && build.s3_output_key) {
+      try {
+        const freshUrl = await generateS3PresignedUrl(
+          build.s3_output_key as string,
+          c.env,
+          { bucket: build.s3_bucket as string || undefined, expiresIn: 86400 }
+        );
+        if (freshUrl) {
+          build.download_url = freshUrl;
+          // DB も更新（fire-and-forget）
+          c.env.DB.prepare(`
+            UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(freshUrl, buildId).run().catch(() => {});
         }
+      } catch (e) {
+        console.error(`[VideoBuild] Presigned URL generation failed for build ${buildId}:`, e);
       }
     }
     
