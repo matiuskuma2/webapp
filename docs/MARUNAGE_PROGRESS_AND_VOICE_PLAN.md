@@ -1,7 +1,10 @@
 # 丸投げチャット — 進捗・音声アーキテクチャ・PersonaPlex-7B統合計画
 
-> 最終更新: 2026-02-17 (commit df9bf59)
+> 最終更新: 2026-02-17 (commit df9bf59 + docs update)
 > 本ドキュメントは「今どこまでできていて、次に何をすべきか」を即座に再開できるよう網羅的に記録する。
+> 
+> **関連ドキュメント**: 
+> - [Audio SSOT 完全仕様書](./AUDIO_SSOT_SPEC.md) — テーブル定義、API契約、禁止ルール、テストケースの網羅的仕様
 
 ---
 
@@ -152,21 +155,38 @@ mcOpenVideoModal          — 動画モーダル
 3. fallback → google: ja-JP-Neural2-B
 ```
 
-### 2.4 API エンドポイント（音声関連）
+### 2.4 API エンドポイント（音声関連 — 実コード確認済み）
 
 ```
-GET  /api/tts/voices                         — 全プロバイダーの声一覧
-POST /api/scenes/:sceneId/audio/generate     — 単一シーン音声生成
-POST /api/projects/:projectId/audio/generate-all — 一括音声生成
-GET  /api/projects/:projectId/audio/job-status   — 一括ジョブ進捗
-POST /api/scenes/:sceneId/audio/preview      — プレビュー再生用
-GET  /api/scenes/:sceneId/utterances         — シーンの発話一覧
-PUT  /api/scenes/:sceneId/utterances/:id     — 発話テキスト編集
-GET  /api/scenes/:sceneId/audio-assignments  — シーンのBGM/SFX割当
-PUT  /api/scenes/:sceneId/audio-assignments/:id — SFX start_ms 更新
-POST /api/audio-library/system               — システム音源登録（管理者）
-GET  /api/audio-library/system               — システム音源一覧
+# TTS
+GET  /api/tts/voices                              — 全プロバイダーの声一覧 (audio-generation.ts:942)
+GET  /api/tts/usage                               — TTS使用量 (audio-generation.ts:1015)
+GET  /api/tts/usage/check                         — 使用量チェック (audio-generation.ts:1106)
+POST /api/tts/preview                             — プレビュー再生用 (audio-generation.ts:801)
+
+# Scene Audio (single)
+POST /api/scenes/:id/generate-audio               — 単一シーン音声生成 (audio-generation.ts:99)
+GET  /api/scenes/:id/audio                        — シーンの音声一覧 (audio-generation.ts:360)
+POST /api/audio/:audioId/activate                 — 音声のアクティブ化 (audio-generation.ts:388)
+DELETE /api/audio/:audioId                        — 音声削除 (audio-generation.ts:442)
+POST /api/audio/fix-durations                     — duration修正バッチ (audio-generation.ts:1158)
+
+# Utterance CRUD
+GET  /api/scenes/:sceneId/utterances              — シーンの発話一覧 (utterances.ts:85)
+POST /api/scenes/:sceneId/utterances              — 発話追加 (utterances.ts:209)
+PUT  /api/utterances/:utteranceId                 — 発話編集 (utterances.ts:342)
+DELETE /api/utterances/:utteranceId               — 発話削除 (utterances.ts:491)
+PUT  /api/scenes/:sceneId/utterances/reorder      — 発話並べ替え (utterances.ts:543)
+POST /api/utterances/:utteranceId/generate-audio  — 発話単位の音声生成 (utterances.ts:610)
+
+# Bulk Audio
+POST /api/projects/:projectId/audio/bulk-generate — 一括音声生成 (bulk-audio.ts:554)
+GET  /api/projects/:projectId/audio/bulk-status   — 一括ジョブ進捗 (bulk-audio.ts:682)
+POST /api/projects/:projectId/audio/bulk-cancel   — 一括ジョブキャンセル (bulk-audio.ts:772)
+GET  /api/projects/:projectId/audio/bulk-history   — 一括ジョブ履歴 (bulk-audio.ts:821)
 ```
+
+> 詳細な API 契約 (リクエスト/レスポンス/副作用) は [AUDIO_SSOT_SPEC.md §4](./AUDIO_SSOT_SPEC.md#4-api-contracts-api-契約) を参照
 
 ### 2.5 依存関係マップ（音声→動画ビルド）
 
@@ -209,8 +229,9 @@ scene_audio_assignments (SFX)
 
 ### 3.1 PersonaPlex-7B とは（実態の正確な把握）
 
-**重要な事実**: PersonaPlex-7B は **Speech-to-Speech (S2S) 全二重対話モデル** であり、
-一般的な Text-to-Speech (TTS) モデルではない。
+**重要な事実**: PersonaPlex-7B は **Audio-to-Audio (Speech-to-Speech/S2S) 全二重対話モデル** であり、
+Text-to-Speech (TTS) プロバイダーではない。
+(ref: https://huggingface.co/nvidia/personaplex-7b-v1/tree/main)
 
 | 属性 | 値 |
 |------|-----|
@@ -358,9 +379,16 @@ CREATE TABLE IF NOT EXISTS voice_prompts (
 **PersonaPlex-7B は現時点では MARUMUVI への統合を保留すべき。理由:**
 
 1. **英語のみ対応** — MARUMUVIのユーザーは日本語コンテンツが主
-2. **S2S モデル** — 純粋なTTSモデルではなく、TTSとして使うには非効率
+2. **S2S モデル (TTSではない)** — Audio-to-Audio モデルのため、TTSとして使うには非効率
 3. **インフラコスト** — 月$400-1,200の追加コスト（既存TTS比で10-50倍）
 4. **品質の不確実性** — 日本語でのフィラー・間・敬語トーンの再現は未検証
+
+**統合オプション** (Suno は除外):
+
+| Option | 方式 | 推奨 | 理由 |
+|--------|------|------|------|
+| **A** | 擬似TTS: text → 既存TTS → PersonaPlex で自然化 | ❌ | 2段階処理、コスト2倍、英語のみ |
+| **B** | リアルタイムチャット/音声UI専用 (既存TTSは動画用) | ⚠️ | コア機能に影響なし、英語対応時に再検討 |
 
 **代わりに、次の優先順位でTTS品質を改善すべき:**
 
@@ -368,6 +396,8 @@ CREATE TABLE IF NOT EXISTS voice_prompts (
 2. **ElevenLabs の声拡充** — Multilingual v2 は日本語対応、カスタムボイスクローン可能
 3. **NVIDIA NIM (Riva TTS)** — クラウドAPI として利用可能、日本語TTS対応、GPUデプロイ不要
 4. **PersonaPlex-7B** — 日本語ファインチューニング版リリース後に再検討
+
+> PersonaPlex-7B PoC の詳細手順 (PoC-1 ローカル検証, PoC-2 SageMaker, 判定基準) は [AUDIO_SSOT_SPEC.md §8](./AUDIO_SSOT_SPEC.md#8-personaplex-7b-poc-計画) を参照
 
 ---
 
@@ -385,13 +415,21 @@ CREATE TABLE IF NOT EXISTS voice_prompts (
 
 ### 4.2 インフラ改善
 
-| 優先度 | 項目 | 工数 | 説明 |
-|--------|------|------|------|
-| ★★★ | presigned URL expires_at カラム追加 | 0.5日 | URLパース方式より堅牢（現在はURLパース方式B で対応中） |
+| 優先度 | 項目 | 工数 | 説明 | 状態 |
+|--------|------|------|------|------|
+| ~~★★★~~ | ~~presigned URL 期限切れ対策~~ | ~~0.5日~~ | ~~URLパース方式B で対応~~ | ✅ `df9bf59` |
 | ★★☆ | video_builds CloudFront 導入 | 2-3日 | Remotion Lambda バケットに CloudFront 追加し、presigned URL問題を根本解決 |
 | ★☆☆ | D1 write 最適化 | 1日 | ポーリング毎のUPDATEを条件付きに |
 
-### 4.3 TTS品質改善ロードマップ
+### 4.3 Audio SSOT 整備タスク
+
+| 優先度 | 項目 | 工数 | 説明 |
+|--------|------|------|------|
+| ★★★ | buildBuildRequestV1 と preflight の voice パス統一 | 1日 | `active_audio` パス (v1) と `utterances` パス (v1.5) の不整合修正 → AUDIO_SSOT_SPEC §5.4 参照 |
+| ★★☆ | utterance text 変更時の audio 無効化オプション | 0.5日 | text 変更 → `audio_generation_id = NULL` リセット → AUDIO_SSOT_SPEC §5.2 参照 |
+| ★★☆ | 新プロバイダー追加テンプレート | 0.5日 | `src/utils/TEMPLATE.ts` + `resolveVoice` 分岐 + `/tts/voices` 追加の雛形 → AUDIO_SSOT_SPEC §3.4 参照 |
+
+### 4.4 TTS品質改善ロードマップ
 
 | Phase | 内容 | 期間 |
 |-------|------|------|
@@ -426,8 +464,19 @@ VCS:        GitHub (matiuskuma2/webapp)
 1. `cd /home/user/webapp && git log --oneline -5` で最新commit確認
 2. `npm run build && pm2 start ecosystem.config.cjs` でローカル起動
 3. `curl http://localhost:3000/marunage-chat` で動作確認
-4. 本ドキュメントの「4. 未実装・保留項目」から作業を選択
-5. 実装 → テスト → `git commit` → `npx wrangler pages deploy dist --project-name webapp`
+4. **ドキュメント確認**:
+   - `docs/MARUNAGE_PROGRESS_AND_VOICE_PLAN.md` — 全体進捗・未実装一覧
+   - `docs/AUDIO_SSOT_SPEC.md` — 音声仕様の詳細 (テーブル、API契約、禁止ルール、テストケース)
+5. 本ドキュメントの「4. 未実装・保留項目」から作業を選択
+6. 実装 → テスト → `git commit` → `npx wrangler pages deploy dist --project-name webapp`
+
+### 確定済み技術事項（次回セッションで再確認不要）
+
+- **`settings_json.default_narration_voice`** — キー名確定: `{ provider, voice_id }` オブジェクト
+- **Voice Resolution 優先順位** — character > project_default > fallback (`google:ja-JP-Neural2-B`)
+- **Provider は TEXT 型** — CHECK 制約なし、新プロバイダー追加時に DB migration 不要
+- **PersonaPlex-7B は S2S モデル** — TTS ではない。PoC 計画は AUDIO_SSOT_SPEC §8 に記載
+- **Presigned URL 対策済み** — `isPresignedUrlExpiringSoon()` で 10 分前再生成 + onerror リカバリ
 
 ---
 
