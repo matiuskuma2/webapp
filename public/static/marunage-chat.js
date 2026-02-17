@@ -75,6 +75,8 @@ const MC = {
 
   // Comic: Comic generation state
   _comicGenerating: null, // { sceneId, sceneIdx }
+  // Comic v2: Bubble edit mode (list → number+text edit)
+  _comicEditMode: null, // { sceneId, sceneIdx, comicData, imageUrl, baseImageGenId }
 };
 
 // ============================================================
@@ -326,11 +328,28 @@ async function mcSendMessage() {
       return;
     }
     
+    // Comic v2: If in bubble edit mode, process the edit reply first
+    if (MC._comicEditMode) {
+      await mcHandleComicEditReply(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
     // Comic: Comic generation intent (漫画化 / コミック化 / 吹き出し付き)
     const isComicIntent = /(?:シーン|scene|Scene)\s*\d+\s*(?:を|の)?\s*(?:漫画化|コミック化|漫画にして|コミックにして|吹き出し|吹き出し付き)/i.test(text)
       || /(?:漫画化|コミック化|吹き出しつけて|吹き出し付きにして|吹き出しをつけて)/i.test(text);
     if (isComicIntent) {
       await mcHandleComicIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
+    // Comic v2: Bubble edit / list intent
+    const isComicEditIntent = /(?:吹き出し|バブル|漫画.?修正|漫画.?編集|吹き出し.?一覧|吹き出し.?修正|吹き出し.?変更|吹き出し.?編集)/i.test(text);
+    if (isComicEditIntent) {
+      await mcHandleComicEditIntent(text);
       input.value = '';
       updateCharCount();
       return;
@@ -2521,6 +2540,256 @@ function mcDrawSimpleBubble(ctx, bubble, text, scale) {
 }
 
 // ============================================================
+// Comic v2: Bubble text editing via Chat
+// Flow: list bubbles → select by number → new text → re-render → re-publish
+// SSOT: scenes.comic_data (draft/published) — structure is preserved, only text updated
+// ============================================================
+
+// Show bubble list for a scene and enter edit mode
+async function mcHandleComicEditIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNumMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)/i);
+  let targetScene = null;
+  let sceneIdx = 0;
+  
+  if (sceneNumMatch) {
+    const idx = parseInt(sceneNumMatch[1], 10) - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+      sceneIdx = idx + 1;
+    } else {
+      mcAddSystemMessage(`シーン${sceneNumMatch[1]}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+    if (targetScene) sceneIdx = scenes.indexOf(targetScene) + 1;
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage(
+      '対象のシーンを指定してください。\n例:「シーン3の吹き出し修正」「シーン1の吹き出し一覧」',
+      'info'
+    );
+    return;
+  }
+  
+  // Check for direct edit command: "吹き出し2を〇〇に" or "吹き出し1の文を〇〇に変更"
+  const directEditMatch = text.match(/吹き出し\s*(\d+)\s*(?:を|の文を|の文字を|のテキストを)\s*[「『]?(.+?)[」』]?\s*(?:に変更|にして|に修正)?$/);
+  
+  // Fetch existing comic data
+  try {
+    const comicRes = await axios.get(`/api/scenes/${targetScene.id}/comic`, { timeout: 10000 });
+    const comicData = comicRes.data?.comic_data;
+    
+    if (!comicData || !comicData.published) {
+      mcAddSystemMessage(
+        `シーン${sceneIdx}にはまだ漫画が作成されていません。\n「シーン${sceneIdx}を漫画化して」で先に漫画を作成してください。`,
+        'error'
+      );
+      return;
+    }
+    
+    // Use published data as the base draft for editing
+    const draft = comicData.draft || comicData.published;
+    const bubbles = draft.bubbles || [];
+    const utterances = draft.utterances || [];
+    
+    if (bubbles.length === 0) {
+      mcAddSystemMessage(`シーン${sceneIdx}の漫画に吹き出しがありません。`, 'error');
+      return;
+    }
+    
+    // If direct edit command was matched, process it immediately
+    if (directEditMatch) {
+      const bubbleNum = parseInt(directEditMatch[1], 10);
+      const newText = directEditMatch[2].trim();
+      
+      if (bubbleNum < 1 || bubbleNum > bubbles.length) {
+        mcAddSystemMessage(`吹き出し${bubbleNum}は存在しません（全${bubbles.length}個）。`, 'error');
+        return;
+      }
+      
+      if (!newText) {
+        mcAddSystemMessage('新しいテキストを指定してください。', 'error');
+        return;
+      }
+      
+      await mcEditComicBubbleText(
+        targetScene.id, sceneIdx,
+        { ...comicData, draft: JSON.parse(JSON.stringify(draft)) },
+        targetScene.image_url,
+        comicRes.data?.comic_data?.base_image_generation_id,
+        bubbleNum, newText
+      );
+      return;
+    }
+    
+    // Show bubble list and enter edit mode
+    let listHtml = `📖 シーン${sceneIdx}の吹き出し一覧（${bubbles.length}個）:\n\n`;
+    
+    for (let i = 0; i < bubbles.length; i++) {
+      const b = bubbles[i];
+      const utt = utterances.find(u => u.id === b.utterance_id);
+      const bText = utt?.text || '(テキストなし)';
+      const typeLabel = b.type === 'caption' ? 'テロップ' 
+        : b.type === 'thought' ? '思考' 
+        : b.type === 'whisper' ? 'ささやき'
+        : '吹き出し';
+      const truncText = bText.length > 30 ? bText.substring(0, 30) + '…' : bText;
+      listHtml += `${i + 1}. [${typeLabel}] ${truncText}\n`;
+    }
+    
+    listHtml += `\n✏️ 編集方法:\n`;
+    listHtml += `• 番号とテキストを入力: 「2 新しいテキスト」\n`;
+    listHtml += `• やめる場合: 「やめ」「キャンセル」`;
+    
+    mcAddSystemMessage(listHtml, 'info');
+    
+    // Enter edit mode
+    MC._comicEditMode = {
+      sceneId: targetScene.id,
+      sceneIdx: sceneIdx,
+      comicData: { ...comicData, draft: JSON.parse(JSON.stringify(draft)) },
+      imageUrl: targetScene.image_url,
+      baseImageGenId: comicData.base_image_generation_id || null,
+    };
+    
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`漫画データ取得エラー: ${errMsg}`, 'error');
+  }
+}
+
+// Handle replies in comic edit mode
+async function mcHandleComicEditReply(text) {
+  const mode = MC._comicEditMode;
+  if (!mode) return;
+  
+  mcAddUserMessage(text);
+  
+  // Cancel
+  if (/^(やめ|キャンセル|cancel|戻る|終了)$/i.test(text.trim())) {
+    MC._comicEditMode = null;
+    mcAddSystemMessage('吹き出し編集を終了しました。', 'info');
+    return;
+  }
+  
+  // Parse: "番号 新テキスト" or "番号「新テキスト」"
+  const editMatch = text.match(/^(\d+)\s+(.+)$/) || text.match(/^(\d+)\s*[「『](.+?)[」』]$/);
+  
+  if (!editMatch) {
+    mcAddSystemMessage(
+      '入力形式: 「番号 新しいテキスト」\n例: 「2 こんにちは！」\nやめる: 「やめ」',
+      'info'
+    );
+    return;
+  }
+  
+  const bubbleNum = parseInt(editMatch[1], 10);
+  const newText = editMatch[2].trim();
+  
+  const draft = mode.comicData.draft;
+  const bubbles = draft?.bubbles || [];
+  
+  if (bubbleNum < 1 || bubbleNum > bubbles.length) {
+    mcAddSystemMessage(`吹き出し${bubbleNum}は存在しません（全${bubbles.length}個）。`, 'error');
+    return;
+  }
+  
+  if (!newText) {
+    mcAddSystemMessage('テキストが空です。', 'error');
+    return;
+  }
+  
+  await mcEditComicBubbleText(
+    mode.sceneId, mode.sceneIdx,
+    mode.comicData, mode.imageUrl, mode.baseImageGenId,
+    bubbleNum, newText
+  );
+  
+  // Exit edit mode after successful edit
+  MC._comicEditMode = null;
+}
+
+// Core: Edit a bubble's text → re-render → re-publish
+async function mcEditComicBubbleText(sceneId, sceneIdx, comicData, imageUrl, baseImageGenId, bubbleNum, newText) {
+  const draft = comicData.draft;
+  const bubbles = draft.bubbles || [];
+  const utterances = draft.utterances || [];
+  const bubble = bubbles[bubbleNum - 1];
+  
+  if (!bubble) {
+    mcAddSystemMessage(`吹き出し${bubbleNum}が見つかりません。`, 'error');
+    return;
+  }
+  
+  // Find and update the utterance text
+  const utt = utterances.find(u => u.id === bubble.utterance_id);
+  const oldText = utt?.text || '';
+  
+  if (utt) {
+    utt.text = newText;
+  } else {
+    mcAddSystemMessage(`吹き出し${bubbleNum}のテキストデータが見つかりません。`, 'error');
+    return;
+  }
+  
+  mcAddSystemMessage(`✏️ 吹き出し${bubbleNum}を更新中...\n「${oldText.substring(0, 20)}…」→「${newText.substring(0, 20)}…」`, 'info');
+  mcSetEditBanner(`📖 シーン${sceneIdx}: 吹き出し${bubbleNum}更新中...`, true);
+  
+  try {
+    // Step 1: Re-render offscreen
+    const imageData = await mcRenderComicOffscreen(imageUrl, draft);
+    
+    if (!imageData) {
+      mcAddSystemMessage('漫画画像のレンダリングに失敗しました。', 'error');
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    // Step 2: Re-publish
+    const publishRes = await axios.post(`/api/scenes/${sceneId}/comic/publish`, {
+      image_data: imageData,
+      base_image_generation_id: baseImageGenId,
+      draft: draft,
+    }, { timeout: 30000 });
+    
+    if (!publishRes.data?.success) {
+      mcAddSystemMessage('漫画の再公開に失敗しました。', 'error');
+      mcSetEditBanner('', false);
+      return;
+    }
+    
+    mcAddSystemMessage(
+      `✅ シーン${sceneIdx}の吹き出し${bubbleNum}を更新しました！\n再ビルドで全体動画に反映されます。`,
+      'success'
+    );
+    mcSetEditBanner(`✅ シーン${sceneIdx}: 吹き出し${bubbleNum}更新完了`, true);
+    mcTrackChange('image', sceneIdx, `吹き出し${bubbleNum}テキスト編集`);
+    mcForcePollSoon();
+    
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`吹き出し更新エラー: ${errMsg}`, 'error');
+    mcSetEditBanner('', false);
+  }
+}
+
+// ============================================================
 // P-5: Dialogue / Utterance Edit via Chat
 // ============================================================
 
@@ -3400,6 +3669,7 @@ function mcStartNew() {
   MC._i2vChecked = false;
   // Comic: Clear state
   MC._comicGenerating = null;
+  MC._comicEditMode = null;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();
