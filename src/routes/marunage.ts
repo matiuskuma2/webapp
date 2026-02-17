@@ -1854,9 +1854,12 @@ marunage.get('/:projectId/status', async (c) => {
       ig.status AS image_status,
       ig.r2_key AS image_r2_key,
       vg.r2_key AS video_r2_key,
-      vg.r2_url AS video_r2_url
+      vg.r2_url AS video_r2_url,
+      (SELECT cig.r2_key FROM image_generations cig 
+       WHERE cig.scene_id = s.id AND cig.asset_type = 'comic' AND cig.is_active = 1 AND cig.status = 'completed'
+       ORDER BY cig.id DESC LIMIT 1) AS comic_image_r2_key
     FROM scenes s
-    LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+    LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1 AND (ig.asset_type IS NULL OR ig.asset_type != 'comic')
     LEFT JOIN video_generations vg ON vg.scene_id = s.id AND vg.is_active = 1 AND vg.status = 'completed'
     WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
     ORDER BY s.idx ASC
@@ -2114,6 +2117,7 @@ marunage.get('/:projectId/status', async (c) => {
             has_audio: (s.audio_completed_count || 0) > 0,
             utterance_count: s.utterance_count,
             video_url: videoUrl,
+            comic_image_url: s.comic_image_r2_key ? `/images/${s.comic_image_r2_key}` : null,
           };
         }),
       },

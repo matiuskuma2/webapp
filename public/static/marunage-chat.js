@@ -1056,6 +1056,20 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
              <p class="text-xs">動画読込エラー</p>
            </div>
          </div>`
+      : (dat === 'comic' && scene.comic_image_url)
+      ? `<div style="position:relative;cursor:pointer;" onclick="event.stopPropagation(); mcOpenComicModal('${scene.comic_image_url.replace(/'/g, "\\'")}', ${idx + 1})">
+           <img src="${scene.comic_image_url}" alt="Comic ${idx + 1}" class="scene-card-img" style="object-fit:cover;display:block;" loading="lazy"
+                onerror="this.style.display='none';this.parentElement.nextElementSibling.style.display='flex';">
+           <div style="position:absolute;bottom:4px;right:4px;background:rgba(236,72,153,0.85);color:#fff;font-size:9px;padding:1px 5px;border-radius:4px;pointer-events:none;">
+             <i class="fas fa-book-open" style="margin-right:2px;"></i>漫画
+           </div>
+         </div>
+         <div class="scene-card-img text-gray-400" style="display:none;">
+           <div class="text-center">
+             <i class="fas fa-exclamation-triangle text-3xl mb-1"></i>
+             <p class="text-xs">漫画読込エラー</p>
+           </div>
+         </div>`
       : scene.image_url
       ? `<img src="${scene.image_url}" alt="Scene ${idx + 1}" class="scene-card-img" style="object-fit:cover;display:block;" loading="lazy"
            onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
@@ -1159,6 +1173,36 @@ function mcOpenVideoModal(videoUrl, sceneNum) {
   document.body.appendChild(modal);
   
   // Close on Escape key
+  const handler = (e) => {
+    if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', handler); }
+  };
+  document.addEventListener('keydown', handler);
+}
+
+// Comic preview modal — click scene comic to enlarge
+function mcOpenComicModal(imageUrl, sceneNum) {
+  const existing = document.getElementById('mcComicModal');
+  if (existing) existing.remove();
+  
+  const modal = document.createElement('div');
+  modal.id = 'mcComicModal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;cursor:pointer;';
+  modal.onclick = () => modal.remove();
+  
+  modal.innerHTML = `
+    <div style="position:relative;max-width:90vw;max-height:90vh;" onclick="event.stopPropagation()">
+      <div style="position:absolute;top:-32px;left:0;right:0;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:#fff;font-size:14px;font-weight:600;"><i class="fas fa-book-open" style="margin-right:4px;"></i>シーン${sceneNum} 漫画プレビュー</span>
+        <button onclick="document.getElementById('mcComicModal').remove()" 
+                style="color:#fff;background:rgba(255,255,255,0.2);border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      <img src="${imageUrl}" alt="Comic Scene ${sceneNum}" 
+           style="max-width:90vw;max-height:85vh;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.5);">
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
   const handler = (e) => {
     if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', handler); }
   };
