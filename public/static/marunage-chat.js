@@ -4048,7 +4048,7 @@ function mcUpdateVideoPanel(video) {
 }
 
 // ── T1: Left Board Video Preview (always present in ready phase) ──
-function mcUpdateBoardVideoPreview(video) {
+async function mcUpdateBoardVideoPreview(video) {
   const previewEl = document.getElementById('mcBoardVideoPreview');
   if (!previewEl) return;
 
@@ -4093,18 +4093,32 @@ function mcUpdateBoardVideoPreview(video) {
     return;
   }
 
-  // Done — show video player
-  if (video.state === 'done' && video.download_url) {
+  // Done — show video player (fetch fresh URL if needed for presigned URL expiry)
+  if (video.state === 'done' && (video.download_url || video.build_id)) {
     if (placeholder) placeholder.classList.add('hidden');
-    if (player) {
+    
+    // Try to get a fresh URL via video-builds endpoint (handles presigned URL expiry)
+    let videoUrl = video.download_url;
+    if (video.build_id && player && player.getAttribute('data-build-id') !== String(video.build_id)) {
+      try {
+        const freshRes = await axios.get(`/api/video-builds/${video.build_id}`, { timeout: 10000 });
+        const freshUrl = freshRes.data?.build?.download_url;
+        if (freshUrl) videoUrl = freshUrl;
+      } catch (e) {
+        console.warn('[Video] Fresh URL fetch failed, using cached URL:', e.message);
+      }
+    }
+    
+    if (player && videoUrl) {
       player.classList.remove('hidden');
-      if (player.getAttribute('data-src') !== video.download_url) {
-        player.setAttribute('data-src', video.download_url);
-        player.src = video.download_url;
+      if (player.getAttribute('data-src') !== videoUrl) {
+        player.setAttribute('data-src', videoUrl);
+        player.setAttribute('data-build-id', String(video.build_id || ''));
+        player.src = videoUrl;
         player.load();
       }
     }
-    if (dlBtn) { dlBtn.classList.remove('hidden'); dlBtn.href = video.download_url; }
+    if (dlBtn && videoUrl) { dlBtn.classList.remove('hidden'); dlBtn.href = videoUrl; }
     if (statusEl) statusEl.innerHTML = '<i class="fas fa-check-circle mr-1"></i>動画完成 — タップで再生';
     mcUpdateRebuildButton(video);
     return;
