@@ -4196,12 +4196,108 @@ async function mcRebuildVideo() {
     return;
   }
   
-  // Confirm dialog — different message for failed (retry) vs done (modification reflection)
+  // Confirm: if dirty changes exist → show confirm modal; retry/no-changes → simple confirm
   const isRetry = lastVideo?.state === 'failed';
+  const hasDirty = MC._dirtyChanges && MC._dirtyChanges.length > 0;
+  
+  if (hasDirty && !isRetry) {
+    // Show rich confirm modal with change list
+    mcShowRebuildConfirmModal();
+    return;
+  }
+  
+  // No dirty changes or retry → simple confirm
   const confirmMsg = isRetry
     ? '前回の動画生成が失敗しました。リトライしますか？\n（素材はそのまま、動画だけ再レンダリングします）'
-    : '修正内容を反映して動画を再ビルドしますか？\n（画像や音声の変更が動画に反映されます）';
+    : '変更はありませんが、動画を再ビルドしますか？\n（同じ素材で動画だけ再レンダリングします）';
   if (!confirm(confirmMsg)) return;
+  
+  await mcExecuteRebuild(isRetry);
+}
+
+// Rebuild confirm modal — shows list of pending changes before rebuild
+function mcShowRebuildConfirmModal() {
+  const existing = document.getElementById('mcRebuildConfirmModal');
+  if (existing) existing.remove();
+  
+  const changes = [...MC._dirtyChanges].reverse().slice(0, 10);
+  
+  const TYPE_ICONS = {
+    image: { icon: 'fa-image', color: 'text-green-600', bg: 'bg-green-50' },
+    audio: { icon: 'fa-microphone', color: 'text-blue-600', bg: 'bg-blue-50' },
+    dialogue: { icon: 'fa-comment-alt', color: 'text-blue-600', bg: 'bg-blue-50' },
+    se: { icon: 'fa-volume-up', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+    bgm: { icon: 'fa-music', color: 'text-purple-600', bg: 'bg-purple-50' },
+    comic: { icon: 'fa-book-open', color: 'text-pink-600', bg: 'bg-pink-50' },
+    i2v: { icon: 'fa-film', color: 'text-cyan-600', bg: 'bg-cyan-50' },
+    dat: { icon: 'fa-exchange-alt', color: 'text-orange-600', bg: 'bg-orange-50' },
+  };
+  
+  let changeRows = '';
+  for (const c of changes) {
+    const ti = TYPE_ICONS[c.type] || { icon: 'fa-edit', color: 'text-gray-600', bg: 'bg-gray-50' };
+    const sceneLabel = c.sceneIdx > 0 ? `S${c.sceneIdx}` : '全体';
+    const ago = mcTimeAgo(c.ts);
+    changeRows += `
+      <div class="flex items-center gap-2 py-1.5 border-b border-gray-100 last:border-0">
+        <span class="flex-shrink-0 w-6 h-6 ${ti.bg} rounded flex items-center justify-center">
+          <i class="fas ${ti.icon} text-[10px] ${ti.color}"></i>
+        </span>
+        <span class="text-[11px] font-semibold text-gray-500 w-8">${sceneLabel}</span>
+        <span class="text-[11px] text-gray-700 flex-1 truncate">${escapeHtml(c.label)}</span>
+        <span class="text-[10px] text-gray-400 flex-shrink-0">${ago}</span>
+      </div>`;
+  }
+  
+  const totalChanges = MC._dirtyChanges.length;
+  const moreNote = totalChanges > 10 ? `<p class="text-[10px] text-gray-400 mt-1">他 ${totalChanges - 10} 件の変更あり</p>` : '';
+  
+  const modal = document.createElement('div');
+  modal.id = 'mcRebuildConfirmModal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;';
+  
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.2);max-width:420px;width:90%;max-height:80vh;overflow:hidden;" onclick="event.stopPropagation()">
+      <div style="padding:16px 20px 12px;border-bottom:1px solid #f3f4f6;">
+        <h3 style="font-size:15px;font-weight:700;color:#1f2937;margin:0;">
+          <i class="fas fa-sync-alt" style="color:#7c3aed;margin-right:6px;"></i>この変更を動画に反映しますか？
+        </h3>
+      </div>
+      <div style="padding:12px 20px;max-height:50vh;overflow-y:auto;">
+        <p class="text-[11px] text-gray-500 mb-2 font-semibold">未反映の変更（${totalChanges}件）</p>
+        ${changeRows}
+        ${moreNote}
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #f3f4f6;background:#f9fafb;">
+        <p style="font-size:10px;color:#9ca3af;margin:0 0 10px;">反映すると動画が再生成されます（数分かかる場合があります）</p>
+        <div style="display:flex;gap:8px;">
+          <button onclick="document.getElementById('mcRebuildConfirmModal').remove()"
+                  style="flex:1;padding:8px;border-radius:8px;border:1px solid #e5e7eb;background:#fff;color:#6b7280;font-size:12px;font-weight:600;cursor:pointer;">
+            キャンセル
+          </button>
+          <button onclick="document.getElementById('mcRebuildConfirmModal').remove(); mcExecuteRebuild(false)"
+                  style="flex:1;padding:8px;border-radius:8px;border:none;background:#7c3aed;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">
+            <i class="fas fa-sync-alt" style="margin-right:4px;"></i>反映して再ビルド
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  
+  // Close on background click
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  document.body.appendChild(modal);
+  
+  // Close on Escape
+  const handler = (e) => {
+    if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', handler); }
+  };
+  document.addEventListener('keydown', handler);
+}
+
+// Execute the actual rebuild (called from confirm modal or direct confirm)
+async function mcExecuteRebuild(isRetry) {
+  const lastVideo = MC._lastStatus?.progress?.video;
 
   const btn = document.getElementById('mcBoardVideoRebuild');
   if (btn) {
