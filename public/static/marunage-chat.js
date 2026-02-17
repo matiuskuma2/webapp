@@ -77,6 +77,12 @@ const MC = {
   _comicGenerating: null, // { sceneId, sceneIdx }
   // Comic v2: Bubble edit mode (list → number+text edit)
   _comicEditMode: null, // { sceneId, sceneIdx, comicData, imageUrl, baseImageGenId }
+  
+  // SE timing edit mode
+  _seTimingEditMode: null, // { sceneId, sceneIdx }
+  
+  // Batch comic state
+  _batchComicRunning: false,
 };
 
 // ============================================================
@@ -293,6 +299,24 @@ async function mcSendMessage() {
       return;
     }
     
+    // P-4.5: SE timing edit mode reply (must be checked before general SE intent)
+    if (MC._seTimingEditMode) {
+      await mcHandleSeTimingEditReply(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
+    // P-4.5: SE timing edit intent (e.g., "シーン3のSE +2秒", "SE タイミング", "SE 開始時間")
+    const isSeTimingIntent = /(?:SE|効果音)\s*(?:タイミング|開始|時間|start|timing|遅延|ディレイ|delay|\+\d|＋\d|-\d|ー\d)/i.test(text)
+      || /(?:シーン|scene|Scene)\s*\d+\s*(?:の)?\s*(?:SE|効果音)\s*(?:\+|-|＋|ー|\d+\s*秒)/i.test(text);
+    if (isSeTimingIntent) {
+      await mcHandleSeTimingIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
     // P-4.5: SE (sound effect) intent detection
     const isSeIntent = /効果音|SE |se |サウンドエフェクト|足音|ドア|爆発|風|雷|鐘|拍手|水|波|鳥|虫|ベル|チャイム|クラクション|sfx/i.test(text);
     if (isSeIntent) {
@@ -350,6 +374,16 @@ async function mcSendMessage() {
     const isComicEditIntent = /(?:吹き出し|バブル|漫画.?修正|漫画.?編集|吹き出し.?一覧|吹き出し.?修正|吹き出し.?変更|吹き出し.?編集)/i.test(text);
     if (isComicEditIntent) {
       await mcHandleComicEditIntent(text);
+      input.value = '';
+      updateCharCount();
+      return;
+    }
+    
+    // Batch comic: "全シーン漫画化" / "シーン1-5を漫画化" etc.
+    const isBatchComicIntent = /(?:全シーン|全部|まとめて|一括|シーン\s*\d+\s*[-~～]\s*\d+)\s*(?:を|の)?\s*(?:漫画化|コミック化|漫画にして)/i.test(text)
+      || /(?:漫画化|コミック化)\s*(?:全部|全シーン|まとめて|一括)/i.test(text);
+    if (isBatchComicIntent) {
+      await mcHandleBatchComicIntent(text);
       input.value = '';
       updateCharCount();
       return;
@@ -1010,7 +1044,19 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
     const hasDirty = MC._dirtyChanges?.some(d => d.sceneIdx === idx + 1);
     const dirtyDot = hasDirty ? '<span class="inline-block w-1.5 h-1.5 bg-orange-500 rounded-full ml-1" title="動画に未反映の変更あり"></span>' : '';
     
-    const imgContent = scene.image_url
+    const imgContent = (dat === 'video' && scene.video_url)
+      ? `<video src="${scene.video_url}" class="scene-card-img" style="object-fit:cover;display:block;" 
+           muted autoplay loop playsinline
+           onclick="event.stopPropagation(); mcOpenVideoModal('${scene.video_url.replace(/'/g, "\\'")}', ${idx + 1})"
+           onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+         </video>
+         <div class="scene-card-img text-gray-400" style="display:none;">
+           <div class="text-center">
+             <i class="fas fa-exclamation-triangle text-3xl mb-1"></i>
+             <p class="text-xs">動画読込エラー</p>
+           </div>
+         </div>`
+      : scene.image_url
       ? `<img src="${scene.image_url}" alt="Scene ${idx + 1}" class="scene-card-img" style="object-fit:cover;display:block;" loading="lazy"
            onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
          <div class="scene-card-img text-gray-400" style="display:none;">
@@ -1086,6 +1132,38 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
 // Currently selected scene for editing
 MC._selectedSceneId = null;
 MC._selectedSceneIdx = null;
+
+// Step D: Video preview modal — click scene video to enlarge
+function mcOpenVideoModal(videoUrl, sceneNum) {
+  // Remove any existing modal
+  const existing = document.getElementById('mcVideoModal');
+  if (existing) existing.remove();
+  
+  const modal = document.createElement('div');
+  modal.id = 'mcVideoModal';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;cursor:pointer;';
+  modal.onclick = () => modal.remove();
+  
+  modal.innerHTML = `
+    <div style="position:relative;max-width:90vw;max-height:90vh;" onclick="event.stopPropagation()">
+      <div style="position:absolute;top:-32px;left:0;right:0;display:flex;justify-content:space-between;align-items:center;">
+        <span style="color:#fff;font-size:14px;font-weight:600;">シーン${sceneNum} 動画プレビュー</span>
+        <button onclick="document.getElementById('mcVideoModal').remove()" 
+                style="color:#fff;background:rgba(255,255,255,0.2);border:none;border-radius:50%;width:28px;height:28px;cursor:pointer;font-size:16px;">✕</button>
+      </div>
+      <video src="${videoUrl}" style="max-width:90vw;max-height:85vh;border-radius:8px;box-shadow:0 4px 24px rgba(0,0,0,0.5);" 
+             controls autoplay loop></video>
+    </div>
+  `;
+  
+  document.body.appendChild(modal);
+  
+  // Close on Escape key
+  const handler = (e) => {
+    if (e.key === 'Escape') { modal.remove(); document.removeEventListener('keydown', handler); }
+  };
+  document.addEventListener('keydown', handler);
+}
 
 function mcSelectScene(sceneId, idx) {
   // Toggle selection
@@ -1468,6 +1546,7 @@ async function mcCheckExistingSe() {
           id: s.system_audio_id || s.id,
           name: s.system_name || s.user_name || s.direct_name || 'SE',
           assignmentId: s.id,
+          start_ms: s.start_ms || 0,
         }));
         totalSe += sfxList.length;
       }
@@ -1597,6 +1676,7 @@ async function mcHandleSeIntent(text) {
         id: se.id,
         name: se.name,
         assignmentId: res.data.id || res.data.assignment?.id,
+        start_ms: 0,
       });
       mcAddSystemMessage(
         `🔊 シーン${sceneIdx}に効果音「${se.name}」を追加しました！` +
@@ -1670,6 +1750,173 @@ async function mcRemoveSeFromBoard(sceneId, assignmentId) {
   }
 }
 
+// ============================================================
+// Step C: SE Timing Edit via Chat
+// Commands: "シーン3のSE +2秒", "SE 3秒後", "SEタイミング"
+// Uses: PUT /api/scenes/:sceneId/audio-assignments/:id with { start_ms }
+// ============================================================
+
+async function mcHandleSeTimingIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  // Try direct timing command: "シーン3のSE +2秒" or "シーン3のSE 2.5秒"
+  const directMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)\s*(?:の)?\s*(?:SE|効果音)\s*(?:\+|＋)?\s*([\d.]+)\s*(?:秒|s)/i);
+  if (directMatch) {
+    const sceneNum = parseInt(directMatch[1], 10);
+    const seconds = parseFloat(directMatch[2]);
+    const idx = sceneNum - 1;
+    if (idx < 0 || idx >= scenes.length) {
+      mcAddSystemMessage(`シーン${sceneNum}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+    const targetScene = scenes[idx];
+    const seList = MC._currentSeMap?.[targetScene.id];
+    if (!seList || seList.length === 0) {
+      mcAddSystemMessage(`シーン${sceneNum}にはSEが設定されていません。`, 'error');
+      return;
+    }
+    // If only 1 SE, apply directly. Otherwise show list.
+    if (seList.length === 1) {
+      await mcUpdateSeTiming(targetScene.id, seList[0], sceneNum, Math.round(seconds * 1000));
+      return;
+    }
+    // Multiple SEs: show list and enter edit mode
+    mcShowSeTimingList(targetScene.id, sceneNum, seList, seconds);
+    return;
+  }
+  
+  // Determine target scene
+  const sceneNumMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)/i);
+  let targetScene = null;
+  let sceneIdx = 0;
+  
+  if (sceneNumMatch) {
+    const idx = parseInt(sceneNumMatch[1], 10) - 1;
+    if (idx >= 0 && idx < scenes.length) {
+      targetScene = scenes[idx];
+      sceneIdx = idx + 1;
+    } else {
+      mcAddSystemMessage(`シーン${sceneNumMatch[1]}が見つかりません（全${scenes.length}シーン）。`, 'error');
+      return;
+    }
+  } else if (MC._selectedSceneId) {
+    targetScene = scenes.find(s => s.id === MC._selectedSceneId);
+    if (targetScene) sceneIdx = scenes.indexOf(targetScene) + 1;
+  }
+  
+  if (!targetScene) {
+    mcAddSystemMessage(
+      'SEタイミングを編集するシーンを指定してください。\n例:「シーン3のSE +2秒」「シーン1のSEタイミング」',
+      'info'
+    );
+    return;
+  }
+  
+  const seList = MC._currentSeMap?.[targetScene.id];
+  if (!seList || seList.length === 0) {
+    mcAddSystemMessage(`シーン${sceneIdx}にはSEが設定されていません。\nまずSEを追加してください（例:「シーン${sceneIdx}に効果音を追加」）。`, 'error');
+    return;
+  }
+  
+  // Show list of SEs with timing and enter edit mode
+  mcShowSeTimingList(targetScene.id, sceneIdx, seList);
+}
+
+function mcShowSeTimingList(sceneId, sceneIdx, seList, pendingSeconds) {
+  let listMsg = `🔊 シーン${sceneIdx}のSEタイミング:\n`;
+  seList.forEach((se, i) => {
+    const t = (se.start_ms || 0) / 1000;
+    listMsg += `  ${i + 1}) ${se.name} — 開始: +${t.toFixed(1)}秒\n`;
+  });
+  listMsg += `\n変更: SE番号 + 秒数を入力\n例: 「1 2.5」→ 1番SEを+2.5秒に\n「やめ」でキャンセル`;
+  mcAddSystemMessage(listMsg, 'info');
+  
+  MC._seTimingEditMode = { sceneId, sceneIdx, seList, pendingSeconds: pendingSeconds || null };
+}
+
+async function mcHandleSeTimingEditReply(text) {
+  if (!MC._seTimingEditMode) return;
+  
+  mcAddUserMessage(text);
+  
+  // Cancel
+  if (/やめ|キャンセル|cancel|戻る/i.test(text)) {
+    MC._seTimingEditMode = null;
+    mcAddSystemMessage('SEタイミング編集を終了しました。', 'info');
+    return;
+  }
+  
+  const { sceneId, sceneIdx, seList, pendingSeconds } = MC._seTimingEditMode;
+  
+  // Parse: "1 2.5" or "2 +3" or just "2.5" (if only 1 SE)
+  const match = text.match(/^(\d+)\s+([\d.]+)/) || text.match(/^([\d.]+)\s*(?:秒|s)?$/);
+  
+  let seIndex, seconds;
+  if (match && match.length === 3) {
+    // "1 2.5" format
+    seIndex = parseInt(match[1], 10) - 1;
+    seconds = parseFloat(match[2]);
+  } else if (match && match.length === 2 && seList.length === 1) {
+    // "2.5" with single SE
+    seIndex = 0;
+    seconds = parseFloat(match[1]);
+  } else if (pendingSeconds !== null && match && match.length === 2) {
+    // Just a number with pending seconds
+    seIndex = parseInt(match[1], 10) - 1;
+    seconds = pendingSeconds;
+  } else {
+    mcAddSystemMessage('入力形式: 「SE番号 秒数」\n例: 「1 2.5」→ 1番SEを+2.5秒に\n「やめ」でキャンセル', 'info');
+    return;
+  }
+  
+  if (seIndex < 0 || seIndex >= seList.length) {
+    mcAddSystemMessage(`SE番号${seIndex + 1}が見つかりません（全${seList.length}件）。`, 'error');
+    return;
+  }
+  if (isNaN(seconds) || seconds < 0 || seconds > 30) {
+    mcAddSystemMessage('タイミングは0〜30秒の範囲で指定してください。', 'error');
+    return;
+  }
+  
+  const se = seList[seIndex];
+  await mcUpdateSeTiming(sceneId, se, sceneIdx, Math.round(seconds * 1000));
+  MC._seTimingEditMode = null;
+}
+
+async function mcUpdateSeTiming(sceneId, se, sceneIdx, startMs) {
+  try {
+    await axios.put(`/api/scenes/${sceneId}/audio-assignments/${se.assignmentId}`, {
+      start_ms: startMs,
+    });
+    
+    // Update local cache
+    se.start_ms = startMs;
+    mcUpdateSeDisplay();
+    
+    const label = `+${(startMs / 1000).toFixed(1)}秒`;
+    mcAddSystemMessage(
+      `✅ シーン${sceneIdx}のSE「${se.name}」の開始タイミングを ${label} に変更しました。\n再ビルドで動画に反映されます。`,
+      'success'
+    );
+    mcSetEditBanner(`🔊 SE: シーン${sceneIdx} — ${se.name} ${label}`, true);
+    mcTrackChange('se', sceneIdx, `SEタイミング: ${se.name} → ${label}`);
+  } catch (err) {
+    const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+    mcAddSystemMessage(`SEタイミング変更エラー: ${errMsg}`, 'error');
+  }
+}
+
 // Update left board SE display
 function mcUpdateSeDisplay() {
   let el = document.getElementById('mcSeDisplay');
@@ -1699,11 +1946,14 @@ function mcUpdateSeDisplay() {
   for (const [sceneId, seList] of allSe) {
     const sceneIdx = scenes.findIndex(s => String(s.id) === String(sceneId)) + 1;
     for (const se of seList) {
+      const timingLabel = (se.start_ms && se.start_ms > 0)
+        ? `+${(se.start_ms / 1000).toFixed(1)}s`
+        : '+0.0s';
       seHtml += `
         <div class="flex items-center justify-between py-0.5">
           <span class="text-[11px] text-indigo-700">
             <i class="fas fa-volume-up text-[9px] mr-1"></i>
-            S${sceneIdx}: ${escapeHtml(se.name)}
+            S${sceneIdx}: ${escapeHtml(se.name)} <span class="text-indigo-400 font-mono text-[9px]">${timingLabel}</span>
           </span>
           <button onclick="mcRemoveSeFromBoard('${sceneId}', '${se.assignmentId}')" 
                   class="text-[9px] text-indigo-300 hover:text-indigo-600 ml-1" title="削除">
@@ -2928,6 +3178,198 @@ async function mcMoveComicBubble(sceneId, sceneIdx, comicData, imageUrl, baseIma
 }
 
 // ============================================================
+// Step B: Batch Comic Conversion via Chat
+// Commands: "全シーン漫画化", "シーン1-5を漫画化"
+// Runs sequentially on client, stops on first failure
+// ============================================================
+
+async function mcHandleBatchComicIntent(text) {
+  if (!MC.projectId) {
+    mcAddSystemMessage('プロジェクトが選択されていません。', 'error');
+    return;
+  }
+  
+  mcAddUserMessage(text);
+  
+  const scenes = MC._lastStatus?.progress?.scenes_ready?.scenes || [];
+  if (scenes.length === 0) {
+    mcAddSystemMessage('シーンが見つかりません。', 'error');
+    return;
+  }
+  
+  if (MC._batchComicRunning) {
+    mcAddSystemMessage('一括漫画化を処理中です。完了までお待ちください。', 'info');
+    return;
+  }
+  
+  // Determine range: "シーン1-5を漫画化" or "全シーン漫画化"
+  let startIdx = 0;
+  let endIdx = scenes.length - 1;
+  
+  const rangeMatch = text.match(/(?:シーン|scene|Scene)\s*(\d+)\s*[-~～]\s*(\d+)/i);
+  if (rangeMatch) {
+    startIdx = parseInt(rangeMatch[1], 10) - 1;
+    endIdx = parseInt(rangeMatch[2], 10) - 1;
+    
+    if (startIdx < 0 || endIdx >= scenes.length || startIdx > endIdx) {
+      mcAddSystemMessage(`範囲指定が不正です。シーン1〜${scenes.length}で指定してください。`, 'error');
+      return;
+    }
+  }
+  
+  // Limit to max 10 scenes at once
+  const count = endIdx - startIdx + 1;
+  if (count > 10) {
+    mcAddSystemMessage(`一括漫画化は最大10シーンまでです。範囲を絞ってください。\n例: 「シーン1-10を漫画化」`, 'error');
+    return;
+  }
+  
+  // Filter scenes that have completed images
+  const targetScenes = [];
+  for (let i = startIdx; i <= endIdx; i++) {
+    if (scenes[i].has_image && scenes[i].image_status === 'completed') {
+      targetScenes.push({ scene: scenes[i], idx: i + 1 });
+    }
+  }
+  
+  if (targetScenes.length === 0) {
+    mcAddSystemMessage('漫画化できるシーン（画像完成済み）がありません。', 'error');
+    return;
+  }
+  
+  mcAddSystemMessage(
+    `📖 一括漫画化を開始します（${targetScenes.length}シーン: S${targetScenes[0].idx}〜S${targetScenes[targetScenes.length - 1].idx}）...`,
+    'info'
+  );
+  mcSetEditBanner(`📖 一括漫画化: 0/${targetScenes.length}`, true);
+  MC._batchComicRunning = true;
+  
+  let completed = 0;
+  let failed = 0;
+  
+  for (const { scene, idx } of targetScenes) {
+    try {
+      mcSetEditBanner(`📖 一括漫画化: ${completed}/${targetScenes.length} (シーン${idx}処理中...)`, true);
+      
+      // Step 1: Fetch utterances
+      const uttRes = await axios.get(`/api/scenes/${scene.id}/utterances`, { timeout: 15000 });
+      const utterances = uttRes.data?.utterances || [];
+      
+      if (utterances.length === 0) {
+        mcAddSystemMessage(`⚠️ シーン${idx}: セリフなし（スキップ）`, 'info');
+        continue;
+      }
+      
+      // Step 2: Build draft with auto-positioned bubbles
+      const maxBubbles = Math.min(utterances.length, 5);
+      const draftUtterances = [];
+      const draftBubbles = [];
+      
+      for (let bi = 0; bi < maxBubbles; bi++) {
+        const utt = utterances[bi];
+        const uttId = `utt_${bi}`;
+        
+        draftUtterances.push({
+          id: uttId,
+          text: utt.text || '',
+          role: utt.role || 'narrator',
+          character_key: utt.character_key || null,
+        });
+        
+        const yPos = 0.1 + (0.8 * bi / Math.max(maxBubbles - 1, 1));
+        const xPos = (bi % 2 === 0) ? 0.25 : 0.65;
+        const isNarrator = (utt.role === 'narrator' || utt.role === 'narration');
+        const bubbleType = isNarrator ? 'caption' : 'speech_round';
+        
+        draftBubbles.push({
+          id: `b_${bi}`,
+          utterance_id: uttId,
+          type: bubbleType,
+          size: 'M',
+          position: { x: xPos, y: yPos },
+          textStyle: {
+            writingMode: 'horizontal',
+            fontFamily: 'gothic',
+            fontWeight: 'normal',
+            fontScale: 1.0,
+            textAlign: 'center',
+            lineHeight: 1.4,
+          },
+          timing: {
+            show_from_ms: 0,
+            show_until_ms: -1,
+            mode: 'scene_duration',
+          },
+        });
+      }
+      
+      const draft = { utterances: draftUtterances, bubbles: draftBubbles };
+      
+      // Step 3: Render offscreen
+      const imageUrl = scene.image_url;
+      if (!imageUrl) {
+        mcAddSystemMessage(`⚠️ シーン${idx}: 画像URLなし（スキップ）`, 'info');
+        continue;
+      }
+      
+      const imageData = await mcRenderComicOffscreen(imageUrl, draft);
+      if (!imageData) {
+        mcAddSystemMessage(`❌ シーン${idx}: レンダリング失敗`, 'error');
+        failed++;
+        mcAddSystemMessage(`一括漫画化をシーン${idx}で中止しました（${completed}/${targetScenes.length}完了）。`, 'error');
+        break;
+      }
+      
+      // Step 4: Publish
+      const publishRes = await axios.post(`/api/scenes/${scene.id}/comic/publish`, {
+        image_data: imageData,
+        base_image_generation_id: null,
+        draft: draft,
+      }, { timeout: 30000 });
+      
+      if (!publishRes.data?.success) {
+        mcAddSystemMessage(`❌ シーン${idx}: 公開失敗`, 'error');
+        failed++;
+        mcAddSystemMessage(`一括漫画化をシーン${idx}で中止しました（${completed}/${targetScenes.length}完了）。`, 'error');
+        break;
+      }
+      
+      // Step 5: Auto-switch DAT
+      try {
+        await axios.put(`/api/scenes/${scene.id}/display-asset-type`, {
+          display_asset_type: 'comic',
+        });
+        scene.display_asset_type = 'comic';
+      } catch { /* DAT switch is optional */ }
+      
+      completed++;
+      mcTrackChange('image', idx, '一括漫画化');
+      
+    } catch (err) {
+      const errMsg = err.response?.data?.error?.message || err.message || '通信エラー';
+      mcAddSystemMessage(`❌ シーン${idx}: ${errMsg}`, 'error');
+      failed++;
+      mcAddSystemMessage(`一括漫画化をシーン${idx}で中止しました（${completed}/${targetScenes.length}完了）。`, 'error');
+      break;
+    }
+  }
+  
+  MC._batchComicRunning = false;
+  
+  if (failed === 0) {
+    mcAddSystemMessage(
+      `✅ 一括漫画化が完了しました！（${completed}シーン）\n再ビルドで全体動画に反映されます。`,
+      'success'
+    );
+    mcSetEditBanner(`✅ 一括漫画化: ${completed}シーン完了`, true);
+  } else {
+    mcSetEditBanner(`⚠️ 一括漫画化: ${completed}完了 / ${failed}失敗`, true);
+  }
+  
+  mcForcePollSoon();
+}
+
+// ============================================================
 // P-5: Dialogue / Utterance Edit via Chat
 // ============================================================
 
@@ -3808,6 +4250,9 @@ function mcStartNew() {
   // Comic: Clear state
   MC._comicGenerating = null;
   MC._comicEditMode = null;
+  // SE timing & Batch comic: Clear state
+  MC._seTimingEditMode = null;
+  MC._batchComicRunning = false;
   if (typeof mcSetEditBanner === 'function') mcSetEditBanner('', false);
   if (typeof mcUpdateBgmDisplay === 'function') mcUpdateBgmDisplay(null);
   if (typeof mcUpdateSeDisplay === 'function') mcUpdateSeDisplay();

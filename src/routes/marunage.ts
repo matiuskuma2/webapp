@@ -49,6 +49,7 @@ import {
 import { logAudit } from '../utils/audit-logger'
 import { composeStyledPrompt, buildR2Key } from '../utils/image-prompt-builder'
 import { getSceneReferenceImages } from '../utils/character-reference-helper'
+import { toCloudFrontUrl, s3ToCloudFrontUrl } from '../utils/aws-video-client'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -1842,7 +1843,7 @@ marunage.get('/:projectId/status', async (c) => {
                      projectStatus?.status === 'generating_images' ||
                      projectStatus?.status === 'completed'
 
-  // 2. Scenes + utterance counts + audio completion status
+  // 2. Scenes + utterance counts + audio completion status + active video
   const { results: scenesData } = await c.env.DB.prepare(`
     SELECT
       s.id, s.idx, s.title, s.display_asset_type,
@@ -1851,9 +1852,12 @@ marunage.get('/:projectId/status', async (c) => {
        JOIN audio_generations ag ON ag.id = su.audio_generation_id AND ag.status = 'completed'
        WHERE su.scene_id = s.id) AS audio_completed_count,
       ig.status AS image_status,
-      ig.r2_key AS image_r2_key
+      ig.r2_key AS image_r2_key,
+      vg.r2_key AS video_r2_key,
+      vg.r2_url AS video_r2_url
     FROM scenes s
     LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+    LEFT JOIN video_generations vg ON vg.scene_id = s.id AND vg.is_active = 1 AND vg.status = 'completed'
     WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
     ORDER BY s.idx ASC
   `).bind(projectId).all()
@@ -2091,17 +2095,27 @@ marunage.get('/:projectId/status', async (c) => {
         state: utterancesReady ? 'done' : 'pending',
         visible_count: visibleScenes.length,
         utterances_ready: utterancesReady,
-        scenes: visibleScenes.map((s: any) => ({
-          id: s.id,
-          idx: s.idx,
-          title: s.title,
-          display_asset_type: s.display_asset_type || 'image',
-          has_image: s.image_status === 'completed',
-          image_status: s.image_status || 'pending', // pending | generating | completed | failed
-          image_url: s.image_r2_key ? `/images/${s.image_r2_key}` : null,
-          has_audio: (s.audio_completed_count || 0) > 0,
-          utterance_count: s.utterance_count,
-        })),
+        scenes: visibleScenes.map((s: any) => {
+          // Resolve active video URL via CloudFront
+          let videoUrl: string | null = null;
+          if (s.video_r2_key) {
+            videoUrl = toCloudFrontUrl(s.video_r2_key);
+          } else if (s.video_r2_url) {
+            videoUrl = s3ToCloudFrontUrl(s.video_r2_url) || s.video_r2_url;
+          }
+          return {
+            id: s.id,
+            idx: s.idx,
+            title: s.title,
+            display_asset_type: s.display_asset_type || 'image',
+            has_image: s.image_status === 'completed',
+            image_status: s.image_status || 'pending',
+            image_url: s.image_r2_key ? `/images/${s.image_r2_key}` : null,
+            has_audio: (s.audio_completed_count || 0) > 0,
+            utterance_count: s.utterance_count,
+            video_url: videoUrl,
+          };
+        }),
       },
       images: {
         state: imagesState as any,
