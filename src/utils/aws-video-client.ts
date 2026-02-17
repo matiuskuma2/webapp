@@ -413,6 +413,39 @@ const DEFAULT_S3_BUCKET = 'rilarc-video-results';
 const DEFAULT_PRESIGN_EXPIRES = 86400; // 24 hours
 
 /**
+ * Check if a presigned URL is expiring soon (or already expired / null / invalid)
+ * Parses X-Amz-Date + X-Amz-Expires from the URL query string.
+ * Returns true if the URL needs refreshing (expired, expiring within thresholdSec, or unparseable).
+ */
+export function isPresignedUrlExpiringSoon(url: string | null | undefined, thresholdSec: number = 600): boolean {
+  if (!url) return true;
+  try {
+    const u = new URL(url);
+    const amzDate = u.searchParams.get('X-Amz-Date');       // e.g. "20260215T174529Z"
+    const amzExpires = u.searchParams.get('X-Amz-Expires');  // e.g. "86400"
+    if (!amzDate || !amzExpires) return true; // Not a presigned URL or missing params → refresh
+
+    // Parse X-Amz-Date (ISO 8601 basic format: YYYYMMDDTHHmmssZ)
+    const y = amzDate.substring(0, 4);
+    const m = amzDate.substring(4, 6);
+    const d = amzDate.substring(6, 8);
+    const h = amzDate.substring(9, 11);
+    const mi = amzDate.substring(11, 13);
+    const s = amzDate.substring(13, 15);
+    const signedAt = new Date(`${y}-${m}-${d}T${h}:${mi}:${s}Z`).getTime();
+    if (isNaN(signedAt)) return true;
+
+    const expiresAtMs = signedAt + parseInt(amzExpires, 10) * 1000;
+    const nowMs = Date.now();
+    const remainingSec = (expiresAtMs - nowMs) / 1000;
+
+    return remainingSec < thresholdSec; // true = needs refresh
+  } catch {
+    return true; // Parse error → refresh to be safe
+  }
+}
+
+/**
  * Generate S3 presigned URL for GET request
  * This allows Cloudflare Workers to directly generate presigned URLs
  * without relying on AWS Video Proxy

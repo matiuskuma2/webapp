@@ -4093,7 +4093,7 @@ async function mcUpdateBoardVideoPreview(video) {
     return;
   }
 
-  // Done — show video player (status API now returns fresh presigned URL each poll)
+  // Done — show video player (status API returns fresh presigned URL when near expiry)
   if (video.state === 'done' && (video.download_url || video.build_id)) {
     if (placeholder) placeholder.classList.add('hidden');
     
@@ -4112,13 +4112,29 @@ async function mcUpdateBoardVideoPreview(video) {
     
     if (player && videoUrl) {
       player.classList.remove('hidden');
-      // Always update src — status API returns fresh presigned URL each poll
+      // Only update src when URL changes (avoids playback reset during polling)
       const currentSrc = player.getAttribute('data-src');
       if (currentSrc !== videoUrl) {
         player.setAttribute('data-src', videoUrl);
         player.setAttribute('data-build-id', String(video.build_id || ''));
         player.src = videoUrl;
         player.load();
+      }
+      // Add one-time error handler for 403/expired URL recovery
+      if (!player._errorHandlerSet && video.build_id) {
+        player._errorHandlerSet = true;
+        player.addEventListener('error', async () => {
+          console.warn('[Video] Playback error, fetching fresh URL...');
+          try {
+            const r = await axios.get(`/api/video-builds/${video.build_id}`, { timeout: 10000 });
+            const u = r.data?.build?.download_url;
+            if (u && u !== player.getAttribute('data-src')) {
+              player.setAttribute('data-src', u);
+              player.src = u;
+              player.load();
+            }
+          } catch (e2) { console.warn('[Video] Error recovery failed:', e2.message); }
+        });
       }
     }
     if (dlBtn && videoUrl) { dlBtn.classList.remove('hidden'); dlBtn.href = videoUrl; }

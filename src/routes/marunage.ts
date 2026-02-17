@@ -49,7 +49,7 @@ import {
 import { logAudit } from '../utils/audit-logger'
 import { composeStyledPrompt, buildR2Key } from '../utils/image-prompt-builder'
 import { getSceneReferenceImages } from '../utils/character-reference-helper'
-import { toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl } from '../utils/aws-video-client'
+import { toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl, isPresignedUrlExpiringSoon } from '../utils/aws-video-client'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -1941,23 +1941,26 @@ marunage.get('/:projectId/status', async (c) => {
       videoProgressPercent = videoBuild.progress_percent
       videoDownloadUrl = videoBuild.download_url
 
-      // Presigned URL 期限切れ対策: completed ビルドは常に fresh presigned URL を生成
+      // Presigned URL 期限切れ対策: 残り10分未満の時だけ再生成（毎回生成の負荷を回避）
       if (videoBuild.status === 'completed' && videoBuild.s3_output_key) {
-        try {
-          const freshUrl = await generateS3PresignedUrl(
-            videoBuild.s3_output_key,
-            c.env,
-            { bucket: videoBuild.s3_bucket || undefined, expiresIn: 86400 }
-          )
-          if (freshUrl) {
-            videoDownloadUrl = freshUrl
-            // DB も更新（fire-and-forget）
-            c.env.DB.prepare(`
-              UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-            `).bind(freshUrl, run.video_build_id).run().catch(() => {})
+        const needsRefresh = isPresignedUrlExpiringSoon(videoBuild.download_url, 10 * 60)
+        if (needsRefresh) {
+          try {
+            const freshUrl = await generateS3PresignedUrl(
+              videoBuild.s3_output_key,
+              c.env,
+              { bucket: videoBuild.s3_bucket || undefined, expiresIn: 86400 }
+            )
+            if (freshUrl) {
+              videoDownloadUrl = freshUrl
+              // DB も更新（再生成時のみ）
+              c.env.DB.prepare(`
+                UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+              `).bind(freshUrl, run.video_build_id).run().catch(() => {})
+            }
+          } catch (e) {
+            console.warn(`[Marunage:Status] Presigned URL refresh failed for build ${run.video_build_id}:`, e)
           }
-        } catch (e) {
-          console.warn(`[Marunage:Status] Presigned URL refresh failed for build ${run.video_build_id}:`, e)
         }
       }
 

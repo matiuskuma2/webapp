@@ -16,7 +16,7 @@
 
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
-import { createAwsVideoClient, toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl, CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
+import { createAwsVideoClient, toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl, isPresignedUrlExpiringSoon, CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
@@ -3706,24 +3706,26 @@ videoGeneration.get('/video-builds/:buildId', async (c) => {
     }
     
     // Presigned URL 期限切れ対策:
-    // download_url は S3 presigned URL (86400秒有効) のため、
-    // 完了済みビルドでは常に s3_output_key + s3_bucket から新規 presigned URL を生成
+    // 残り10分未満の時だけ再生成（毎回生成の負荷を回避）
     if (build.status === 'completed' && build.s3_output_key) {
-      try {
-        const freshUrl = await generateS3PresignedUrl(
-          build.s3_output_key as string,
-          c.env,
-          { bucket: build.s3_bucket as string || undefined, expiresIn: 86400 }
-        );
-        if (freshUrl) {
-          build.download_url = freshUrl;
-          // DB も更新（fire-and-forget）
-          c.env.DB.prepare(`
-            UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-          `).bind(freshUrl, buildId).run().catch(() => {});
+      const needsRefresh = isPresignedUrlExpiringSoon(build.download_url as string | null, 10 * 60);
+      if (needsRefresh) {
+        try {
+          const freshUrl = await generateS3PresignedUrl(
+            build.s3_output_key as string,
+            c.env,
+            { bucket: build.s3_bucket as string || undefined, expiresIn: 86400 }
+          );
+          if (freshUrl) {
+            build.download_url = freshUrl;
+            // DB も更新（再生成時のみ）
+            c.env.DB.prepare(`
+              UPDATE video_builds SET download_url = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+            `).bind(freshUrl, buildId).run().catch(() => {});
+          }
+        } catch (e) {
+          console.error(`[VideoBuild] Presigned URL generation failed for build ${buildId}:`, e);
         }
-      } catch (e) {
-        console.error(`[VideoBuild] Presigned URL generation failed for build ${buildId}:`, e);
       }
     }
     
