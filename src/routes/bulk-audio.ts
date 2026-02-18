@@ -15,6 +15,14 @@ import { createErrorResponse } from '../utils/error-response';
 import { generateFishTTS } from '../utils/fish-audio';
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
 import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration'; // MP3 duration parser
+import {
+  resolveVoiceForUtterance,
+  parseProjectSettings,
+  detectProvider,
+  getSampleRate,
+  type VoiceResolution,
+  type ProjectSettings,
+} from '../utils/voice-resolution';
 
 const bulkAudio = new Hono<{ Bindings: Bindings }>();
 
@@ -66,61 +74,9 @@ async function getSessionUser(db: D1Database, sessionCookie: string | undefined)
 }
 
 // =============================================================================
-// Helper: Resolve voice for utterance (SSOT priority)
+// Voice resolution: imported from src/utils/voice-resolution.ts (SSOT)
+// Do NOT add local resolveVoice logic here.
 // =============================================================================
-
-interface VoiceResolution {
-  provider: string;
-  voiceId: string;
-  source: 'character' | 'project_default' | 'fallback';
-}
-
-async function resolveVoiceForUtterance(
-  db: D1Database,
-  utterance: UtteranceForGeneration,
-  projectSettings: { default_narration_voice?: { provider?: string; voice_id: string } } | null
-): Promise<VoiceResolution> {
-  // Priority 1: Character voice for dialogue
-  if (utterance.role === 'dialogue' && utterance.character_key) {
-    const character = await db.prepare(`
-      SELECT voice_preset_id FROM project_character_models
-      WHERE project_id = ? AND character_key = ?
-    `).bind(utterance.project_id, utterance.character_key).first<{ voice_preset_id: string | null }>();
-    
-    if (character?.voice_preset_id) {
-      let provider = 'google';
-      const voiceId = character.voice_preset_id;
-      
-      if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-        provider = 'elevenlabs';
-      } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-        provider = 'fish';
-      }
-      
-      return { provider, voiceId, source: 'character' };
-    }
-  }
-  
-  // Priority 2: Project default narration voice
-  if (projectSettings?.default_narration_voice?.voice_id) {
-    let provider = projectSettings.default_narration_voice.provider || 'google';
-    const voiceId = projectSettings.default_narration_voice.voice_id;
-    
-    // Re-detect provider if not explicitly set
-    if (!projectSettings.default_narration_voice.provider) {
-      if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-        provider = 'elevenlabs';
-      } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-        provider = 'fish';
-      }
-    }
-    
-    return { provider, voiceId, source: 'project_default' };
-  }
-  
-  // Priority 3: Ultimate fallback
-  return { provider: 'google', voiceId: 'ja-JP-Neural2-B', source: 'fallback' };
-}
 
 // =============================================================================
 // Helper: Generate audio for single utterance (isolated, async)
@@ -227,7 +183,7 @@ async function generateSingleUtteranceAudio(
         throw new Error('ELEVENLABS_API_KEY is not configured');
       }
       
-      const resolvedVoiceId = await resolveElevenLabsVoiceId(elevenLabsApiKey, voiceId);
+      const resolvedVoiceId = resolveElevenLabsVoiceId(voiceId);
       const model = (env as any).ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
       
       const elevenLabsResult = await generateElevenLabsTTS(elevenLabsApiKey, {
@@ -340,13 +296,9 @@ async function runBulkGenerationJob(
       SELECT settings_json FROM projects WHERE id = ?
     `).bind(projectId).first<{ settings_json: string | null }>();
     
-    let projectSettings: { default_narration_voice?: { provider?: string; voice_id: string } } | null = null;
-    if (project?.settings_json) {
-      try {
-        projectSettings = JSON.parse(project.settings_json);
-      } catch (e) {
-        console.warn(`[BulkAudio Job ${jobId}] Failed to parse project settings`);
-      }
+    const projectSettings: ProjectSettings | null = parseProjectSettings(project?.settings_json);
+    if (!projectSettings && project?.settings_json) {
+      console.warn(`[BulkAudio Job ${jobId}] Failed to parse project settings`);
     }
     
     // Build query based on mode

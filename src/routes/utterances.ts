@@ -6,6 +6,12 @@ import { createErrorResponse } from '../utils/error-response';
 import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration';
 import { generateFishTTS } from '../utils/fish-audio';
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
+import {
+  resolveVoiceWithOverride,
+  loadProjectSettings,
+  detectProvider,
+  getSampleRate,
+} from '../utils/voice-resolution';
 
 const utterances = new Hono<{ Bindings: Bindings }>();
 
@@ -421,7 +427,30 @@ utterances.put('/utterances/:utteranceId', async (c) => {
       }
       updates.push('text = ?');
       values.push(text.trim());
+
+      // ========================================
+      // SSOT: Invalidate stale audio on text change
+      // ========================================
+      // When utterance text changes, the existing audio no longer matches.
+      // Set audio_generation_id = NULL and duration_ms = NULL so that:
+      //   1. Video build will NOT use the outdated audio
+      //   2. The UI will show "audio missing" state
+      //   3. User / bulk-generate can regenerate fresh audio
+      // This prevents text-audio mismatch (AUDIO_SSOT_SPEC §7.1)
+      // ========================================
+      if (text.trim() !== (existing.text ?? '').trim()) {
+        updates.push('audio_generation_id = ?');
+        values.push(null);
+        updates.push('duration_ms = ?');
+        values.push(null);
+        console.log(`[Utterance ${utteranceId}] Text changed → audio_generation_id set to NULL (old audio invalidated)`);
+      }
     }
+
+    // Track if audio was invalidated for the response
+    const audioInvalidated = text !== undefined && 
+      text.trim() !== (existing.text ?? '').trim() && 
+      existing.audio_generation_id !== null;
 
     if (updates.length === 0) {
       return c.json(createErrorResponse('NO_UPDATES', 'No fields to update'), 400);
@@ -461,6 +490,7 @@ utterances.put('/utterances/:utteranceId', async (c) => {
 
     return c.json({
       success: true,
+      audio_invalidated: audioInvalidated,
       utterance: {
         id: updated.id,
         scene_id: updated.scene_id,
@@ -668,72 +698,25 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
     }
 
     // ========================================
-    // SSOT: Voice Selection Logic
+    // SSOT: Voice Resolution (unified via voice-resolution.ts)
     // ========================================
-    // Priority (MUST NOT be changed without spec review):
-    // 1. dialogue + character_key → project_character_models.voice_preset_id
-    // 2. narration → projects.settings_json.default_narration_voice
-    // 3. fallback (only when nothing configured) → ja-JP-Neural2-B
-    // ========================================
-    
-    let provider = 'google';
-    let voiceId = 'ja-JP-Neural2-B'; // Ultimate fallback only
-    let voiceSource = 'fallback';
+    const projectSettings = await loadProjectSettings(c.env.DB, utterance.project_id);
 
-    if (utterance.role === 'dialogue' && utterance.character_key) {
-      // Priority 1: Character voice for dialogue
-      const character = await c.env.DB.prepare(`
-        SELECT voice_preset_id FROM project_character_models
-        WHERE project_id = ? AND character_key = ?
-      `).bind(utterance.project_id, utterance.character_key).first<{ voice_preset_id: string | null }>();
+    const resolved = await resolveVoiceWithOverride(
+      c.env.DB,
+      {
+        role: utterance.role,
+        character_key: utterance.character_key,
+        project_id: utterance.project_id,
+      },
+      projectSettings,
+      body.voice_id ? { voiceId: body.voice_id, provider: body.provider } : undefined
+    );
 
-      if (character?.voice_preset_id) {
-        voiceId = character.voice_preset_id;
-        voiceSource = 'character';
-        
-        // Detect provider from voice_preset_id
-        if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-          provider = 'elevenlabs';
-        } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-          provider = 'fish';
-        }
-      }
-    }
+    let provider = resolved.provider;
+    let voiceId = resolved.voiceId;
     
-    // Priority 2: Project default narration voice (for narration or when character voice not found)
-    if (voiceSource === 'fallback') {
-      const project = await c.env.DB.prepare(`
-        SELECT settings_json FROM projects WHERE id = ?
-      `).bind(utterance.project_id).first<{ settings_json: string | null }>();
-      
-      if (project?.settings_json) {
-        try {
-          const settings = JSON.parse(project.settings_json);
-          if (settings.default_narration_voice?.voice_id) {
-            voiceId = settings.default_narration_voice.voice_id;
-            provider = settings.default_narration_voice.provider || 'google';
-            voiceSource = 'project_default';
-            
-            // Re-detect provider if not explicitly set
-            if (!settings.default_narration_voice.provider) {
-              if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-                provider = 'elevenlabs';
-              } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-                provider = 'fish';
-              }
-            }
-          }
-        } catch (e) {
-          console.warn(`[Utterance ${utteranceId}] Failed to parse settings_json:`, e);
-        }
-      }
-    }
-    
-    console.log(`[Utterance ${utteranceId}] Voice resolved: source=${voiceSource}, provider=${provider}, voiceId=${voiceId}`);
-
-    // Allow override from request body (explicit user request only)
-    if (body.voice_id) voiceId = body.voice_id;
-    if (body.provider) provider = body.provider;
+    console.log(`[Utterance ${utteranceId}] Voice resolved: source=${resolved.source}, provider=${provider}, voiceId=${voiceId}`);
     let format = body.format || 'mp3';
     const sampleRate = provider === 'fish' ? 44100 : 24000;
 
@@ -889,7 +872,7 @@ async function generateUtteranceAudio(args: {
       }
       
       // Extract voice_id from voiceId (format: elevenlabs:xxx or el-xxx)
-      const resolvedVoiceId = await resolveElevenLabsVoiceId(elevenLabsApiKey, voiceId);
+      const resolvedVoiceId = resolveElevenLabsVoiceId(voiceId);
       console.log(`[Utterance ${utteranceId}] Using ElevenLabs: voice_id=${resolvedVoiceId}`);
       
       // Get model from env or use default

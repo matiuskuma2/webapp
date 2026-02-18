@@ -9,6 +9,15 @@ import { generateFishTTS } from '../utils/fish-audio'; // Phase X-1: Fish Audio 
 import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, getElevenLabsVoiceList, ELEVENLABS_MODELS } from '../utils/elevenlabs'; // ElevenLabs TTS
 import { logAudit } from '../utils/audit-logger';
 import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration'; // MP3 duration parser
+import {
+  resolveVoiceForUtterance,
+  resolveVoiceWithOverride,
+  loadProjectSettings,
+  detectProvider,
+  getSampleRate,
+  FALLBACK_VOICE_ID,
+  FALLBACK_PROVIDER,
+} from '../utils/voice-resolution';
 
 const audioGeneration = new Hono<{ Bindings: Bindings }>();
 
@@ -122,21 +131,10 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     }
 
     // ========================================
-    // FIX: Character Voice Auto-Resolution
-    // ========================================
-    // フロントから voice_id が送られなかった場合、
-    // utterance-level と同じ SSOT ロジックでキャラクター音声を自動解決する
-    // Priority:
-    //   1. dialogue + character_key → project_character_models.voice_preset_id
-    //   2. projects.settings_json.default_narration_voice
-    //   3. fallback → ja-JP-Neural2-B
+    // Voice Resolution (unified via voice-resolution.ts)
     // ========================================
     if (!voiceId) {
-      let voiceSource = 'fallback';
-      voiceId = 'ja-JP-Neural2-B'; // Ultimate fallback
-      provider = 'google';
-
-      // Check utterances for character voice info
+      // Need first utterance info for character-level resolution
       const firstUtterance = await c.env.DB.prepare(`
         SELECT role, character_key FROM scene_utterances
         WHERE scene_id = ?
@@ -144,66 +142,26 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
         LIMIT 1
       `).bind(sceneId).first<{ role: string; character_key: string | null }>();
 
-      if (firstUtterance?.role === 'dialogue' && firstUtterance.character_key) {
-        // Priority 1: Character voice
-        const character = await c.env.DB.prepare(`
-          SELECT voice_preset_id FROM project_character_models
-          WHERE project_id = ? AND character_key = ?
-        `).bind(scene.project_id, firstUtterance.character_key).first<{ voice_preset_id: string | null }>();
+      const projectSettings = await loadProjectSettings(c.env.DB, scene.project_id);
 
-        if (character?.voice_preset_id) {
-          voiceId = character.voice_preset_id;
-          voiceSource = 'character';
-          // Detect provider from voice_preset_id
-          if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-            provider = 'elevenlabs';
-          } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-            provider = 'fish';
-          } else {
-            provider = 'google';
-          }
-        }
-      }
+      const resolved = await resolveVoiceForUtterance(
+        c.env.DB,
+        {
+          role: firstUtterance?.role || 'narration',
+          character_key: firstUtterance?.character_key || null,
+          project_id: scene.project_id,
+        },
+        projectSettings
+      );
 
-      // Priority 2: Project default narration voice
-      if (voiceSource === 'fallback') {
-        const project = await c.env.DB.prepare(`
-          SELECT settings_json FROM projects WHERE id = ?
-        `).bind(scene.project_id).first<{ settings_json: string | null }>();
+      voiceId = resolved.voiceId;
+      provider = resolved.provider;
 
-        if (project?.settings_json) {
-          try {
-            const settings = JSON.parse(project.settings_json);
-            if (settings.default_narration_voice?.voice_id) {
-              voiceId = settings.default_narration_voice.voice_id;
-              provider = settings.default_narration_voice.provider || 'google';
-              voiceSource = 'project_default';
-              // Re-detect provider if not explicitly set
-              if (!settings.default_narration_voice.provider) {
-                if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-                  provider = 'elevenlabs';
-                } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-                  provider = 'fish';
-                }
-              }
-            }
-          } catch (e) {
-            console.warn(`[Audio] Failed to parse settings_json for project ${scene.project_id}:`, e);
-          }
-        }
-      }
-
-      console.log(`[Audio] Scene ${sceneId}: Voice auto-resolved: source=${voiceSource}, provider=${provider}, voiceId=${voiceId}`);
+      console.log(`[Audio] Scene ${sceneId}: Voice auto-resolved: source=${resolved.source}, provider=${provider}, voiceId=${voiceId}`);
     } else {
       // Auto-detect provider from explicit voice_id if not set
       if (!provider) {
-        if (voiceId.startsWith('elevenlabs:') || voiceId.startsWith('el-')) {
-          provider = 'elevenlabs';
-        } else if (voiceId.startsWith('fish:') || voiceId.startsWith('fish-')) {
-          provider = 'fish';
-        } else {
-          provider = 'google';
-        }
+        provider = detectProvider(voiceId);
       }
     }
 
@@ -810,10 +768,9 @@ audioGeneration.post('/tts/preview', async (c) => {
     const sampleText = text || 'こんにちは、これはサンプル音声です。';
     
     // Determine provider from voice_id
-    // Note: isElevenLabsVoice is imported function, use different variable name
+    // Determine provider from voice_id (unified via voice-resolution.ts)
     const isElevenLabs = voice_id.startsWith('elevenlabs:') || voice_id.startsWith('el-') || isElevenLabsVoice(voice_id);
-    const isFish = voice_id.startsWith('fish:') || voice_id.startsWith('fish-');
-    const provider = isElevenLabs ? 'elevenlabs' : isFish ? 'fish' : 'google';
+    const provider = isElevenLabs ? 'elevenlabs' : detectProvider(voice_id);
 
     if (provider === 'elevenlabs') {
       // ElevenLabs TTS
