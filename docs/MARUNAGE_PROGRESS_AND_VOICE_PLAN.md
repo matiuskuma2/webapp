@@ -1,10 +1,10 @@
 # 丸投げチャット — 進捗・音声アーキテクチャ・PersonaPlex-7B統合計画
 
-> 最終更新: 2026-02-17 (commit df9bf59 + docs update)
+> 最終更新: 2026-02-18 (production schema 完全一致版)
 > 本ドキュメントは「今どこまでできていて、次に何をすべきか」を即座に再開できるよう網羅的に記録する。
 > 
 > **関連ドキュメント**: 
-> - [Audio SSOT 完全仕様書](./AUDIO_SSOT_SPEC.md) — テーブル定義、API契約、禁止ルール、テストケースの網羅的仕様
+> - [Audio SSOT 完全仕様書](./AUDIO_SSOT_SPEC.md) — production schema 完全一致版: CREATE TABLE 文、API契約、禁止ルール、テストケース
 
 ---
 

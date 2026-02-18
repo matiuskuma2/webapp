@@ -1,237 +1,345 @@
 # Audio SSOT (Single Source of Truth) - 完全仕様書
 
-> 最終更新: 2026-02-17
+> 最終更新: 2026-02-18 (production schema 完全一致版)
 > 対象: MARUMUVI (webapp) 音声サブシステム全体
+> 
+> **本仕様の CREATE TABLE 文は production DB (0001_full_schema_from_production.sql + 後続 migration) と 1:1 で一致する。**
+> migration ファイルとの差分がある場合は本仕様が誤りであり、migration が正である。
 
 ---
 
 ## 1. 概要
 
-本仕様書は MARUMUVI の音声サブシステムの **唯一の真実源 (SSOT)** を定義する。
-すべての音声関連コード変更は本仕様に従うこと。
+### 1.1 SSOT の "唯一の真実" 3つ
 
-### 1.1 設計原則
+| SSOT | テーブル | 何が正か |
+|------|---------|---------|
+| **SSOT-A: 発話** | `scene_utterances` | 何を・誰が・何番目に喋るか (text, role, order_no, character_key) |
+| **SSOT-B: 音声実体** | `audio_generations` | 生成結果 (provider, voice_id, status, r2_key, r2_url, duration_ms) |
+| **SSOT-C: 採用リンク** | `scene_utterances.audio_generation_id` | どの音声が採用されているか |
 
-1. **scene_utterances が発話の SSOT** — テキスト、話者、順序はここだけが正
-2. **audio_generations が音声ファイルの SSOT** — provider、status、r2_key/url はここだけが正
+動画ビルドは最終的に **utterances → audio_generation_id → audio_generations.r2_url** のみを参照して Remotion へ渡す (`video-build-helpers.ts`)。
+
+### 1.2 設計原則
+
+1. **scene_utterances が発話の SSOT** — 丸投げも Builder も「台本→音声→動画」はここに収束
+2. **audio_generations が音声ファイルの SSOT** — provider, status, r2_key/url はここだけが正
 3. **リンクは 1:1** — `scene_utterances.audio_generation_id` → `audio_generations.id`
-4. **provider は TEXT (enum lock なし)** — 新プロバイダー追加時に DB 変更不要
-5. **Voice Resolution は 3段階** — utterance override > character preset > default narration voice > fallback
+4. **provider は TEXT (enum lock なし)** — CHECK 制約なし、新プロバイダー追加時に DB 変更不要
+5. **Voice Resolution は 3段階** — character preset > default narration voice > fallback
 6. **動画ビルドは最終 audio URL を消費する** — utterance 変更時は必ずビデオリビルドが必要
 
 ---
 
-## 2. テーブル仕様
+## 2. テーブル仕様 (production schema 完全一致)
 
-### 2.1 scene_utterances (SSOT: 発話テキスト・順序)
+### 2.1 scene_utterances (SSOT-A: 発話テキスト・順序)
 
 **Migration**: `0022_create_scene_utterances.sql`
+**API SSOT**: `src/routes/utterances.ts`
 
-| Column | Type | Nullable | Default | Description |
-|--------|------|----------|---------|-------------|
-| `id` | INTEGER | NO | AUTOINCREMENT | PK |
-| `scene_id` | INTEGER | NO | - | FK → `scenes(id)` ON DELETE CASCADE |
-| `order_no` | INTEGER | NO | - | 表示・再生順序 (1-based) |
-| `role` | TEXT | NO | - | `'narration'` \| `'dialogue'` |
-| `character_key` | TEXT | YES | NULL | dialogue 時のみ必須。`scene_character_map.character_key` と対応 |
-| `text` | TEXT | NO | - | 発話テキスト（字幕にも使用） |
-| `audio_generation_id` | INTEGER | YES | NULL | FK → `audio_generations(id)` ON DELETE SET NULL |
-| `duration_ms` | INTEGER | YES | NULL | キャッシュ: リンク先 audio の尺 (ms) |
-| `created_at` | DATETIME | NO | CURRENT_TIMESTAMP | - |
-| `updated_at` | DATETIME | NO | CURRENT_TIMESTAMP | - |
+```sql
+-- 0022_create_scene_utterances.sql (production 完全一致)
+CREATE TABLE IF NOT EXISTS scene_utterances (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  
+  scene_id INTEGER NOT NULL
+    REFERENCES scenes(id) ON DELETE CASCADE,
+  
+  order_no INTEGER NOT NULL,
+  
+  role TEXT NOT NULL
+    CHECK (role IN ('narration', 'dialogue')),
+  
+  character_key TEXT NULL,
+  
+  text TEXT NOT NULL,
+  
+  audio_generation_id INTEGER NULL
+    REFERENCES audio_generations(id) ON DELETE SET NULL,
+  
+  duration_ms INTEGER NULL,
+  
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-**Indexes**:
-- `UNIQUE (scene_id, order_no)` — 同一シーン内で order_no は一意
-- `idx_scene_utterances_scene_id (scene_id)` — シーン検索用
-- `idx_scene_utterances_audio_gen (audio_generation_id)` — 音声逆引き
-- `idx_scene_utterances_role (role)` — role 統計用
+CREATE UNIQUE INDEX IF NOT EXISTS idx_scene_utterances_scene_order 
+  ON scene_utterances(scene_id, order_no);
 
-**Constraints & Rules**:
-- `role = 'dialogue'` の時、`character_key` は NOT NULL であるべき（アプリレベル制約）
-- `role = 'narration'` の時、`character_key` は NULL であるべき
-- `text` は空文字列不可（アプリレベル制約、trim 後に検証）
-- `audio_generation_id` が SET NULL になった場合、`duration_ms` もリセットすべき
-- `order_no` の採番: INSERT 時に `MAX(order_no) + 1` で付与
+CREATE INDEX IF NOT EXISTS idx_scene_utterances_scene 
+  ON scene_utterances(scene_id);
+
+CREATE INDEX IF NOT EXISTS idx_scene_utterances_audio_generation 
+  ON scene_utterances(audio_generation_id);
+
+CREATE INDEX IF NOT EXISTS idx_scene_utterances_role 
+  ON scene_utterances(role);
+```
+
+**運用ルール**:
+- `role = 'dialogue'` → `character_key` は NOT NULL であるべき (アプリ層バリデーション)
+- `role = 'narration'` → `character_key` は NULL であるべき
+- `text` は空文字列不可 (trim 後に検証)
+- `audio_generation_id` が SET NULL になった場合 → `duration_ms` もリセットすべき
+- `order_no` の採番: INSERT 時に `MAX(order_no) + 1`
 - reorder 時: 全 utterance の order_no をバッチ更新
 
-### 2.2 audio_generations (SSOT: 音声ファイル・生成状態)
+### 2.2 audio_generations (SSOT-B: 音声ファイル・生成状態)
 
-**Migration**: `0009_create_audio_generations.sql`
+**Origin**: `0001_full_schema_from_production.sql` (lines 332-351)
+**追加 migration**: `0009_create_audio_generations.sql` (0001 に統合済み — 新環境では 0001 が正)
 
-| Column | Type | Nullable | Default | Description |
-|--------|------|----------|---------|-------------|
-| `id` | INTEGER | NO | AUTOINCREMENT | PK |
-| `scene_id` | INTEGER | NO | - | FK → `scenes(id)` (実質的なスコープ) |
-| `provider` | TEXT | NO | `'google'` | `'google'` \| `'elevenlabs'` \| `'fish'` \| (将来: 任意文字列) |
-| `voice_id` | TEXT | YES | NULL | provider 固有の voice identifier |
-| `model` | TEXT | YES | NULL | 使用モデル名 (e.g., `'eleven_multilingual_v2'`) |
-| `format` | TEXT | NO | `'mp3'` | 出力形式 |
-| `sample_rate` | INTEGER | NO | `24000` | サンプルレート (Google: 24000, Fish: 44100) |
-| `text` | TEXT | YES | NULL | 生成時のテキスト（デバッグ用、SSOT はuttで管理） |
-| `status` | TEXT | NO | `'pending'` | `'pending'` \| `'generating'` \| `'completed'` \| `'failed'` |
-| `error_message` | TEXT | YES | NULL | 失敗時のエラー詳細 |
-| `r2_key` | TEXT | YES | NULL | R2 オブジェクトキー |
-| `r2_url` | TEXT | YES | NULL | R2 公開URL（CloudFront化の候補） |
-| `is_active` | INTEGER | NO | `0` | 1 = アクティブ（レガシー: scene 単位の active 音声） |
-| `created_at` | DATETIME | NO | CURRENT_TIMESTAMP | - |
-| `updated_at` | DATETIME | NO | CURRENT_TIMESTAMP | - |
+```sql
+-- 0001_full_schema_from_production.sql (production 完全一致)
+CREATE TABLE IF NOT EXISTS audio_generations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scene_id INTEGER NOT NULL,
+  provider TEXT NOT NULL DEFAULT 'google',
+  voice_id TEXT NOT NULL,
+  model TEXT,
+  format TEXT NOT NULL DEFAULT 'mp3',
+  sample_rate INTEGER DEFAULT 24000,
+  text TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  error_message TEXT,
+  r2_key TEXT,
+  r2_url TEXT,
+  is_active INTEGER NOT NULL DEFAULT 0,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  duration_ms INTEGER,
+  FOREIGN KEY (scene_id) REFERENCES scenes(id) ON DELETE CASCADE
+);
 
-**Indexes**:
-- `idx_audio_generations_scene (scene_id, created_at DESC)` — シーン別の最新音声取得
-- `idx_audio_generations_active (scene_id, is_active)` — アクティブ音声検索
-- `idx_audio_generations_status (status)` — ジョブ監視用
+-- 0001 indexes
+CREATE INDEX IF NOT EXISTS idx_audio_generations_scene_id 
+  ON audio_generations(scene_id);
+
+-- 0009 indexes (0001作成後に追加された可能性あり)
+CREATE INDEX IF NOT EXISTS idx_audio_generations_scene_active
+  ON audio_generations(scene_id, is_active);
+
+CREATE INDEX IF NOT EXISTS idx_audio_generations_status
+  ON audio_generations(status);
+```
+
+**重要: 0001 vs 0009 の差分**:
+- 0001 には `user_id` と `duration_ms` がある (production schema に後から追加された)
+- 0009 にはそれらがない (0009 は 0001 より前に作られた migration)
+- **production の真実は 0001** — 新環境構築時は 0001 を使う
 
 **Status Transitions**:
 ```
 pending → generating → completed
                     └→ failed
 ```
-- `completed` → 再生成不可（新 record を INSERT、古いものは is_active=0 のまま残す）
-- `failed` → 再生成時は新 record を INSERT
+- `completed` レコードは **イミュータブル** — 再生成時は新 record を INSERT、古いものは `is_active=0`
+- `failed` → 再生成時も新 record を INSERT
 
-**Provider 拡張ルール**:
-- `provider` は TEXT 型で CHECK 制約なし → 新プロバイダー追加時に DB migration 不要
-- provider prefix convention: `google:`, `elevenlabs:` / `el-`, `fish:` / `fish-`
-- 将来: `personaplex:`, `riva:`, `openai:` など
+### 2.3 projects テーブル (settings_json 部分のみ)
 
-### 2.3 projects.settings_json — デフォルトナレーション音声
+**Origin**: `0001_full_schema_from_production.sql` (lines 73-96)
+**追加 migration**: `0047_add_projects_settings_json.sql`
 
-**キー名 (確定)**: `default_narration_voice`
+```sql
+-- 0001 の projects 定義 (音声関連カラムのみ抜粋)
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  title TEXT NOT NULL,
+  -- ... 他カラム省略 ...
+  settings_json TEXT DEFAULT '{}',    -- 0047 で追加
+  output_preset TEXT DEFAULT 'yt_long',  -- 0035 で追加
+  split_mode TEXT DEFAULT 'raw',      -- 0045 で追加
+  target_scene_count INTEGER DEFAULT 5, -- 0045 で追加
+  is_deleted INTEGER NOT NULL DEFAULT 0, -- 0052 で追加
+  deleted_at DATETIME,                -- 0052 で追加
+  -- ... 他カラム省略 ...
+);
+```
+
+**settings_json の音声関連キー (確定)**:
 
 ```json
 {
   "default_narration_voice": {
-    "provider": "google",          // 'google' | 'elevenlabs' | 'fish' | ...
-    "voice_id": "ja-JP-Neural2-B"  // provider 固有の voice identifier
+    "provider": "google",
+    "voice_id": "ja-JP-Neural2-B"
+  },
+  "character_voices": {
+    "<character_key>": { "provider": "elevenlabs", "voice_id": "el-aria" }
   },
   "output_preset": "youtube_short",
   "marunage_mode": true,
-  "character_voices": {
-    "char_a": { "provider": "elevenlabs", "voice_id": "el-aria" },
-    "char_b": { "provider": "fish", "voice_id": "fish:nanamin" }
-  },
-  "telops_comic": { ... },
-  "telops_remotion": { ... }
+  "telops_comic": { "style_preset": "outline", "size_preset": "md", "position_preset": "bottom" },
+  "telops_remotion": { "enabled": true, "style_preset": "outline", ... }
 }
 ```
 
-**確定根拠** (実コード参照):
-- `src/routes/audio-generation.ts:177` — `settings.default_narration_voice.voice_id`
-- `src/routes/audio-generation.ts:179` — `settings.default_narration_voice.provider`
-- `src/routes/bulk-audio.ts:105` — `projectSettings.default_narration_voice.voice_id`
-- `src/routes/marunage.ts:1249` — `settings.default_narration_voice = { provider, voice_id }`
-- `src/routes/marunage.ts:1738` — `default_narration_voice: narrationVoice`
-- `src/routes/marunage.ts:2098` — `sj.default_narration_voice`
-- `public/static/marunage-chat.js:30` — `MC.selectedVoice = { provider: 'google', voice_id: 'ja-JP-Neural2-B' }`
+**コード根拠** (キー名 `default_narration_voice` の確定):
+| ファイル | 行 | 使い方 |
+|---------|-----|-------|
+| `src/routes/marunage.ts` | 1249 | `settings.default_narration_voice = { provider, voice_id }` (書き込み) |
+| `src/routes/marunage.ts` | 1738 | `default_narration_voice: narrationVoice` (初期設定) |
+| `src/routes/marunage.ts` | 2098 | `sj.default_narration_voice` (読み取り) |
+| `src/routes/audio-generation.ts` | 177 | `settings.default_narration_voice.voice_id` (voice 解決) |
+| `src/routes/audio-generation.ts` | 179 | `settings.default_narration_voice.provider` (voice 解決) |
+| `src/routes/bulk-audio.ts` | 105 | `projectSettings.default_narration_voice.voice_id` (bulk voice 解決) |
+| `public/static/marunage-chat.js` | 30 | `MC.selectedVoice = { provider: 'google', voice_id: 'ja-JP-Neural2-B' }` |
 
-### 2.4 project_character_models.voice_preset_id — キャラクター音声
+### 2.4 project_character_models (キャラクター音声設定)
 
-**Migration**: `0001_full_schema_from_production.sql` (line 200)
+**Origin**: `0001_full_schema_from_production.sql` (lines 191-208)
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `voice_preset_id` | TEXT, nullable | キャラクター専用の voice ID |
-
-**Provider 推定ルール** (prefix convention):
+```sql
+-- 0001_full_schema_from_production.sql (production 完全一致)
+CREATE TABLE IF NOT EXISTS project_character_models (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL,
+  character_key TEXT NOT NULL,
+  character_name TEXT NOT NULL,
+  description TEXT,
+  appearance_description TEXT,
+  reference_image_r2_key TEXT,
+  reference_image_r2_url TEXT,
+  voice_preset_id TEXT,                           -- ★ キャラ声の SSOT
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  aliases_json TEXT NULL,                         -- 0011 で追加
+  story_traits TEXT,                              -- 0021 で追加
+  style_preset_id INTEGER REFERENCES style_presets(id),  -- 0046 で追加
+  FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+  UNIQUE(project_id, character_key)
+);
 ```
-voice_preset_id starts with 'el-' or 'elevenlabs:' → provider = 'elevenlabs'
-voice_preset_id starts with 'fish-' or 'fish:'     → provider = 'fish'
-else                                                → provider = 'google'
+
+**Provider 推定ルール** (voice_preset_id → provider, prefix convention):
+```
+'el-'        / 'elevenlabs:' → provider = 'elevenlabs'
+'fish-'      / 'fish:'       → provider = 'fish'
+それ以外                      → provider = 'google'
 ```
 
-**関連コード**:
-- `src/routes/bulk-audio.ts:84-101` — `resolveVoiceForUtterance` の Priority 1
-- `src/routes/audio-generation.ts:148-165` — scene 単位の voice 自動解決
-- `src/routes/marunage.ts:1720-1733` — キャラ音声マップ構築
-
-### 2.5 project_audio_jobs (SSOT: 一括音声生成ジョブ)
+### 2.5 project_audio_jobs (一括音声生成ジョブ)
 
 **Migration**: `0049_create_project_audio_jobs.sql`
 
-| Column | Type | Nullable | Default | Description |
-|--------|------|----------|---------|-------------|
-| `id` | INTEGER | NO | AUTOINCREMENT | PK |
-| `project_id` | INTEGER | NO | - | FK → `projects(id)` |
-| `mode` | TEXT | YES | NULL | `'missing'` \| `'pending'` \| `'all'` |
-| `force_regenerate` | INTEGER | YES | 0 | 1 = 既存完了音声も再生成 |
-| `narration_provider` | TEXT | YES | NULL | ジョブ指定のプロバイダー |
-| `narration_voice_id` | TEXT | YES | NULL | ジョブ指定の voice ID |
-| `status` | TEXT | NO | - | `'queued'` \| `'running'` \| `'completed'` \| `'failed'` \| `'canceled'` |
-| `total_utterances` | INTEGER | YES | 0 | 対象 utterance 数 |
-| `processed_utterances` | INTEGER | YES | 0 | 処理済み数 |
-| `success_count` | INTEGER | YES | 0 | 成功数 |
-| `failed_count` | INTEGER | YES | 0 | 失敗数 |
-| `skipped_count` | INTEGER | YES | 0 | スキップ数 |
-| `last_error` | TEXT | YES | NULL | 最後のエラー |
-| `error_details_json` | TEXT | YES | NULL | 全エラー JSON |
-| `locked_until` | DATETIME | YES | NULL | 排他ロック期限 |
-| `started_by_user_id` | INTEGER | YES | NULL | 実行ユーザー |
-| `created_at` | DATETIME | NO | CURRENT_TIMESTAMP | - |
-| `started_at` | DATETIME | YES | NULL | 実行開始時刻 |
-| `completed_at` | DATETIME | YES | NULL | 完了時刻 |
-| `updated_at` | DATETIME | NO | CURRENT_TIMESTAMP | - |
+```sql
+-- 0049_create_project_audio_jobs.sql (production 完全一致)
+CREATE TABLE IF NOT EXISTS project_audio_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  
+  mode TEXT NOT NULL CHECK (mode IN ('missing', 'pending', 'all')),
+  force_regenerate INTEGER NOT NULL DEFAULT 0,
+  narration_provider TEXT DEFAULT 'google',
+  narration_voice_id TEXT DEFAULT 'ja-JP-Neural2-B',
+  
+  status TEXT NOT NULL DEFAULT 'queued' 
+    CHECK (status IN ('queued', 'running', 'completed', 'failed', 'canceled')),
+  
+  total_utterances INTEGER NOT NULL DEFAULT 0,
+  processed_utterances INTEGER NOT NULL DEFAULT 0,
+  success_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  skipped_count INTEGER NOT NULL DEFAULT 0,
+  
+  last_error TEXT,
+  error_details_json TEXT,
+  
+  locked_until DATETIME,
+  
+  started_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at DATETIME,
+  completed_at DATETIME,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
-**Idempotency Rules**:
-- 同一 project_id に対して `status = 'queued' | 'running'` のジョブが存在する場合、新規作成は 409 Conflict
-- `locked_until` でデッドロック防止（5分タイムアウト）
+CREATE INDEX IF NOT EXISTS idx_project_audio_jobs_project_status 
+  ON project_audio_jobs(project_id, status);
 
-### 2.6 project_audio_tracks (SSOT: 通し BGM)
+CREATE INDEX IF NOT EXISTS idx_project_audio_jobs_status_locked 
+  ON project_audio_jobs(status, locked_until);
+```
+
+**Idempotency**: 同一 project_id に `status = 'queued' | 'running'` のジョブが存在 → 409 Conflict
+
+### 2.6 project_audio_tracks (通し BGM)
 
 **Migration**: `0029_create_project_audio_tracks.sql`
 
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | INTEGER | AUTOINCREMENT | PK |
-| `project_id` | INTEGER | - | FK → `projects(id)` |
-| `track_type` | TEXT | `'bgm'` | 現在 'bgm' のみ |
-| `r2_key` | TEXT | NULL | R2 オブジェクトキー |
-| `r2_url` | TEXT | NULL | R2 公開URL |
-| `duration_ms` | INTEGER | NULL | BGM の尺 |
-| `volume` | REAL | `0.25` | 0.0 - 1.0 |
-| `loop` | INTEGER | `1` | 0/1 |
-| `fade_in_ms` | INTEGER | `800` | - |
-| `fade_out_ms` | INTEGER | `800` | - |
-| `ducking_enabled` | INTEGER | `0` | 将来用 |
-| `ducking_volume` | REAL | `0.12` | ダッキング時音量 |
-| `ducking_attack_ms` | INTEGER | `120` | - |
-| `ducking_release_ms` | INTEGER | `220` | - |
-| `is_active` | INTEGER | `1` | 1 = 現在の有効BGM |
+```sql
+-- 0029_create_project_audio_tracks.sql (production 完全一致)
+CREATE TABLE IF NOT EXISTS project_audio_tracks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  track_type TEXT NOT NULL DEFAULT 'bgm',
+  r2_key TEXT,
+  r2_url TEXT,
+  duration_ms INTEGER,
+  volume REAL NOT NULL DEFAULT 0.25,
+  loop INTEGER NOT NULL DEFAULT 1,
+  fade_in_ms INTEGER NOT NULL DEFAULT 800,
+  fade_out_ms INTEGER NOT NULL DEFAULT 800,
+  ducking_enabled INTEGER NOT NULL DEFAULT 0,
+  ducking_volume REAL NOT NULL DEFAULT 0.12,
+  ducking_attack_ms INTEGER NOT NULL DEFAULT 120,
+  ducking_release_ms INTEGER NOT NULL DEFAULT 220,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_audio_tracks_project 
+  ON project_audio_tracks(project_id);
+CREATE INDEX IF NOT EXISTS idx_project_audio_tracks_active 
+  ON project_audio_tracks(project_id, is_active);
+```
 
 **Rules**: 各プロジェクトにつき `is_active=1` は最大1つ
 
-### 2.7 scene_audio_assignments (SSOT: シーン別 BGM/SFX)
+### 2.7 scene_audio_assignments (シーン別 BGM/SFX)
 
 **Migration**: `0041_create_scene_audio_assignments.sql`
 
-| Column | Type | Default | Description |
-|--------|------|---------|-------------|
-| `id` | INTEGER | AUTOINCREMENT | PK |
-| `scene_id` | INTEGER | - | FK → `scenes(id)` |
-| `audio_library_type` | TEXT | - | `'system'` \| `'user'` \| `'direct'` |
-| `system_audio_id` | INTEGER | NULL | FK → `system_audio_library(id)` |
-| `user_audio_id` | INTEGER | NULL | FK → `user_audio_library(id)` |
-| `direct_r2_key` | TEXT | NULL | 直接アップロード用 |
-| `direct_r2_url` | TEXT | NULL | - |
-| `direct_name` | TEXT | NULL | - |
-| `direct_duration_ms` | INTEGER | NULL | - |
-| `audio_type` | TEXT | - | `'bgm'` \| `'sfx'` |
-| `start_ms` | INTEGER | `0` | シーン内開始時刻 |
-| `end_ms` | INTEGER | NULL | 終了時刻 (NULL = シーン末尾) |
-| `volume_override` | REAL | NULL | - |
-| `loop_override` | INTEGER | NULL | - |
-| `fade_in_ms_override` | INTEGER | NULL | - |
-| `fade_out_ms_override` | INTEGER | NULL | - |
-| `is_active` | INTEGER | `1` | - |
+```sql
+-- 0041_create_scene_audio_assignments.sql (production 完全一致)
+CREATE TABLE IF NOT EXISTS scene_audio_assignments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  scene_id INTEGER NOT NULL REFERENCES scenes(id) ON DELETE CASCADE,
+  audio_library_type TEXT NOT NULL CHECK (audio_library_type IN ('system', 'user', 'direct')),
+  system_audio_id INTEGER REFERENCES system_audio_library(id),
+  user_audio_id INTEGER REFERENCES user_audio_library(id),
+  direct_r2_key TEXT,
+  direct_r2_url TEXT,
+  direct_name TEXT,
+  direct_duration_ms INTEGER,
+  audio_type TEXT NOT NULL CHECK (audio_type IN ('bgm', 'sfx')),
+  start_ms INTEGER NOT NULL DEFAULT 0,
+  end_ms INTEGER,
+  volume_override REAL,
+  loop_override INTEGER,
+  fade_in_ms_override INTEGER,
+  fade_out_ms_override INTEGER,
+  is_active INTEGER NOT NULL DEFAULT 1,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
 
 **Rules**:
-- 1シーンにつき BGM (`audio_type='bgm'`) は `is_active=1` が最大1つ
-- SFX (`audio_type='sfx'`) は複数可、`start_ms` で再生位置を指定
+- 1シーン BGM (`audio_type='bgm'`) は `is_active=1` が最大1つ
+- SFX (`audio_type='sfx'`) は複数可、`start_ms` で再生位置指定
 
 ---
 
 ## 3. Voice Resolution (音声解決) 仕様
 
 ### 3.1 優先順位 (SSOT: resolveVoiceForUtterance)
+
+**実装ファイル**: `src/routes/bulk-audio.ts:78-123`
 
 ```
 Priority 1: Character Voice (dialogue のみ)
@@ -240,7 +348,7 @@ Priority 1: Character Voice (dialogue のみ)
   └─ → voice_preset_id → provider推定 (prefix convention)
 
 Priority 2: Project Default Narration Voice
-  ├─ DB: projects.settings_json → JSON.parse() → .default_narration_voice
+  ├─ DB: projects.settings_json → .default_narration_voice
   ├─ { provider: string, voice_id: string }
   └─ provider未設定時は voice_id の prefix から推定
 
@@ -248,459 +356,321 @@ Priority 3: Ultimate Fallback
   └─ { provider: 'google', voiceId: 'ja-JP-Neural2-B' }
 ```
 
-### 3.2 Provider 推定ルール (prefix convention)
+### 3.2 resolveVoice の実装箇所 (丸投げ + Builder 両方)
 
-| Prefix | Provider |
-|--------|----------|
-| `elevenlabs:` / `el-` | `elevenlabs` |
-| `fish:` / `fish-` | `fish` |
-| それ以外 | `google` |
-
-### 3.3 実装箇所
-
-| File | Function | 用途 |
+| File | Location | 用途 |
 |------|----------|------|
-| `src/routes/bulk-audio.ts:78` | `resolveVoiceForUtterance()` | 一括生成時の voice 解決 (SSOT) |
+| `src/routes/bulk-audio.ts:78` | `resolveVoiceForUtterance()` | 一括生成時の voice 解決 (**正規 SSOT**) |
 | `src/routes/audio-generation.ts:134` | inline resolution | 単一シーン生成時の voice 解決 |
 | `src/routes/marunage.ts:1238-1239` | config extraction | 丸投げからの voice 取得 |
 
-### 3.4 新プロバイダー追加時の手順
+**注意**: 丸投げと Builder で `resolveVoice` がそれぞれ独立実装されている。
+→ **要改善**: 共通 util に統一すべき (矛盾が起きやすい点 §7.2)
 
-1. `src/utils/NEW_PROVIDER.ts` を作成（TTS クライアント）
+### 3.3 新プロバイダー追加時の手順
+
+1. `src/utils/NEW_PROVIDER.ts` を作成 (TTS クライアント)
 2. `src/routes/audio-generation.ts` の generateTTS 関数に provider 分岐を追加
 3. `src/routes/audio-generation.ts` の GET `/tts/voices` に声一覧を追加
-4. prefix convention に新 prefix を追加（例: `riva:`, `openai:`）
+4. prefix convention に新 prefix を追加 (e.g., `riva:`, `openai:`)
 5. `resolveVoiceForUtterance()` の prefix 判定に分岐を追加
-6. DB migration **不要**（`audio_generations.provider` は TEXT 型）
-7. フロントエンド: `mcLoadVoices()` に自動で反映（`/tts/voices` から動的取得）
+6. DB migration **不要** (`audio_generations.provider` は TEXT 型, CHECK 制約なし)
+7. フロントエンド: `mcLoadVoices()` に自動反映 (`/tts/voices` から動的取得)
 8. 環境変数: `NEW_PROVIDER_API_KEY` を `.dev.vars` / `wrangler secret put` に追加
 
 ---
 
-## 4. API Contracts (API 契約)
+## 4. API Contracts (API 契約 — 現行ルート完全準拠)
 
-### 4.1 Utterance CRUD
+### 4.1 Utterance CRUD: `src/routes/utterances.ts`
 
-#### GET /api/scenes/:sceneId/utterances
-**Response**: `{ utterances: [{ id, scene_id, order_no, role, character_key, text, audio_generation_id, duration_ms, audio_status?, audio_url? }] }`
+| Method | Path | Description | Source |
+|--------|------|-------------|--------|
+| GET | `/api/scenes/:sceneId/utterances` | シーンの発話一覧 | L85 |
+| POST | `/api/scenes/:sceneId/utterances` | 発話追加 (order_no 自動採番) | L209 |
+| PUT | `/api/utterances/:utteranceId` | 発話テキスト/role/character_key 編集 | L342 |
+| DELETE | `/api/utterances/:utteranceId` | 発話削除 (audio は孤立, 削除しない) | L491 |
+| PUT | `/api/scenes/:sceneId/utterances/reorder` | 発話並べ替え | L543 |
+| POST | `/api/utterances/:utteranceId/generate-audio` | 発話単位の音声生成 (P-5 で使用) | L610 |
 
-#### POST /api/scenes/:sceneId/utterances
-**Body**: `{ role: 'narration'|'dialogue', character_key?: string, text: string }`
-**Response**: `{ success: true, utterance: { id, ... } }`
-**Side Effect**: order_no は自動採番 (`MAX(order_no) + 1`)
-
-#### PUT /api/utterances/:utteranceId
-**Body**: `{ text?: string, role?: string, character_key?: string }`
-**Response**: `{ success: true, utterance: { id, ... } }`
-**Side Effect**: テキスト変更時、リンクされた audio は **無効化されない**（明示的な再生成が必要）
-
-#### DELETE /api/utterances/:utteranceId
-**Response**: `{ success: true }`
-**Side Effect**: `audio_generation_id` の音声レコードは孤立するが削除しない（参照整合性）
-
-#### PUT /api/scenes/:sceneId/utterances/reorder
-**Body**: `{ utterance_ids: [3, 1, 2] }` — 新しい順序
-**Response**: `{ success: true }`
-**Side Effect**: 全 utterance の `order_no` を 1-based で再採番
-
-### 4.2 Audio Generation
-
-#### POST /api/utterances/:utteranceId/generate-audio
-**Body**: `{ force?: boolean, voice_id?: string, provider?: string }`
-**Response**: `{ success: true, utterance_id, audio: { id, status, r2_url, duration_ms } }`
-**Flow**:
+**generate-audio の flow**:
 1. utterance の text を取得
-2. force=false かつ既存 completed audio がある場合 → skip (reuse)
+2. `force=false` かつ既存 completed audio → skip (reuse)
 3. voice 解決 (explicit > character > project_default > fallback)
-4. `audio_generations` に INSERT (status='generating')
+4. `audio_generations` に INSERT (`status='generating'`)
 5. `scene_utterances.audio_generation_id` を UPDATE
 6. TTS API 呼び出し → R2 に保存
-7. status → 'completed', r2_key/r2_url 更新
+7. `status` → `'completed'`, `r2_key`/`r2_url` 更新
 8. `scene_utterances.duration_ms` にキャッシュ
 
-#### POST /api/scenes/:sceneId/generate-audio (レガシー: シーン単位)
-**Body**: `{ voice_id?, provider?, voice_preset_id? }`
-**Flow**: シーンの最初の utterance text を使って音声生成 → `is_active=1` 設定
+### 4.2 Bulk Audio: `src/routes/bulk-audio.ts`
 
-#### POST /api/projects/:projectId/audio/bulk-generate
-**Body**: `{ mode?: 'missing'|'pending'|'all', force_regenerate?: boolean }`
-**Response**: `{ success: true, job_id, status: 'queued' }`
-**Idempotency**: 同一 project に running/queued job がある場合 → 409 Conflict
-**Flow**:
-1. `project_audio_jobs` に INSERT (status='queued')
-2. 対象 utterance を列挙 (mode に応じてフィルタ)
-3. 各 utterance に対して `resolveVoiceForUtterance()` → `generateSingleUtteranceAudio()`
-4. 進捗を `project_audio_jobs` に更新
-5. 完了/失敗 → status 更新
+| Method | Path | Description | Source |
+|--------|------|-------------|--------|
+| POST | `/api/projects/:projectId/audio/bulk-generate` | 一括音声生成 | L554 |
+| GET | `/api/projects/:projectId/audio/bulk-status` | ジョブ進捗 | L682 |
+| POST | `/api/projects/:projectId/audio/bulk-cancel` | キャンセル | L772 |
+| GET | `/api/projects/:projectId/audio/bulk-history` | 履歴 | L821 |
 
-#### GET /api/projects/:projectId/audio/bulk-status
-**Response**: `{ job: { id, status, total, processed, success, failed, skipped, last_error } }`
+**bulk-generate の flow**: `resolveVoiceForUtterance()` → `generateSingleUtteranceAudio()` (utterance 単位)
 
-#### POST /api/projects/:projectId/audio/bulk-cancel
-**Response**: `{ success: true }`
+### 4.3 Scene Audio (single): `src/routes/audio-generation.ts`
 
-### 4.3 TTS Voices
+| Method | Path | Description | Source |
+|--------|------|-------------|--------|
+| POST | `/api/scenes/:id/generate-audio` | 単一シーン音声生成 | L99 |
+| GET | `/api/scenes/:id/audio` | シーンの音声一覧 | L360 |
+| POST | `/api/audio/:audioId/activate` | 音声アクティブ化 | L388 |
+| DELETE | `/api/audio/:audioId` | 音声削除 | L442 |
+| POST | `/api/tts/preview` | プレビュー | L801 |
+| GET | `/api/tts/voices` | 全プロバイダーの声一覧 | L942 |
+| GET | `/api/tts/usage` | TTS使用量 | L1015 |
+| GET | `/api/tts/usage/check` | 使用量チェック | L1106 |
+| POST | `/api/audio/fix-durations` | duration修正バッチ | L1158 |
 
-#### GET /api/tts/voices
-**Response**:
-```json
-{
-  "voices": [
-    { "id": "google:ja-JP-Neural2-B", "provider": "google", "voice_id": "ja-JP-Neural2-B", "name": "Neural2-B", "gender": "male", "language": "ja-JP" },
-    { "id": "elevenlabs:9BWtsMINq...", "provider": "elevenlabs", "voice_id": "9BWtsMINq...", "name": "Aria", "gender": "female", "description": "calm narration" },
-    { "id": "fish:nanamin", "provider": "fish", "voice_id": "fish:nanamin", "name": "Nanamin", "gender": "female", "description": "anime style" }
-  ],
-  "configured_providers": ["google", "elevenlabs", "fish"],
-  "default_voice": { "provider": "google", "voice_id": "ja-JP-Neural2-B" }
-}
-```
+### 4.4 TTS Providers (現在3つ)
 
-### 4.4 TTS Usage
-
-#### GET /api/tts/usage
-**Response**: `{ total_cost_usd, monthly_budget, usage_percent, warning_threshold }`
-- monthly_budget: $100 USD
-- warning_thresholds: 70%, 85%
+| Provider | util file | API | 声の数 | 特徴 |
+|----------|-----------|-----|--------|------|
+| **Google TTS** | inline in audio-generation.ts | `texttospeech.googleapis.com/v1` | 8声 + Neural2-B | デフォルト |
+| **ElevenLabs** | `src/utils/elevenlabs.ts` (274行) | `api.elevenlabs.io/v1` | 6声 | Multilingual v2 |
+| **Fish Audio** | `src/utils/fish-audio.ts` (133行) | `api.fish.audio/v1/tts` | 1声 | reference_id 方式 |
 
 ---
 
-## 5. 音声 → 動画ビルド依存関係 (Fragile Points)
+## 5. 動画ビルド側の音声参照 (依存関係)
 
-### 5.1 データフロー
+### 5.1 正規の参照線
 
 ```
 scene_utterances
   ↓ audio_generation_id
 audio_generations (status='completed', r2_url NOT NULL)
-  ↓ r2_url
-video-generation.ts (line 1859-1863):
+  ↓ r2_url (絶対URL)
+video-generation.ts (L1859-1863):
   voiceUrls = utterances
     .filter(u => u.audio_url && u.audio_status === 'completed')
     .map(u => u.audio_url)
   ↓
-buildProjectJson() → project.json
-  scenes[].voice_urls: string[]
-  ↓
-Remotion Lambda → 動画のオーディオトラック
+buildProjectJson() → project.json → Remotion Lambda
 ```
 
-### 5.2 Fragile Point: utterance テキスト変更
+**重要**: video build は `audio_generations.is_active` を勝手に探しに行かない。
+`utterance → audio_generation_id → r2_url` だけが正規の参照線。
 
-**問題**: utterance テキストを変更しても、リンクされた `audio_generation` は変わらない。
-→ テキストと音声が不一致になる。
+### 5.2 二重パスの問題 (要修正候補)
 
-**現在の対策**: `MC._dirtyChanges` (フロントエンド) でダーティフラグを管理し、
-動画リビルド前にモーダルで確認。
-
-**推奨**: テキスト変更時に `audio_generation_id = NULL, duration_ms = NULL` にリセットし、
-自動で再生成をトリガーするオプションを追加。
-
-### 5.3 Fragile Point: presigned URL 期限切れ
-
-**問題**: `audio_generations.r2_url` は R2 の URL（永続）なので期限切れの問題はない。
-→ 音声 URL は動画ビルドの入り口で問題なし。
-
-**注意**: `video_builds.download_url` (完成動画) は S3 presigned URL のため期限切れする。
-→ commit `df9bf59` で `isPresignedUrlExpiringSoon()` ガード済み。
-
-### 5.4 Fragile Point: video_builds と audio の結合
-
-`buildBuildRequestV1()` (video-build-helpers.ts:1199):
+`buildBuildRequestV1()` (`video-build-helpers.ts:1199`):
 ```typescript
+// v1 パス: active_audio (レガシー, scene 単位)
 const audio = scene.active_audio?.audio_url
   ? { voice: { audio_url: scene.active_audio.audio_url, speed: 1.0 } }
   : undefined;
 ```
-→ `active_audio` が存在しないシーンは無音。utterance が追加されても自動反映しない。
 
-一方、video-generation.ts の preflight (line 1859) は:
+`video-generation.ts` preflight (`L1859`):
 ```typescript
+// v1.5 パス: utterances (新, utterance 単位)
 const voiceUrls = s.utterances
   .filter(u => u.audio_url && u.audio_status === 'completed')
   .map(u => u.audio_url)
 ```
-→ utterance 単位で voice_urls を収集。preflight と buildRequest で **異なるパス** を使っている。
 
-**リスク**: 古い buildBuildRequestV1 の `active_audio` パスと、新しい `utterances` パスの
-不整合が起きる可能性がある。
+→ 2つのパスが並行して存在。統一が必要。
+
+### 5.3 BGM の参照
+
+```
+project_audio_tracks (is_active=1)
+  → buildProjectJson() → audio_global.bgm
+
+scene_audio_assignments (is_active=1)
+  → buildProjectJson() → scenes[].sfx[]
+```
 
 ---
 
-## 6. 禁止ルール (Forbidden Rules)
+## 6. 丸投げチャット側の音声フロー
 
-### 6.1 DB レベル
+### 6.1 フロント → サーバ
+
+```
+marunage-chat.js:
+  MC.selectedVoice = { provider: 'google', voice_id: 'ja-JP-Neural2-B' }
+    ↓ (run 開始時に送信)
+  POST /api/marunage/start { narration_voice: MC.selectedVoice }
+    ↓
+marunage.ts:
+  narrationVoice = { provider, voice_id }
+    ↓
+  projects.settings_json.default_narration_voice = narrationVoice
+    ↓
+  bulk-audio の resolveVoice が settings_json を参照
+```
+
+### 6.2 mcLoadVoices()
+
+`public/static/marunage-chat.js:4632` — `/api/tts/voices` を fetch し、Google / ElevenLabs / Fish のタブで一覧表示。
+
+---
+
+## 7. 矛盾が起きやすい点 (要注意・次の改善候補)
+
+### 7.1 utterance text 更新時の音声不一致
+
+**現状**: text 更新後に `generate-audio(force)` を呼ぶ運用で解決。
+**事故要因**: text だけ変えて音声を再生成しないとズレる。
+**対策案**: PUT `utterance.text` の時点で `audio_generation_id=null` にするオプション (フラグ運用)。
+**フロント側**: `MC._dirtyChanges` でダーティフラグ管理 → リビルド前モーダルで確認。
+
+### 7.2 丸投げ/Builder で resolveVoice がズレる可能性
+
+**現状**: `bulk-audio.ts:78` と `audio-generation.ts:134` に同一ロジックが独立実装。
+**対策**: `resolveVoiceForUtterance` を共通 util (`src/utils/voice-resolution.ts`) に切り出す。
+
+### 7.3 buildBuildRequestV1 と preflight の voice パス不整合
+
+**現状**: §5.2 の通り `active_audio` パス (v1) と `utterances` パス (v1.5) が並行。
+**対策**: v1 パスを deprecate し、全て utterances パスに統一。
+
+---
+
+## 8. 禁止ルール (Forbidden Rules)
+
+### 8.1 DB レベル
 
 | Rule | Reason |
 |------|--------|
-| ❌ `audio_generations.provider` に CHECK 制約を追加しない | 新プロバイダー追加時に migration が必要になるため |
-| ❌ `scene_utterances.audio_generation_id` を CASCASDE DELETE にしない | 音声履歴が失われるため (SET NULL が正しい) |
-| ❌ 同一 scene に同一 order_no の utterance を2つ以上許可しない | UNIQUE 制約で保護済み |
-| ❌ `is_active` を複数 record に同時に 1 にしない (project_audio_tracks, scene_audio_assignments の BGM) | 1プロジェクト/1シーンに BGM は最大1つ |
+| ❌ `audio_generations.provider` に CHECK 制約を追加しない | 新プロバイダー追加時に migration 不要を維持 |
+| ❌ `scene_utterances.audio_generation_id` を CASCADE DELETE にしない | 音声履歴保持のため (SET NULL が正) |
+| ❌ 同一 scene に同一 order_no の utterance を2つ許可しない | UNIQUE 制約で保護済み |
+| ❌ `is_active` を複数 record に同時に 1 にしない (BGM 系) | 1プロジェクト/1シーンに BGM は最大1つ |
 
-### 6.2 アプリケーションレベル
+### 8.2 アプリケーションレベル
 
 | Rule | Reason |
 |------|--------|
-| ❌ 音声生成中 (status='generating') の utterance に対して DELETE/UPDATE しない | 競合状態の防止 |
-| ❌ `audio_generations` の completed レコードを UPDATE しない | イミュータブル設計: 再生成時は新 record を INSERT |
-| ❌ フロントエンドで直接 TTS API を呼ばない | API キーの漏洩防止 |
-| ❌ `settings_json.default_narration_voice` を直接文字列にしない | 常に `{ provider, voice_id }` オブジェクト |
+| ❌ 音声生成中 (`status='generating'`) の utterance に DELETE/UPDATE しない | 競合防止 |
+| ❌ `audio_generations` の completed レコードを UPDATE しない | イミュータブル設計 |
+| ❌ フロントで直接 TTS API を呼ばない | API キー漏洩防止 |
+| ❌ `settings_json.default_narration_voice` を文字列にしない | 常に `{ provider, voice_id }` オブジェクト |
 | ❌ 動画ビルド中に utterance テキストを変更しない | ビルド成果物との不整合防止 |
-| ❌ bulk-audio job が running 中に同一プロジェクトの新 job を作成しない | 409 Conflict で保護済み |
-
-### 6.3 ビデオビルド
-
-| Rule | Reason |
-|------|--------|
-| ❌ utterance の text/audio 変更後にビデオリビルドなしで出力を確定しない | テキストと動画音声の不整合 |
-| ❌ audio_generations.r2_url を直接ビデオに埋め込まない | CloudFront URL 変換が必要な場合がある |
+| ❌ bulk-audio job running 中に同一プロジェクトの新 job 作成しない | 409 で保護済み |
 
 ---
 
-## 7. テストケース
+## 9. テストケース
 
-### 7.1 Voice Resolution テスト
+### 9.1 Voice Resolution
 
 ```
 TC-VR-01: dialogue + character voice → character の voice_preset_id が使われる
-  Given: utterance.role='dialogue', character_key='char_a'
-  And: project_character_models に char_a の voice_preset_id='el-aria' が存在
+  Given: role='dialogue', character_key='char_a',
+         project_character_models.voice_preset_id='el-aria'
   Then: provider='elevenlabs', voiceId='el-aria', source='character'
 
-TC-VR-02: dialogue + character voice なし → project default が使われる
-  Given: utterance.role='dialogue', character_key='char_b'
-  And: project_character_models に char_b の voice_preset_id=NULL
-  And: settings_json.default_narration_voice = { provider: 'fish', voice_id: 'fish:nanamin' }
+TC-VR-02: dialogue + character voice なし → project default
+  Given: role='dialogue', character_key='char_b',
+         voice_preset_id=NULL,
+         settings_json.default_narration_voice = { provider:'fish', voice_id:'fish:nanamin' }
   Then: provider='fish', voiceId='fish:nanamin', source='project_default'
 
-TC-VR-03: narration → project default が使われる
-  Given: utterance.role='narration'
-  And: settings_json.default_narration_voice = { provider: 'google', voice_id: 'ja-JP-Wavenet-A' }
+TC-VR-03: narration → project default
+  Given: role='narration',
+         default_narration_voice = { provider:'google', voice_id:'ja-JP-Wavenet-A' }
   Then: provider='google', voiceId='ja-JP-Wavenet-A', source='project_default'
 
 TC-VR-04: narration + project default なし → fallback
-  Given: utterance.role='narration'
-  And: settings_json = {} (default_narration_voice なし)
+  Given: role='narration', settings_json = {}
   Then: provider='google', voiceId='ja-JP-Neural2-B', source='fallback'
 
-TC-VR-05: provider が明示されない voice_id の prefix 推定
-  Given: voice_preset_id = 'el-adam'
-  Then: provider='elevenlabs'
-
-  Given: voice_preset_id = 'fish:nanamin'
-  Then: provider='fish'
-
-  Given: voice_preset_id = 'ja-JP-Standard-A'
-  Then: provider='google'
+TC-VR-05: prefix 推定
+  'el-adam'         → elevenlabs
+  'elevenlabs:xxx'  → elevenlabs
+  'fish:nanamin'    → fish
+  'fish-custom'     → fish
+  'ja-JP-Standard-A' → google
 ```
 
-### 7.2 Utterance CRUD テスト
+### 9.2 Utterance CRUD
 
 ```
-TC-UT-01: POST → order_no 自動採番
-  Given: scene に order_no=1, order_no=2 の utterance が存在
-  When: POST /api/scenes/:sceneId/utterances { role: 'narration', text: 'テスト' }
-  Then: 新 utterance の order_no = 3
-
-TC-UT-02: DELETE → audio_generation は孤立（削除されない）
-  Given: utterance id=5, audio_generation_id=10
-  When: DELETE /api/utterances/5
-  Then: audio_generations id=10 は残存、scene_utterances id=5 は削除
-
-TC-UT-03: PUT text → audio は自動無効化されない
-  Given: utterance id=5, audio_generation_id=10, audio.status='completed'
-  When: PUT /api/utterances/5 { text: '新テキスト' }
-  Then: audio_generation_id=10 はそのまま（不整合だが意図的）
-  Note: ダーティフラグが UI で管理される
-
-TC-UT-04: Reorder → order_no 再採番
-  Given: utterances [id=1(order=1), id=2(order=2), id=3(order=3)]
-  When: PUT /api/scenes/:sceneId/utterances/reorder { utterance_ids: [3, 1, 2] }
-  Then: id=3→order_no=1, id=1→order_no=2, id=2→order_no=3
+TC-UT-01: POST → order_no 自動採番 (MAX + 1)
+TC-UT-02: DELETE → audio_generation は孤立 (削除されない)
+TC-UT-03: PUT text → audio は自動無効化されない (意図的仕様)
+TC-UT-04: Reorder → order_no 1-based 再採番
 ```
 
-### 7.3 Bulk Audio テスト
+### 9.3 Bulk Audio
 
 ```
-TC-BA-01: mode='missing' → 完了音声のある utterance はスキップ
-  Given: utterance id=1 with audio.status='completed'
-  And: utterance id=2 with audio_generation_id=NULL
-  When: POST bulk-generate { mode: 'missing' }
-  Then: id=2 のみ生成、id=1 は skipped
-
-TC-BA-02: 409 Conflict → 既存 running job
-  Given: project_audio_jobs に status='running' のレコードあり
-  When: POST bulk-generate
-  Then: 409 Conflict, existing_job_id 返却
-
-TC-BA-03: force_regenerate=true → 全 utterance 再生成
-  Given: utterance id=1 with audio.status='completed'
-  When: POST bulk-generate { mode: 'all', force_regenerate: true }
-  Then: id=1 も再生成 (新 audio_generation INSERT)
-```
-
-### 7.4 Video Build Integration テスト
-
-```
-TC-VB-01: 全 utterance に completed audio → voice_urls にすべて含まれる
-  Given: scene に utterance 3件、全て audio.status='completed'
-  When: preflight → voice_urls 収集
-  Then: voice_urls.length === 3
-
-TC-VB-02: 一部 utterance に audio なし → 警告だがビルド可能
-  Given: scene に utterance 3件、1件のみ audio.status='completed'
-  When: preflight
-  Then: voice_urls.length === 1, warnings に 2件の「音声未生成」
-
-TC-VB-03: utterance テキスト変更後 → dirtyChanges フラグ
-  Given: ビルド済み video あり
-  When: utterance テキストを変更
-  Then: MC._dirtyChanges に記録、リビルド前モーダル表示
+TC-BA-01: mode='missing' → completed 音声ある utterance はスキップ
+TC-BA-02: 既存 running job → 409 Conflict
+TC-BA-03: force_regenerate=true → 全 utterance 再生成 (新 audio INSERT)
 ```
 
 ---
 
-## 8. PersonaPlex-7B PoC 計画
+## 10. PersonaPlex-7B 統合判定
 
-### 8.1 結論: PersonaPlex-7B は Audio-to-Audio (S2S) モデル
+### 10.1 事実
 
-**公式**: https://huggingface.co/nvidia/personaplex-7b-v1
+PersonaPlex-7B は **Audio-to-Audio (S2S) モデル** であり、TTS ではない。
+(ref: https://huggingface.co/nvidia/personaplex-7b-v1/tree/main)
 
-PersonaPlex-7B は **TTS プロバイダーではない**。
 - 入力: WAV (24kHz) + テキストプロンプト + 音声プロンプト
 - 出力: WAV (24kHz) + テキスト
-- 本質: リアルタイム音声対話（聞きながら同時に話す全二重モデル）
+- 訓練データ: Fisher English (<10,000h) — **英語のみ**
 
-### 8.2 統合オプション分析
+### 10.2 統合オプション
 
-#### Option A: 擬似 TTS (text → 既存TTS → PersonaPlex で自然化)
-```
-text → Google TTS → WAV → PersonaPlex-7B → 自然な WAV
-```
-**評価**: ❌ 非推奨
-- 2段階処理でレイテンシー 2-5倍
-- コスト: TTS + GPU = 2重課金
-- PersonaPlex は英語のみ → 日本語 WAV 入力の品質不明
-- 「自然化」の効果が不確実
+| Option | 方式 | 推奨 | 理由 |
+|--------|------|------|------|
+| **A** | 擬似TTS: text → 既存TTS → PersonaPlex で自然化 | ❌ | 2段階処理、コスト2倍、英語のみ |
+| **B** | リアルタイムチャット/音声UI専用 | ⚠️ | コア機能に影響なし、英語対応時に再検討 |
 
-#### Option B: リアルタイムチャット/音声 UI 専用
-```
-PersonaPlex-7B → リアルタイム音声会話UI
-既存 TTS (Google/EL/Fish) → 動画生成の音声
-```
-**評価**: ⚠️ 検討の余地あり（ただし英語のみ）
-- 動画生成パイプラインに影響なし
-- 新規機能として「AI と音声で会話」を追加する形
-- MARUMUVIのコア機能（日本語動画生成）とは独立
-- 英語コンテンツ対応時に再検討
+### 10.3 PoC 計画 (やるなら)
 
-### 8.3 PoC 実施計画
-
-**目的**: PersonaPlex-7B が日本語コンテンツ生成に使えるか最低限検証
-
-#### PoC-1: ローカル検証 (1-2日)
-```bash
-# 環境: NVIDIA GPU (A100/A10G) + Docker
-git clone https://github.com/NVIDIA/personaplex
-pip install -r requirements.txt
-
-# Offline TTS テスト
-# 1. Google TTS で日本語 WAV を生成
-# 2. PersonaPlex に入力して出力 WAV を取得
-# 3. 音質比較（MOS テスト）
-```
-
-**判定基準**:
-- 日本語入力 WAV に対して出力が崩壊しないか
-- レイテンシー (RTF: Real-Time Factor)
-- 音質の主観評価 (入力より良い/同等/劣化)
-
-#### PoC-2: AWS SageMaker テスト (3-5日, PoC-1 合格時のみ)
-```python
-# SageMaker Endpoint デプロイ
-# FastAPI wrapper → REST API 化
-# Cloudflare Workers からの呼び出しテスト
-```
-
-**判定基準**:
-- E2E レイテンシー < 5秒 (Workers → SageMaker → R2)
-- コスト: 1音声あたり < $0.01
-- エラーレート < 1%
-
-### 8.4 代替 TTS 推奨 (PersonaPlex 不要の場合)
-
-| 優先度 | Provider | 日本語 | コスト | 特徴 |
-|--------|----------|--------|--------|------|
-| 1 | Fish Audio Speech 1.6 | ○ 良好 | ~$15/月 | 既に統合済み、reference_id でカスタム声可 |
-| 2 | ElevenLabs Multilingual v2 | ○ 対応 | $22-99/月 | 高品質、ボイスクローン可 |
-| 3 | NVIDIA Riva (NIM API) | ○ 対応 | 従量制 | クラウドAPI、GPU不要 |
-| 4 | OpenAI TTS (gpt-4o-mini-tts) | ○ 対応 | 従量制 | 感情表現豊か、多言語 |
+**PoC-1**: ローカル GPU (A100) で text → (Google TTS → WAV) → PersonaPlex → WAV の品質検証
+**判定基準**: 日本語入力で出力が崩壊しないか、RTF、主観音質
 
 ---
 
-## 9. 矛盾点・リスクまとめ (presigned URL 修正: commit 85ccd6a, df9bf59)
+## 付録A: 環境変数 (音声関連)
 
-### 9.1 修正内容の検証
-
-| 修正 | ファイル | 検証結果 |
-|------|---------|----------|
-| `isPresignedUrlExpiringSoon()` utility | `aws-video-client.ts` | ✅ URL パースで X-Amz-Date + X-Amz-Expires から残り時間を推定。10分以内で true |
-| marunage.ts status API | `marunage.ts` | ✅ completed + s3_output_key あり + URL期限切れ → fresh URL 生成 |
-| video-generation.ts GET /video-builds/:buildId | `video-generation.ts` | ✅ 同上ロジック |
-| Frontend: video src 更新条件 | `marunage-chat.js` | ✅ URL 文字列比較で変更時のみ src 更新 |
-| Frontend: 403 error recovery | `marunage-chat.js` | ✅ video onerror で fresh URL 再取得 |
-
-### 9.2 残存リスク
-
-| Risk | Severity | Mitigation |
-|------|----------|------------|
-| URL パース失敗 (非標準形式) | 低 | try/catch でフォールバック → 常に再生成 |
-| D1 UPDATE (download_url) のレースコンディション | 低 | fire-and-forget UPDATE、最悪でも次回リクエストで再生成 |
-| isPresignedUrlExpiringSoon の 10分閾値が短すぎる | 低 | 変更容易 (定数化済み) |
-| フロント polling 間隔が長い場合に期限切れ | 中 | onerror ハンドラで 403 時に自動リカバリ |
-
----
-
-## 付録A: 実コードとの対応表
-
-| Spec の項目 | 実コードの場所 |
-|-------------|---------------|
-| `settings_json.default_narration_voice` | `audio-generation.ts:177`, `bulk-audio.ts:105`, `marunage.ts:1249` |
-| `resolveVoiceForUtterance()` | `bulk-audio.ts:78-123` |
-| `generateSingleUtteranceAudio()` | `bulk-audio.ts:129-163` |
-| Voice prefix detection | `bulk-audio.ts:94-98`, `audio-generation.ts:158-164` |
-| buildProjectJson voice_urls | `video-generation.ts:1859-1863` |
-| buildBuildRequestV1 audio | `video-build-helpers.ts:1199-1201` |
-| Utterance CRUD | `utterances.ts:85-650` |
-| Bulk generate | `bulk-audio.ts:554-680` |
-| TTS voices list | `audio-generation.ts:942-1014` |
-
-## 付録B: settings_json 完全キーマップ
-
-```json
-{
-  "default_narration_voice": {
-    "provider": "google|elevenlabs|fish|...",
-    "voice_id": "ja-JP-Neural2-B|el-aria|fish:nanamin|..."
-  },
-  "output_preset": "youtube_short|youtube_long|tiktok|instagram_reel",
-  "marunage_mode": true,
-  "character_voices": {
-    "<character_key>": { "provider": "...", "voice_id": "..." }
-  },
-  "telops_comic": {
-    "style_preset": "outline|minimal|band|pop|cinematic",
-    "size_preset": "sm|md|lg",
-    "position_preset": "bottom|center|top"
-  },
-  "telops_remotion": {
-    "enabled": true,
-    "style_preset": "outline|minimal|band|pop|cinematic",
-    "size_preset": "sm|md|lg",
-    "position_preset": "bottom|center|top",
-    "custom_style": { ... },
-    "typography": { ... },
-    "updated_at": "2026-02-17T..."
-  }
-}
 ```
+GOOGLE_TTS_API_KEY        — Google TTS API キー (GEMINI_API_KEY でも可)
+ELEVENLABS_API_KEY        — ElevenLabs API キー
+FISH_AUDIO_API_TOKEN      — Fish Audio API トークン
+ELEVENLABS_DEFAULT_MODEL  — デフォルトモデル (eleven_multilingual_v2)
+```
+
+## 付録B: ファイル構成 (音声関連)
+
+```
+src/routes/audio-generation.ts  — 単一音声生成 + voices一覧 + usage
+src/routes/bulk-audio.ts        — 一括音声生成 + resolveVoiceForUtterance (SSOT)
+src/routes/utterances.ts        — 発話CRUD + generate-audio
+src/routes/marunage.ts          — 丸投げチャット (narration_voice → settings_json)
+src/utils/fish-audio.ts         — Fish Audio TTS クライアント
+src/utils/elevenlabs.ts         — ElevenLabs TTS クライアント
+src/utils/video-build-helpers.ts — buildBuildRequestV1 / buildProjectJson
+src/routes/video-generation.ts  — preflight voice_urls 収集
+public/static/marunage-chat.js  — フロントエンド (mcLoadVoices, mcSelectVoice 等)
+```
+
+## 付録C: Migration 一覧 (音声関連)
+
+| # | File | 内容 | 対象テーブル |
+|---|------|------|------------|
+| 0001 | full_schema_from_production | 本番DB全体 (audio_generations 含む) | audio_generations + 全テーブル |
+| 0009 | create_audio_generations | TTS音声 (0001 に統合済み、新環境では不要) | audio_generations |
+| 0018 | create_tts_usage_logs | TTS使用量追跡 | tts_usage_logs |
+| 0022 | create_scene_utterances | 発話SSOT (R1.5) | scene_utterances |
+| 0029 | create_project_audio_tracks | 通しBGM | project_audio_tracks |
+| 0039 | create_system_audio_library | システムBGM/SFXライブラリ | system_audio_library |
+| 0040 | create_user_audio_library | ユーザーBGM/SFXライブラリ | user_audio_library |
+| 0041 | create_scene_audio_assignments | シーン別BGM/SFX割当 | scene_audio_assignments |
+| 0047 | add_projects_settings_json | settings_json カラム追加 | projects |
+| 0048 | add_bgm_timeline_columns | BGMタイムラインカラム | (BGM拡張) |
+| 0049 | create_project_audio_jobs | 一括音声生成ジョブ | project_audio_jobs |
