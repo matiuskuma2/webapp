@@ -152,11 +152,16 @@
       const isGenerating = this.audioGeneratingIds.has(utterance.id);
       const isEditing = this.editingUtteranceId === utterance.id;
       
+      const isUnconfirmedSpeaker = !isNarration && !utterance.character_key;
       const characterName = isNarration 
         ? 'ナレーション' 
-        : (utterance.character_name || utterance.character_key || '未設定');
+        : isUnconfirmedSpeaker 
+          ? '⚠️ 話者未確定'
+          : (utterance.character_name || utterance.character_key || '未設定');
       
-      const roleColor = isNarration ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800';
+      const roleColor = isNarration ? 'bg-purple-100 text-purple-800' 
+        : isUnconfirmedSpeaker ? 'bg-amber-100 text-amber-800 border border-amber-300'
+        : 'bg-blue-100 text-blue-800';
       const audioStatusColor = hasAudio ? 'text-green-600' : 'text-gray-400';
       
       // Phase2-PR2c: If editing, show inline edit form
@@ -165,7 +170,7 @@
       }
       
       return `
-        <div class="utterance-card p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow" data-utterance-id="${utterance.id}">
+        <div class="utterance-card p-4 ${isUnconfirmedSpeaker ? 'bg-amber-50 border-amber-300' : 'bg-white border-gray-200'} border rounded-lg shadow-sm hover:shadow-md transition-shadow" data-utterance-id="${utterance.id}">
           <!-- Header: Order, Role, Character -->
           <div class="flex items-center justify-between mb-3">
             <div class="flex items-center gap-2">
@@ -417,8 +422,16 @@
       const totalUtterances = this.utterances.length;
       const withAudio = this.utterances.filter(u => u.audio_url).length;
       const totalDuration = this.utterances.reduce((sum, u) => sum + (u.duration_ms || 0), 0);
+      const unconfirmedSpeakers = this.utterances.filter(u => u.role === 'dialogue' && !u.character_key).length;
       
       return `
+        ${unconfirmedSpeakers > 0 ? `
+          <div class="mb-3 p-2 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-700">
+            <i class="fas fa-exclamation-triangle mr-1"></i>
+            <strong>話者未確定: ${unconfirmedSpeakers}件</strong> — 編集ボタンで話者（ナレ/キャラ）を設定してください。
+            話者が確定すると、そのキャラの声で音声が生成されます。
+          </div>
+        ` : ''}
         <div class="flex items-center justify-between text-sm">
           <div class="text-gray-600">
             <i class="fas fa-list-ol mr-1"></i>

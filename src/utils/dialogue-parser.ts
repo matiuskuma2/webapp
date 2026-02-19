@@ -255,17 +255,25 @@ export function parseDialogueToUtterances(
           original_line: trimmedLine
         });
       } else {
-        // キャラクターが見つからない場合でも「名前：セリフ」形式なら
-        // dialogue扱いにして、テキストからキャラ名を除去する
-        // → 音声生成時にキャラ名を読み上げないようにする
+        // ================================================================
+        // FAILSAFE: 未マッチ話者 → narration に矯正
+        // ================================================================
+        // 「名前：セリフ」形式だがプロジェクトのキャラに一致しない場合、
+        // dialogue + character_key=null にすると voice-resolution が
+        // narration 声に落ちるだけでなく、UI上も「誰のセリフか不明」になる。
+        //
+        // 解決策: narration に確定させ、テキストにキャラ名を含めて保持する。
+        // ユーザーは後から PUT /utterances/:id で role=dialogue + character_key を
+        // セットして「話者確定」させることができる。
+        // ================================================================
         const dialogueText = extractDialogueText(rawText);
-        console.warn(`[DialogueParser] Unknown speaker: "${speakerName}" - treating as dialogue (unmatched character)`);
+        console.warn(`[DialogueParser] Unknown speaker: "${speakerName}" → narration (failsafe). Text preserved with speaker prefix.`);
         utterances.push({
           order_no: orderNo++,
-          role: 'dialogue',
-          character_key: null,  // 未マッチだがdialogue扱い
-          character_name: speakerName,  // シナリオ上の名前は保持
-          text: dialogueText,  // キャラ名を除いたセリフ本文のみ
+          role: 'narration',
+          character_key: null,
+          character_name: speakerName,  // シナリオ上の名前は保持（UIで表示用）
+          text: `${speakerName}：${dialogueText}`,  // キャラ名付きで保持（情報損失なし）
           original_line: trimmedLine
         });
       }
@@ -327,6 +335,31 @@ export function parseDialogueToUtterances(
     );
   }
   
+  // Summary logging
+  const narrationCount = utterances.filter(u => u.role === 'narration').length;
+  const dialogueCount = utterances.filter(u => u.role === 'dialogue').length;
+  const unmatchedCount = utterances.filter(u => u.role === 'narration' && u.character_name !== null).length;
+  
+  if (unmatchedCount > 0) {
+    const unmatchedNames = utterances
+      .filter(u => u.role === 'narration' && u.character_name !== null)
+      .map(u => u.character_name);
+    const uniqueNames = [...new Set(unmatchedNames)];
+    console.warn(
+      `[DialogueParser] ${unmatchedCount} utterance(s) had unmatched speakers → narration fallback. ` +
+      `Unmatched: [${uniqueNames.join(', ')}]. ` +
+      `Available characters: [${characterMappings.map(c => c.character_name).join(', ')}]`
+    );
+  }
+  
+  if (utterances.length > 0) {
+    console.log(
+      `[DialogueParser] Parsed ${utterances.length} utterances: ` +
+      `${dialogueCount} dialogue, ${narrationCount} narration` +
+      (unmatchedCount > 0 ? `, ${unmatchedCount} unmatched→narration` : '')
+    );
+  }
+  
   return utterances;
 }
 
@@ -383,7 +416,7 @@ export async function generateUtterancesForScene(
   sceneId: number,
   dialogue: string,
   projectId: number
-): Promise<{ created: number; parsed: ParsedUtterance[] }> {
+): Promise<{ created: number; parsed: ParsedUtterance[]; unmatched_speakers: number }> {
   // 1. キャラクターマッピング取得
   const characterMappings = await getCharacterMappings(db, projectId);
   
@@ -401,7 +434,7 @@ export async function generateUtterancesForScene(
       VALUES (?, 1, 'narration', NULL, ?)
     `).bind(sceneId, dialogue || '').run();
     
-    return { created: 1, parsed: [] };
+    return { created: 1, parsed: [], unmatched_speakers: 0 };
   }
   
   // 3. 既存のutterancesを削除
@@ -423,9 +456,12 @@ export async function generateUtterancesForScene(
     ).run();
   }
   
-  console.log(`[DialogueParser] Scene ${sceneId}: Generated ${parsed.length} utterances`);
+  const unmatchedSpeakers = parsed.filter(u => u.role === 'narration' && u.character_name !== null).length;
   
-  return { created: parsed.length, parsed };
+  console.log(`[DialogueParser] Scene ${sceneId}: Generated ${parsed.length} utterances` +
+    (unmatchedSpeakers > 0 ? ` (${unmatchedSpeakers} unmatched speakers → narration)` : ''));
+  
+  return { created: parsed.length, parsed, unmatched_speakers: unmatchedSpeakers };
 }
 
 /**
@@ -443,6 +479,7 @@ export async function generateUtterancesForProject(
   total_utterances: number;
   scenes_with_dialogues: number;
   scenes_with_narration_only: number;
+  total_unmatched_speakers: number;
 }> {
   // 1. プロジェクトの全シーンを取得
   const { results: scenes } = await db.prepare(`
@@ -454,7 +491,8 @@ export async function generateUtterancesForProject(
       total_scenes: 0,
       total_utterances: 0,
       scenes_with_dialogues: 0,
-      scenes_with_narration_only: 0
+      scenes_with_narration_only: 0,
+      total_unmatched_speakers: 0
     };
   }
   
@@ -464,6 +502,7 @@ export async function generateUtterancesForProject(
   let totalUtterances = 0;
   let scenesWithDialogues = 0;
   let scenesWithNarrationOnly = 0;
+  let totalUnmatchedSpeakers = 0;
   
   // 3. 各シーンを処理
   for (const scene of scenes) {
@@ -478,6 +517,7 @@ export async function generateUtterancesForProject(
     );
     
     totalUtterances += result.created;
+    totalUnmatchedSpeakers += result.unmatched_speakers;
     
     // カウント
     const hasDialogueRole = result.parsed.some(u => u.role === 'dialogue');
@@ -488,12 +528,16 @@ export async function generateUtterancesForProject(
     }
   }
   
-  console.log(`[DialogueParser] Project ${projectId}: Generated ${totalUtterances} utterances for ${scenes.length} scenes`);
+  console.log(
+    `[DialogueParser] Project ${projectId}: Generated ${totalUtterances} utterances for ${scenes.length} scenes` +
+    (totalUnmatchedSpeakers > 0 ? ` (⚠ ${totalUnmatchedSpeakers} unmatched speakers → narration fallback)` : '')
+  );
   
   return {
     total_scenes: scenes.length,
     total_utterances: totalUtterances,
     scenes_with_dialogues: scenesWithDialogues,
-    scenes_with_narration_only: scenesWithNarrationOnly
+    scenes_with_narration_only: scenesWithNarrationOnly,
+    total_unmatched_speakers: totalUnmatchedSpeakers
   };
 }

@@ -99,6 +99,23 @@ export async function resolveVoiceForUtterance(
   projectSettings: ProjectSettings | null
 ): Promise<VoiceResolution> {
   // Priority 1: Character voice for dialogue
+  // NOTE: dialogue + character_key=null → skipped (speaker unknown).
+  // This utterance will fall through to Priority 2/3 (narration voice).
+  // The UI should flag these as "話者未確定" so the user can fix them.
+  if (utterance.role === 'dialogue' && !utterance.character_key) {
+    // ================================================================
+    // DEFENSIVE LOG: dialogue utterance with no character_key
+    // This should be rare after Phase 1 parser failsafe, but can still
+    // happen if utterances are created manually via POST /utterances
+    // without setting character_key, or via legacy code paths.
+    // We intentionally fall through to Priority 2/3 (narration voice).
+    // ================================================================
+    console.warn(
+      `[VoiceResolution] dialogue utterance has character_key=null ` +
+      `(project=${utterance.project_id}). Falling back to narration voice. ` +
+      `Fix: set character_key via PUT /utterances/:id`
+    );
+  }
   if (utterance.role === 'dialogue' && utterance.character_key) {
     const character = await db.prepare(`
       SELECT voice_preset_id FROM project_character_models

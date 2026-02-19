@@ -1848,6 +1848,7 @@ marunage.get('/:projectId/status', async (c) => {
     SELECT
       s.id, s.idx, s.title, s.display_asset_type,
       (SELECT COUNT(*) FROM scene_utterances su WHERE su.scene_id = s.id) AS utterance_count,
+      (SELECT COUNT(*) FROM scene_utterances su WHERE su.scene_id = s.id AND su.role = 'dialogue' AND su.character_key IS NULL) AS speaker_unconfirmed_count,
       (SELECT COUNT(*) FROM scene_utterances su
        JOIN audio_generations ag ON ag.id = su.audio_generation_id AND ag.status = 'completed'
        WHERE su.scene_id = s.id) AS audio_completed_count,
@@ -1911,6 +1912,24 @@ marunage.get('/:projectId/status', async (c) => {
     audioCompleted = audioStats.completed || 0
     audioFailed = audioStats.failed || 0
   }
+
+  // 4b. Speaker confirmation stats (話者未確定カウント)
+  // Counts utterances where speaker assignment is ambiguous:
+  //   - dialogue with no character_key (legacy/manual creation)
+  //   - narration-only scenes (no dialogue at all — may need review)
+  const speakerStats = await c.env.DB.prepare(`
+    SELECT
+      SUM(CASE WHEN su.role = 'dialogue' AND su.character_key IS NULL THEN 1 ELSE 0 END) AS dialogue_no_speaker,
+      SUM(CASE WHEN su.role = 'dialogue' AND su.character_key IS NOT NULL THEN 1 ELSE 0 END) AS dialogue_with_speaker,
+      SUM(CASE WHEN su.role = 'narration' THEN 1 ELSE 0 END) AS narration_count
+    FROM scene_utterances su
+    JOIN scenes s ON s.id = su.scene_id
+    WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+  `).bind(projectId).first<{ dialogue_no_speaker: number; dialogue_with_speaker: number; narration_count: number }>()
+  
+  const dialogueNoSpeaker = speakerStats?.dialogue_no_speaker || 0
+  const dialogueWithSpeaker = speakerStats?.dialogue_with_speaker || 0
+  const narrationCount = speakerStats?.narration_count || 0
 
   // Determine sub-states
   const formatState = formatDone ? 'done' : (chunkStats?.pending || 0) > 0 ? 'running' : (chunkStats?.failed || 0) > 0 ? 'failed' : 'pending'
@@ -2139,6 +2158,7 @@ marunage.get('/:projectId/status', async (c) => {
             image_url: s.image_r2_key ? `/images/${s.image_r2_key}` : null,
             has_audio: (s.audio_completed_count || 0) > 0,
             utterance_count: s.utterance_count,
+            speaker_unconfirmed: s.speaker_unconfirmed_count || 0,
             video_url: videoUrl,
             comic_image_url: s.comic_image_r2_key ? `/images/${s.comic_image_r2_key}` : null,
           };
@@ -2159,6 +2179,12 @@ marunage.get('/:projectId/status', async (c) => {
         total_utterances: audioTotalUtterances,
         completed: audioCompleted,
         failed: audioFailed,
+        // Speaker confirmation stats (話者SSOT)
+        speaker_stats: {
+          dialogue_no_speaker: dialogueNoSpeaker,     // dialogue + character_key=null（要修正）
+          dialogue_with_speaker: dialogueWithSpeaker,  // dialogue + character_key 確定
+          narration_count: narrationCount,              // ナレーション行数
+        },
       },
       video: {
         state: videoState,

@@ -49,8 +49,24 @@ async function lazyMigrateSceneUtterances(
   db: D1Database,
   sceneId: number,
   dialogue: string | null,
-  activeAudioId: number | null
+  activeAudioId: number | null,
+  projectId?: number
 ): Promise<void> {
+  // Guard: Skip lazy migration if the project is currently being formatted.
+  // During formatting, dialogue-parser (via formatting.ts → generateUtterancesForProject)
+  // is generating proper utterances with correct role/character_key.
+  // Running lazy migrate at this point would create a single narration utterance
+  // that overwrites the parser's output → "誤SSOT" race condition.
+  if (projectId) {
+    const project = await db.prepare(`
+      SELECT status FROM projects WHERE id = ?
+    `).bind(projectId).first<{ status: string }>();
+    if (project?.status === 'formatting') {
+      console.log(`[Utterances] Skipped lazy migrate for scene ${sceneId} — project ${projectId} is formatting`);
+      return;
+    }
+  }
+
   // Check if utterances exist
   const existing = await db.prepare(`
     SELECT COUNT(*) as count FROM scene_utterances WHERE scene_id = ?
@@ -114,12 +130,13 @@ utterances.get('/scenes/:sceneId/utterances', async (c) => {
       LIMIT 1
     `).bind(sceneId).first<{ id: number }>();
 
-    // Lazy migrate if needed
+    // Lazy migrate if needed (skips if project is currently formatting)
     await lazyMigrateSceneUtterances(
       c.env.DB,
       sceneId,
       scene.dialogue,
-      activeAudio?.id || null
+      activeAudio?.id || null,
+      scene.project_id
     );
 
     // Get utterances with audio info

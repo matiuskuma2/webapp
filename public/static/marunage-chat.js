@@ -1103,7 +1103,7 @@ function mcUpdateSceneCards(scenes, imageProgress, audioProgress) {
           </div>
           <p class="text-sm font-semibold text-gray-800 line-clamp-2">${scene.title || 'シーン ' + (idx + 1)}</p>
           <p class="text-xs text-gray-500 mt-1">
-            <i class="fas fa-comment mr-1"></i>${scene.utterance_count} 発話
+            <i class="fas fa-comment mr-1"></i>${scene.utterance_count} 発話${scene.speaker_unconfirmed > 0 ? '<span class="ml-1 text-amber-600 font-semibold"><i class="fas fa-exclamation-triangle mr-0.5"></i>話者未確定:' + scene.speaker_unconfirmed + '</span>' : ''}
           </p>
         </div>
       </div>
@@ -3487,11 +3487,14 @@ async function mcHandleDialogueIntent(text) {
     // Show utterance list
     let listHtml = `<div class="text-sm font-semibold mb-2">📝 シーン${sceneIdx}のセリフ一覧:</div>`;
     utterances.forEach((u, i) => {
-      const role = u.role === 'narration' ? '🎤ナレ' : `🗣️${u.character_name || u.character_key || 'キャラ'}`;
+      const isUnconfirmed = u.role === 'dialogue' && !u.character_key;
+      const role = u.role === 'narration' ? '🎤ナレ' 
+        : isUnconfirmed ? '⚠️話者不明' 
+        : `🗣️${u.character_name || u.character_key || 'キャラ'}`;
       const truncText = u.text.length > 40 ? u.text.substring(0, 40) + '...' : u.text;
-      listHtml += `<div class="text-xs py-0.5 border-b border-gray-100">`;
+      listHtml += `<div class="text-xs py-0.5 border-b border-gray-100${isUnconfirmed ? ' bg-amber-50' : ''}">`;
       listHtml += `<span class="font-mono text-purple-600 font-bold">${i + 1}.</span> `;
-      listHtml += `<span class="text-gray-400">${role}</span> `;
+      listHtml += `<span class="${isUnconfirmed ? 'text-amber-600 font-semibold' : 'text-gray-400'}">${role}</span> `;
       listHtml += `<span class="text-gray-700">"${escapeHtml(truncText)}"</span>`;
       listHtml += `</div>`;
     });
@@ -3923,6 +3926,7 @@ function mcShowReadyActions() {
   const imgTotal = p?.images?.total || 0;
   const audioDone = p?.audio?.completed || 0;
   const audioTotal = p?.audio?.total_utterances || 0;
+  const speakerNoConfirm = p?.audio?.speaker_stats?.dialogue_no_speaker || 0;
   
   const videoState = p?.video?.state;
   // Title adapts to video build status
@@ -3952,6 +3956,14 @@ function mcShowReadyActions() {
     if (subtitleEl) subtitleEl.textContent = readySubtitle;
     if (imgCountEl) imgCountEl.innerHTML = `<i class="fas fa-image text-blue-500 mr-1"></i>画像: <strong>${imgDone}/${imgTotal}</strong>`;
     if (audioCountEl) audioCountEl.innerHTML = `<i class="fas fa-microphone text-purple-500 mr-1"></i>音声: <strong>${audioDone}/${audioTotal}</strong>`;
+    // Update speaker unconfirmed banner
+    const speakerBannerEl = existing.querySelector('[data-speaker-banner]');
+    if (speakerBannerEl) {
+      speakerBannerEl.innerHTML = speakerNoConfirm > 0
+        ? `<i class="fas fa-exclamation-triangle mr-1"></i>話者未確定の発話が <strong>${speakerNoConfirm}件</strong> あります<br><span class="text-[10px]">シーンカードをタップ → 音声タブで話者を設定できます</span>`
+        : '';
+      speakerBannerEl.className = speakerNoConfirm > 0 ? 'text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-2 py-1.5 mb-2' : 'hidden';
+    }
     mcUpdateVideoPanel(p?.video);
     return;
   }
@@ -3971,6 +3983,10 @@ function mcShowReadyActions() {
         <div class="bg-white rounded px-2 py-1.5 border" data-audio-count>
           <i class="fas fa-microphone text-purple-500 mr-1"></i>音声: <strong>${audioDone}/${audioTotal}</strong>
         </div>
+      </div>
+      
+      <div data-speaker-banner class="${speakerNoConfirm > 0 ? 'text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-2 py-1.5 mb-2' : 'hidden'}">
+        ${speakerNoConfirm > 0 ? `<i class="fas fa-exclamation-triangle mr-1"></i>話者未確定の発話が <strong>${speakerNoConfirm}件</strong> あります<br><span class="text-[10px]">シーンカードをタップ → 音声タブで話者を設定できます</span>` : ''}
       </div>
       
       <div id="mcVideoPanel" class="mb-3 p-2.5 bg-white rounded border">
