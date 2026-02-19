@@ -4436,7 +4436,7 @@ function mcStartNew() {
     <div class="flex justify-start">
       <div class="chat-bubble chat-system">
         <p class="font-semibold mb-1"><i class="fas fa-hand-sparkles mr-1"></i>丸投げチャットへようこそ！</p>
-        <p class="text-sm">シナリオテキストを貼り付けてください。<br>5シーンの画像とナレーション音声を自動で生成します。</p>
+        <p class="text-sm">シナリオテキストを貼り付けてください。<br>シーン画像・ナレーション音声・BGM・SEを自動で生成します。<br>生成後はチャットから編集指示も可能です。</p>
         <p class="text-xs mt-2 text-purple-400">
           <i class="fas fa-info-circle mr-1"></i>100文字以上のテキストが必要です
         </p>

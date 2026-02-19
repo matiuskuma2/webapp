@@ -329,7 +329,7 @@ app.get('/', (c) => {
                         </div>
                     </div>
 
-                    <!-- 動線2: 丸投げチャット（MVP v1） -->
+                    <!-- 動線2: 丸投げチャット（β版） -->
                     <a href="/marunage" class="bg-white rounded-xl shadow-md hover:shadow-lg transition-all cursor-pointer border-2 border-transparent hover:border-purple-400 group block relative overflow-hidden">
                         <div class="p-6">
                             <div class="flex items-center mb-3">
@@ -338,21 +338,21 @@ app.get('/', (c) => {
                                 </div>
                                 <div>
                                     <h3 class="text-lg font-bold text-gray-800">丸投げチャット</h3>
-                                    <p class="text-sm text-gray-500">チャットだけで動画素材完成</p>
+                                    <p class="text-sm text-gray-500">チャットで指示するだけで動画素材を自動生成</p>
                                 </div>
                             </div>
                             <p class="text-sm text-gray-600 leading-relaxed">
-                                シナリオを貼り付けるだけで、5シーン画像生成 → ナレーション音声まで全自動。左のボードと右のチャットだけで完結します。
+                                シナリオを貼るだけでシーン画像・ナレーション音声・BGM・SEを自動生成。漫画コマ・I2V動画変換にも対応し、チャットからの編集指示で微調整まで完結します。
                             </p>
                             <div class="mt-4 flex items-center text-purple-600 text-sm font-medium">
                                 <span>はじめる</span>
                                 <i class="fas fa-chevron-right ml-1 text-xs"></i>
                             </div>
                         </div>
-                        <!-- MVP v1 バッジ -->
+                        <!-- β版バッジ -->
                         <div class="absolute top-3 right-3">
                             <span class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-800 border border-purple-300">
-                                <i class="fas fa-flask mr-1"></i>MVP v1
+                                <i class="fas fa-flask mr-1"></i>Beta
                             </span>
                         </div>
                     </a>
@@ -4271,7 +4271,7 @@ app.get('/marunage', (c) => {
           <div class="max-w-3xl mx-auto px-8 pt-14 pb-10">
             <div class="text-center mb-8">
               <h1 class="text-3xl font-bold text-gray-900 tracking-tight">丸投げチャット</h1>
-              <p class="text-sm text-gray-400 mt-2">テキストを貼り付けるだけで、画像・音声・動画まで自動生成</p>
+              <p class="text-sm text-gray-400 mt-2">シナリオを貼るだけで画像・音声・BGM・動画まで自動生成。チャットで編集指示もOK</p>
             </div>
 
             <!-- Input-style CTA (Lovart) -->
