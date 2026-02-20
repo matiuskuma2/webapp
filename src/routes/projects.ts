@@ -668,409 +668,214 @@ projects.get('/:id/scenes', async (c) => {
 
     // view=board: 最小画像情報のみ（Builder用、軽量）+ キャラクター情報
     // Phase1.7: display_asset_type と active_comic を追加
+    // ⚡ PERF FIX: N+1 → Bulk queries via JOIN scenes (avoids D1 SQL variable limit)
     if (view === 'board') {
-      const scenesWithMinimalImages = await Promise.all(
-        scenes.map(async (scene: any) => {
-          // アクティブAI画像（asset_type='ai' または NULL、r2_urlが有効なもののみ）
-          const activeRecord = await c.env.DB.prepare(`
-            SELECT r2_key, r2_url FROM image_generations
-            WHERE scene_id = ? AND is_active = 1 AND (asset_type = 'ai' OR asset_type IS NULL)
-              AND r2_url IS NOT NULL AND r2_url != ''
-            LIMIT 1
-          `).bind(scene.id).first()
+      if (scenes.length === 0) {
+        return c.json({ project_id: parseInt(projectId), total_scenes: 0, scenes: [] })
+      }
 
-          // アクティブ漫画画像（asset_type='comic'、r2_urlが有効なもののみ）
-          const activeComicRecord = await c.env.DB.prepare(`
-            SELECT id, r2_key, r2_url FROM image_generations
-            WHERE scene_id = ? AND is_active = 1 AND asset_type = 'comic'
-              AND r2_url IS NOT NULL AND r2_url != ''
-            LIMIT 1
-          `).bind(scene.id).first()
+      // ⚡ PERF FIX: All bulk queries use JOIN scenes WHERE project_id=? 
+      // instead of IN(scene_id1, scene_id2, ...) to avoid D1 SQL variable limit
 
-          // 最新ステータス＋エラーメッセージ＋r2情報（AI画像のみ）
-          const latestRecord = await c.env.DB.prepare(`
-            SELECT status, r2_key, r2_url, substr(error_message, 1, 80) as error_message
-            FROM image_generations
-            WHERE scene_id = ? AND (asset_type = 'ai' OR asset_type IS NULL)
-            ORDER BY created_at DESC
-            LIMIT 1
-          `).bind(scene.id).first()
+      // ── Bulk query 1: Active AI images ──
+      const { results: allActiveImages } = await c.env.DB.prepare(`
+        SELECT ig.scene_id, ig.r2_key, ig.r2_url FROM image_generations ig
+        JOIN scenes s ON ig.scene_id = s.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+          AND ig.is_active = 1 AND (ig.asset_type = 'ai' OR ig.asset_type IS NULL)
+          AND ig.r2_url IS NOT NULL AND ig.r2_url != ''
+      `).bind(projectId).all()
 
-          // アクティブ動画（is_active=1 または 最新の completed）
-          const activeVideo = await c.env.DB.prepare(`
-            SELECT id, status, r2_url, r2_key, model, duration_sec
-            FROM video_generations
-            WHERE scene_id = ? AND (is_active = 1 OR (status = 'completed' AND r2_url IS NOT NULL))
-            ORDER BY is_active DESC, created_at DESC
-            LIMIT 1
-          `).bind(scene.id).first()
+      // ── Bulk query 2: Active comic images ──
+      const { results: allComicImages } = await c.env.DB.prepare(`
+        SELECT ig.scene_id, ig.id, ig.r2_key, ig.r2_url FROM image_generations ig
+        JOIN scenes s ON ig.scene_id = s.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+          AND ig.is_active = 1 AND ig.asset_type = 'comic'
+          AND ig.r2_url IS NOT NULL AND ig.r2_url != ''
+      `).bind(projectId).all()
 
-          // comic_dataのパース
-          let comicData = null
-          try {
-            if (scene.comic_data) {
-              comicData = JSON.parse(scene.comic_data)
-            }
-          } catch (e) {
-            console.warn(`Failed to parse comic_data for scene ${scene.id}:`, e)
-          }
+      // ── Bulk query 3: Latest image status per scene ──
+      const { results: allLatestImages } = await c.env.DB.prepare(`
+        SELECT scene_id, status, r2_key, r2_url, substr(error_message, 1, 80) as error_message
+        FROM (
+          SELECT ig.scene_id, ig.status, ig.r2_key, ig.r2_url, ig.error_message,
+            ROW_NUMBER() OVER (PARTITION BY ig.scene_id ORDER BY ig.created_at DESC) as rn
+          FROM image_generations ig
+          JOIN scenes s ON ig.scene_id = s.id
+          WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+            AND (ig.asset_type = 'ai' OR ig.asset_type IS NULL)
+        )
+        WHERE rn = 1
+      `).bind(projectId).all()
 
-          // キャラクター情報取得（scene_character_map + project_character_models）
-          const { results: characterMappings } = await c.env.DB.prepare(`
-            SELECT 
-              scm.character_key,
-              scm.is_primary,
-              pcm.character_name,
-              pcm.voice_preset_id,
-              pcm.reference_image_r2_url
-            FROM scene_character_map scm
-            LEFT JOIN project_character_models pcm 
-              ON scm.character_key = pcm.character_key AND pcm.project_id = ?
-            WHERE scm.scene_id = ?
-          `).bind(projectId, scene.id).all()
+      // ── Bulk query 4: Active videos ──
+      const { results: allVideos } = await c.env.DB.prepare(`
+        SELECT scene_id, id, status, r2_url, r2_key, model, duration_sec
+        FROM (
+          SELECT vg.scene_id, vg.id, vg.status, vg.r2_url, vg.r2_key, vg.model, vg.duration_sec,
+            ROW_NUMBER() OVER (PARTITION BY vg.scene_id ORDER BY vg.is_active DESC, vg.created_at DESC) as rn
+          FROM video_generations vg
+          JOIN scenes s ON vg.scene_id = s.id
+          WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+            AND (vg.is_active = 1 OR (vg.status = 'completed' AND vg.r2_url IS NOT NULL))
+        )
+        WHERE rn = 1
+      `).bind(projectId).all()
 
-          // SSOT: voice_character = is_primary=1 のキャラクター
-          // voice_preset_id がなくても、is_primary=1 なら voice_character として返す
-          const voiceCharacter = characterMappings.find((c: any) => c.is_primary === 1)
-            || (characterMappings.length > 0 ? characterMappings[0] : null)
-            || null
+      // ── Bulk query 5: Character mappings ──
+      const { results: allCharMappings } = await c.env.DB.prepare(`
+        SELECT 
+          scm.scene_id, scm.character_key, scm.is_primary,
+          pcm.character_name, pcm.voice_preset_id, pcm.reference_image_r2_url
+        FROM scene_character_map scm
+        JOIN scenes s ON scm.scene_id = s.id
+        LEFT JOIN project_character_models pcm 
+          ON scm.character_key = pcm.character_key AND pcm.project_id = ?
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+      `).bind(projectId, projectId).all()
 
-          // シーン別特徴（C層）取得
-          const { results: sceneTraits } = await c.env.DB.prepare(`
-            SELECT character_key, trait_description
-            FROM scene_character_traits
-            WHERE scene_id = ?
-          `).bind(scene.id).all()
+      // ── Bulk query 6: Scene traits ──
+      const { results: allSceneTraits } = await c.env.DB.prepare(`
+        SELECT sct.scene_id, sct.character_key, sct.trait_description
+        FROM scene_character_traits sct
+        JOIN scenes s ON sct.scene_id = s.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+      `).bind(projectId).all()
 
-          // R1.6: scene_utterances の状態取得（preflight用）
-          // R3-A: duration_ms 追加（音声尺の合計計算用）
-          // PR-API-1: role, character_key 追加（話者サマリー用）
-          const { results: utteranceRows } = await c.env.DB.prepare(`
-            SELECT 
-              u.id,
-              u.text,
-              u.role,
-              u.character_key,
-              u.audio_generation_id,
-              ag.status as audio_status,
-              ag.duration_ms
-            FROM scene_utterances u
-            LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
-            WHERE u.scene_id = ?
-            ORDER BY u.order_no ASC
-          `).bind(scene.id).all<{
-            id: number;
-            text: string;
-            role: string;
-            character_key: string | null;
-            audio_generation_id: number | null;
-            audio_status: string | null;
-            duration_ms: number | null;
-          }>()
+      // ── Bulk query 7: Utterances with audio status ──
+      const { results: allUtterances } = await c.env.DB.prepare(`
+        SELECT 
+          u.scene_id, u.id, u.text, u.role, u.character_key,
+          u.audio_generation_id, ag.status as audio_status, ag.duration_ms
+        FROM scene_utterances u
+        JOIN scenes s ON u.scene_id = s.id
+        LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+        ORDER BY u.scene_id, u.order_no ASC
+      `).bind(projectId).all()
 
-          // R3-B: scene_audio_cues のカウント取得（SFX数）
-          const sfxCountResult = await c.env.DB.prepare(`
-            SELECT COUNT(*) as count
-            FROM scene_audio_cues
-            WHERE scene_id = ? AND is_active = 1
-          `).bind(scene.id).first<{ count: number }>()
-          const sfxCount = sfxCountResult?.count || 0
+      // ── Bulk query 8: SFX items ──
+      const { results: allSfx } = await c.env.DB.prepare(`
+        SELECT sac.scene_id, sac.name, sac.start_ms
+        FROM scene_audio_cues sac
+        JOIN scenes s ON sac.scene_id = s.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+          AND sac.is_active = 1
+        ORDER BY sac.scene_id, sac.start_ms ASC
+      `).bind(projectId).all()
 
-          // P3: SFX詳細情報取得（先頭2件のnameを含む）
-          const { results: sfxDetails } = await c.env.DB.prepare(`
-            SELECT name, start_ms
-            FROM scene_audio_cues
-            WHERE scene_id = ? AND is_active = 1
-            ORDER BY start_ms ASC
-            LIMIT 2
-          `).bind(scene.id).all()
+      // ── Bulk query 9: Scene BGMs ──
+      const { results: allSceneBgms } = await c.env.DB.prepare(`
+        SELECT 
+          saa.scene_id, saa.id,
+          saa.audio_library_type as library_type,
+          saa.volume_override as volume,
+          saa.loop_override as loop,
+          CASE 
+            WHEN saa.audio_library_type = 'system' THEN sal.name
+            WHEN saa.audio_library_type = 'user' THEN ual.name
+            ELSE saa.direct_name
+          END as name,
+          CASE 
+            WHEN saa.audio_library_type = 'system' THEN sal.file_url
+            WHEN saa.audio_library_type = 'user' THEN ual.r2_url
+            ELSE saa.direct_r2_url
+          END as url
+        FROM scene_audio_assignments saa
+        JOIN scenes s ON saa.scene_id = s.id
+        LEFT JOIN system_audio_library sal ON saa.audio_library_type = 'system' AND saa.system_audio_id = sal.id
+        LEFT JOIN user_audio_library ual ON saa.audio_library_type = 'user' AND saa.user_audio_id = ual.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+          AND saa.audio_type = 'bgm' AND saa.is_active = 1
+      `).bind(projectId).all()
 
-          // P3: シーン別BGM取得（scene_audio_assignments から）
-          // 本番DBスキーマ: 
-          //   scene_audio_assignments: audio_library_type, system_audio_id, user_audio_id, direct_r2_url, volume_override, loop_override
-          //   system_audio_library: file_url (NOT r2_url)
-          //   user_audio_library: r2_url
-          const sceneBgm = await c.env.DB.prepare(`
-            SELECT 
-              saa.id,
-              saa.audio_library_type as library_type,
-              saa.volume_override as volume,
-              saa.loop_override as loop,
-              CASE 
-                WHEN saa.audio_library_type = 'system' THEN sal.name
-                WHEN saa.audio_library_type = 'user' THEN ual.name
-                ELSE saa.direct_name
-              END as name,
-              CASE 
-                WHEN saa.audio_library_type = 'system' THEN sal.file_url
-                WHEN saa.audio_library_type = 'user' THEN ual.r2_url
-                ELSE saa.direct_r2_url
-              END as url
-            FROM scene_audio_assignments saa
-            LEFT JOIN system_audio_library sal ON saa.audio_library_type = 'system' AND saa.system_audio_id = sal.id
-            LEFT JOIN user_audio_library ual ON saa.audio_library_type = 'user' AND saa.user_audio_id = ual.id
-            WHERE saa.scene_id = ? AND saa.audio_type = 'bgm' AND saa.is_active = 1
-            LIMIT 1
-          `).bind(scene.id).first()
+      // ── Bulk query 10: Project character details (once, not per-scene) ──
+      const { results: charDetails } = await c.env.DB.prepare(`
+        SELECT character_key, character_name, appearance_description, story_traits
+        FROM project_character_models WHERE project_id = ?
+      `).bind(projectId).all()
+      const charDetailsMap = new Map((charDetails as any[]).map((c: any) => [c.character_key, c]))
 
-          // キャラクターの特徴情報をマージ（A/B/C層）
-          // PR-API-1: character_name 追加（話者サマリー用）
-          const { results: charDetails } = await c.env.DB.prepare(`
-            SELECT character_key, character_name, appearance_description, story_traits
-            FROM project_character_models
-            WHERE project_id = ?
-          `).bind(projectId).all()
+      // ── Bulk query 11: Motion presets (JOIN to avoid D1 variable limit) ──
+      let allMotionPresets: any[] = []
+      const motionColumn = await detectMotionPresetColumn(c.env.DB)
+      if (motionColumn) {
+        try {
+          const { results } = await c.env.DB.prepare(
+            `SELECT sm.scene_id, sm.${motionColumn} as preset_value
+             FROM scene_motion sm
+             JOIN scenes s ON sm.scene_id = s.id
+             WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)`
+          ).bind(projectId).all()
+          allMotionPresets = results || []
+        } catch (e) {
+          console.warn('[Board] Bulk motion preset fetch failed:', e)
+        }
+      }
 
-          const charDetailsMap = new Map((charDetails as any[]).map((c: any) => [c.character_key, c]))
-          const sceneTraitsMap = new Map((sceneTraits as any[]).map((t: any) => [t.character_key, t.trait_description]))
+      // ═══ Build Maps for O(1) lookup ═══
+      const activeImageMap = new Map<number, any>()
+      for (const r of allActiveImages as any[]) activeImageMap.set(r.scene_id, r)
 
-          // Safe JSON parsing for bullets
-          let bulletsParsed: any[] = []
-          try {
-            if (scene.bullets) {
-              const parsed = JSON.parse(scene.bullets)
-              bulletsParsed = Array.isArray(parsed) ? parsed : []
-            }
-          } catch (e) {
-            console.warn(`Failed to parse bullets for scene ${scene.id}:`, e)
-            bulletsParsed = []
-          }
+      const comicImageMap = new Map<number, any>()
+      for (const r of allComicImages as any[]) comicImageMap.set(r.scene_id, r)
 
-          return {
-            id: scene.id,
-            idx: scene.idx,
-            role: scene.role,
-            title: scene.title,
-            dialogue: scene.dialogue || '', // フルテキスト（詳細編集で使用）
-            speech_type: scene.speech_type || 'narration',
-            bullets: bulletsParsed,
-            image_prompt: scene.image_prompt || '', // フルテキスト（プロンプト編集で使用）
-            style_preset_id: scene.style_preset_id || null,
-            // Phase1.7: display_asset_type と active_comic を追加
-            display_asset_type: scene.display_asset_type || 'image',
-            comic_data: comicData,
-            // R3: 無音シーンの手動尺設定
-            duration_override_ms: scene.duration_override_ms || null,
-            active_image: activeRecord ? { 
-              r2_key: activeRecord.r2_key,
-              r2_url: activeRecord.r2_url,
-              image_url: activeRecord.r2_url || (activeRecord.r2_key ? `/${activeRecord.r2_key}` : null) 
-            } : null,
-            // Phase1.7: 漫画画像情報
-            active_comic: activeComicRecord ? {
-              id: activeComicRecord.id,
-              r2_key: activeComicRecord.r2_key,
-              r2_url: activeComicRecord.r2_url,
-              image_url: activeComicRecord.r2_url || (activeComicRecord.r2_key ? `/${activeComicRecord.r2_key}` : null)
-            } : null,
-            // Phase1.7: display_image SSOT（display_asset_typeに基づく採用素材）
-            display_image: (() => {
-              const displayType = scene.display_asset_type || 'image';
-              if (displayType === 'comic' && activeComicRecord) {
-                return {
-                  type: 'comic',
-                  r2_url: activeComicRecord.r2_url,
-                  image_url: activeComicRecord.r2_url || (activeComicRecord.r2_key ? `/${activeComicRecord.r2_key}` : null)
-                };
-              }
-              if (activeRecord) {
-                return {
-                  type: 'image',
-                  r2_url: activeRecord.r2_url,
-                  image_url: activeRecord.r2_url || (activeRecord.r2_key ? `/${activeRecord.r2_key}` : null)
-                };
-              }
-              return null;
-            })(),
-            latest_image: latestRecord ? {
-              status: latestRecord.status,
-              r2_key: latestRecord.r2_key,
-              r2_url: latestRecord.r2_url,
-              image_url: latestRecord.r2_url || (latestRecord.r2_key ? `/${latestRecord.r2_key}` : null),
-              error_message: latestRecord.error_message
-            } : null,
-            active_video: activeVideo ? (() => {
-              const r2Key = (activeVideo as any).r2_key;
-              const r2Url = (activeVideo as any).r2_url;
-              // CloudFront永続URL生成（期限なし）
-              let videoUrl = r2Url;
-              if ((activeVideo as any).status === 'completed' && r2Key) {
-                videoUrl = toCloudFrontUrl(r2Key);
-              } else if ((activeVideo as any).status === 'completed' && r2Url) {
-                videoUrl = s3ToCloudFrontUrl(r2Url) || r2Url;
-              }
-              return {
-                id: (activeVideo as any).id,
-                status: (activeVideo as any).status,
-                r2_url: videoUrl,
-                model: (activeVideo as any).model,
-                duration_sec: (activeVideo as any).duration_sec
-              };
-            })() : null,
-            // キャラクター情報追加（A/B/C層の特徴含む）
-            characters: characterMappings.map((c: any) => {
-              const charDetail = charDetailsMap.get(c.character_key) || {}
-              const sceneTrait = sceneTraitsMap.get(c.character_key) || null
-              return {
-                character_key: c.character_key,
-                character_name: c.character_name,
-                is_primary: c.is_primary,
-                voice_preset_id: c.voice_preset_id,
-                reference_image_r2_url: c.reference_image_r2_url,
-                // A層: キャラクター登録の外見
-                appearance_description: charDetail.appearance_description || null,
-                // B層: 物語共通の特徴
-                story_traits: charDetail.story_traits || null,
-                // C層: シーン別特徴
-                scene_trait: sceneTrait
-              }
-            }),
-            voice_character: voiceCharacter ? {
-              character_key: voiceCharacter.character_key,
-              character_name: voiceCharacter.character_name,
-              voice_preset_id: voiceCharacter.voice_preset_id
-            } : null,
-            // R1.6: utterance_status for preflight check in UI
-            // R3-A: total_duration_ms 追加（音声尺の合計）
-            utterance_status: (() => {
-              const total = utteranceRows.length;
-              const withAudio = utteranceRows.filter(
-                (u: any) => u.audio_generation_id && u.audio_status === 'completed'
-              ).length;
-              const withText = utteranceRows.filter(
-                (u: any) => u.text && u.text.trim().length > 0
-              ).length;
-              const isReady = total > 0 && withText === total && withAudio === total;
-              // R3-A: 音声の合計尺を計算（duration_ms を持つものの合計）
-              const totalDurationMs = utteranceRows.reduce((sum: number, u: any) => {
-                // audio_generation から duration_ms を取得（仮に audio_duration_ms というカラムで取得している場合）
-                // 現在のスキーマでは duration_ms は audio_generations ではなく scene_utterances にある可能性
-                // ここでは単純に推定値を返す（実装改善の余地あり）
-                return sum + (u.duration_ms || 0);
-              }, 0);
-              return {
-                total,
-                with_audio: withAudio,
-                with_text: withText,
-                is_ready: isReady,
-                total_duration_ms: totalDurationMs
-              };
-            })(),
-            // PR-API-1: speaker_summary（話者サマリー）
-            // scene_utterances から話者情報を集約（SSOTはscene_utterancesのみ）
-            speaker_summary: (() => {
-              const hasNarration = utteranceRows.some((u: any) => u.role === 'narration');
-              const dialogueCharacterKeys = [...new Set(
-                utteranceRows
-                  .filter((u: any) => u.role === 'dialogue' && u.character_key)
-                  .map((u: any) => u.character_key)
-              )];
-              // character_key から character_name を解決（charDetailsMap を使用）
-              const speakers: string[] = [];
-              const speakerKeys: string[] = [];
-              
-              for (const charKey of dialogueCharacterKeys) {
-                const charDetail = charDetailsMap.get(charKey);
-                if (charDetail && (charDetail as any).character_name) {
-                  speakers.push((charDetail as any).character_name);
-                } else {
-                  // キャラ名が見つからない場合はキーをそのまま使用
-                  speakers.push(charKey as string);
-                }
-                speakerKeys.push(charKey as string);
-              }
-              
-              if (hasNarration) {
-                speakers.push('ナレーション');
-              }
-              
-              return {
-                speakers,           // 表示用: ["レイラ", "レン", "ナレーション"]
-                speaker_keys: speakerKeys,  // キー: ["char_leila", "char_ren"]
-                has_narration: hasNarration,
-                utterance_total: utteranceRows.length
-              };
-            })(),
-            // P0-2: utterance_list（発話プレビュー用 — 各発話のテキスト・話者・音声状態を返す）
-            utterance_list: utteranceRows.map((u: any) => ({
-              id: u.id,
-              role: u.role || 'narration',
-              character_key: u.character_key || null,
-              character_name: u.character_key
-                ? ((charDetailsMap.get(u.character_key) as any)?.character_name || u.character_key)
-                : null,
-              text: u.text || '',
-              has_audio: !!(u.audio_generation_id && u.audio_status === 'completed'),
-              duration_ms: u.duration_ms || null
-            })),
-            // R2-C: text_render_mode (computed from display_asset_type)
-            text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
-            // R3-B: SFX（効果音）数
-            sfx_count: sfxCount,
-            // P3: SFX詳細（先頭2件のname）
-            sfx_preview: (sfxDetails || []).map((s: any) => s.name || 'SFX'),
-            // P3: シーン別BGM
-            scene_bgm: sceneBgm ? {
-              id: sceneBgm.id,
-              source: sceneBgm.library_type || 'direct',
-              name: sceneBgm.name || 'BGM',
-              url: sceneBgm.url,
-              volume: sceneBgm.volume,
-              loop: sceneBgm.loop
-            } : null,
-            // R2-C: motion preset
-            // 互換レイヤー使用: detectMotionPresetColumn() でカラム名を検出
-            motion_preset_id: await fetchMotionPreset(
-              c.env.DB,
-              scene.id,
-              (scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft'
-            )
-          }
-        })
-      )
+      const latestImageMap = new Map<number, any>()
+      for (const r of allLatestImages as any[]) latestImageMap.set(r.scene_id, r)
 
-      return c.json({
-        project_id: parseInt(projectId),
-        total_scenes: scenes.length,
-        scenes: scenesWithMinimalImages
-      })
-    }
+      const videoMap = new Map<number, any>()
+      for (const r of allVideos as any[]) videoMap.set(r.scene_id, r)
 
-    // デフォルト（full）: 完全版（既存の動作、後方互換）
-    const scenesWithImages = await Promise.all(
-      scenes.map(async (scene: any) => {
-        // 1) アクティブな画像（表示用）
-        const activeRecord = await c.env.DB.prepare(`
-          SELECT id, prompt, r2_key, status, created_at
-          FROM image_generations
-          WHERE scene_id = ? AND is_active = 1
-          ORDER BY created_at DESC
-          LIMIT 1
-        `).bind(scene.id).first()
+      const charMappingsMap = new Map<number, any[]>()
+      for (const r of allCharMappings as any[]) {
+        if (!charMappingsMap.has(r.scene_id)) charMappingsMap.set(r.scene_id, [])
+        charMappingsMap.get(r.scene_id)!.push(r)
+      }
 
-        const activeImage = activeRecord ? {
-          id: activeRecord.id,
-          prompt: activeRecord.prompt,
-          image_url: `/${activeRecord.r2_key}`, // SSOT: "/" + r2_key
-          status: activeRecord.status,
-          created_at: activeRecord.created_at
-        } : null
+      const sceneTraitsMap = new Map<number, Map<string, string>>()
+      for (const r of allSceneTraits as any[]) {
+        if (!sceneTraitsMap.has(r.scene_id)) sceneTraitsMap.set(r.scene_id, new Map())
+        sceneTraitsMap.get(r.scene_id)!.set(r.character_key, r.trait_description)
+      }
 
-        // 2) 最新の画像生成レコード（ステータス表示用、is_active無関係）
-        const latestRecord = await c.env.DB.prepare(`
-          SELECT id, status, error_message, created_at
-          FROM image_generations
-          WHERE scene_id = ?
-          ORDER BY created_at DESC
-          LIMIT 1
-        `).bind(scene.id).first()
+      const utterancesMap = new Map<number, any[]>()
+      for (const r of allUtterances as any[]) {
+        if (!utterancesMap.has(r.scene_id)) utterancesMap.set(r.scene_id, [])
+        utterancesMap.get(r.scene_id)!.push(r)
+      }
 
-        const latestImage = latestRecord ? {
-          id: latestRecord.id,
-          status: latestRecord.status,
-          error_message: latestRecord.error_message,
-          created_at: latestRecord.created_at
-        } : null
+      const sfxMap = new Map<number, any[]>()
+      for (const r of allSfx as any[]) {
+        if (!sfxMap.has(r.scene_id)) sfxMap.set(r.scene_id, [])
+        sfxMap.get(r.scene_id)!.push(r)
+      }
+
+      const bgmMap = new Map<number, any>()
+      for (const r of allSceneBgms as any[]) {
+        if (!bgmMap.has(r.scene_id)) bgmMap.set(r.scene_id, r) // first one per scene
+      }
+
+      const motionMap = new Map<number, string>()
+      for (const r of allMotionPresets as any[]) motionMap.set(r.scene_id, r.preset_value)
+
+      // ═══ Assemble response (pure JS, no more DB calls) ═══
+      const scenesWithMinimalImages = scenes.map((scene: any) => {
+        const sid = scene.id as number
+        const activeRecord = activeImageMap.get(sid) || null
+        const activeComicRecord = comicImageMap.get(sid) || null
+        const latestRecord = latestImageMap.get(sid) || null
+        const activeVideo = videoMap.get(sid) || null
+        const characterMappings = charMappingsMap.get(sid) || []
+        const traits = sceneTraitsMap.get(sid) || new Map()
+        const utteranceRows = utterancesMap.get(sid) || []
+        const sfxItems = sfxMap.get(sid) || []
+        const sceneBgm = bgmMap.get(sid) || null
+
+        // voice_character = is_primary=1 のキャラクター
+        const voiceCharacter = characterMappings.find((c: any) => c.is_primary === 1)
+          || (characterMappings.length > 0 ? characterMappings[0] : null)
+          || null
 
         // Safe JSON parsing for bullets
         let bulletsParsed: any[] = []
@@ -1079,9 +884,13 @@ projects.get('/:id/scenes', async (c) => {
             const parsed = JSON.parse(scene.bullets)
             bulletsParsed = Array.isArray(parsed) ? parsed : []
           }
-        } catch (e) {
-          bulletsParsed = []
-        }
+        } catch (e) { bulletsParsed = [] }
+
+        // comic_data parse
+        let comicData = null
+        try {
+          if (scene.comic_data) comicData = JSON.parse(scene.comic_data)
+        } catch (e) {}
 
         return {
           id: scene.id,
@@ -1092,13 +901,223 @@ projects.get('/:id/scenes', async (c) => {
           speech_type: scene.speech_type || 'narration',
           bullets: bulletsParsed,
           image_prompt: scene.image_prompt || '',
-          created_at: scene.created_at,
-          updated_at: scene.updated_at,
-          active_image: activeImage,
-          latest_image: latestImage // ステータスバッジ用
+          style_preset_id: scene.style_preset_id || null,
+          display_asset_type: scene.display_asset_type || 'image',
+          comic_data: comicData,
+          duration_override_ms: scene.duration_override_ms || null,
+          active_image: activeRecord ? { 
+            r2_key: activeRecord.r2_key,
+            r2_url: activeRecord.r2_url,
+            image_url: activeRecord.r2_url || (activeRecord.r2_key ? `/${activeRecord.r2_key}` : null) 
+          } : null,
+          active_comic: activeComicRecord ? {
+            id: activeComicRecord.id,
+            r2_key: activeComicRecord.r2_key,
+            r2_url: activeComicRecord.r2_url,
+            image_url: activeComicRecord.r2_url || (activeComicRecord.r2_key ? `/${activeComicRecord.r2_key}` : null)
+          } : null,
+          display_image: (() => {
+            const displayType = scene.display_asset_type || 'image'
+            if (displayType === 'comic' && activeComicRecord) {
+              return {
+                type: 'comic',
+                r2_url: activeComicRecord.r2_url,
+                image_url: activeComicRecord.r2_url || (activeComicRecord.r2_key ? `/${activeComicRecord.r2_key}` : null)
+              }
+            }
+            if (activeRecord) {
+              return {
+                type: 'image',
+                r2_url: activeRecord.r2_url,
+                image_url: activeRecord.r2_url || (activeRecord.r2_key ? `/${activeRecord.r2_key}` : null)
+              }
+            }
+            return null
+          })(),
+          latest_image: latestRecord ? {
+            status: latestRecord.status,
+            r2_key: latestRecord.r2_key,
+            r2_url: latestRecord.r2_url,
+            image_url: latestRecord.r2_url || (latestRecord.r2_key ? `/${latestRecord.r2_key}` : null),
+            error_message: latestRecord.error_message
+          } : null,
+          active_video: activeVideo ? (() => {
+            const r2Key = activeVideo.r2_key
+            const r2Url = activeVideo.r2_url
+            let videoUrl = r2Url
+            if (activeVideo.status === 'completed' && r2Key) {
+              videoUrl = toCloudFrontUrl(r2Key)
+            } else if (activeVideo.status === 'completed' && r2Url) {
+              videoUrl = s3ToCloudFrontUrl(r2Url) || r2Url
+            }
+            return {
+              id: activeVideo.id,
+              status: activeVideo.status,
+              r2_url: videoUrl,
+              model: activeVideo.model,
+              duration_sec: activeVideo.duration_sec
+            }
+          })() : null,
+          characters: characterMappings.map((c: any) => {
+            const charDetail = charDetailsMap.get(c.character_key) || {} as any
+            const sceneTrait = traits.get(c.character_key) || null
+            return {
+              character_key: c.character_key,
+              character_name: c.character_name,
+              is_primary: c.is_primary,
+              voice_preset_id: c.voice_preset_id,
+              reference_image_r2_url: c.reference_image_r2_url,
+              appearance_description: charDetail.appearance_description || null,
+              story_traits: charDetail.story_traits || null,
+              scene_trait: sceneTrait
+            }
+          }),
+          voice_character: voiceCharacter ? {
+            character_key: voiceCharacter.character_key,
+            character_name: voiceCharacter.character_name,
+            voice_preset_id: voiceCharacter.voice_preset_id
+          } : null,
+          utterance_status: (() => {
+            const total = utteranceRows.length
+            const withAudio = utteranceRows.filter(
+              (u: any) => u.audio_generation_id && u.audio_status === 'completed'
+            ).length
+            const withText = utteranceRows.filter(
+              (u: any) => u.text && u.text.trim().length > 0
+            ).length
+            const isReady = total > 0 && withText === total && withAudio === total
+            const totalDurationMs = utteranceRows.reduce((sum: number, u: any) => sum + (u.duration_ms || 0), 0)
+            return { total, with_audio: withAudio, with_text: withText, is_ready: isReady, total_duration_ms: totalDurationMs }
+          })(),
+          speaker_summary: (() => {
+            const hasNarration = utteranceRows.some((u: any) => u.role === 'narration')
+            const dialogueCharacterKeys = [...new Set(
+              utteranceRows.filter((u: any) => u.role === 'dialogue' && u.character_key).map((u: any) => u.character_key)
+            )]
+            const speakers: string[] = []
+            const speakerKeys: string[] = []
+            for (const charKey of dialogueCharacterKeys) {
+              const charDetail = charDetailsMap.get(charKey as string) as any
+              speakers.push(charDetail?.character_name || (charKey as string))
+              speakerKeys.push(charKey as string)
+            }
+            if (hasNarration) speakers.push('ナレーション')
+            return { speakers, speaker_keys: speakerKeys, has_narration: hasNarration, utterance_total: utteranceRows.length }
+          })(),
+          utterance_list: utteranceRows.map((u: any) => ({
+            id: u.id,
+            role: u.role || 'narration',
+            character_key: u.character_key || null,
+            character_name: u.character_key
+              ? ((charDetailsMap.get(u.character_key) as any)?.character_name || u.character_key)
+              : null,
+            text: u.text || '',
+            has_audio: !!(u.audio_generation_id && u.audio_status === 'completed'),
+            duration_ms: u.duration_ms || null
+          })),
+          text_render_mode: scene.text_render_mode || ((scene.display_asset_type === 'comic') ? 'baked' : 'remotion'),
+          sfx_count: sfxItems.length,
+          sfx_preview: sfxItems.slice(0, 2).map((s: any) => s.name || 'SFX'),
+          scene_bgm: sceneBgm ? {
+            id: sceneBgm.id,
+            source: sceneBgm.library_type || 'direct',
+            name: sceneBgm.name || 'BGM',
+            url: sceneBgm.url,
+            volume: sceneBgm.volume,
+            loop: sceneBgm.loop
+          } : null,
+          motion_preset_id: motionMap.get(sid) ?? 
+            ((scene.display_asset_type === 'comic') ? 'none' : 'kenburns_soft')
         }
       })
-    )
+
+      return c.json({
+        project_id: parseInt(projectId),
+        total_scenes: scenes.length,
+        scenes: scenesWithMinimalImages
+      })
+    }
+
+    // デフォルト（full）: 完全版（既存の動作、後方互換）
+    // ⚡ PERF FIX: N+1 → Bulk queries via JOIN scenes (avoids D1 SQL variable limit)
+    
+    // Bulk query: Active images for all scenes
+    const { results: fullActiveImages } = await c.env.DB.prepare(`
+      SELECT ig.scene_id, ig.id, ig.prompt, ig.r2_key, ig.status, ig.created_at
+      FROM (
+        SELECT scene_id, MAX(created_at) as max_created
+        FROM image_generations
+        WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
+          AND is_active = 1
+        GROUP BY scene_id
+      ) latest
+      JOIN image_generations ig ON ig.scene_id = latest.scene_id AND ig.created_at = latest.max_created AND ig.is_active = 1
+    `).bind(projectId).all()
+
+    // Bulk query: Latest image status per scene
+    const { results: fullLatestImages } = await c.env.DB.prepare(`
+      SELECT scene_id, id, status, error_message, created_at
+      FROM (
+        SELECT ig.scene_id, ig.id, ig.status, ig.error_message, ig.created_at,
+          ROW_NUMBER() OVER (PARTITION BY ig.scene_id ORDER BY ig.created_at DESC) as rn
+        FROM image_generations ig
+        JOIN scenes s ON ig.scene_id = s.id
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
+      )
+      WHERE rn = 1
+    `).bind(projectId).all()
+
+    const fullActiveMap = new Map<number, any>()
+    for (const r of fullActiveImages as any[]) fullActiveMap.set(r.scene_id, r)
+    const fullLatestMap = new Map<number, any>()
+    for (const r of fullLatestImages as any[]) fullLatestMap.set(r.scene_id, r)
+
+    const scenesWithImages = scenes.map((scene: any) => {
+      const sid = scene.id as number
+      const activeRecord = fullActiveMap.get(sid) || null
+      const latestRecord = fullLatestMap.get(sid) || null
+
+      const activeImage = activeRecord ? {
+        id: activeRecord.id,
+        prompt: activeRecord.prompt,
+        image_url: `/${activeRecord.r2_key}`,
+        status: activeRecord.status,
+        created_at: activeRecord.created_at
+      } : null
+
+      const latestImage = latestRecord ? {
+        id: latestRecord.id,
+        status: latestRecord.status,
+        error_message: latestRecord.error_message,
+        created_at: latestRecord.created_at
+      } : null
+
+      // Safe JSON parsing for bullets
+      let bulletsParsed: any[] = []
+      try {
+        if (scene.bullets) {
+          const parsed = JSON.parse(scene.bullets)
+          bulletsParsed = Array.isArray(parsed) ? parsed : []
+        }
+      } catch (e) {
+        bulletsParsed = []
+      }
+
+      return {
+        id: scene.id,
+        idx: scene.idx,
+        role: scene.role,
+        title: scene.title,
+        dialogue: scene.dialogue || '',
+        speech_type: scene.speech_type || 'narration',
+        bullets: bulletsParsed,
+        image_prompt: scene.image_prompt || '',
+        created_at: scene.created_at,
+        updated_at: scene.updated_at,
+        active_image: activeImage,
+        latest_image: latestImage
+      }
+    })
 
     return c.json({
       project_id: parseInt(projectId),
