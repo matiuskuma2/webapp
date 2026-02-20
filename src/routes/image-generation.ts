@@ -1603,7 +1603,28 @@ async function generateImageWithRetry(
         }
       }
 
-      // その他のエラー
+      // サーバーサイド一時エラー (500, 502, 503, 524) → リトライ
+      const retryableStatuses = [500, 502, 503, 524]
+      if (retryableStatuses.includes(response.status)) {
+        const waitTime = Math.min(Math.pow(2, attempt + 1) * 2000, 30000)
+        console.warn(`[Gemini] Server error ${response.status}. Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
+        
+        if (attempt < maxRetries - 1) {
+          await sleep(waitTime)
+          continue
+        } else {
+          const errorData = await response.json().catch(() => ({}))
+          lastError = JSON.stringify({
+            status: response.status,
+            message: errorData.error?.message || `API error: ${response.status} (all retries exhausted)`,
+            code: errorData.error?.code || 'SERVER_ERROR',
+            details: errorData.error?.details || null
+          })
+          break
+        }
+      }
+
+      // その他のエラー（リトライ不可）
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
         
