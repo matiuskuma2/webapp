@@ -261,9 +261,11 @@ function showToast(message, type = 'success') {
   messageEl.textContent = message;
   toast.classList.remove('hidden');
   
+  // エラーは長めに表示（ユーザーが読めるように）
+  const duration = (type === 'error') ? 6000 : 3000;
   setTimeout(() => {
     toast.classList.add('hidden');
-  }, 3000);
+  }, duration);
 }
 
 // Disable/Enable button with loading state
@@ -5055,6 +5057,11 @@ function renderSceneAudioSection(scene) {
           </button>
         </div>
       </div>
+      
+      <!-- 共通音声プレビュー領域（モードに関係なく表示） -->
+      <div id="audioPreview-${scene.id}" class="mt-3 hidden">
+        <!-- 音声プレーヤーがここに挿入される -->
+      </div>
     </div>
   `;
 }
@@ -8090,7 +8097,16 @@ async function generateVideo(sceneId) {
       return;
     }
     
-    const errorMsg = error.response?.data?.error?.message || error.message || '動画生成中にエラーが発生しました';
+    const rawMsg = error.response?.data?.error?.message || error.message || '';
+    const code = error.response?.data?.error?.code || '';
+    const errorMsgMap = {
+      'NO_ACTIVE_IMAGE': 'このシーンに有効な画像がありません。先に画像を生成してください。',
+      'USER_KEY_ERROR': 'APIキーに問題があります。設定画面で確認してください。',
+      'SPONSOR_KEY_NOT_CONFIGURED': 'システムAPIキーが設定されていません。管理者にお問い合わせください。',
+      'SPONSOR_VERTEX_NOT_CONFIGURED': 'Vertex AI APIキーが設定されていません。管理者にお問い合わせください。',
+      'ACCESS_DENIED': 'このプロジェクトにアクセスする権限がありません。',
+    };
+    const errorMsg = errorMsgMap[code] || rawMsg || '動画生成中にエラーが発生しました';
     showToast(errorMsg, 'error');
     
     window.videoGenerating[sceneId] = false;
@@ -8237,7 +8253,19 @@ async function generateVideoInline(sceneId) {
       return;
     }
     
-    const errorMsg = error.response?.data?.error?.message || error.message || '動画生成中にエラーが発生しました';
+    const rawMsg = error.response?.data?.error?.message || error.message || '';
+    const code = error.response?.data?.error?.code || '';
+    // APIエラーメッセージを日本語化
+    const errorMsgMap = {
+      'NO_ACTIVE_IMAGE': 'このシーンに有効な画像がありません。先に画像を生成してください。',
+      'USER_KEY_ERROR': 'APIキーに問題があります。設定画面で確認してください。',
+      'SPONSOR_KEY_NOT_CONFIGURED': 'システムAPIキーが設定されていません。管理者にお問い合わせください。',
+      'SPONSOR_VERTEX_NOT_CONFIGURED': 'Vertex AI APIキーが設定されていません。管理者にお問い合わせください。',
+      'ACCESS_DENIED': 'このプロジェクトにアクセスする権限がありません。',
+      'NO_PROMPT': '動画生成にはプロンプトが必要です。',
+      'SCENE_NOT_FOUND': 'シーンが見つかりません。',
+    };
+    const errorMsg = errorMsgMap[code] || rawMsg || '動画生成中にエラーが発生しました';
     showToast(errorMsg, 'error');
     
     window.videoGenerating[sceneId] = false;

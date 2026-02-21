@@ -451,8 +451,8 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
     }
   }
   
-  // アクセス制御: superadmin/adminは全プロジェクトにアクセス可能、それ以外はオーナーのみ
-  const isPrivileged = accessUserRole === 'superadmin' || accessUserRole === 'admin';
+  // アクセス制御: superadminのみ全プロジェクトにアクセス可能、admin含むそれ以外はオーナーのみ
+  const isPrivileged = accessUserRole === 'superadmin';
   if (!isPrivileged && scene.owner_user_id !== accessUserId) {
     console.log(`[VideoGen] Access denied: project owner ${scene.owner_user_id} !== logged-in user ${accessUserId}`);
     await logError({
@@ -1371,7 +1371,7 @@ videoGeneration.post('/videos/:videoId/cancel', async (c) => {
   }
   
   // Permission check
-  const isPrivileged = session.role === 'superadmin' || session.role === 'admin';
+  const isPrivileged = session.role === 'superadmin';
   if (!isPrivileged && video.owner_user_id !== session.user_id) {
     return c.json({ error: { code: 'ACCESS_DENIED', message: 'Access denied' } }, 403);
   }
@@ -4758,8 +4758,8 @@ videoGeneration.put('/video-generations/:id/prompt', async (c) => {
     return c.json({ error: { code: 'NOT_FOUND', message: 'Video generation not found' } }, 404);
   }
   
-  // アクセス制御
-  const isPrivileged = sessionUser.role === 'superadmin' || sessionUser.role === 'admin';
+  // アクセス制御: superadminのみ全アクセス可能
+  const isPrivileged = sessionUser.role === 'superadmin';
   if (!isPrivileged && video.owner_user_id !== sessionUser.user_id) {
     return c.json({ error: { code: 'ACCESS_DENIED', message: 'Access denied' } }, 403);
   }
@@ -4854,8 +4854,8 @@ videoGeneration.post('/:sceneId/video-regenerate', async (c) => {
     return c.json({ error: { code: 'SCENE_NOT_FOUND', message: 'Scene not found' } }, 404);
   }
   
-  // アクセス制御
-  const isPrivileged = sessionUser.role === 'superadmin' || sessionUser.role === 'admin';
+  // アクセス制御: superadminのみ全アクセス可能
+  const isPrivileged = sessionUser.role === 'superadmin';
   if (!isPrivileged && scene.owner_user_id !== sessionUser.user_id) {
     return c.json({ error: { code: 'ACCESS_DENIED', message: 'Access denied' } }, 403);
   }
