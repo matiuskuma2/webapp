@@ -1816,9 +1816,9 @@ marunage.get('/:projectId/status', async (c) => {
   if (!run) run = await getLatestRunForProject(c.env.DB, projectId)
   if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No marunage run found for this project')
 
-  // Ownership check
-  if (run.started_by_user_id !== user.id) {
-    return errorJson(c, MARUNAGE_ERRORS.FORBIDDEN, 'Not your project')
+  // Ownership check (superadmin can view all)
+  if (run.started_by_user_id !== user.id && user.role !== 'superadmin') {
+    return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No marunage run found for this project')
   }
 
   const config: MarunageConfig = JSON.parse(run.config_json || '{}')
@@ -2256,7 +2256,7 @@ marunage.post('/:projectId/advance', async (c) => {
 
   const run = await getActiveRunForProject(c.env.DB, projectId)
   if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No active run for this project')
-  if (run.started_by_user_id !== user.id) return errorJson(c, MARUNAGE_ERRORS.FORBIDDEN, 'Not your project')
+  if (run.started_by_user_id !== user.id && user.role !== 'superadmin') return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No active run for this project')
 
   // Lock check — but allow re-kick if stuck in generating_images with no progress
   if (run.locked_until) {
@@ -3034,7 +3034,7 @@ marunage.post('/:projectId/retry', async (c) => {
   `).bind(projectId).first<MarunageRunRow>()
 
   if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No failed run found')
-  if (run.started_by_user_id !== user.id) return errorJson(c, MARUNAGE_ERRORS.FORBIDDEN, 'Not your project')
+  if (run.started_by_user_id !== user.id && user.role !== 'superadmin') return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No failed run found')
   if (run.retry_count >= MAX_RETRY_COUNT) return errorJson(c, MARUNAGE_ERRORS.RETRY_EXHAUSTED, 'Retry limit reached')
 
   const errorPhase = run.error_phase || 'formatting'
@@ -3116,7 +3116,7 @@ marunage.post('/:projectId/cancel', async (c) => {
   const projectId = parseInt(c.req.param('projectId'))
   const run = await getActiveRunForProject(c.env.DB, projectId)
   if (!run) return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No active run found')
-  if (run.started_by_user_id !== user.id) return errorJson(c, MARUNAGE_ERRORS.FORBIDDEN, 'Not your project')
+  if (run.started_by_user_id !== user.id && user.role !== 'superadmin') return errorJson(c, MARUNAGE_ERRORS.NOT_FOUND, 'No active run found')
 
   const result = await c.env.DB.prepare(`
     UPDATE marunage_runs

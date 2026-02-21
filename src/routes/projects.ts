@@ -5,7 +5,85 @@ import { logAudit } from '../utils/audit-logger'
 import { getUserFromSession, validateProjectAccess } from '../utils/auth-helper'
 import { toCloudFrontUrl, s3ToCloudFrontUrl } from '../utils/aws-video-client'
 
-const projects = new Hono<{ Bindings: Bindings }>()
+const projects = new Hono<{ Bindings: Bindings & { authUser?: { id: number; role: string; email?: string }; authProjectOwned?: boolean } }>()
+
+// =============================================================================
+// ⚠️ SECURITY MIDDLEWARE: 認証 + プロジェクトオーナーシップ検証
+// =============================================================================
+// 全ての /:id/* ルートに対して認証とオーナーシップを強制する。
+// - 未ログイン → 401
+// - superadmin → 常にアクセス可
+// - admin/user → 自分が作成したプロジェクトのみアクセス可
+// - 他人のプロジェクト → 404 (存在を隠す)
+// =============================================================================
+
+projects.use('/:id/*', async (c, next) => {
+  const id = c.req.param('id')
+  // 数値でない場合はスキップ（'deleted' や 'output-presets' などの静的ルート）
+  if (!/^\d+$/.test(id)) return next()
+
+  const user = await getUserFromSession(c)
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+  }
+  // c.env に authUser をセット
+  ;(c as any).set('authUser', user)
+
+  // superadmin は全プロジェクトアクセス可
+  if (user.role === 'superadmin') {
+    ;(c as any).set('authProjectOwned', true)
+    return next()
+  }
+
+  // オーナーシップ検証
+  const project = await c.env.DB.prepare(
+    `SELECT user_id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`
+  ).bind(id).first<{ user_id: number | null }>()
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+  }
+
+  if (project.user_id !== user.id) {
+    // 他人のプロジェクト → 404 で存在を隠す
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+  }
+
+  ;(c as any).set('authProjectOwned', true)
+  return next()
+})
+
+// /:id 直接アクセス用（サブパスなしの場合）
+projects.use('/:id', async (c, next) => {
+  const id = c.req.param('id')
+  if (!/^\d+$/.test(id)) return next()
+
+  const user = await getUserFromSession(c)
+  if (!user) {
+    return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+  }
+  ;(c as any).set('authUser', user)
+
+  if (user.role === 'superadmin') {
+    ;(c as any).set('authProjectOwned', true)
+    return next()
+  }
+
+  const project = await c.env.DB.prepare(
+    `SELECT user_id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)`
+  ).bind(id).first<{ user_id: number | null }>()
+
+  if (!project) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+  }
+
+  if (project.user_id !== user.id) {
+    return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
+  }
+
+  ;(c as any).set('authProjectOwned', true)
+  return next()
+})
 
 // =============================================================================
 // Scene Motion Column Compatibility Layer
@@ -98,10 +176,9 @@ async function fetchMotionPreset(
   }
 }
 
-// POST /api/projects - プロジェクト作成
+// POST /api/projects - プロジェクト作成（認証必須）
 projects.post('/', async (c) => {
   try {
-    const { getCookie } = await import('hono/cookie')
     const { title } = await c.req.json()
 
     if (!title || title.trim() === '') {
@@ -117,15 +194,12 @@ projects.post('/', async (c) => {
       }, 400)
     }
 
-    // セッションからuser_idを取得
-    let userId: number | null = null
-    const sessionId = getCookie(c, 'session')
-    if (sessionId) {
-      const session = await c.env.DB.prepare(`
-        SELECT user_id FROM sessions WHERE id = ? AND expires_at > datetime('now')
-      `).bind(sessionId).first<{ user_id: number }>()
-      userId = session?.user_id || null
+    // ⚠️ SECURITY FIX: 認証必須 — 未ログインユーザーはプロジェクト作成不可
+    const user = await getUserFromSession(c)
+    if (!user) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
     }
+    const userId = user.id
 
     const result = await c.env.DB.prepare(`
       INSERT INTO projects (title, status, user_id, target_scene_count, split_mode) 
@@ -309,16 +383,38 @@ projects.post('/:id/upload', async (c) => {
   }
 })
 
-// GET /api/projects - プロジェクト一覧
+// GET /api/projects - プロジェクト一覧（認証必須 + オーナーフィルタ）
 projects.get('/', async (c) => {
   try {
-    const { results } = await c.env.DB.prepare(`
-      SELECT id, title, status, audio_filename, audio_r2_key, audio_size_bytes, created_at, updated_at
-      FROM projects
-      WHERE (is_deleted = 0 OR is_deleted IS NULL)
-        AND json_extract(settings_json, '$.marunage_mode') IS NOT 1
-      ORDER BY created_at DESC
-    `).all()
+    // ⚠️ SECURITY FIX: 認証必須 + 自分のプロジェクトのみ表示
+    const user = await getUserFromSession(c)
+    if (!user) {
+      return c.json({ error: { code: 'UNAUTHORIZED', message: 'Authentication required' } }, 401)
+    }
+
+    let results: any[]
+    if (user.role === 'superadmin') {
+      // superadmin は全プロジェクトを閲覧可能
+      const res = await c.env.DB.prepare(`
+        SELECT id, title, status, audio_filename, audio_r2_key, audio_size_bytes, user_id, created_at, updated_at
+        FROM projects
+        WHERE (is_deleted = 0 OR is_deleted IS NULL)
+          AND json_extract(settings_json, '$.marunage_mode') IS NOT 1
+        ORDER BY created_at DESC
+      `).all()
+      results = res.results
+    } else {
+      // 一般ユーザー/admin は自分が作成したプロジェクトのみ
+      const res = await c.env.DB.prepare(`
+        SELECT id, title, status, audio_filename, audio_r2_key, audio_size_bytes, user_id, created_at, updated_at
+        FROM projects
+        WHERE (is_deleted = 0 OR is_deleted IS NULL)
+          AND json_extract(settings_json, '$.marunage_mode') IS NOT 1
+          AND user_id = ?
+        ORDER BY created_at DESC
+      `).bind(user.id).all()
+      results = res.results
+    }
 
     return c.json({ projects: results })
   } catch (error) {
@@ -1253,6 +1349,7 @@ projects.get('/:id/scenes/hidden', async (c) => {
 })
 
 // DELETE /api/projects/:id - プロジェクト削除（ソフトデリート v3）
+// ⚠️ SECURITY: ミドルウェアで認証+オーナーシップ検証済み
 // 
 // ■ 方針（2026-02-11 改定）
 //   ハードデリートは30以上の子テーブルへのカスケード削除を伴い、
@@ -1269,7 +1366,7 @@ projects.delete('/:id', async (c) => {
 
     // プロジェクト存在確認（未削除のものだけ対象）
     const project = await c.env.DB.prepare(`
-      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL) AND (is_deleted = 0 OR is_deleted IS NULL)
+      SELECT id FROM projects WHERE id = ? AND (is_deleted = 0 OR is_deleted IS NULL)
     `).bind(projectId).first()
 
     if (!project) {

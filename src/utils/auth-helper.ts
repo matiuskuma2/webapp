@@ -101,11 +101,10 @@ export async function validateSceneAccess(
       };
     }
     
-    // SSOT: Superadmin と Admin は全データにアクセス可能
-    // Note: マルチテナント環境では admin のアクセス範囲を制限する必要があるが、
-    // 現状は全ユーザーが全プロジェクトを閲覧できる設計のため、編集も許可する
-    if (user.role === 'superadmin' || user.role === 'admin') {
-      console.log(`[AuthHelper] ${user.role} access granted for scene ${sceneId}`);
+    // SSOT: Superadmin のみ全データにアクセス可能
+    // ⚠️ SECURITY FIX 2026-02-21: admin は owner と同等（自分のプロジェクトのみ）
+    if (user.role === 'superadmin') {
+      console.log(`[AuthHelper] superadmin access granted for scene ${sceneId}`);
       return { valid: true, projectId: scene.project_id };
     }
     
