@@ -15338,7 +15338,7 @@ let bulkAudioPollingInterval = null;
 async function generateAllMissingAudio(skipConfirm = false) {
   const btn = document.getElementById('btnBulkAudioGenerate');
   const originalContent = btn?.innerHTML || '';
-  const projectId = window.currentProjectId;
+  const projectId = window.currentProjectId || PROJECT_ID;
   
   if (!projectId) {
     showToast('プロジェクトが選択されていません', 'error');
@@ -15500,7 +15500,7 @@ function stopBulkAudioPolling(btn, originalContent, wasSuccessful) {
  * 一括音声生成をキャンセル
  */
 async function cancelBulkAudioGeneration() {
-  const projectId = window.currentProjectId;
+  const projectId = window.currentProjectId || PROJECT_ID;
   if (!projectId) return;
   
   try {
@@ -15519,7 +15519,7 @@ window.cancelBulkAudioGeneration = cancelBulkAudioGeneration;
  * ページ読み込み時に実行中の一括音声ジョブがあれば再開
  */
 async function checkAndResumeBulkAudioJob() {
-  const projectId = window.currentProjectId;
+  const projectId = window.currentProjectId || PROJECT_ID;
   if (!projectId) return;
   
   try {
