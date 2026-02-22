@@ -896,7 +896,7 @@
             <i class="fas fa-volume-up mr-1"></i>SFX
             ${(() => {
               const totalSfx = (this.currentState?.sfxCues?.length || 0) + (this.currentState?.sfxAssignments?.length || 0);
-              return totalSfx > 0 ? '<span class="ml-1 bg-pink-400 text-white text-xs px-1.5 py-0.5 rounded-full">' + totalSfx + '</span>' : '';
+              return totalSfx > 0 ? '<span class="ml-1 bg-purple-500 text-white text-xs px-1.5 py-0.5 rounded-full">' + totalSfx + '</span>' : '';
             })()}
           </button>
         </div>
@@ -1806,7 +1806,7 @@
                 <i class="fas fa-user"></i>
                 マイSFX
               </button>
-              <label class="cursor-pointer px-3 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors font-semibold text-sm inline-flex items-center gap-2">
+              <label class="cursor-pointer px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold text-sm inline-flex items-center gap-2">
                 <i class="fas fa-upload"></i>
                 アップロード
                 <input 
@@ -2643,7 +2643,7 @@
         // アップロードボタン（ユーザーライブラリの場合のみ）
         const uploadButton = libraryType === 'user' ? `
           <div class="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-            <label class="cursor-pointer px-4 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors font-semibold text-sm inline-flex items-center gap-2">
+            <label class="cursor-pointer px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold text-sm inline-flex items-center gap-2">
               <i class="fas fa-upload"></i>
               新しいSFXをアップロード
               <input 
@@ -2687,7 +2687,7 @@
                 ` : ''}
                 <button 
                   onclick="SceneEditModal.selectSfxFromLibrary('${libraryType}', ${item.id}, '${this.escapeHtml(item.name || 'SFX')}', ${item.duration_ms || 0})"
-                  class="px-3 py-2 bg-pink-500 text-white rounded-lg hover:bg-pink-600 transition-colors text-sm font-semibold flex-shrink-0"
+                  class="px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors text-sm font-semibold flex-shrink-0"
                 >
                   <i class="fas fa-plus mr-1"></i>追加
                 </button>

@@ -4118,7 +4118,7 @@ function renderSceneStatusBar(scene, utteranceStatus) {
             return `
               <button 
                 onclick="openSceneEditModal(${scene.id}, 'sfx')"
-                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-pink-100 text-pink-800 hover:bg-pink-200 transition-colors cursor-pointer" 
+                class="inline-flex items-center gap-1 px-2 py-1 rounded bg-pink-100 text-pink-700 hover:bg-pink-100 transition-colors cursor-pointer" 
                 title="効果音: ${sfxCount}件（${sfxPreview.join(', ') || 'SFX'}）クリックで編集"
               >
                 <span>💥</span>
