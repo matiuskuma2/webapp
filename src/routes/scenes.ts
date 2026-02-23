@@ -794,6 +794,33 @@ scenes.post('/', async (c) => {
     const insertPos = await getInsertPosition(c.env.DB, project_id, insert_after_idx);
     const newIdx = insertPos.newIdx;
     
+    // UNIQUE(project_id, idx) 制約回避:
+    // 途中挿入の場合、先に既存シーンのidxをずらしてから新規INSERTする
+    if (insertPos.needsRenumber) {
+      // Step 1: 挿入位置以降の可視シーンを一時的に大きな値にずらす
+      const { results: scenesToShift } = await c.env.DB.prepare(`
+        SELECT id, idx FROM scenes
+        WHERE project_id = ? AND idx >= ? AND (is_hidden = 0 OR is_hidden IS NULL)
+        ORDER BY idx DESC
+      `).bind(project_id, newIdx).all<{ id: number; idx: number }>();
+      
+      // 降順で処理（UNIQUE衝突回避）
+      for (const s of scenesToShift) {
+        await c.env.DB.prepare(`
+          UPDATE scenes SET idx = ? WHERE id = ?
+        `).bind(s.idx + 10000, s.id).run();
+      }
+      
+      // Step 2: 一時値を +1 した正しい値に戻す
+      for (const s of scenesToShift) {
+        await c.env.DB.prepare(`
+          UPDATE scenes SET idx = ? WHERE id = ?
+        `).bind(s.idx + 1, s.id).run();
+      }
+      
+      console.log(`[Scenes] Shifted ${scenesToShift.length} scenes (idx >= ${newIdx}) to make room for insert`);
+    }
+    
     // 新規シーン作成（bullets, image_prompt は NOT NULL なので空文字列を設定）
     const result = await c.env.DB.prepare(`
       INSERT INTO scenes (project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden)
@@ -809,11 +836,6 @@ scenes.post('/', async (c) => {
     const newSceneId = result.meta?.last_row_id;
     
     console.log(`[Scenes] Created scene id=${newSceneId}, idx=${newIdx}, project=${project_id}, role=${sceneRole}`);
-    
-    // 挿入位置に挿入した場合は再採番が必要
-    if (insertPos.needsRenumber) {
-      await renumberVisibleScenes(c.env.DB, project_id);
-    }
     
     // 作成したシーンを取得して返却
     const newScene = await c.env.DB.prepare(`
@@ -872,6 +894,30 @@ scenes.post('/:sceneId/duplicate', async (c) => {
     const insertPos = await getInsertPosition(c.env.DB, original.project_id, insertAfterIdx);
     const newIdx = insertPos.newIdx;
 
+    // UNIQUE(project_id, idx) 制約回避:
+    // 途中挿入の場合、先に既存シーンのidxをずらしてから新規INSERTする
+    if (insertPos.needsRenumber) {
+      const { results: scenesToShift } = await c.env.DB.prepare(`
+        SELECT id, idx FROM scenes
+        WHERE project_id = ? AND idx >= ? AND (is_hidden = 0 OR is_hidden IS NULL)
+        ORDER BY idx DESC
+      `).bind(original.project_id, newIdx).all<{ id: number; idx: number }>();
+      
+      for (const s of scenesToShift) {
+        await c.env.DB.prepare(`
+          UPDATE scenes SET idx = ? WHERE id = ?
+        `).bind(s.idx + 10000, s.id).run();
+      }
+      
+      for (const s of scenesToShift) {
+        await c.env.DB.prepare(`
+          UPDATE scenes SET idx = ? WHERE id = ?
+        `).bind(s.idx + 1, s.id).run();
+      }
+      
+      console.log(`[Scenes] Shifted ${scenesToShift.length} scenes for duplicate insert at idx=${newIdx}`);
+    }
+
     // テキスト情報のみコピー（画像・動画・漫画は含まない）
     const result = await c.env.DB.prepare(`
       INSERT INTO scenes (project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden)
@@ -901,10 +947,6 @@ scenes.post('/:sceneId/duplicate', async (c) => {
           VALUES (?, ?, ?, ?)
         `).bind(newSceneId, ch.character_key, ch.character_name, ch.display_order).run();
       }
-    }
-
-    if (insertPos.needsRenumber) {
-      await renumberVisibleScenes(c.env.DB, original.project_id);
     }
 
     const newScene = await c.env.DB.prepare(`
