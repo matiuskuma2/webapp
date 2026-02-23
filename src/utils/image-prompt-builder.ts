@@ -66,7 +66,26 @@ export async function composeStyledPrompt(
 
   let stylePresetId = sceneStyle?.style_preset_id
 
-  // 2. scene固有のスタイルがない場合、project defaultを取得
+  // 2. scene固有のスタイルがない場合、主キャラクターのstyle_preset_idを取得
+  if (!stylePresetId) {
+    try {
+      const charStyle = await db.prepare(`
+        SELECT pcm.style_preset_id
+        FROM scene_character_map scm
+        JOIN project_character_models pcm 
+          ON pcm.project_id = ? AND scm.character_key = pcm.character_key
+        WHERE scm.scene_id = ? AND pcm.style_preset_id IS NOT NULL
+        ORDER BY scm.is_primary DESC, scm.created_at ASC
+        LIMIT 1
+      `).bind(projectId, sceneId).first()
+      
+      stylePresetId = charStyle?.style_preset_id
+    } catch (charError) {
+      console.warn('[Prompt Builder] Failed to fetch character style:', charError)
+    }
+  }
+
+  // 3. キャラスタイルもない場合、project defaultを取得
   if (!stylePresetId) {
     const projectStyle = await db.prepare(`
       SELECT default_style_preset_id 

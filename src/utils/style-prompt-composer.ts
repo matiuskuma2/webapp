@@ -8,8 +8,9 @@
  * 
  * Priority:
  * 1. scene_style_settings.style_preset_id (scene-specific override)
- * 2. project_style_settings.default_style_preset_id (project default)
- * 3. No style (use original prompt only - backward compatibility)
+ * 2. Primary character's style_preset_id (from scene_character_map + project_character_models)
+ * 3. project_style_settings.default_style_preset_id (project default)
+ * 4. No style (use original prompt only - backward compatibility)
  */
 
 export interface StylePreset {
@@ -22,6 +23,7 @@ export interface StylePreset {
 
 export interface StyleSettings {
   scene_style_preset_id: number | null
+  character_style_preset_id: number | null
   project_default_preset_id: number | null
 }
 
@@ -35,12 +37,17 @@ export function getEffectiveStylePresetId(settings: StyleSettings): number | nul
     return settings.scene_style_preset_id
   }
   
-  // Priority 2: Project default style
+  // Priority 2: Primary character's style
+  if (settings.character_style_preset_id !== null) {
+    return settings.character_style_preset_id
+  }
+  
+  // Priority 3: Project default style
   if (settings.project_default_preset_id !== null) {
     return settings.project_default_preset_id
   }
   
-  // Priority 3: No style (backward compatibility)
+  // Priority 4: No style (backward compatibility)
   return null
 }
 
@@ -125,14 +132,34 @@ export async function fetchSceneStyleSettings(
       WHERE s.id = ? AND s.project_id = ?
     `).bind(sceneId, projectId).first()
 
+    // Fetch primary character's style_preset_id for this scene
+    let characterStylePresetId: number | null = null
+    try {
+      const charStyle = await db.prepare(`
+        SELECT pcm.style_preset_id
+        FROM scene_character_map scm
+        JOIN project_character_models pcm 
+          ON pcm.project_id = ? AND scm.character_key = pcm.character_key
+        WHERE scm.scene_id = ? AND pcm.style_preset_id IS NOT NULL
+        ORDER BY scm.is_primary DESC, scm.created_at ASC
+        LIMIT 1
+      `).bind(projectId, sceneId).first<{ style_preset_id: number }>()
+      
+      characterStylePresetId = charStyle?.style_preset_id || null
+    } catch (charError) {
+      console.warn('[Style Composer] Failed to fetch character style:', charError)
+    }
+
     return {
       scene_style_preset_id: result?.scene_style_preset_id || null,
+      character_style_preset_id: characterStylePresetId,
       project_default_preset_id: result?.project_default_preset_id || null
     }
   } catch (error) {
     console.error('Error fetching scene style settings:', error)
     return {
       scene_style_preset_id: null,
+      character_style_preset_id: null,
       project_default_preset_id: null
     }
   }
