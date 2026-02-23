@@ -198,52 +198,37 @@ export const Scene: React.FC<SceneProps> = ({
   
   // ========================================
   // 動画クリップがある場合
-  // 修正: 動画が音声より短い場合、動画終了後はサムネイル画像を表示
+  // ★ FIX: <Video> のネイティブ最終フレーム保持を活用
+  //   Remotion の <Video>/<Html5Video> は、動画の duration を超えても
+  //   loop={false}（デフォルト）なら最終フレームを自動保持する。
+  //   （公式ドキュメント: "When a video ends (and loop is not set),
+  //    the last frame of the video remains visible by default."）
+  //   以前は動画終了後に <Img thumbnail> へ切り替えていたが、
+  //   これが「トップサムネイルに戻る」違和感の原因だったため削除。
   // ========================================
   if (scene.assets?.video_clip?.url) {
-    // 動画の長さ（ミリ秒）- project.jsonから取得、なければシーン長を使用
+    // 動画の長さ（ミリ秒）- ログ用に保持
     const videoDurationMs = scene.assets.video_clip.duration_ms || scene.timing.duration_ms;
     const videoDurationFrames = msToFrames(videoDurationMs, fps);
-    
-    // 現在のフレームが動画の長さを超えているか
-    const isAfterVideoEnd = frame >= videoDurationFrames;
-    
-    // 元の画像URL（動画終了後に表示するサムネイル）
-    // video_clip.thumbnail_url または scene.assets.image.url を使用
-    const thumbnailUrl = scene.assets.video_clip.thumbnail_url || scene.assets?.image?.url;
     
     if (frame === 0) {
       console.log(`[Scene ${scene.idx}] Video mode: video=${videoDurationMs}ms (${videoDurationFrames}f), scene=${scene.timing.duration_ms}ms (${durationFrames}f)`);
       if (durationFrames > videoDurationFrames) {
-        console.log(`[Scene ${scene.idx}] Will show thumbnail after frame ${videoDurationFrames}, thumbnail=${thumbnailUrl}`);
+        console.log(`[Scene ${scene.idx}] Video shorter than scene: last frame will be held for ${durationFrames - videoDurationFrames}f (Remotion native behavior)`);
       }
     }
     
     return (
       <AbsoluteFill style={{ opacity }}>
-        {/* 動画終了前: 動画を再生 */}
-        {!isAfterVideoEnd && (
-          <Video
-            src={scene.assets.video_clip.url}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-          />
-        )}
-        
-        {/* 動画終了後: サムネイル画像を表示（音声が終わるまで） */}
-        {isAfterVideoEnd && thumbnailUrl && (
-          <Img
-            src={thumbnailUrl}
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-            }}
-          />
-        )}
+        {/* 動画再生: 終了後は Remotion が自動的に最終フレームを保持 */}
+        <Video
+          src={scene.assets.video_clip.url}
+          style={{
+            width: '100%',
+            height: '100%',
+            objectFit: 'cover',
+          }}
+        />
         {/* R1.5: voices[] を再生 */}
         {/* ★ FIX: durationInFrames をシーン尺の残りまで拡張
             voice.duration_ms が不正確でも、実際の音声ファイルの長さまで再生される。
