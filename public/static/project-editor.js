@@ -8956,8 +8956,30 @@ async function updateVideoBuildRequirements() {
     window.missingAudioSceneIds = missingAudioSceneIds;
     
     if (warningCount > 0) {
-      recommendedHtml += '<div class="flex items-center justify-between text-amber-600">';
-      recommendedHtml += '<span><i class="fas fa-info-circle mr-2"></i>注意事項 ' + warningCount + '件（生成には影響しません）</span>';
+      // 内訳を分類して表示
+      const uttErrors = preflight.utterance_errors || [];
+      const assetWarns = preflight.warnings || [];
+      
+      // カテゴリ別にカウント
+      const audioMissingCount2 = uttErrors.filter(e => e.type === 'AUDIO_MISSING').length;
+      const noUtteranceCount = uttErrors.filter(e => e.type === 'NO_UTTERANCES').length;
+      const noDialogueCount = uttErrors.filter(e => e.type === 'NO_DIALOGUE').length;
+      const otherUttCount = uttErrors.filter(e => !['AUDIO_MISSING', 'NO_UTTERANCES', 'NO_DIALOGUE'].includes(e.type)).length;
+      
+      // 内訳テキストを構築
+      const breakdownParts = [];
+      if (audioMissingCount2 > 0) breakdownParts.push(`音声未生成 ${audioMissingCount2}件`);
+      if (noUtteranceCount > 0) breakdownParts.push(`セリフ未設定 ${noUtteranceCount}件`);
+      if (noDialogueCount > 0) breakdownParts.push(`テキスト未入力 ${noDialogueCount}件`);
+      if (otherUttCount > 0) breakdownParts.push(`その他音声 ${otherUttCount}件`);
+      if (assetWarns.length > 0) breakdownParts.push(`素材関連 ${assetWarns.length}件`);
+      
+      const breakdownText = breakdownParts.length > 0 
+        ? breakdownParts.join('、') 
+        : `${warningCount}件`;
+      
+      recommendedHtml += '<div class="flex items-center justify-between text-gray-500">';
+      recommendedHtml += `<span class="text-xs"><i class="fas fa-info-circle mr-1"></i>${breakdownText}（生成には影響しません）</span>`;
       // PR-Audio-Bulk: 未生成音声がある場合は一括生成ボタンを追加
       if (missingAudioCount > 0) {
         recommendedHtml += `
@@ -8968,7 +8990,7 @@ async function updateVideoBuildRequirements() {
           </button>`;
       }
       recommendedHtml += '</div>';
-      if (summaryStatus === 'ok') summaryStatus = 'warning';
+      // 生成に影響しない警告ではサマリーステータスを変更しない（緑のまま）
     }
     
   } catch (error) {
