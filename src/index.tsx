@@ -2278,6 +2278,21 @@ app.get('/projects/:id', async (c) => {
                                 <span id="vbMotionApplyStatus" class="text-xs text-gray-500 hidden"></span>
                             </div>
                         </div>
+
+                        <!-- トランジション（シーン切り替え効果） -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">
+                                <i class="fas fa-exchange-alt mr-1 text-teal-600"></i>トランジション（シーン切り替え効果）
+                            </label>
+                            <select id="vbTransitionType"
+                                class="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-teal-500 focus:ring-2 focus:ring-teal-200 text-sm">
+                                <option value="fade" selected>フェイド（ふわっと切り替え）</option>
+                                <option value="none">なし（パッと切り替え）</option>
+                            </select>
+                            <p class="text-xs text-gray-500 mt-1">
+                                各シーンの切り替え時のフェイドイン/フェイドアウト効果を設定します
+                            </p>
+                        </div>
                     </div>
                 </div>
                 

@@ -9887,6 +9887,11 @@ async function startVideoBuild() {
     ? (getVal('vbMotionPreset', 'kenburns_soft') || 'kenburns_soft')
     : (getBool('videoBuildMotion', true) ? 'kenburns_soft' : 'none');
   
+  // トランジション設定（UIから取得）
+  const transitionType = hasNewConfigUI
+    ? (getVal('vbTransitionType', 'fade') || 'fade')
+    : 'fade';
+  
   // PR-5-3a + Phase 1: Telops（テロップ - 字幕とは別）
   const telopsEnabled = hasNewConfigUI
     ? getBool('vbTelopsToggle', true)  // デフォルトON
@@ -9922,6 +9927,11 @@ async function startVideoBuild() {
     },
     motion: {
       preset: motionPreset,
+    },
+    // トランジション設定（シーン切り替えのフェイド）
+    transition: {
+      type: transitionType,
+      duration_ms: transitionType === 'none' ? 0 : 300,
     },
     // PR-5-3a/b + Phase 1: テロップ表示設定
     telops: {

@@ -2437,8 +2437,8 @@ export function buildProjectJson(
         duck_bgm_on_voice: true,
       },
       transition: {
-        type: 'fade',
-        duration_ms: 300,
+        type: settings.transition?.type || 'fade',
+        duration_ms: settings.transition?.type === 'none' ? 0 : (settings.transition?.duration_ms || 300),
       },
       // PR-5-3b + Phase 1: テロップ設定
       // SSOT Validation: Log telops settings being included in projectJson

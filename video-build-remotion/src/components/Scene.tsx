@@ -21,6 +21,8 @@ interface SceneProps {
   telopCustomStyle?: CustomTelopStyle | null;
   /** PR-Remotion-Typography: 文字組み設定 */
   telopTypography?: TelopTypography | null;
+  /** トランジションタイプ: 'none' の場合フェイドイン/アウトなし */
+  transitionType?: 'none' | 'fade' | 'slide' | 'wipe';
 }
 
 /**
@@ -121,9 +123,10 @@ export const Scene: React.FC<SceneProps> = ({
     }
   }
   
-  // フェードイン・アウト（15フレーム = 0.5秒 @30fps）
-  const fadeFrames = Math.min(15, Math.floor(durationFrames / 4));
-  const opacity = interpolate(
+  // フェードイン・アウト（transitionType が 'none' の場合は常にopacity=1）
+  const effectiveTransitionType = props.transitionType ?? 'fade';
+  const fadeFrames = effectiveTransitionType === 'none' ? 0 : Math.min(15, Math.floor(durationFrames / 4));
+  const opacity = effectiveTransitionType === 'none' ? 1 : interpolate(
     frame,
     [0, fadeFrames, durationFrames - fadeFrames, durationFrames],
     [0, 1, 1, 0],

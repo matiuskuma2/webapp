@@ -51,6 +51,9 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
   // PR-Remotion-Typography: 文字組み設定
   const telopTypography = (telopsSettings as any)?.typography || null;
   
+  // トランジション設定を取得（'none' でフェイド無効化）
+  const transitionType = (projectJson?.build_settings?.transition?.type || 'fade') as 'none' | 'fade' | 'slide' | 'wipe';
+  
   console.log('[RilarcVideo] telops settings:', JSON.stringify(telopsSettings));
   console.log('[RilarcVideo] globalTelopEnabled:', globalTelopEnabled);
   console.log('[RilarcVideo] telopStylePreset:', telopStylePreset);
@@ -237,6 +240,7 @@ export const RilarcVideo: React.FC<RilarcVideoProps> = ({
               telopPosition={telopPosition}
               telopCustomStyle={telopCustomStyle}
               telopTypography={telopTypography}
+              transitionType={transitionType}
             />
           </Sequence>
         );
