@@ -32,6 +32,7 @@ import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Bindings } from '../types/bindings';
 import { fetchInfrastructureCosts } from '../utils/infrastructure-cost';
+import { ELEVENLABS_COST_PER_1K_CHARS } from '../utils/elevenlabs';
 
 const admin = new Hono<{ Bindings: Bindings }>();
 
@@ -263,6 +264,7 @@ admin.get('/usage', async (c) => {
     `).all();
     
     // 2. Get TTS usage from tts_usage_logs (TTS is always platform cost for now)
+    // IMPORTANT: status = 'success' のみ集計（失敗分はAPI課金されない）
     const ttsResult = await DB.prepare(`
       SELECT 
         provider,
@@ -270,6 +272,20 @@ admin.get('/usage', async (c) => {
         SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM tts_usage_logs
       WHERE created_at > datetime('now', '-30 days')
+        AND status = 'success'
+      GROUP BY provider
+    `).all();
+    
+    // 2a-extra. Get TTS FAILED stats (for transparency in admin dashboard)
+    const ttsFailedResult = await DB.prepare(`
+      SELECT 
+        provider,
+        COUNT(*) as request_count,
+        SUM(COALESCE(estimated_cost_usd, 0)) as total_cost_if_billed,
+        GROUP_CONCAT(DISTINCT SUBSTR(error_message, 1, 60)) as error_summary
+      FROM tts_usage_logs
+      WHERE created_at > datetime('now', '-30 days')
+        AND status = 'failed'
       GROUP BY provider
     `).all();
     
@@ -553,6 +569,16 @@ admin.get('/usage', async (c) => {
     const totalCostAll = (totalAllResult?.total_cost || 0) + imgTotalCorrected;
     const totalRequestsAll = (totalAllResult?.request_count || 0) + (imgTotalAllResult?.request_count || 0);
     
+    // Build ttsFailedStats for transparency
+    const ttsFailedStats: Record<string, { count: number; wouldHaveCost: number; errors: string }> = {};
+    for (const row of (ttsFailedResult.results || []) as { provider: string; request_count: number; total_cost_if_billed: number; error_summary: string }[]) {
+      ttsFailedStats[row.provider] = {
+        count: row.request_count || 0,
+        wouldHaveCost: row.total_cost_if_billed || 0,
+        errors: row.error_summary || '',
+      };
+    }
+    
     // Return camelCase format for frontend compatibility
     return c.json({
       // 運営負担のみ（メイン表示用）
@@ -563,7 +589,9 @@ admin.get('/usage', async (c) => {
       // 全体の利用状況（参考値）
       totalCostAll,
       totalRequestsAll,
-      byUserAll
+      byUserAll,
+      // TTS失敗統計（透明性のため）
+      ttsFailedStats,
     });
   } catch (error) {
     console.error('Get usage error:', error);
@@ -594,13 +622,14 @@ admin.get('/usage/daily', async (c) => {
       GROUP BY date(created_at)
     `).bind(days).all();
     
-    // Get daily totals from tts_usage_logs
+    // Get daily totals from tts_usage_logs (成功分のみ)
     const ttsResult = await DB.prepare(`
       SELECT 
         date(created_at) as date,
         SUM(COALESCE(estimated_cost_usd, 0)) as total_cost
       FROM tts_usage_logs
       WHERE created_at > datetime('now', '-' || ? || ' days')
+        AND status = 'success'
       GROUP BY date(created_at)
     `).bind(days).all();
     
@@ -2786,6 +2815,162 @@ admin.get('/usage/infrastructure', async (c) => {
       }
     }, 500);
   }
+});
+
+// ====================================================================
+// GET /api/admin/elevenlabs/usage - ElevenLabs 実額取得 + 推定との突合
+// ====================================================================
+// ElevenLabs API /v1/user/subscription から実際の使用量を取得し、
+// tts_usage_logs の推定値と比較する
+admin.get('/elevenlabs/usage', async (c) => {
+  const { DB } = c.env;
+  const apiKey = c.env.ELEVENLABS_API_KEY;
+
+  // 1. ローカルDB推定値の集計（成功分のみ）
+  const now = new Date();
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthStartStr = monthStart.toISOString().slice(0, 10);
+
+  let localStats = {
+    total_characters: 0,
+    estimated_cost_usd: 0,
+    request_count: 0,
+    success_count: 0,
+    failed_count: 0,
+  };
+
+  try {
+    const successResult = await DB.prepare(`
+      SELECT 
+        SUM(text_length) as total_characters,
+        SUM(estimated_cost_usd) as total_cost,
+        COUNT(*) as request_count
+      FROM tts_usage_logs
+      WHERE provider = 'elevenlabs'
+        AND status = 'success'
+        AND created_at >= ?
+    `).bind(monthStartStr).first<any>();
+
+    const failedResult = await DB.prepare(`
+      SELECT COUNT(*) as count
+      FROM tts_usage_logs
+      WHERE provider = 'elevenlabs'
+        AND status = 'failed'
+        AND created_at >= ?
+    `).bind(monthStartStr).first<any>();
+
+    localStats = {
+      total_characters: Number(successResult?.total_characters) || 0,
+      estimated_cost_usd: Number(successResult?.total_cost) || 0,
+      request_count: Number(successResult?.request_count) || 0,
+      success_count: Number(successResult?.request_count) || 0,
+      failed_count: Number(failedResult?.count) || 0,
+    };
+  } catch (e) {
+    console.error('[ElevenLabs Usage] DB query error:', e);
+  }
+
+  // 2. ElevenLabs API 実額取得
+  let elevenLabsApi: {
+    character_count: number;
+    character_limit: number;
+    tier: string;
+    next_character_count_reset_unix: number;
+    status: string;
+    cost_per_1k_chars: number;
+    estimated_monthly_cost_usd: number;
+  } | null = null;
+  let apiError: string | null = null;
+
+  if (!apiKey) {
+    apiError = 'ELEVENLABS_API_KEY が設定されていません';
+  } else {
+    try {
+      const resp = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
+        headers: { 'xi-api-key': apiKey },
+      });
+      if (!resp.ok) {
+        const errText = await resp.text().catch(() => '');
+        apiError = `ElevenLabs API error ${resp.status}: ${errText.substring(0, 200)}`;
+      } else {
+        const sub = await resp.json() as {
+          tier: string;
+          character_count: number;
+          character_limit: number;
+          next_character_count_reset_unix: number;
+          status: string;
+        };
+        elevenLabsApi = {
+          character_count: sub.character_count,
+          character_limit: sub.character_limit,
+          tier: sub.tier,
+          next_character_count_reset_unix: sub.next_character_count_reset_unix,
+          status: sub.status,
+          cost_per_1k_chars: ELEVENLABS_COST_PER_1K_CHARS,
+          estimated_monthly_cost_usd: (sub.character_count / 1000) * ELEVENLABS_COST_PER_1K_CHARS,
+        };
+      }
+    } catch (e: any) {
+      apiError = `Fetch failed: ${e?.message || 'unknown'}`;
+    }
+  }
+
+  // 3. 突合（差分分析）
+  let reconciliation: {
+    chars_local: number;
+    chars_api: number | null;
+    chars_diff: number | null;
+    cost_local_usd: number;
+    cost_api_estimated_usd: number | null;
+    cost_diff_usd: number | null;
+    warning: string | null;
+  } | null = null;
+
+  if (elevenLabsApi) {
+    const charsDiff = elevenLabsApi.character_count - localStats.total_characters;
+    const costLocal = localStats.estimated_cost_usd;
+    const costApi = elevenLabsApi.estimated_monthly_cost_usd;
+    const costDiff = costApi - costLocal;
+    const diffPercent = costLocal > 0 ? Math.abs(costDiff / costLocal) * 100 : (costApi > 0 ? 100 : 0);
+
+    let warning: string | null = null;
+    if (Math.abs(charsDiff) > 100) {
+      warning = `文字数差 ${charsDiff > 0 ? '+' : ''}${charsDiff} 文字。`;
+      if (charsDiff > 0) {
+        warning += ' APIキーが他の場所でも使用されている可能性があります。';
+      } else {
+        warning += ' ローカルログに記録されているが、APIに反映されていない可能性があります（リセット周期の違い等）。';
+      }
+    }
+    if (diffPercent > 20 && Math.abs(costDiff) > 0.01) {
+      const existingWarning = warning || '';
+      warning = `${existingWarning} コスト差 ${costDiff > 0 ? '+' : ''}$${costDiff.toFixed(4)} (${diffPercent.toFixed(1)}%)`;
+    }
+
+    reconciliation = {
+      chars_local: localStats.total_characters,
+      chars_api: elevenLabsApi.character_count,
+      chars_diff: charsDiff,
+      cost_local_usd: Math.round(costLocal * 10000) / 10000,
+      cost_api_estimated_usd: Math.round(costApi * 10000) / 10000,
+      cost_diff_usd: Math.round(costDiff * 10000) / 10000,
+      warning,
+    };
+  }
+
+  return c.json({
+    // ローカルDB推定値
+    local: {
+      month: monthStartStr,
+      ...localStats,
+      cost_per_1k_chars: ELEVENLABS_COST_PER_1K_CHARS,
+    },
+    // ElevenLabs API 実額
+    api: elevenLabsApi,
+    api_error: apiError,
+    // 突合結果
+    reconciliation,
+  });
 });
 
 export default admin;

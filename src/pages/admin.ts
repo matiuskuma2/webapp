@@ -320,6 +320,35 @@ export const adminHtml = `
                         <div class="text-gray-500 text-center py-4">読み込み中...</div>
                     </div>
                 </div>
+                
+                <!-- ElevenLabs Usage Reconciliation Section -->
+                <div class="bg-gradient-to-r from-violet-50 to-purple-50 rounded-xl shadow mt-6 border border-violet-200">
+                    <div class="p-6 border-b border-violet-200 flex items-center justify-between">
+                        <h2 class="text-lg font-bold text-violet-800">
+                            <i class="fas fa-microphone-alt mr-2 text-violet-600"></i>ElevenLabs 実額突合
+                        </h2>
+                        <button onclick="loadElevenLabsUsage()" class="px-3 py-1 bg-violet-600 text-white rounded hover:bg-violet-700 text-sm">
+                            <i class="fas fa-sync-alt mr-1"></i>取得
+                        </button>
+                    </div>
+                    <div id="elevenLabsUsage" class="p-6">
+                        <div class="text-gray-500 text-center py-4">
+                            <i class="fas fa-info-circle mr-1"></i>「取得」ボタンで ElevenLabs API から実際の使用量を取得します
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- TTS Failed Stats Section -->
+                <div class="bg-gradient-to-r from-red-50 to-orange-50 rounded-xl shadow mt-6 border border-red-200">
+                    <div class="p-4 border-b border-red-200">
+                        <h2 class="text-base font-bold text-red-800">
+                            <i class="fas fa-exclamation-triangle mr-2 text-red-600"></i>TTS 失敗統計（課金なし）
+                        </h2>
+                    </div>
+                    <div id="ttsFailedStats" class="p-4">
+                        <div class="text-gray-500 text-center py-2 text-sm">コストデータ読み込み後に表示されます</div>
+                    </div>
+                </div>
             </div>
             
             <!-- Video Build Tab (Phase C) -->
@@ -752,6 +781,10 @@ export const adminHtml = `
                                 <div>
                                     <label class="block text-xs font-medium text-gray-700 mb-1">Fish TTS (/ 1M ch)</label>
                                     <input type="number" step="0.01" id="settingCostTtsFish" class="w-full border rounded-lg px-3 py-2 text-sm">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">ElevenLabs (/ 1K ch)</label>
+                                    <input type="number" step="0.01" id="settingCostTtsElevenlabs" class="w-full border rounded-lg px-3 py-2 text-sm">
                                 </div>
                             </div>
                             <div class="pt-4 border-t">
@@ -1633,6 +1666,8 @@ export const adminHtml = `
                 loadSponsorUsage();
                 // Load operations usage data (Safe Chat v1)
                 loadOperationsUsage();
+                // Render TTS failed stats
+                renderTtsFailedStats(data.ttsFailedStats);
                 
             } catch (err) {
                 console.error('Failed to load cost data:', err);
@@ -1651,6 +1686,7 @@ export const adminHtml = `
                 'image_character_reference': '画像生成 (キャラ参照)',
                 'tts_google': '音声合成 (Google TTS)',
                 'tts_fish': '音声合成 (Fish Audio)',
+                'tts_elevenlabs': '音声合成 (ElevenLabs)',
                 'video_generation': '動画生成',
                 'video_build': '動画ビルド (Remotion)'
             };
@@ -2031,6 +2067,192 @@ export const adminHtml = `
             }
         }
         
+        // ====================================================================
+        // ElevenLabs Usage Reconciliation
+        // ====================================================================
+        async function loadElevenLabsUsage() {
+            const el = document.getElementById('elevenLabsUsage');
+            if (!el) return;
+            
+            el.innerHTML = '<div class="text-center py-4"><i class="fas fa-spinner fa-spin text-violet-500 text-2xl"></i><p class="text-gray-500 mt-2">ElevenLabs APIに問い合わせ中...</p></div>';
+            
+            try {
+                const res = await axios.get('/api/admin/elevenlabs/usage');
+                const data = res.data;
+                
+                const local = data.local || {};
+                const api = data.api;
+                const apiError = data.api_error;
+                const recon = data.reconciliation;
+                
+                let html = '<div class="grid grid-cols-1 md:grid-cols-3 gap-4">';
+                
+                // Local DB Card
+                html += \`
+                    <div class="bg-white rounded-lg p-4 border border-violet-200">
+                        <h3 class="font-bold text-violet-700 mb-3">
+                            <i class="fas fa-database mr-2"></i>ローカルDB推定値
+                        </h3>
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">月（UTC）</span>
+                                <span class="font-medium">\${local.month || '-'}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">文字数（成功）</span>
+                                <span class="font-medium">\${(local.total_characters || 0).toLocaleString()}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">推定コスト</span>
+                                <span class="font-bold text-violet-700">\\\$\${(local.estimated_cost_usd || 0).toFixed(4)}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">成功 / 失敗</span>
+                                <span><span class="text-green-600">\${local.success_count || 0}</span> / <span class="text-red-600">\${local.failed_count || 0}</span></span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">単価</span>
+                                <span class="text-xs">\\\$\${local.cost_per_1k_chars || '?'}/1K文字</span>
+                            </div>
+                        </div>
+                    </div>
+                \`;
+                
+                // API Real Value Card
+                html += \`
+                    <div class="bg-white rounded-lg p-4 border border-violet-200">
+                        <h3 class="font-bold text-violet-700 mb-3">
+                            <i class="fas fa-cloud mr-2"></i>ElevenLabs API 実額
+                        </h3>
+                \`;
+                
+                if (api) {
+                    const usagePercent = api.character_limit > 0 ? Math.round((api.character_count / api.character_limit) * 100) : 0;
+                    const resetDate = api.next_character_count_reset_unix ? new Date(api.next_character_count_reset_unix * 1000).toLocaleDateString('ja-JP') : '-';
+                    html += \`
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">プラン</span>
+                                <span class="font-medium capitalize">\${api.tier || '-'}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">使用文字数</span>
+                                <span class="font-medium">\${(api.character_count || 0).toLocaleString()} / \${(api.character_limit || 0).toLocaleString()}</span>
+                            </div>
+                            <div class="w-full bg-gray-200 rounded-full h-2 my-1">
+                                <div class="h-2 rounded-full \${usagePercent > 80 ? 'bg-red-500' : usagePercent > 50 ? 'bg-yellow-500' : 'bg-green-500'}" style="width: \${Math.min(usagePercent, 100)}%"></div>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">推定コスト（API文字数×単価）</span>
+                                <span class="font-bold text-violet-700">\\\$\${(api.estimated_monthly_cost_usd || 0).toFixed(4)}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">リセット日</span>
+                                <span>\${resetDate}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">ステータス</span>
+                                <span class="\${api.status === 'active' ? 'text-green-600' : 'text-red-600'}">\${api.status || '-'}</span>
+                            </div>
+                        </div>
+                    \`;
+                } else {
+                    html += \`
+                        <div class="text-red-500 text-sm py-4">
+                            <i class="fas fa-exclamation-triangle mr-1"></i>
+                            \${escapeHtml(apiError || 'API取得失敗')}
+                        </div>
+                    \`;
+                }
+                html += '</div>';
+                
+                // Reconciliation Card
+                html += \`
+                    <div class="bg-white rounded-lg p-4 border border-violet-200">
+                        <h3 class="font-bold text-violet-700 mb-3">
+                            <i class="fas fa-balance-scale mr-2"></i>突合結果
+                        </h3>
+                \`;
+                
+                if (recon) {
+                    const hasDiff = recon.warning;
+                    const diffColor = hasDiff ? 'text-red-600' : 'text-green-600';
+                    const diffIcon = hasDiff ? 'fa-exclamation-triangle' : 'fa-check-circle';
+                    html += \`
+                        <div class="space-y-2 text-sm">
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">DB文字数</span>
+                                <span>\${(recon.chars_local || 0).toLocaleString()}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">API文字数</span>
+                                <span>\${recon.chars_api != null ? recon.chars_api.toLocaleString() : '-'}</span>
+                            </div>
+                            <div class="flex justify-between font-medium">
+                                <span class="text-gray-600">文字数差</span>
+                                <span class="\${diffColor}">\${recon.chars_diff != null ? (recon.chars_diff > 0 ? '+' : '') + recon.chars_diff.toLocaleString() : '-'}</span>
+                            </div>
+                            <hr>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">DB推定コスト</span>
+                                <span>\\\$\${(recon.cost_local_usd || 0).toFixed(4)}</span>
+                            </div>
+                            <div class="flex justify-between">
+                                <span class="text-gray-600">API推定コスト</span>
+                                <span>\${recon.cost_api_estimated_usd != null ? '\\\$' + recon.cost_api_estimated_usd.toFixed(4) : '-'}</span>
+                            </div>
+                            <div class="flex justify-between font-medium">
+                                <span class="text-gray-600">コスト差</span>
+                                <span class="\${diffColor}">\${recon.cost_diff_usd != null ? (recon.cost_diff_usd > 0 ? '+' : '') + '\\\$' + recon.cost_diff_usd.toFixed(4) : '-'}</span>
+                            </div>
+                            \${recon.warning ? '<div class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800"><i class="fas ' + diffIcon + ' mr-1"></i>' + escapeHtml(recon.warning) + '</div>' : '<div class="mt-2 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-800"><i class="fas fa-check-circle mr-1"></i>差異なし</div>'}
+                        </div>
+                    \`;
+                } else {
+                    html += '<div class="text-gray-500 text-sm py-4">API取得後に表示</div>';
+                }
+                html += '</div>';
+                
+                html += '</div>';
+                el.innerHTML = html;
+                
+            } catch (err) {
+                console.error('Failed to load ElevenLabs usage:', err);
+                el.innerHTML = \`
+                    <div class="text-gray-500 text-center py-4">
+                        <i class="fas fa-exclamation-circle text-2xl text-gray-300 mb-2"></i>
+                        <p>ElevenLabs使用量の取得に失敗しました</p>
+                        <p class="text-sm text-gray-400 mt-1">\${err.message || ''}</p>
+                    </div>
+                \`;
+            }
+        }
+        
+        // Render TTS failed stats from main usage data
+        function renderTtsFailedStats(ttsFailedStats) {
+            const el = document.getElementById('ttsFailedStats');
+            if (!el || !ttsFailedStats) return;
+            
+            const providers = Object.entries(ttsFailedStats);
+            if (providers.length === 0) {
+                el.innerHTML = '<div class="text-green-600 text-center py-2 text-sm"><i class="fas fa-check-circle mr-1"></i>TTS失敗はありません</div>';
+                return;
+            }
+            
+            el.innerHTML = providers.map(([provider, stats]) => \`
+                <div class="flex items-center justify-between p-2 bg-white rounded border mb-2">
+                    <div>
+                        <span class="font-medium text-gray-700">\${getApiTypeLabel('tts_' + provider)}</span>
+                        <span class="text-xs text-red-600 ml-2">\${stats.count}回失敗</span>
+                    </div>
+                    <div class="text-right">
+                        <div class="text-xs text-gray-500">仮に課金されていた場合: <span class="text-red-600">\\\$\${(stats.wouldHaveCost || 0).toFixed(4)}</span></div>
+                        <div class="text-xs text-gray-400 max-w-xs truncate" title="\${escapeHtml(stats.errors || '')}">\${escapeHtml((stats.errors || '').substring(0, 80))}</div>
+                    </div>
+                </div>
+            \`).join('');
+        }
+        
         function drawCostDailyChart(svg, daily) {
             if (!svg) return;
             svg.innerHTML = '';
@@ -2281,6 +2503,7 @@ export const adminHtml = `
                 document.getElementById('settingCostChatOutput').value = settings['cost_chat_output_per_1k_tokens']?.value || '0.03';
                 document.getElementById('settingCostTtsGoogle').value = settings['cost_tts_google_per_1m_chars']?.value || '16';
                 document.getElementById('settingCostTtsFish').value = settings['cost_tts_fish_per_1m_chars']?.value || '20';
+                document.getElementById('settingCostTtsElevenlabs').value = settings['cost_tts_elevenlabs_per_1k_chars']?.value || '0.30';
                 
                 // Update free mode banner
                 const freeModeEnabled = settings['free_mode_enabled']?.value === 'true';
@@ -2327,6 +2550,7 @@ export const adminHtml = `
                     ['cost_chat_output_per_1k_tokens', document.getElementById('settingCostChatOutput').value],
                     ['cost_tts_google_per_1m_chars', document.getElementById('settingCostTtsGoogle').value],
                     ['cost_tts_fish_per_1m_chars', document.getElementById('settingCostTtsFish').value],
+                    ['cost_tts_elevenlabs_per_1k_chars', document.getElementById('settingCostTtsElevenlabs').value],
                 ];
                 
                 for (const [key, value] of settings) {

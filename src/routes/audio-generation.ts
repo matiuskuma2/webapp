@@ -6,7 +6,7 @@ import { GENERATION_STATUS, ERROR_CODES } from '../constants';
 import { createErrorResponse } from '../utils/error-response';
 import { base64ToUint8Array, generateR2Key, getR2PublicUrl } from '../utils/r2-helper';
 import { generateFishTTS } from '../utils/fish-audio'; // Phase X-1: Fish Audio integration
-import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, getElevenLabsVoiceList, ELEVENLABS_MODELS } from '../utils/elevenlabs'; // ElevenLabs TTS
+import { generateElevenLabsTTS, resolveElevenLabsVoiceId, isElevenLabsVoice, getElevenLabsVoiceList, ELEVENLABS_MODELS, ELEVENLABS_COST_PER_1K_CHARS } from '../utils/elevenlabs'; // ElevenLabs TTS
 import { logAudit } from '../utils/audit-logger';
 import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration'; // MP3 duration parser
 import {
@@ -52,8 +52,8 @@ function estimateTTSCost(provider: string, textLength: number, model?: string): 
       // $0.015/1000 chars
       return (textLength / 1000) * 0.015;
     case 'elevenlabs':
-      // $0.24/1000 chars (average)
-      return (textLength / 1000) * 0.24;
+      // SSOT: elevenlabs.ts の ELEVENLABS_COST_PER_1K_CHARS を参照
+      return (textLength / 1000) * ELEVENLABS_COST_PER_1K_CHARS;
     default:
       return 0;
   }

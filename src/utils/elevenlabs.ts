@@ -265,10 +265,17 @@ export function isElevenLabsVoice(voiceId: string): boolean {
 }
 
 /**
+ * ElevenLabs TTS cost constants
+ * Scale (Starter): $0.30 per 1000 characters
+ * ref: https://elevenlabs.io/pricing
+ * 
+ * SSOT: この値が唯一の正解。audio-generation.ts の estimateTTSCost() もこの定数を参照する。
+ */
+export const ELEVENLABS_COST_PER_1K_CHARS = 0.30;
+
+/**
  * Estimate cost for TTS (characters to dollars)
- * ElevenLabs Starter: ~$0.30 per 1000 characters
  */
 export function estimateCost(characterCount: number): number {
-  const costPer1000 = 0.30;
-  return (characterCount / 1000) * costPer1000;
+  return (characterCount / 1000) * ELEVENLABS_COST_PER_1K_CHARS;
 }
