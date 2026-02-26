@@ -2265,8 +2265,10 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         preset: 'default',
         aspect_ratio: '16:9',
         fps: 30,
-        transition_type: 'fade',
-        transition_duration_ms: 500,
+        transition: {
+          type: 'fade' as const,
+          duration_ms: 500,
+        },
         // R3-A: BGM設定（R4: タイムライン制御追加）
         bgm: activeBgm ? {
           enabled: true,
@@ -3114,7 +3116,14 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
       },
       motion: {
         preset: body.motion?.preset ?? outputPresetConfig.motion_default ?? 'none',
-        transition: body.motion?.transition || 'crossfade',
+        // DEPRECATED: motion.transition は buildProjectJson では未使用
+        // transition 設定は build_settings.transition で管理
+      },
+      // トランジション設定（シーン切り替えのフェイド等）
+      // フロントエンドから body.transition.type ('none'|'fade'|'slide'|'wipe') で送信される
+      transition: {
+        type: body.transition?.type || 'fade',
+        duration_ms: body.transition?.type === 'none' ? 0 : (body.transition?.duration_ms || 300),
       },
       // PR-5-3a/b + Phase 1: テロップ表示設定
       telops: {

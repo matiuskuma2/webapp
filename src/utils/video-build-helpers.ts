@@ -2440,6 +2440,13 @@ export function buildProjectJson(
         type: settings.transition?.type || 'fade',
         duration_ms: settings.transition?.type === 'none' ? 0 : (settings.transition?.duration_ms || 300),
       },
+      // Transition SSOT log
+      ...(console.log('[SSOT-TRANSITION] buildProjectJson transition:', JSON.stringify({
+        input: settings.transition,
+        output_type: settings.transition?.type || 'fade',
+        output_duration_ms: settings.transition?.type === 'none' ? 0 : (settings.transition?.duration_ms || 300),
+        global_transition_duration_ms: settings.transition?.type === 'none' ? 0 : (settings.transition?.duration_ms || 300),
+      })), {}),
       // PR-5-3b + Phase 1: テロップ設定
       // SSOT Validation: Log telops settings being included in projectJson
       ...(console.log('[SSOT-TELOP] buildProjectJson telops input:', JSON.stringify(settings.telops)), {}),
@@ -2468,7 +2475,8 @@ export function buildProjectJson(
     },
     global: {
       default_scene_duration_ms: DEFAULT_SCENE_DURATION_MS,
-      transition_duration_ms: 300,
+      // transition_duration_ms は build_settings.transition から算出
+      transition_duration_ms: settings.transition?.type === 'none' ? 0 : (settings.transition?.duration_ms || 300),
     },
     // R3-A: BGM対応（通しBGM with ducking）
     // R4: タイムライン制御（video_start_ms, video_end_ms, audio_offset_ms）
@@ -2588,7 +2596,11 @@ export function buildProjectJsonLegacy(
     global: {
       captions: settings.captions || { enabled: true },
       bgm: settings.bgm || { enabled: false },
-      motion: settings.motion || { preset: 'gentle-zoom', transition: 'crossfade' },
+      motion: {
+        ...(settings.motion || { preset: 'gentle-zoom' }),
+        // transition: 'cut' = no fade, 'crossfade' = fade between scenes
+        transition: settings.transition?.type === 'none' ? 'cut' : 'crossfade',
+      },
     },
     scenes: projectScenes,
     total_duration_ms: totalDurationMs,
