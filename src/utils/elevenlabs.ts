@@ -72,6 +72,13 @@ export const ELEVENLABS_VOICES = {
     gender: 'male',
     description: '落ち着いた中年男性の声',
   },
+  // Japanese voices
+  'el-hinata': {
+    voice_id: 'j210dv0vWm7fCknyQpbA', // Hinata
+    name: 'Hinata（女性・日本語）',
+    gender: 'female',
+    description: '日本語ネイティブの女性の声',
+  },
 } as const;
 
 export type ElevenLabsVoiceKey = keyof typeof ELEVENLABS_VOICES;

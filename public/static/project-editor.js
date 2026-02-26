@@ -4222,6 +4222,7 @@ function renderComicAudioSection(scene) {
     { id: 'el-bill', name: 'Bill（男性・自然）', provider: 'elevenlabs' },
     { id: 'el-brian', name: 'Brian（男性・プロ）', provider: 'elevenlabs' },
     { id: 'el-george', name: 'George（男性・落ち着き）', provider: 'elevenlabs' },
+    { id: 'el-hinata', name: 'Hinata（女性・日本語）', provider: 'elevenlabs' },
     // Fish Audio
     { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', provider: 'fish' },
   ];
@@ -4878,6 +4879,7 @@ function renderSceneAudioSection(scene) {
     { id: 'el-bill', name: 'Bill（男性・自然）', gender: 'male', provider: 'elevenlabs' },
     { id: 'el-brian', name: 'Brian（男性・プロ）', gender: 'male', provider: 'elevenlabs' },
     { id: 'el-george', name: 'George（男性・落ち着き）', gender: 'male', provider: 'elevenlabs' },
+    { id: 'el-hinata', name: 'Hinata（女性・日本語）', gender: 'female', provider: 'elevenlabs' },
     // Fish Audio
     { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', gender: 'female', provider: 'fish' },
   ];
