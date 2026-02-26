@@ -129,13 +129,13 @@
     },
     {
       "id": "el-hinata",
-      "name": "Hinata（女性・日本語）",
+      "name": "Hinata（男性・日本語）",
       "language": "ja-JP",
-      "gender": "female",
+      "gender": "male",
       "provider": "elevenlabs",
       "tier": "premium",
       "voice_id": "j210dv0vWm7fCknyQpbA",
-      "description": "ElevenLabs - 日本語ネイティブの女性の声",
+      "description": "ElevenLabs - 日本語ネイティブの男性の声",
       "status": "active"
     },
     {

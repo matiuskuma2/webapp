@@ -75,9 +75,9 @@ export const ELEVENLABS_VOICES = {
   // Japanese voices
   'el-hinata': {
     voice_id: 'j210dv0vWm7fCknyQpbA', // Hinata
-    name: 'Hinata（女性・日本語）',
-    gender: 'female',
-    description: '日本語ネイティブの女性の声',
+    name: 'Hinata（男性・日本語）',
+    gender: 'male',
+    description: '日本語ネイティブの男性の声',
   },
   'el-yumi': {
     voice_id: 'T5zZhOYp2nr6YMG0xepT', // Yumi

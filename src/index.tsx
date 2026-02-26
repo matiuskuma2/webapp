@@ -1659,7 +1659,7 @@ app.get('/projects/:id', async (c) => {
                                     <option value="elevenlabs:el-bill">Bill（男性・自然）</option>
                                     <option value="elevenlabs:el-brian">Brian（男性・プロ）</option>
                                     <option value="elevenlabs:el-george">George（男性・落ち着き）</option>
-                                    <option value="elevenlabs:el-hinata">Hinata（女性・日本語）</option>
+                                    <option value="elevenlabs:el-hinata">Hinata（男性・日本語）</option>
                                     <option value="elevenlabs:el-yumi">Yumi（女性・日本語・落ち着き）</option>
                                 </optgroup>
                                 <optgroup label="Fish Audio (日本語特化)">
