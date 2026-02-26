@@ -182,7 +182,7 @@ export async function generateElevenLabsTTS(
           return { success: false, error: 'ElevenLabs Free Tier is blocked from this IP. Please use a paid subscription.' };
         }
         if (errorJson?.detail?.status === 'quota_exceeded') {
-          return { success: false, error: 'ElevenLabs quota exceeded. Please check your subscription.' };
+          return { success: false, error: 'ElevenLabs の文字数クォータを超えています。サブスクリプションをご確認ください。' };
         }
       } catch (e) {
         // Not JSON, use raw text
