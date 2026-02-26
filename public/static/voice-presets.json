@@ -139,6 +139,17 @@
       "status": "active"
     },
     {
+      "id": "el-yumi",
+      "name": "Yumi（女性・日本語・落ち着き）",
+      "language": "ja-JP",
+      "gender": "female",
+      "provider": "elevenlabs",
+      "tier": "premium",
+      "voice_id": "T5zZhOYp2nr6YMG0xepT",
+      "description": "ElevenLabs - 明瞭で落ち着いたトーンの日本語女性の声、ナレーション向き",
+      "status": "active"
+    },
+    {
       "id": "el-aria",
       "name": "Aria（女性）",
       "language": "multilingual",

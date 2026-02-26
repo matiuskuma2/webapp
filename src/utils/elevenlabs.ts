@@ -79,6 +79,12 @@ export const ELEVENLABS_VOICES = {
     gender: 'female',
     description: '日本語ネイティブの女性の声',
   },
+  'el-yumi': {
+    voice_id: 'T5zZhOYp2nr6YMG0xepT', // Yumi
+    name: 'Yumi（女性・日本語・落ち着き）',
+    gender: 'female',
+    description: '明瞭で落ち着いたトーンの日本語女性の声、ナレーション向き',
+  },
 } as const;
 
 export type ElevenLabsVoiceKey = keyof typeof ELEVENLABS_VOICES;
