@@ -314,6 +314,8 @@ async function applyAssignments(
   projectId: number,
   assignments: AssignmentResult[]
 ): Promise<void> {
+  if (assignments.length === 0) return;
+  
   // Group by scene_id
   const byScene = new Map<number, AssignmentResult[]>();
   for (const assignment of assignments) {
@@ -323,35 +325,39 @@ async function applyAssignments(
     byScene.get(assignment.sceneId)!.push(assignment);
   }
   
-  // Process each scene
+  // ★ batch化: N+1 問題を解消（200シーン × 3キャラ = 600+回 → 数回のbatchに集約）
+  const DB_BATCH_SIZE = 80;
+  
+  // Step 1: 一括DELETE — プロジェクト内の全 scene_character_map を削除
+  // Safety: scene_id IN (SELECT id FROM scenes WHERE project_id = ?) でプロジェクトスコープ確保
+  await db.prepare(`
+    DELETE FROM scene_character_map 
+    WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+  `).bind(projectId).run();
+  
+  // Step 2: 一括INSERT — 全assignmentをbatch insertで投入
+  const insertStatements = [];
   for (const [sceneId, sceneAssignments] of byScene.entries()) {
-    // Safety check: verify scene belongs to project
-    const scene = await db.prepare(`
-      SELECT id FROM scenes WHERE id = ? AND project_id = ?
-    `).bind(sceneId, projectId).first();
-    
-    if (!scene) {
-      console.warn(`[CharacterAutoAssign] Scene ${sceneId} not found or not in project ${projectId}`);
-      continue;
-    }
-    
-    // DELETE existing assignments for this scene
-    await db.prepare(`
-      DELETE FROM scene_character_map WHERE scene_id = ?
-    `).bind(sceneId).run();
-    
-    // INSERT new assignments
     for (const assignment of sceneAssignments) {
-      await db.prepare(`
-        INSERT INTO scene_character_map (scene_id, character_key, is_primary)
-        VALUES (?, ?, ?)
-      `).bind(
-        assignment.sceneId,
-        assignment.characterKey,
-        assignment.isPrimary ? 1 : 0
-      ).run();
+      insertStatements.push(
+        db.prepare(`
+          INSERT INTO scene_character_map (scene_id, character_key, is_primary)
+          VALUES (?, ?, ?)
+        `).bind(
+          assignment.sceneId,
+          assignment.characterKey,
+          assignment.isPrimary ? 1 : 0
+        )
+      );
     }
   }
+  
+  // D1 batch制限（100件）に配慮して分割実行
+  for (let i = 0; i < insertStatements.length; i += DB_BATCH_SIZE) {
+    await db.batch(insertStatements.slice(i, i + DB_BATCH_SIZE));
+  }
+  
+  console.log(`[CharacterAutoAssign] Applied ${insertStatements.length} assignments in ${Math.ceil(insertStatements.length / DB_BATCH_SIZE)} batch(es)`);
 }
 
 /**

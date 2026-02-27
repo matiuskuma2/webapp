@@ -271,11 +271,14 @@ formatting.post('/:id/merge', async (c) => {
       )
     }
 
-    // Batch実行（transaction的動作）
-    await c.env.DB.batch(updateStatements)
+    // Batch実行（D1は100件制限、200シーン対応のため80件ずつ分割）
+    const DB_BATCH_SIZE = 80
+    for (let i = 0; i < updateStatements.length; i += DB_BATCH_SIZE) {
+      await c.env.DB.batch(updateStatements.slice(i, i + DB_BATCH_SIZE))
+    }
 
     // 7. projects.status更新
-    const finalStatus = stats.failed > 0 ? 'formatted' : 'formatted'
+    const finalStatus = 'formatted'  // stats.failed > 0 でも formatted（未使用分岐を整理）
     await c.env.DB.prepare(`
       UPDATE projects
       SET status = ?, updated_at = CURRENT_TIMESTAMP
@@ -422,7 +425,7 @@ ${castList}
     } else if (project.source_type === 'audio' && project.status === 'transcribed') {
       // 音声入力 + Parse未実行の場合：従来のフロー（全文を1回で処理）
       // ※このケースは Parse をスキップした場合のみ
-      return await processAudioTranscription(c, projectId, project)
+      return await processAudioTranscription(c, projectId, project, characterPromptSection)
     } else if (project.source_type === 'text') {
       // テキスト入力の場合：chunk単位処理
       // まず parse を実行する必要がある
@@ -495,39 +498,22 @@ ${castList}
 async function hardResetProject(db: any, projectId: string) {
   console.log(`[HardReset] Starting reset for project ${projectId}`)
   
-  // 1. scenes取得
-  const { results: scenes } = await db.prepare(`SELECT id FROM scenes WHERE project_id = ?`).bind(projectId).all()
-  const sceneIds = scenes.map((s: any) => s.id)
+  // 1. シーン数を確認（ログ用）
+  const sceneCount = await db.prepare(
+    `SELECT COUNT(*) as count FROM scenes WHERE project_id = ?`
+  ).bind(projectId).first() as { count: number } | null
+  const count = sceneCount?.count || 0
   
-  if (sceneIds.length > 0) {
-    // 2. 関連データ削除（子→親の順、漏れ防止のため全テーブル列挙）
-    for (const sceneId of sceneIds) {
-      // 吹き出し
-      await db.prepare(`DELETE FROM scene_balloons WHERE scene_id = ?`).bind(sceneId).run()
-      // SFX/BGMキュー
-      await db.prepare(`DELETE FROM scene_audio_cues WHERE scene_id = ?`).bind(sceneId).run()
-      // テロップ
-      await db.prepare(`DELETE FROM scene_telops WHERE scene_id = ?`).bind(sceneId).run()
-      // モーション設定
-      await db.prepare(`DELETE FROM scene_motion WHERE scene_id = ?`).bind(sceneId).run()
-      // シーン別スタイル
-      await db.prepare(`DELETE FROM scene_style_settings WHERE scene_id = ?`).bind(sceneId).run()
-      // 発話
-      await db.prepare(`DELETE FROM scene_utterances WHERE scene_id = ?`).bind(sceneId).run()
-      // キャラクター割当
-      await db.prepare(`DELETE FROM scene_character_map WHERE scene_id = ?`).bind(sceneId).run()
-      // キャラクター特性
-      await db.prepare(`DELETE FROM scene_character_traits WHERE scene_id = ?`).bind(sceneId).run()
-      // 音声生成
-      await db.prepare(`DELETE FROM audio_generations WHERE scene_id = ?`).bind(sceneId).run()
-      // 画像生成
-      await db.prepare(`DELETE FROM image_generations WHERE scene_id = ?`).bind(sceneId).run()
-    }
-    
-    // 3. scenes削除
+  if (count > 0) {
+    // 2. scenes を一括削除
+    // ★ 全子テーブル（scene_balloons, scene_audio_cues, scene_telops, scene_motion,
+    //    scene_style_settings, scene_utterances, scene_character_map, scene_character_traits,
+    //    audio_generations, image_generations）は ON DELETE CASCADE で自動削除される
+    // ★ 旧実装: N+1問題（200シーン × 10テーブル = 2000 DB呼び出し → Workers 30秒タイムアウト）
+    // ★ 新実装: 1回のDELETEで完了
     await db.prepare(`DELETE FROM scenes WHERE project_id = ?`).bind(projectId).run()
     
-    console.log(`[HardReset] Deleted ${sceneIds.length} scenes and all related data`)
+    console.log(`[HardReset] Deleted ${count} scenes and all related data (ON DELETE CASCADE)`)
   }
   
   // 4. text_chunks をリセット（statusをpendingに戻す）
@@ -612,20 +598,11 @@ async function processTextChunks(
   // BUG FIX: uploaded 状態からも formatting に遷移できるように修正
   if (project.status === 'parsed' || project.status === 'uploaded') {
     // ✅ 既存image_generationsを削除（整合性確保）
-    // Note: scenes削除前に実行する必要がある
-    const { results: existingScenes } = await c.env.DB.prepare(`
-      SELECT id FROM scenes WHERE project_id = ?
-    `).bind(projectId).all()
-    
-    if (existingScenes.length > 0) {
-      const sceneIds = existingScenes.map((s: any) => s.id)
-      // D1はIN句に制限があるため、batch処理
-      for (const sceneId of sceneIds) {
-        await c.env.DB.prepare(`
-          DELETE FROM image_generations WHERE scene_id = ?
-        `).bind(sceneId).run()
-      }
-    }
+    // ★ N+1解消: サブクエリで一括DELETE（旧: 個別sceneId × DELETE）
+    await c.env.DB.prepare(`
+      DELETE FROM image_generations 
+      WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+    `).bind(projectId).run()
     
     // ✅ Split由来シーンのみ削除（手動追加シーン chunk_id=NULL は保護）
     // ⚠️ 手動追加シーンはユーザー資産なので巻き込まない
@@ -862,7 +839,7 @@ async function processTextChunks(
 /**
  * 音声入力の従来フロー（全文を1回で処理）
  */
-async function processAudioTranscription(c: any, projectId: string, project: any) {
+async function processAudioTranscription(c: any, projectId: string, project: any, characterPromptSection: string = '') {
   // ステータスチェック
   if (project.status !== 'transcribed') {
     return c.json({
@@ -1159,7 +1136,7 @@ async function processPreserveMode(
     sceneTexts,
     project.title as string,
     c.env.OPENAI_API_KEY,
-    10  // 同時10並列（Workers 30秒制限に配慮しつつ高速化）
+    20  // 1回のGPT呼び出しで20シーン分を生成（200シーン→10回、Workers 30秒制限に余裕を確保）
   )
   
   const insertStatements = []
@@ -1460,13 +1437,13 @@ async function generateImagePromptFromText(
  * @param scenes 各シーンのテキスト配列
  * @param projectTitle プロジェクトタイトル
  * @param apiKey OpenAI APIキー
- * @param batchSize 1回のAPI呼び出しで処理するシーン数（デフォルト15）
+ * @param batchSize 1回のAPI呼び出しで処理するシーン数（デフォルト20）
  */
 async function generateImagePromptsInBatch(
   scenes: string[],
   projectTitle: string,
   apiKey: string,
-  batchSize: number = 15
+  batchSize: number = 20
 ): Promise<string[]> {
   const results: string[] = new Array(scenes.length).fill('')
   
@@ -1674,8 +1651,11 @@ async function autoMergeScenes(c: any, projectId: string, stats: any, targetScen
       )
     }
 
-    // Batch実行
-    await c.env.DB.batch(updateStatements)
+    // Batch実行（D1は100件制限、200シーン対応のため80件ずつ分割）
+    const DB_BATCH_SIZE = 80
+    for (let i = 0; i < updateStatements.length; i += DB_BATCH_SIZE) {
+      await c.env.DB.batch(updateStatements.slice(i, i + DB_BATCH_SIZE))
+    }
 
     // 3. projects.status更新
     await c.env.DB.prepare(`

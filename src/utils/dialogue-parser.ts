@@ -499,37 +499,75 @@ export async function generateUtterancesForProject(
   // 2. キャラクターマッピング取得（一度だけ）
   const characterMappings = await getCharacterMappings(db, projectId);
   
-  let totalUtterances = 0;
+  // 3. 全シーンのutterancesをメモリ上でパース
+  const allInserts: Array<{ sceneId: number; orderNo: number; role: string; characterKey: string | null; text: string }> = [];
   let scenesWithDialogues = 0;
   let scenesWithNarrationOnly = 0;
   let totalUnmatchedSpeakers = 0;
   
-  // 3. 各シーンを処理
   for (const scene of scenes) {
     const sceneId = scene.id as number;
     const dialogue = scene.dialogue as string || '';
     
-    const result = await generateUtterancesForScene(
-      db,
-      sceneId,
-      dialogue,
-      projectId
-    );
+    const parsed = parseDialogueToUtterances(dialogue, characterMappings);
     
-    totalUtterances += result.created;
-    totalUnmatchedSpeakers += result.unmatched_speakers;
-    
-    // カウント
-    const hasDialogueRole = result.parsed.some(u => u.role === 'dialogue');
-    if (hasDialogueRole) {
-      scenesWithDialogues++;
-    } else {
+    if (parsed.length === 0) {
+      // パース結果が空 → dialogue全体を1つのnarration
+      allInserts.push({
+        sceneId,
+        orderNo: 1,
+        role: 'narration',
+        characterKey: null,
+        text: dialogue || ''
+      });
       scenesWithNarrationOnly++;
+    } else {
+      const hasDialogueRole = parsed.some(u => u.role === 'dialogue');
+      if (hasDialogueRole) {
+        scenesWithDialogues++;
+      } else {
+        scenesWithNarrationOnly++;
+      }
+      
+      totalUnmatchedSpeakers += parsed.filter(u => u.role === 'narration' && u.character_name !== null).length;
+      
+      for (const utt of parsed) {
+        allInserts.push({
+          sceneId,
+          orderNo: utt.order_no,
+          role: utt.role,
+          characterKey: utt.character_key,
+          text: utt.text
+        });
+      }
     }
   }
   
+  // 4. 一括DELETE: プロジェクト内の全utterancesを削除
+  // ★ N+1 解消: 200シーンで個別DELETE → 1回のサブクエリDELETEに
+  await db.prepare(`
+    DELETE FROM scene_utterances 
+    WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+  `).bind(projectId).run();
+  
+  // 5. 一括INSERT: D1 batch制限（100件）に配慮して80件ずつ分割
+  const DB_BATCH_SIZE = 80;
+  const insertStatements = allInserts.map(ins =>
+    db.prepare(`
+      INSERT INTO scene_utterances (scene_id, order_no, role, character_key, text)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(ins.sceneId, ins.orderNo, ins.role, ins.characterKey, ins.text)
+  );
+  
+  for (let i = 0; i < insertStatements.length; i += DB_BATCH_SIZE) {
+    await db.batch(insertStatements.slice(i, i + DB_BATCH_SIZE));
+  }
+  
+  const totalUtterances = allInserts.length;
+  
   console.log(
-    `[DialogueParser] Project ${projectId}: Generated ${totalUtterances} utterances for ${scenes.length} scenes` +
+    `[DialogueParser] Project ${projectId}: Generated ${totalUtterances} utterances for ${scenes.length} scenes ` +
+    `in ${Math.ceil(insertStatements.length / DB_BATCH_SIZE)} batch(es)` +
     (totalUnmatchedSpeakers > 0 ? ` (⚠ ${totalUnmatchedSpeakers} unmatched speakers → narration fallback)` : '')
   );
   
