@@ -1151,18 +1151,22 @@ async function processPreserveMode(
   console.log(`[PreserveMode] Adjusted to ${paragraphs.length} scenes`)
   
   // 4. シーンを作成（dialogue = 原文そのまま、image_prompt はAI生成）
+  // ★ FIX: バッチ並列生成に変更（レート制限対策 + シーン固有フォールバック）
+  const sceneTexts = paragraphs.map(p => p.substring(0, 200))  // 先頭200文字を参考に
+  console.log(`[PreserveMode] Generating ${sceneTexts.length} image prompts in batch...`)
+  
+  const imagePrompts = await generateImagePromptsInBatch(
+    sceneTexts,
+    project.title as string,
+    c.env.OPENAI_API_KEY,
+    10  // 同時10並列（Workers 30秒制限に配慮しつつ高速化）
+  )
+  
   const insertStatements = []
   for (let i = 0; i < paragraphs.length; i++) {
     const dialogue = paragraphs[i]  // 原文そのまま！AIに渡さない
     const role = i === 0 ? 'hook' : (i === paragraphs.length - 1 ? 'summary' : 'context')
     const title = `シーン ${i + 1}`
-    
-    // image_prompt のみAI生成（dialogue は渡さない、要約テキストのみ）
-    const imagePrompt = await generateImagePromptFromText(
-      dialogue.substring(0, 200),  // 先頭200文字を参考に
-      project.title as string,
-      c.env.OPENAI_API_KEY
-    )
     
     insertStatements.push(
       c.env.DB.prepare(`
@@ -1177,13 +1181,18 @@ async function processPreserveMode(
         dialogue,  // ★ 原文そのまま保存
         'narration',
         JSON.stringify([]),
-        imagePrompt
+        imagePrompts[i] || `A vibrant scene illustrating: ${dialogue.substring(0, 120)}`
       )
     )
   }
   
-  // Batch実行
-  await c.env.DB.batch(insertStatements)
+  // Batch実行（D1は100件まで1回のbatch、超える場合は分割）
+  const DB_BATCH_SIZE = 80  // D1 batch limit safety margin
+  for (let batchStart = 0; batchStart < insertStatements.length; batchStart += DB_BATCH_SIZE) {
+    const batch = insertStatements.slice(batchStart, batchStart + DB_BATCH_SIZE)
+    await c.env.DB.batch(batch)
+    console.log(`[PreserveMode] DB batch insert: ${batchStart + 1}-${Math.min(batchStart + DB_BATCH_SIZE, insertStatements.length)} of ${insertStatements.length}`)
+  }
   
   // 5. status更新 + split_mode保存（SSOT）
   // Note: target_scene_count はユーザー指定値を保持（結果シーン数で上書きしない）
@@ -1370,57 +1379,239 @@ function normalizeWhitespace(text: string): string {
 }
 
 /**
- * テキストから image_prompt を生成（簡易版）
+ * テキストから image_prompt を生成（単一シーン用、リトライ付き）
  */
 async function generateImagePromptFromText(
   text: string,
   projectTitle: string,
-  apiKey: string
+  apiKey: string,
+  maxRetries: number = 3
 ): Promise<string> {
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        messages: [
-          {
-            role: 'system',
-            content: 'Generate a detailed English image prompt (100-300 chars) for an infographic video scene. Focus on visual elements, composition, lighting, and style that represent the text content. Output only the prompt, no explanation.'
-          },
-          {
-            role: 'user',
-            content: `Project: ${projectTitle}\nText: ${text}`
-          }
-        ],
-        max_tokens: 500,  // Increased from 100 to prevent prompt truncation
-        temperature: 0.7
+  // シーン固有のフォールバック（テキストの先頭部分を使って固有プロンプトを作成）
+  const sceneSpecificFallback = `A vibrant, detailed infographic scene illustrating: ${text.substring(0, 120).replace(/[\n\r]+/g, ' ')}. Modern digital illustration style with clean composition and warm lighting.`
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: 'Generate a detailed English image prompt (100-300 chars) for an infographic video scene. Focus on visual elements, composition, lighting, and style that represent the text content. Output only the prompt, no explanation.'
+            },
+            {
+              role: 'user',
+              content: `Project: ${projectTitle}\nText: ${text}`
+            }
+          ],
+          max_tokens: 500,
+          temperature: 0.7
+        })
       })
-    })
-    
-    if (!response.ok) {
-      console.error('Image prompt generation failed:', response.status)
-      return 'Abstract digital illustration representing the concept'
+      
+      if (!response.ok) {
+        const status = response.status
+        console.error(`[ImagePrompt] API failed (attempt ${attempt + 1}/${maxRetries}): HTTP ${status}`)
+        
+        // 429 Rate limit or 5xx → retry with exponential backoff
+        if ((status === 429 || status >= 500) && attempt < maxRetries - 1) {
+          const backoffMs = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 10000)
+          console.log(`[ImagePrompt] Retrying in ${Math.round(backoffMs)}ms...`)
+          await new Promise(resolve => setTimeout(resolve, backoffMs))
+          continue
+        }
+        
+        return sceneSpecificFallback
+      }
+      
+      const result = await response.json() as any
+      const generatedPrompt = result.choices?.[0]?.message?.content?.trim() || ''
+      
+      // Safety guard: Ensure prompt is not too short (indicates generation failure)
+      const MIN_PROMPT_LENGTH = 30
+      if (generatedPrompt.length < MIN_PROMPT_LENGTH) {
+        console.warn(`[ImagePrompt] Generated prompt too short (${generatedPrompt.length} chars), using scene-specific fallback`)
+        return sceneSpecificFallback
+      }
+      
+      return generatedPrompt
+    } catch (error) {
+      console.error(`[ImagePrompt] Error (attempt ${attempt + 1}/${maxRetries}):`, error)
+      if (attempt < maxRetries - 1) {
+        const backoffMs = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 10000)
+        await new Promise(resolve => setTimeout(resolve, backoffMs))
+        continue
+      }
     }
-    
-    const result = await response.json() as any
-    const generatedPrompt = result.choices?.[0]?.message?.content?.trim() || ''
-    
-    // Safety guard: Ensure prompt is not too short (indicates generation failure)
-    const MIN_PROMPT_LENGTH = 30
-    if (generatedPrompt.length < MIN_PROMPT_LENGTH) {
-      console.warn(`[ImagePrompt] Generated prompt too short (${generatedPrompt.length} chars), using fallback`)
-      return 'Abstract digital illustration representing the concept with modern design elements'
-    }
-    
-    return generatedPrompt
-  } catch (error) {
-    console.error('Image prompt generation error:', error)
-    return 'Abstract digital illustration representing the concept with modern design elements'
   }
+  
+  return sceneSpecificFallback
+}
+
+/**
+ * 複数シーンの image_prompt をバッチ生成（1回のGPT呼び出しで最大20シーン分を生成）
+ * Workers 30秒制限に配慮し、APIコール回数を最小化
+ * @param scenes 各シーンのテキスト配列
+ * @param projectTitle プロジェクトタイトル
+ * @param apiKey OpenAI APIキー
+ * @param batchSize 1回のAPI呼び出しで処理するシーン数（デフォルト15）
+ */
+async function generateImagePromptsInBatch(
+  scenes: string[],
+  projectTitle: string,
+  apiKey: string,
+  batchSize: number = 15
+): Promise<string[]> {
+  const results: string[] = new Array(scenes.length).fill('')
+  
+  // 少量シーンの場合は個別生成（並列5）
+  if (scenes.length <= 10) {
+    const promises = scenes.map((text, idx) =>
+      generateImagePromptFromText(text, projectTitle, apiKey, 3)
+        .then(prompt => { results[idx] = prompt })
+    )
+    await Promise.allSettled(promises)
+    return results
+  }
+  
+  // 大量シーンの場合: 1回のGPT呼び出しで複数シーンのプロンプトをまとめて生成
+  for (let batchStart = 0; batchStart < scenes.length; batchStart += batchSize) {
+    const batchEnd = Math.min(batchStart + batchSize, scenes.length)
+    const batch = scenes.slice(batchStart, batchEnd)
+    
+    console.log(`[ImagePromptBatch] Processing scenes ${batchStart + 1}-${batchEnd} of ${scenes.length} (multi-prompt mode)`)
+    
+    const batchResult = await generateMultiImagePrompts(batch, projectTitle, apiKey)
+    
+    for (let i = 0; i < batch.length; i++) {
+      if (batchResult[i] && batchResult[i].length >= 30) {
+        results[batchStart + i] = batchResult[i]
+      } else {
+        // シーン固有フォールバック
+        const text = batch[i]
+        results[batchStart + i] = `A vibrant, detailed infographic scene illustrating: ${text.substring(0, 120).replace(/[\n\r]+/g, ' ')}. Modern digital illustration style with clean composition and warm lighting.`
+      }
+    }
+    
+    // バッチ間のクールダウン（レート制限回避）
+    if (batchEnd < scenes.length) {
+      await new Promise(resolve => setTimeout(resolve, 200))
+    }
+  }
+  
+  const successCount = results.filter(r => !r.startsWith('A vibrant, detailed infographic scene illustrating:')).length
+  console.log(`[ImagePromptBatch] Completed: ${successCount}/${scenes.length} AI-generated, ${scenes.length - successCount} fallback`)
+  
+  return results
+}
+
+/**
+ * 1回のGPT呼び出しで複数シーンの image_prompt をまとめて生成
+ * @param texts 各シーンのテキスト配列（最大20件）
+ * @param projectTitle プロジェクトタイトル
+ * @param apiKey OpenAI APIキー
+ * @returns 各シーンの image_prompt 配列
+ */
+async function generateMultiImagePrompts(
+  texts: string[],
+  projectTitle: string,
+  apiKey: string
+): Promise<string[]> {
+  const fallbackResults = texts.map(text =>
+    `A vibrant, detailed infographic scene illustrating: ${text.substring(0, 120).replace(/[\n\r]+/g, ' ')}. Modern digital illustration style with clean composition and warm lighting.`
+  )
+  
+  // 各シーンのテキストを番号付きで結合
+  const numberedTexts = texts.map((text, i) =>
+    `[Scene ${i + 1}] ${text.substring(0, 150).replace(/[\n\r]+/g, ' ')}`
+  ).join('\n')
+  
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          messages: [
+            {
+              role: 'system',
+              content: `You are an image prompt generator for infographic video scenes.
+For each numbered scene text, generate a unique, detailed English image prompt (100-300 chars).
+Focus on visual elements, composition, lighting, and style specific to each scene's content.
+Each prompt must be different and scene-specific.
+
+Output format: Return a JSON object with a "prompts" array containing exactly ${texts.length} strings, one per scene, in order.
+Example: {"prompts": ["A warm sunset over...", "A bustling city..."]}`
+            },
+            {
+              role: 'user',
+              content: `Project: ${projectTitle}\n\n${numberedTexts}`
+            }
+          ],
+          response_format: { type: 'json_object' },
+          max_tokens: Math.min(texts.length * 200, 4000),
+          temperature: 0.7
+        })
+      })
+      
+      if (!response.ok) {
+        const status = response.status
+        console.error(`[MultiImagePrompt] API failed (attempt ${attempt + 1}/2): HTTP ${status}`)
+        if ((status === 429 || status >= 500) && attempt === 0) {
+          await new Promise(resolve => setTimeout(resolve, 2000))
+          continue
+        }
+        return fallbackResults
+      }
+      
+      const result = await response.json() as any
+      const content = result.choices?.[0]?.message?.content?.trim() || ''
+      
+      try {
+        const parsed = JSON.parse(content)
+        const prompts = parsed.prompts || parsed.image_prompts || []
+        
+        if (Array.isArray(prompts) && prompts.length > 0) {
+          // 返ってきたプロンプトをマッピング
+          const output: string[] = []
+          for (let i = 0; i < texts.length; i++) {
+            const p = prompts[i]
+            if (typeof p === 'string' && p.length >= 30) {
+              output.push(p)
+            } else {
+              output.push(fallbackResults[i])
+            }
+          }
+          console.log(`[MultiImagePrompt] Generated ${prompts.length} prompts for ${texts.length} scenes`)
+          return output
+        }
+      } catch (parseErr) {
+        console.error(`[MultiImagePrompt] JSON parse error:`, parseErr)
+      }
+      
+      // パース失敗 → フォールバック
+      return fallbackResults
+      
+    } catch (error) {
+      console.error(`[MultiImagePrompt] Error (attempt ${attempt + 1}/2):`, error)
+      if (attempt === 0) {
+        await new Promise(resolve => setTimeout(resolve, 1000))
+        continue
+      }
+    }
+  }
+  
+  return fallbackResults
 }
 
 /**
