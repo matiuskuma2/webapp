@@ -2273,9 +2273,10 @@ videoGeneration.get('/projects/:projectId/video-builds/preview-json', async (c) 
         preset: 'default',
         aspect_ratio: '16:9',
         fps: 30,
+        // トランジション設定（クエリパラメータで制御可能、デフォルト: fade）
         transition: {
-          type: 'fade' as const,
-          duration_ms: 500,
+          type: (c.req.query('transition') || 'fade') as 'none' | 'fade' | 'slide' | 'wipe',
+          duration_ms: (c.req.query('transition') === 'none') ? 0 : 500,
         },
         // R3-A: BGM設定（R4: タイムライン制御追加）
         bgm: activeBgm ? {

@@ -51,7 +51,12 @@ export interface VideoBuildSettings {
   };
   motion: {
     preset?: 'none' | 'gentle-zoom' | 'ken-burns';
-    transition?: 'cut' | 'crossfade' | 'fade';
+    transition?: 'cut' | 'crossfade' | 'fade';  // @deprecated use top-level transition
+  };
+  // トランジション設定（シーン切り替えのフェイド等）
+  transition?: {
+    type: 'none' | 'fade' | 'slide' | 'wipe';
+    duration_ms: number;
   };
   // PR-5-3b: テロップ設定
   telops?: {
