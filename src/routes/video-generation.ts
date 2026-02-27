@@ -253,21 +253,29 @@ function estimateRemotionBuildCost(totalDurationSec: number, sceneCount: number)
 }
 
 // Image generation cost estimate
+// 2026-02-26: Updated to Nano Banana 2 (gemini-3.1-flash-image-preview) pricing
 function estimateImageCost(provider: string, model: string): number {
   switch (provider?.toLowerCase()) {
     case 'gemini':
-      // Gemini Imagen 3: $0.04 per image (1024x1024)
-      // Gemini 2.0 Flash experimental: Free during preview
+      // Nano Banana 2 (gemini-3.1-flash-image-preview): $0.067/image (1K)
+      if (model?.includes('3.1-flash-image') || model?.includes('3-1-flash-image')) {
+        return 0.067;
+      }
+      // Legacy: Nano Banana Pro (gemini-3-pro-image-preview)
+      if (model?.includes('3-pro-image')) {
+        return 0.134;
+      }
+      // Imagen models: $0.04/image
       if (model?.includes('imagen')) {
         return 0.04;
       }
-      // Gemini experimental models are currently free
-      return 0.0;
+      // Default to Nano Banana 2 rate
+      return 0.067;
     case 'openai':
       // DALL-E 3: $0.04-0.12 per image depending on size
       return 0.04;
     default:
-      return 0.0;
+      return 0.067;  // Default to Nano Banana 2 rate
   }
 }
 

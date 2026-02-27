@@ -138,33 +138,38 @@ interface ImageGenerationLogParams {
 }
 
 // コスト推定関数（画像生成）
-// 2026-02 Google 公式レート (https://ai.google.dev/gemini-api/docs/pricing):
+// 2026-02-26 Google 公式レート:
 //
-// ★ Nano Banana (gemini-2.5-flash-image):
-//   Output: $30/1M tokens, ~1290 tokens/image → $0.039/image
+// ★ Nano Banana 2 (gemini-3.1-flash-image-preview):
+//   1K (1024x1024): $0.067/image
+//   2K (2048x2048): $0.101/image
+//   4K (4096x4096): $0.151/image
 //
-// ★ Nano Banana Pro (gemini-3-pro-image-preview):
-//   Output: $120/1M tokens, ~1120 tokens/image (1K/2K) → $0.134/image
-//   Output: $120/1M tokens, ~2000 tokens/image (4K) → $0.24/image
+// ★ Nano Banana Pro (gemini-3-pro-image-preview): [deprecated, replaced by Nano Banana 2]
+//   $0.134/image (1K/2K), $0.24/image (4K)
 //
 // ★ Imagen 4: $0.02 (fast) / $0.04 (standard) / $0.06 (ultra) per image
 // ★ OpenAI DALL-E 3: ~$0.04/image (1024x1024)
 function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
   if (provider === 'gemini') {
-    // Nano Banana Pro (gemini-3-pro-image-preview)
+    // Nano Banana 2 (gemini-3.1-flash-image-preview) — default model
+    if (model.includes('3.1-flash-image') || model.includes('3-1-flash-image')) {
+      return 0.067 * imageCount;  // 1K resolution (default)
+    }
+    // Legacy: Nano Banana Pro (gemini-3-pro-image-preview)
     if (model.includes('gemini-3') || model.includes('3-pro-image')) {
-      return 0.134 * imageCount;  // 1K/2K resolution
+      return 0.134 * imageCount;
     }
     // Imagen models
     if (model.includes('imagen')) return 0.04 * imageCount;
     // Nano Banana (gemini-2.5-flash-image) and other Gemini image models
-    return 0.039 * imageCount;
+    return 0.067 * imageCount;  // Default to Nano Banana 2 rate
   }
   if (provider === 'openai') {
     if (model.includes('dall-e-3')) return 0.04 * imageCount;
   }
-  // Unknown provider: assume ~$0.04/image as conservative estimate
-  return 0.04 * imageCount;
+  // Unknown provider: assume ~$0.067/image (Nano Banana 2 rate)
+  return 0.067 * imageCount;
 }
 
 // 画像生成ログ記録
@@ -572,7 +577,7 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
         const insertResult = await c.env.DB.prepare(`
           INSERT INTO image_generations (
             scene_id, prompt, status, provider, model, is_active
-          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3-pro-image-preview', 1)
+          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 1)
         `).bind(scene.id, finalPrompt).run()
 
         const generationId = insertResult.meta.last_row_id as number
@@ -604,7 +609,7 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
             sceneId: scene.id as number,
             generationType: 'scene_image',
             provider: 'gemini',
-            model: 'gemini-3-pro-image-preview',
+            model: 'gemini-3.1-flash-image-preview',
             apiKeySource: imageResult.apiKeySource,
             promptLength: finalPrompt.length,
             referenceImageCount: referenceImages.length,
@@ -683,7 +688,7 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
           sceneId: scene.id as number,
           generationType: 'scene_image',
           provider: 'gemini',
-          model: 'gemini-3-pro-image-preview',
+          model: 'gemini-3.1-flash-image-preview',
           apiKeySource: imageResult.apiKeySource,
           promptLength: finalPrompt.length,
           referenceImageCount: referenceImages.length,
@@ -961,7 +966,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO image_generations (
         scene_id, prompt, status, provider, model, is_active
-      ) VALUES (?, ?, 'pending', 'gemini', 'gemini-3-pro-image-preview', 0)
+      ) VALUES (?, ?, 'pending', 'gemini', 'gemini-3.1-flash-image-preview', 0)
     `).bind(sceneId, finalPrompt).run()
 
     const generationId = insertResult.meta.last_row_id as number
@@ -999,7 +1004,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         sceneId: parseInt(sceneId),
         generationType: 'scene_image',
         provider: 'gemini',
-        model: 'gemini-3-pro-image-preview',
+        model: 'gemini-3.1-flash-image-preview',
         apiKeySource: imageResult.apiKeySource,
         promptLength: finalPrompt.length,
         referenceImageCount: referenceImages.length,
@@ -1096,7 +1101,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       sceneId: parseInt(sceneId),
       generationType: 'scene_image',
       provider: 'gemini',
-      model: 'gemini-3-pro-image-preview',
+      model: 'gemini-3.1-flash-image-preview',
       apiKeySource: imageResult.apiKeySource,
       promptLength: finalPrompt.length,
       referenceImageCount: referenceImages.length,
@@ -1304,7 +1309,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
         const insertResult = await c.env.DB.prepare(`
           INSERT INTO image_generations (
             scene_id, prompt, status, provider, model, is_active
-          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3-pro-image-preview', 0)
+          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 0)
         `).bind(scene.id, finalPrompt).run()
 
         const generationId = insertResult.meta.last_row_id as number
@@ -1349,7 +1354,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
             sceneId: scene.id as number,
             generationType: 'scene_image',
             provider: 'gemini',
-            model: 'gemini-3-pro-image-preview',
+            model: 'gemini-3.1-flash-image-preview',
             apiKeySource: imageResult.apiKeySource,
             promptLength: finalPrompt.length,
             referenceImageCount: referenceImages.length,
@@ -1406,7 +1411,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
           sceneId: scene.id as number,
           generationType: 'scene_image',
           provider: 'gemini',
-          model: 'gemini-3-pro-image-preview',
+          model: 'gemini-3.1-flash-image-preview',
           apiKeySource: imageResult.apiKeySource,
           promptLength: finalPrompt.length,
           referenceImageCount: referenceImages.length,
@@ -1559,7 +1564,7 @@ async function generateImageWithRetry(
 
       // Gemini API公式仕様: generateContent
       const response = await fetch(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
         {
           method: 'POST',
           headers: {
@@ -1667,8 +1672,8 @@ async function generateImageWithRetry(
             }
             
             console.log('Image generation success:', {
-              model: 'gemini-3-pro-image-preview',
-              endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent',
+              model: 'gemini-3.1-flash-image-preview',
+              endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
               promptLength: prompt.length,
               imageSize: '2K',
               aspectRatio: '16:9',

@@ -37,7 +37,7 @@ export interface CharacterForReference {
 
 /**
  * Maximum number of reference images to send to Gemini API
- * Based on gemini-3-pro-image-preview specification (max 5 for character consistency)
+ * Based on gemini-3.1-flash-image-preview specification (max 5 for character consistency, up to 14 reference images)
  */
 export const MAX_REFERENCE_IMAGES = 5;
 

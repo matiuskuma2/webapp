@@ -776,17 +776,16 @@ interface ImageGenerationLogParams {
 }
 
 // コスト推定関数（画像生成）
-// 2026-02 Googleの公式レート:
-// - Gemini native image gen: ~$0.04/image (~1290 output tokens × $30/1M)
-// - Imagen 3: ~$0.04/image
+// 2026-02-26 Nano Banana 2 (gemini-3.1-flash-image-preview):
+// - 1K: $0.067/image, 2K: $0.101/image, 4K: $0.151/image
 function estimateImageGenerationCost(provider: string, model: string, imageCount: number = 1): number {
   if (provider === 'gemini') {
-    return 0.04 * imageCount;
+    return 0.067 * imageCount;  // Nano Banana 2 (1K default)
   }
   if (provider === 'openai') {
     if (model.includes('dall-e-3')) return 0.04 * imageCount;
   }
-  return 0.04 * imageCount;
+  return 0.067 * imageCount;
 }
 
 // 画像生成ログ記録
@@ -846,7 +845,7 @@ app.post('/projects/:projectId/characters/generate-preview', async (c) => {
   const projectId = Number(c.req.param('projectId'));
   let userId: number | undefined;
   let apiKeySource: 'user' | 'system' = 'system';
-  const model = 'gemini-3-pro-image-preview';
+  const model = 'gemini-3.1-flash-image-preview';
   const provider = 'gemini';
   
   try {

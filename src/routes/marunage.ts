@@ -388,25 +388,28 @@ async function marunageFormatStartup(
  * リトライ: 呼び出し元（advance）が retry_count を管理。この関数は1回分の生成のみ。
  */
 // Image generation model:
-//   gemini-3-pro-image-preview   → Nano Banana Pro: highest quality, Thinking mode, 4K support (avg ~19s/image)
-//   gemini-2.5-flash-image       → Nano Banana: Flash-tier speed, Stable, good quality
-// ★ 2026-02-13: Switched to Nano Banana Pro (gemini-3-pro-image-preview) for highest quality output
-//   - Matches image-generation.ts (builder context) which already uses this model
-//   - Timeout increased: 25s → 45s per attempt to accommodate Pro model's processing time
-//   - Delay between images: 3s → 5s to respect lower RPM limits of Pro model
-const GEMINI_MODEL = 'gemini-3-pro-image-preview'
+//   gemini-3.1-flash-image-preview → Nano Banana 2: Flash-tier speed + Pro quality, 4K support
+//   gemini-3-pro-image-preview     → [deprecated] Nano Banana Pro
+//   gemini-2.5-flash-image         → [deprecated] Nano Banana
+// ★ 2026-02-26: Switched to Nano Banana 2 (gemini-3.1-flash-image-preview)
+//   - Faster than Pro (Flash-tier speed, seconds instead of 20-40s)
+//   - ~50% cheaper: $0.067/image vs $0.134/image
+//   - Same quality features: character consistency, 4K, text rendering
+//   - Timeout reduced: 45s → 25s (Flash speed)
+//   - Delay between images: 5s → 3s (higher RPM tolerance)
+const GEMINI_MODEL = 'gemini-3.1-flash-image-preview'
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
-const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数 (45s timeout × 2 = max 90s)
-const IMAGE_GEN_DELAY = 5000       // 画像間の待機 (ms) — Pro model needs more spacing between requests
+const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数
+const IMAGE_GEN_DELAY = 3000       // 画像間の待機 (ms) — Flash model is faster
 const MAX_R2_RETRIES = 3
 
 // ============================================================
-// Cost estimation & logging (Nano Banana Pro)
+// Cost estimation & logging (Nano Banana 2)
 // ============================================================
-// 2026-02 Google 公式レート:
-//   Nano Banana Pro (gemini-3-pro-image-preview): $0.134/image (1K/2K)
-//   Nano Banana     (gemini-2.5-flash-image):     $0.039/image
-const COST_PER_IMAGE_USD = 0.134  // Nano Banana Pro rate
+// 2026-02-26 Google 公式レート:
+//   Nano Banana 2   (gemini-3.1-flash-image-preview): $0.067/image (1K), $0.101 (2K), $0.151 (4K)
+//   Nano Banana Pro (gemini-3-pro-image-preview):     $0.134/image (deprecated)
+const COST_PER_IMAGE_USD = 0.067  // Nano Banana 2 rate (1K default)
 
 async function logImageGenerationCost(
   db: D1Database,
@@ -572,9 +575,9 @@ async function generateSingleImage(
 
   for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
     try {
-      // 45s timeout per attempt — Pro model (Nano Banana Pro) needs longer processing time (~19s avg)
+      // 25s timeout per attempt — Flash model (Nano Banana 2) is much faster
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 45000)
+      const timeout = setTimeout(() => controller.abort(), 25000)
       
       const response = await fetch(GEMINI_ENDPOINT, {
         method: 'POST',
@@ -664,7 +667,7 @@ async function generateSingleImage(
 
     } catch (error) {
       const isAbort = error instanceof Error && error.name === 'AbortError'
-      lastError = isAbort ? 'TIMEOUT_45s: Gemini API (Nano Banana Pro) did not respond within 45 seconds' : (error instanceof Error ? error.message : String(error))
+      lastError = isAbort ? 'TIMEOUT_25s: Gemini API (Nano Banana 2) did not respond within 25 seconds' : (error instanceof Error ? error.message : String(error))
       console.warn(`[Marunage:Image] Attempt ${attempt + 1}/${IMAGE_GEN_RETRY} failed: ${lastError}`)
       if (attempt < IMAGE_GEN_RETRY - 1) {
         await sleep(isAbort ? 1000 : 2000 * (attempt + 1))

@@ -293,8 +293,8 @@ admin.get('/usage', async (c) => {
     // 運営負担 = api_key_source = 'system' (システムAPIキー使用分)
     // ユーザー自身のAPIキーで発生したコストは除外
     // NOTE: estimated_cost_usd が $0 で記録されているレコードが多数あるため
-    //       件数 × $0.04/画像 で補正計算する（Gemini image gen: ~$0.04/image）
-    const IMAGE_COST_PER_UNIT = 0.04; // USD per image (Gemini/Imagen pricing)
+    //       件数 × $0.067/画像 で補正計算する（Nano Banana 2: $0.067/image）
+    const IMAGE_COST_PER_UNIT = 0.067; // USD per image (Nano Banana 2 pricing)
     let imgResult: { results: { generation_type: string; request_count: number; total_cost: number; image_count: number }[] | null } = { results: [] };
     try {
       imgResult = await DB.prepare(`
