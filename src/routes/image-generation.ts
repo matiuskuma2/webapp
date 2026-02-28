@@ -898,12 +898,22 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     // 6. Phase X-2: Fetch world settings and character info (Optional - no error if missing)
     // Phase X-4: If prompt is customized, skip text enhancement but still load reference images
     // P-2: Support prompt_override from request body (chat-driven regeneration)
+    // Phase C: Support reference_scene_id for background reuse with character swap
     let bodyPromptOverride: string | null = null;
+    let referenceSceneId: number | null = null;
     try {
-      const body = await c.req.json().catch(() => ({})) as { prompt_override?: string; regenerate?: boolean };
+      const body = await c.req.json().catch(() => ({})) as {
+        prompt_override?: string;
+        regenerate?: boolean;
+        reference_scene_id?: number;
+      };
       if (body.prompt_override && typeof body.prompt_override === 'string') {
         bodyPromptOverride = body.prompt_override.trim();
         console.log(`[Image Gen] P-2: prompt_override received for scene ${sceneId}: "${bodyPromptOverride.substring(0, 100)}"`)
+      }
+      if (body.reference_scene_id && typeof body.reference_scene_id === 'number') {
+        referenceSceneId = body.reference_scene_id;
+        console.log(`[Image Gen] Phase C: reference_scene_id=${referenceSceneId} for scene ${sceneId} (background reuse mode)`)
       }
     } catch {}
     
@@ -957,6 +967,60 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     } catch (error) {
       // Phase X-2: Fallback to original prompt if enhancement fails (no breaking change)
       console.warn('[Image Gen] Phase X-2 enhancement failed, using original prompt:', error);
+    }
+    
+    // ===== Phase C: 背景再利用モード — 参照シーンの完成画像をリファレンスとして追加 =====
+    let backgroundReferenceUsed = false;
+    if (referenceSceneId) {
+      try {
+        // 参照シーンの最新完成画像を取得
+        const refImage = await c.env.DB.prepare(`
+          SELECT r2_key, r2_url FROM image_generations
+          WHERE scene_id = ? AND is_active = 1 AND status = 'completed' AND r2_key IS NOT NULL
+          ORDER BY id DESC LIMIT 1
+        `).bind(referenceSceneId).first<{ r2_key: string; r2_url: string }>();
+        
+        if (refImage?.r2_key) {
+          const r2Object = await c.env.R2.get(refImage.r2_key);
+          if (r2Object) {
+            const arrayBuffer = await r2Object.arrayBuffer();
+            // ArrayBuffer to base64 (chunked for large files)
+            const bytes = new Uint8Array(arrayBuffer);
+            const CHUNK_SIZE = 0x8000;
+            let binary = '';
+            for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
+              const chunk = bytes.subarray(i, i + CHUNK_SIZE);
+              let chunkStr = '';
+              for (let j = 0; j < chunk.length; j++) {
+                chunkStr += String.fromCharCode(chunk[j]);
+              }
+              binary += chunkStr;
+            }
+            const base64Data = btoa(binary);
+            const mimeType = r2Object.httpMetadata?.contentType || 'image/png';
+            
+            // 背景参照画像を先頭に追加（最も重要なリファレンス）
+            referenceImages.unshift({
+              base64Data,
+              mimeType,
+              characterName: '__background_reference__'
+            });
+            
+            // プロンプトに背景維持指示を追加
+            enhancedPrompt = `IMPORTANT INSTRUCTION: The first reference image shows the background/scene composition to MAINTAIN. Keep the same background, environment, lighting, and composition. Only change the characters as described below.\n\n${enhancedPrompt}`;
+            backgroundReferenceUsed = true;
+            
+            console.log(`[Image Gen] Phase C: Background reference loaded from scene ${referenceSceneId} (${arrayBuffer.byteLength} bytes), total refs=${referenceImages.length}`);
+          } else {
+            console.warn(`[Image Gen] Phase C: R2 object not found for key ${refImage.r2_key}`);
+          }
+        } else {
+          console.warn(`[Image Gen] Phase C: No completed image found for reference scene ${referenceSceneId}`);
+        }
+      } catch (bgError) {
+        console.warn(`[Image Gen] Phase C: Background reference loading failed:`, bgError);
+        // Continue without background reference (graceful degradation)
+      }
     }
     
     // 7. 最終プロンプト生成（スタイル適用）

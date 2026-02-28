@@ -5428,6 +5428,14 @@ function renderBuilderSceneCard(scene) {
               ${disableRegenerate ? '<i class="fas fa-lock mr-2"></i>再生成不可' : '読み込み中...'}
             </button>
             <button 
+              id="bgRefBtn-${scene.id}"
+              onclick="openBackgroundReferenceDialog(${scene.id})"
+              class="px-4 py-2 rounded-lg font-semibold touch-manipulation bg-purple-100 text-purple-700 hover:bg-purple-200 ${disableRegenerate ? 'hidden' : ''}"
+              title="他シーンの背景を参照してキャラだけ差し替え"
+            >
+              <i class="fas fa-layer-group mr-1"></i>背景参照
+            </button>
+            <button 
               id="historyBtn-${scene.id}" 
               onclick="viewImageHistory(${scene.id})" 
               class="px-4 py-2 rounded-lg font-semibold touch-manipulation"
@@ -6035,6 +6043,134 @@ async function regenerateSceneImage(sceneId) {
   await generateSceneImage(sceneId);
 }
 
+// ===== Phase C: 背景参照ダイアログ =====
+// 他シーンの背景を参照して、キャラだけ差し替えて画像生成
+
+function openBackgroundReferenceDialog(targetSceneId) {
+  const scenes = window.lastLoadedScenes || [];
+  // 完成画像があるシーンだけ選択肢に出す（自分自身は除外）
+  const candidates = scenes.filter(s =>
+    s.id !== targetSceneId &&
+    s.latest_image?.status === 'completed' &&
+    (s.latest_image?.image_url || s.latest_image?.r2_url)
+  );
+
+  if (candidates.length === 0) {
+    showToast('参照可能な完成画像がありません。先にシーンの画像を生成してください。', 'warning');
+    return;
+  }
+
+  // モーダル作成
+  const overlay = document.createElement('div');
+  overlay.id = 'bgRefOverlay';
+  overlay.className = 'fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+
+  const sceneCards = candidates.map(s => {
+    const imgUrl = s.latest_image?.image_url || s.latest_image?.r2_url || '';
+    const title = s.title || `シーン ${s.idx + 1}`;
+    return `
+      <button
+        onclick="selectBackgroundReference(${targetSceneId}, ${s.id})"
+        class="border-2 border-gray-200 rounded-lg p-2 hover:border-purple-500 hover:shadow-lg transition-all cursor-pointer text-left"
+      >
+        <img src="${imgUrl}" alt="${title}" class="w-full h-24 object-cover rounded mb-1" onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2280%22 height=%2248%22><rect fill=%22%23ddd%22 width=%2280%22 height=%2248%22/></svg>'" />
+        <p class="text-xs font-medium truncate">${s.idx + 1}. ${title}</p>
+      </button>
+    `;
+  }).join('');
+
+  overlay.innerHTML = `
+    <div class="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[80vh] overflow-y-auto">
+      <div class="p-4 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+        <h3 class="text-lg font-bold"><i class="fas fa-layer-group mr-2 text-purple-600"></i>背景参照元を選択</h3>
+        <button onclick="document.getElementById('bgRefOverlay').remove()" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
+      </div>
+      <div class="p-4">
+        <p class="text-sm text-gray-600 mb-3">選択したシーンの背景・構図を維持し、現在のシーンのキャラクターに差し替えて画像を生成します。</p>
+        <div class="grid grid-cols-3 gap-3">${sceneCards}</div>
+      </div>
+    </div>
+  `;
+
+  document.body.appendChild(overlay);
+}
+
+async function selectBackgroundReference(targetSceneId, referenceSceneId) {
+  // ダイアログを閉じる
+  const overlay = document.getElementById('bgRefOverlay');
+  if (overlay) overlay.remove();
+
+  // 確認
+  const refScene = (window.lastLoadedScenes || []).find(s => s.id === referenceSceneId);
+  const refTitle = refScene ? `${refScene.idx + 1}. ${refScene.title || 'シーン'}` : `シーン#${referenceSceneId}`;
+  showToast(`「${refTitle}」の背景を参照して画像生成を開始...`, 'info');
+
+  // 生成開始（背景参照モード）
+  await generateSceneImageWithBackgroundRef(targetSceneId, referenceSceneId);
+}
+
+async function generateSceneImageWithBackgroundRef(sceneId, referenceSceneId) {
+  if (window.sceneProcessing[sceneId]) {
+    showToast('このシーンは処理中です', 'warning');
+    return;
+  }
+  window.sceneProcessing[sceneId] = true;
+  updateGeneratingButtonUI(sceneId, 0);
+
+  let fakePercent = 0;
+  const fakeStart = Date.now();
+  const fakeTimer = setInterval(() => {
+    const elapsed = (Date.now() - fakeStart) / 1000;
+    if (elapsed < 45) {
+      fakePercent = Math.round((elapsed / 45) * 80);
+    } else if (elapsed < 90) {
+      fakePercent = 80 + Math.round(((elapsed - 45) / 45) * 15);
+    } else {
+      fakePercent = 95;
+    }
+    updateGeneratingButtonUI(sceneId, fakePercent);
+  }, 1000);
+
+  try {
+    const response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-image`, {
+      reference_scene_id: referenceSceneId
+    });
+
+    clearInterval(fakeTimer);
+    updateGeneratingButtonUI(sceneId, 100);
+
+    const imageGenId = response.data.image_generation_id || response.data.id;
+    const responseStatus = response.data.status;
+
+    if (imageGenId) {
+      if (responseStatus === 'completed') {
+        showToast('背景参照画像の生成が完了しました', 'success');
+        setTimeout(async () => {
+          stopGenerationWatch(sceneId);
+          window.sceneProcessing[sceneId] = false;
+          await updateSingleSceneCard(sceneId);
+          await checkAndUpdateProjectStatus();
+        }, 500);
+        return;
+      }
+      showToast('背景参照画像の生成を開始しました', 'success');
+      pollSceneImageGeneration(sceneId);
+    } else {
+      showToast('画像生成に失敗しました', 'error');
+      stopGenerationWatch(sceneId);
+      window.sceneProcessing[sceneId] = false;
+      await updateSingleSceneCard(sceneId);
+    }
+  } catch (error) {
+    clearInterval(fakeTimer);
+    console.error('Background reference image generation failed:', error);
+    showToast('背景参照画像の生成に失敗しました: ' + (error.response?.data?.error?.message || error.message), 'error');
+    stopGenerationWatch(sceneId);
+    window.sceneProcessing[sceneId] = false;
+    await updateSingleSceneCard(sceneId);
+  }
+}
 // Bulk image generation
 async function generateBulkImages(mode) {
   if (isProcessing) {

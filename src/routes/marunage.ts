@@ -808,7 +808,43 @@ async function marunageGenerateImages(
         mimeType: r.mimeType,
         characterName: r.characterName,
       }))
-      if (refImages.length > 0) {
+      
+      // ★ Fallback: scene_character_map にキャラ割当がなくても、プロジェクトのキャラ参照画像を取得
+      // これにより「キャラがシーン毎に違う」問題を防止
+      if (refImages.length === 0) {
+        const { results: projectChars } = await db.prepare(`
+          SELECT character_key, character_name, reference_image_r2_url
+          FROM project_character_models
+          WHERE project_id = ? AND reference_image_r2_url IS NOT NULL AND reference_image_r2_url != ''
+          ORDER BY id ASC
+          LIMIT 5
+        `).bind(projectId).all()
+        
+        if (projectChars && projectChars.length > 0) {
+          const { fetchReferenceImageFromR2 } = await import('../utils/character-reference-helper')
+          for (const pc of projectChars) {
+            try {
+              const refImg = await fetchReferenceImageFromR2(
+                r2,
+                pc.reference_image_r2_url as string,
+                pc.character_key as string,
+                pc.character_name as string,
+                false
+              )
+              if (refImg) {
+                refImages.push({
+                  base64Data: refImg.base64Data,
+                  mimeType: refImg.mimeType,
+                  characterName: refImg.characterName,
+                })
+              }
+            } catch (_) { /* skip single char */ }
+          }
+          if (refImages.length > 0) {
+            console.log(`[Marunage:Image] Fallback: loaded ${refImages.length} project-level ref image(s) for scene ${scene.id}`)
+          }
+        }
+      } else {
         console.log(`[Marunage:Image] Loaded ${refImages.length} reference image(s) for scene ${scene.id}`)
       }
     } catch (e) {

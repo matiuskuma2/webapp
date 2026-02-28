@@ -372,14 +372,14 @@ async function applyAssignments(
 export async function autoAssignCharactersToScenes(
   db: D1Database,
   projectId: number
-): Promise<{ assigned: number; scenes: number; skipped: number }> {
+): Promise<{ assigned: number; scenes: number; skipped: number; fallback: number }> {
   try {
     // Step 1: Build character patterns
     const characterPatterns = await buildCharacterPatterns(db, projectId);
     
     if (characterPatterns.length === 0) {
       console.log(`[CharacterAutoAssign] No characters defined for project ${projectId}`);
-      return { assigned: 0, scenes: 0, skipped: 0 };
+      return { assigned: 0, scenes: 0, skipped: 0, fallback: 0 };
     }
     
     // Step 2: Build scene texts
@@ -387,24 +387,47 @@ export async function autoAssignCharactersToScenes(
     
     if (sceneTexts.length === 0) {
       console.log(`[CharacterAutoAssign] No scenes found for project ${projectId}`);
-      return { assigned: 0, scenes: 0, skipped: 0 };
+      return { assigned: 0, scenes: 0, skipped: 0, fallback: 0 };
     }
     
     // Step 3: Match characters to scenes
     const assignments = matchCharactersToScenes(sceneTexts, characterPatterns);
     
-    // Step 4: Apply assignments to database
+    // Step 4: Fallback — キャラが1名も割当されなかったシーンにプライマリキャラを自動割当
+    // 画像生成時にキャラ参照画像がゼロになるのを防ぐ（丸投げのキャラ不一致問題の根本対策）
+    const assignedSceneIds = new Set(assignments.map(a => a.sceneId));
+    const unassignedScenes = sceneTexts.filter(s => !assignedSceneIds.has(s.sceneId));
+    let fallbackCount = 0;
+    
+    if (unassignedScenes.length > 0 && characterPatterns.length > 0) {
+      // プライマリキャラ = 最初に定義されたキャラ（IDの昇順で最初）
+      const primaryCharKey = characterPatterns[0].characterKey;
+      
+      for (const scene of unassignedScenes) {
+        assignments.push({
+          sceneId: scene.sceneId,
+          characterKey: primaryCharKey,
+          isPrimary: true,
+        });
+        fallbackCount++;
+      }
+      
+      console.log(`[CharacterAutoAssign] Fallback: assigned primary character "${primaryCharKey}" to ${fallbackCount} unmatched scene(s)`);
+    }
+    
+    // Step 5: Apply assignments to database
     await applyAssignments(db, projectId, assignments);
     
     // Count unique scenes
     const uniqueScenes = new Set(assignments.map(a => a.sceneId)).size;
     
-    console.log(`[CharacterAutoAssign] Project ${projectId}: ${assignments.length} assignments to ${uniqueScenes} scenes`);
+    console.log(`[CharacterAutoAssign] Project ${projectId}: ${assignments.length} assignments to ${uniqueScenes} scenes (fallback=${fallbackCount})`);
     
     return {
       assigned: assignments.length,
       scenes: uniqueScenes,
-      skipped: sceneTexts.length - uniqueScenes
+      skipped: sceneTexts.length - uniqueScenes,
+      fallback: fallbackCount,
     };
   } catch (error) {
     console.error('[CharacterAutoAssign] Error:', error);

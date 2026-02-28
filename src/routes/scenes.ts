@@ -858,8 +858,8 @@ scenes.post('/', async (c) => {
   }
 });
 
-// POST /api/scenes/:sceneId/duplicate - シーンをコピー（テキスト情報のみ）
-// Scene Split タブ専用。画像・動画・漫画データはコピーしない。
+// POST /api/scenes/:sceneId/duplicate - シーン完全複製
+// テキスト情報 + 全子テーブル（キャラ・スタイル・発話・画像・モーション等）をコピー
 // オプション: insert_after_idx で挿入位置を指定可能
 scenes.post('/:sceneId/duplicate', async (c) => {
   try {
@@ -876,13 +876,18 @@ scenes.post('/:sceneId/duplicate', async (c) => {
       // bodyなしでもOK
     }
 
-    // 元シーンを取得
+    // 元シーンを全カラム取得
     const original = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden
+      SELECT id, project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden,
+             display_asset_type, comic_data, speech_type, is_prompt_customized,
+             text_render_mode, motion_preset, motion_params_json, duration_override_ms
       FROM scenes WHERE id = ? AND is_hidden = 0
     `).bind(sceneId).first<{
       id: number; project_id: number; idx: number; role: string;
       title: string; dialogue: string; bullets: string; image_prompt: string; is_hidden: number;
+      display_asset_type: string; comic_data: string | null; speech_type: string;
+      is_prompt_customized: number; text_render_mode: string; motion_preset: string;
+      motion_params_json: string | null; duration_override_ms: number | null;
     }>();
 
     if (!original) {
@@ -915,13 +920,16 @@ scenes.post('/:sceneId/duplicate', async (c) => {
         `).bind(s.idx + 1, s.id).run();
       }
       
-      console.log(`[Scenes] Shifted ${scenesToShift.length} scenes for duplicate insert at idx=${newIdx}`);
+      console.log(`[Scenes:Dup] Shifted ${scenesToShift.length} scenes for duplicate insert at idx=${newIdx}`);
     }
 
-    // テキスト情報のみコピー（画像・動画・漫画は含まない）
+    // ===== 1. scenes 本体コピー（全カラム） =====
     const result = await c.env.DB.prepare(`
-      INSERT INTO scenes (project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden)
-      VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+      INSERT INTO scenes (
+        project_id, idx, role, title, dialogue, bullets, image_prompt, is_hidden,
+        display_asset_type, comic_data, speech_type, is_prompt_customized,
+        text_render_mode, motion_preset, motion_params_json, duration_override_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       original.project_id,
       newIdx,
@@ -929,34 +937,212 @@ scenes.post('/:sceneId/duplicate', async (c) => {
       original.title + '（コピー）',
       original.dialogue,
       original.bullets,
-      original.image_prompt
+      original.image_prompt,
+      original.display_asset_type || 'image',
+      original.comic_data,
+      original.speech_type || 'narration',
+      original.is_prompt_customized || 0,
+      original.text_render_mode || 'remotion',
+      original.motion_preset || 'kenburns',
+      original.motion_params_json,
+      original.duration_override_ms
     ).run();
 
-    const newSceneId = result.meta?.last_row_id;
+    const newSceneId = result.meta?.last_row_id as number;
+    let copiedTables: string[] = [];
 
-    // シーンキャラクターもコピー
-    const chars = await c.env.DB.prepare(`
-      SELECT character_key, character_name, display_order
-      FROM scene_characters WHERE scene_id = ?
-    `).bind(sceneId).all();
-
-    if (chars.results && chars.results.length > 0) {
-      for (const ch of chars.results) {
-        await c.env.DB.prepare(`
-          INSERT INTO scene_characters (scene_id, character_key, character_name, display_order)
-          VALUES (?, ?, ?, ?)
-        `).bind(newSceneId, ch.character_key, ch.character_name, ch.display_order).run();
+    // ===== 2. scene_character_map コピー（現行テーブル — 画像生成のキャラ参照源） =====
+    try {
+      const { results: charMap } = await c.env.DB.prepare(`
+        SELECT character_key, is_primary, role FROM scene_character_map WHERE scene_id = ?
+      `).bind(sceneId).all();
+      if (charMap && charMap.length > 0) {
+        for (const cm of charMap) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_character_map (scene_id, character_key, is_primary, role)
+            VALUES (?, ?, ?, ?)
+          `).bind(newSceneId, cm.character_key, cm.is_primary, cm.role || 'image').run();
+        }
+        copiedTables.push(`scene_character_map(${charMap.length})`);
       }
-    }
+    } catch (e) { console.warn('[Scenes:Dup] scene_character_map copy failed:', e); }
 
+    // ===== 3. scene_character_traits コピー（C層オーバーライド） =====
+    try {
+      const { results: traits } = await c.env.DB.prepare(`
+        SELECT character_key, trait_description FROM scene_character_traits WHERE scene_id = ?
+      `).bind(sceneId).all();
+      if (traits && traits.length > 0) {
+        for (const t of traits) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_character_traits (scene_id, character_key, trait_description)
+            VALUES (?, ?, ?)
+          `).bind(newSceneId, t.character_key, t.trait_description).run();
+        }
+        copiedTables.push(`scene_character_traits(${traits.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_character_traits copy failed:', e); }
+
+    // ===== 4. scene_style_settings コピー =====
+    try {
+      const style = await c.env.DB.prepare(`
+        SELECT style_preset_id FROM scene_style_settings WHERE scene_id = ?
+      `).bind(sceneId).first();
+      if (style?.style_preset_id) {
+        await c.env.DB.prepare(`
+          INSERT INTO scene_style_settings (scene_id, style_preset_id) VALUES (?, ?)
+        `).bind(newSceneId, style.style_preset_id).run();
+        copiedTables.push('scene_style_settings');
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_style_settings copy failed:', e); }
+
+    // ===== 5. scene_utterances コピー（音声生成に影響） =====
+    try {
+      const { results: utterances } = await c.env.DB.prepare(`
+        SELECT role, character_key, text, speaker_label, order_index, speech_type,
+               audio_url, audio_duration_ms, audio_provider, audio_voice_id
+        FROM scene_utterances WHERE scene_id = ? ORDER BY order_index ASC
+      `).bind(sceneId).all();
+      if (utterances && utterances.length > 0) {
+        for (const u of utterances) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_utterances (scene_id, role, character_key, text, speaker_label,
+                                          order_index, speech_type, audio_url, audio_duration_ms,
+                                          audio_provider, audio_voice_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            newSceneId, u.role, u.character_key, u.text, u.speaker_label,
+            u.order_index, u.speech_type, u.audio_url, u.audio_duration_ms,
+            u.audio_provider, u.audio_voice_id
+          ).run();
+        }
+        copiedTables.push(`scene_utterances(${utterances.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_utterances copy failed:', e); }
+
+    // ===== 6. scene_motion コピー =====
+    try {
+      const motion = await c.env.DB.prepare(`
+        SELECT motion_type, params_json FROM scene_motion WHERE scene_id = ?
+      `).bind(sceneId).first();
+      if (motion) {
+        await c.env.DB.prepare(`
+          INSERT INTO scene_motion (scene_id, motion_type, params_json) VALUES (?, ?, ?)
+        `).bind(newSceneId, motion.motion_type, motion.params_json).run();
+        copiedTables.push('scene_motion');
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_motion copy failed:', e); }
+
+    // ===== 7. image_generations コピー（R2キー参照、実画像は共有） =====
+    try {
+      const { results: images } = await c.env.DB.prepare(`
+        SELECT prompt, status, provider, model, r2_key, r2_url, is_active,
+               generation_type, aspect_ratio, error_message
+        FROM image_generations WHERE scene_id = ? AND is_active = 1 AND status = 'completed'
+        ORDER BY id DESC LIMIT 1
+      `).bind(sceneId).all();
+      if (images && images.length > 0) {
+        for (const img of images) {
+          await c.env.DB.prepare(`
+            INSERT INTO image_generations (scene_id, prompt, status, provider, model,
+                                           r2_key, r2_url, is_active, generation_type, aspect_ratio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+          `).bind(
+            newSceneId, img.prompt, img.status, img.provider, img.model,
+            img.r2_key, img.r2_url, img.generation_type, img.aspect_ratio
+          ).run();
+        }
+        copiedTables.push(`image_generations(${images.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] image_generations copy failed:', e); }
+
+    // ===== 8. scene_balloons コピー =====
+    try {
+      const { results: balloons } = await c.env.DB.prepare(`
+        SELECT character_key, text, position_x, position_y, width, height,
+               balloon_type, style_json, order_index, bubble_r2_url, bubble_r2_key
+        FROM scene_balloons WHERE scene_id = ? ORDER BY order_index ASC
+      `).bind(sceneId).all();
+      if (balloons && balloons.length > 0) {
+        for (const b of balloons) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_balloons (scene_id, character_key, text, position_x, position_y,
+                                        width, height, balloon_type, style_json, order_index,
+                                        bubble_r2_url, bubble_r2_key)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            newSceneId, b.character_key, b.text, b.position_x, b.position_y,
+            b.width, b.height, b.balloon_type, b.style_json, b.order_index,
+            b.bubble_r2_url, b.bubble_r2_key
+          ).run();
+        }
+        copiedTables.push(`scene_balloons(${balloons.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_balloons copy failed:', e); }
+
+    // ===== 9. scene_telops コピー =====
+    try {
+      const { results: telops } = await c.env.DB.prepare(`
+        SELECT text, position, size, style_json FROM scene_telops WHERE scene_id = ?
+      `).bind(sceneId).all();
+      if (telops && telops.length > 0) {
+        for (const t of telops) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_telops (scene_id, text, position, size, style_json) VALUES (?, ?, ?, ?, ?)
+          `).bind(newSceneId, t.text, t.position, t.size, t.style_json).run();
+        }
+        copiedTables.push(`scene_telops(${telops.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_telops copy failed:', e); }
+
+    // ===== 10. scene_audio_cues コピー =====
+    try {
+      const { results: cues } = await c.env.DB.prepare(`
+        SELECT cue_type, label, audio_url, volume, start_ms, duration_ms, loop, order_index
+        FROM scene_audio_cues WHERE scene_id = ? ORDER BY order_index ASC
+      `).bind(sceneId).all();
+      if (cues && cues.length > 0) {
+        for (const cue of cues) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_audio_cues (scene_id, cue_type, label, audio_url, volume,
+                                          start_ms, duration_ms, loop, order_index)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).bind(
+            newSceneId, cue.cue_type, cue.label, cue.audio_url, cue.volume,
+            cue.start_ms, cue.duration_ms, cue.loop, cue.order_index
+          ).run();
+        }
+        copiedTables.push(`scene_audio_cues(${cues.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_audio_cues copy failed:', e); }
+
+    // ===== 11. scene_audio_assignments コピー =====
+    try {
+      const { results: assignments } = await c.env.DB.prepare(`
+        SELECT track_id, volume, start_ms, end_ms, fade_in_ms, fade_out_ms
+        FROM scene_audio_assignments WHERE scene_id = ?
+      `).bind(sceneId).all();
+      if (assignments && assignments.length > 0) {
+        for (const a of assignments) {
+          await c.env.DB.prepare(`
+            INSERT INTO scene_audio_assignments (scene_id, track_id, volume, start_ms, end_ms, fade_in_ms, fade_out_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+          `).bind(newSceneId, a.track_id, a.volume, a.start_ms, a.end_ms, a.fade_in_ms, a.fade_out_ms).run();
+        }
+        copiedTables.push(`scene_audio_assignments(${assignments.length})`);
+      }
+    } catch (e) { console.warn('[Scenes:Dup] scene_audio_assignments copy failed:', e); }
+
+    // レスポンス用に新シーン取得
     const newScene = await c.env.DB.prepare(`
-      SELECT id, project_id, idx, role, title, dialogue, created_at
+      SELECT id, project_id, idx, role, title, dialogue, display_asset_type,
+             speech_type, text_render_mode, motion_preset, duration_override_ms, created_at
       FROM scenes WHERE id = ?
     `).bind(newSceneId).first();
 
-    console.log(`[Scenes] Duplicated scene ${sceneId} -> ${newSceneId}, idx=${newIdx}, project=${original.project_id}`);
+    console.log(`[Scenes:Dup] Complete duplicate scene ${sceneId} -> ${newSceneId}, idx=${newIdx}, project=${original.project_id}, copied=[${copiedTables.join(', ')}]`);
 
-    return c.json({ success: true, scene: newScene }, 201);
+    return c.json({ success: true, scene: newScene, copied_tables: copiedTables }, 201);
   } catch (error) {
     console.error('Error duplicating scene:', error);
     return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to duplicate scene' } }, 500);
