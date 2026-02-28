@@ -1,5 +1,5 @@
 {
-  "deployedAt": "2026-02-27T04:45:00.000Z",
+  "deployedAt": "2026-02-28T08:18:17.308Z",
   "region": "ap-northeast-1",
   "serveUrl": "https://remotionlambda-apnortheast1-ucgr0eo7k7.s3.ap-northeast-1.amazonaws.com/sites/rilarc-video-build/index.html",
   "functionName": "remotion-render-4-0-404-mem2048mb-disk2048mb-240sec",
@@ -14,8 +14,9 @@
     "voices[] R1.5 複数話者音声",
     "MotionWrapper R2-C カメラワーク",
     "Video freeze at last frame when audio > video duration",
-    "Voice duration safety validation (audio cutoff prevention)",
     "Transition type support: none/fade/slide/wipe (transitionType prop)",
-    "Scene.tsx fadeFrames=0 when transitionType=none (no fade in/out)"
+    "Scene.tsx fadeFrames=0 when transitionType=none (no fade in/out)",
+    "Voice duration safety validation (audio cutoff prevention)",
+    "Video freeze at last frame when audio > video duration"
   ]
 }

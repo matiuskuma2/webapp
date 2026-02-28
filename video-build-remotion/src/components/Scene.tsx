@@ -62,6 +62,7 @@ export const Scene: React.FC<SceneProps> = ({
   telopPosition = 'bottom',
   telopCustomStyle = null,
   telopTypography = null,
+  transitionType = 'fade',
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -124,7 +125,7 @@ export const Scene: React.FC<SceneProps> = ({
   }
   
   // フェードイン・アウト（transitionType が 'none' の場合は常にopacity=1）
-  const effectiveTransitionType = props.transitionType ?? 'fade';
+  const effectiveTransitionType = transitionType ?? 'fade';
   const fadeFrames = effectiveTransitionType === 'none' ? 0 : Math.min(15, Math.floor(durationFrames / 4));
   const opacity = effectiveTransitionType === 'none' ? 1 : interpolate(
     frame,
