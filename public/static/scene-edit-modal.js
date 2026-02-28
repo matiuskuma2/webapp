@@ -379,6 +379,7 @@
       }
       
       // 4. Duration (R3-A)
+      // ビルド時の実際の優先順位: 音声尺 > 手動設定 > デフォルト
       const durationOverride = this.sceneData?.duration_override_ms;
       // Note: utteranceStatus is obtained from sceneData.utterance_status
       const utteranceStatus = this.sceneData?.utterance_status || { total: 0, with_audio: 0, total_duration_ms: 0 };
@@ -387,17 +388,26 @@
       let durationSource = 'デフォルト';
       let durationIcon = '⏱️';
       let durationClass = 'text-gray-600 bg-gray-50';
+      let durationNote = '';
       
-      if (durationOverride && durationOverride > 0) {
-        durationMs = durationOverride;
-        durationSource = '手動設定';
-        durationIcon = '✏️';
-        durationClass = 'text-yellow-700 bg-yellow-50';
-      } else if (audioReady && totalDurationMs > 0) {
+      const hasAudioDur = audioReady && totalDurationMs > 0;
+      const hasOverrideDur = durationOverride && durationOverride > 0;
+      
+      if (hasAudioDur) {
+        // 音声がある場合 → 音声尺が常に優先（ビルド時の実際の挙動）
         durationMs = totalDurationMs + 500;
         durationSource = '音声尺';
         durationIcon = '🎙️';
         durationClass = 'text-green-700 bg-green-50';
+        if (hasOverrideDur) {
+          const overrideSec = (durationOverride / 1000).toFixed(1);
+          durationNote = `※手動設定${overrideSec}秒あり。音声がある場合は音声尺が優先されます`;
+        }
+      } else if (hasOverrideDur) {
+        durationMs = durationOverride;
+        durationSource = '手動設定';
+        durationIcon = '✏️';
+        durationClass = 'text-yellow-700 bg-yellow-50';
       } else if (utteranceTotal === 0) {
         durationSource = '無音/要設定';
         durationIcon = '⚠️';
@@ -405,10 +415,13 @@
       }
       
       const durationSec = (durationMs / 1000).toFixed(1);
+      const durationDetail = durationNote 
+        ? `(${durationSource}) ${durationNote}`
+        : `(${durationSource})`;
       lines.push({
         icon: durationIcon,
         text: `尺：${durationSec}秒`,
-        detail: `(${durationSource})`,
+        detail: durationDetail,
         class: durationClass
       });
       
@@ -617,23 +630,30 @@
       const hasAudio = utteranceStatus.total > 0;
       const currentOverride = this.sceneData?.duration_override_ms || null;
       
-      // Calculate estimated duration
+      // Calculate estimated duration — match build-time priority: audio > override > default
       let estimatedDurationMs = 3000; // Default 3 seconds
       let durationSource = 'デフォルト';
       
-      if (currentOverride && currentOverride > 0) {
-        estimatedDurationMs = currentOverride;
-        durationSource = '手動設定';
-      } else if (utteranceStatus.total_duration_ms > 0) {
+      if (utteranceStatus.total_duration_ms > 0 && utteranceStatus.with_audio > 0) {
+        // 音声があれば音声尺が常に優先（ビルド時の実際の挙動）
         estimatedDurationMs = utteranceStatus.total_duration_ms + 500;
         durationSource = '音声尺';
+      } else if (currentOverride && currentOverride > 0) {
+        estimatedDurationMs = currentOverride;
+        durationSource = '手動設定';
       }
       
       const estimatedDurationSec = (estimatedDurationMs / 1000).toFixed(1);
       
-      // Only show UI for scenes without audio or with manual override
-      if (hasAudio && !currentOverride) {
-        // Has audio, no override - show info only
+      // Audio exists → show info (override has no effect on build)
+      if (hasAudio && utteranceStatus.total_duration_ms > 0) {
+        const overrideNote = currentOverride 
+          ? `<p class="text-xs text-amber-600 mt-1">
+              <i class="fas fa-exclamation-triangle mr-1"></i>
+              手動設定（${(currentOverride / 1000).toFixed(1)}秒）がありますが、音声がある場合は音声尺が優先されます
+            </p>`
+          : '';
+        
         container.innerHTML = `
           <div class="p-3 border border-gray-200 rounded-lg bg-gray-50">
             <div class="flex items-center gap-2 text-sm text-gray-600">
@@ -645,6 +665,7 @@
               <i class="fas fa-info-circle mr-1"></i>
               音声がある場合、尺は自動的に音声の長さ+0.5秒になります
             </p>
+            ${overrideNote}
           </div>
         `;
         return;

@@ -3993,29 +3993,32 @@ function renderSceneStatusBar(scene, utteranceStatus) {
   motionTooltip = motionInfo.tip;
   
   // === R3-A: シーン尺（duration）計算 ===
-  // 優先順位: duration_override_ms > 音声合計 + 500ms > デフォルト3000ms
+  // ビルド時の実際の優先順位に合わせた表示:
+  //   1. 音声がある場合 → 音声尺が常に優先（セリフ切れ防止）
+  //   2. 音声なし + duration_override_ms → 手動設定
+  //   3. どちらもなし → デフォルト
   let durationMs = 3000; // デフォルト
   let durationSource = 'デフォルト';
   let durationIcon = '⏱️';
   let durationClass = 'bg-gray-100 text-gray-600';
   
-  if (scene.duration_override_ms && scene.duration_override_ms > 0) {
-    // 手動設定の尺（無音シーン用）
+  // まず音声尺を計算（ビルド時と同じ優先順位）
+  const audioDurationMs = (total > 0 && withAudio === total) ? (utteranceStatus.total_duration_ms || 0) : 0;
+  const hasAudioDuration = audioDurationMs > 0;
+  const hasOverride = scene.duration_override_ms && scene.duration_override_ms > 0;
+  
+  if (hasAudioDuration) {
+    // 音声がある場合 → 音声尺が常に優先（ビルド時の実際の挙動）
+    durationMs = audioDurationMs + 500;
+    durationSource = '音声尺';
+    durationIcon = '🎙️';
+    durationClass = 'bg-green-100 text-green-800';
+  } else if (hasOverride) {
+    // 音声なし + 手動設定 → override を使用
     durationMs = scene.duration_override_ms;
     durationSource = '手動設定';
     durationIcon = '✏️';
     durationClass = 'bg-yellow-100 text-yellow-800';
-  } else if (total > 0 && withAudio === total) {
-    // 全音声生成済み → 音声の合計尺 + 500ms（推定値として表示）
-    // ※実際のduration_msは各utteranceから取得する必要があるが、ここでは概算
-    // utteranceStatus.total_duration_ms があれば使用
-    const audioDurationMs = utteranceStatus.total_duration_ms;
-    if (audioDurationMs && audioDurationMs > 0) {
-      durationMs = audioDurationMs + 500;
-      durationSource = '音声尺';
-      durationIcon = '🎙️';
-      durationClass = 'bg-green-100 text-green-800';
-    }
   } else if (total === 0) {
     // 発話なし → デフォルトまたは手動設定を推奨
     durationSource = '無音/要設定';
@@ -4025,7 +4028,12 @@ function renderSceneStatusBar(scene, utteranceStatus) {
   
   // 尺を秒に変換（小数点1桁）
   const durationSec = (durationMs / 1000).toFixed(1);
-  const durationTooltip = `シーン尺: ${durationSec}秒（${durationSource}）`;
+  // 音声優先で override が無視されている場合、その旨を tooltip に表示
+  let durationTooltip = `シーン尺: ${durationSec}秒（${durationSource}）`;
+  if (hasAudioDuration && hasOverride) {
+    const overrideSec = (scene.duration_override_ms / 1000).toFixed(1);
+    durationTooltip += ` ※手動設定${overrideSec}秒あり。音声がある場合は音声尺が優先されます`;
+  }
   
   // === ステータスバーHTML ===
   return `
@@ -4056,6 +4064,7 @@ function renderSceneStatusBar(scene, utteranceStatus) {
         <span class="inline-flex items-center gap-1 px-2 py-1 rounded ${durationClass}" title="${durationTooltip}">
           <span>${durationIcon}</span>
           <span class="font-semibold">${durationSec}秒</span>
+          <span class="opacity-60">(${durationSource})</span>
         </span>
         
         <!-- P3: シーン別BGM -->
