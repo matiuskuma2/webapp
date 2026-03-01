@@ -3135,8 +3135,11 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         duration_ms: body.transition?.type === 'none' ? 0 : (body.transition?.duration_ms || 300),
       },
       // PR-5-3a/b + Phase 1: テロップ表示設定
+      // FIX: captions.enabled (字幕) が ON なら telops も ON にする
+      // UI は「字幕」と「テロップ」を別トグルで送信するが、Remotion は telops.enabled のみ参照する
+      // → 字幕ON + テロップOFF の場合、字幕が消えるバグを修正
       telops: {
-        enabled: body.telops?.enabled ?? true,  // デフォルトON
+        enabled: (body.telops?.enabled ?? true) || (body.captions?.enabled ?? body.include_captions ?? true),  // 字幕 OR テロップが ON なら表示
         // PR-5-3b: 位置・サイズプリセット（Safe Chatで変更可能）
         position_preset: body.telops?.position_preset ?? 'bottom',  // bottom | center | top
         size_preset: body.telops?.size_preset ?? 'md',  // sm | md | lg
@@ -3157,9 +3160,9 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
         },
         // 無音判定（音声・BGM・SFXすべてなし）
         is_silent: totalUtterancesWithAudio === 0 && !activeBgm && !(body.bgm?.enabled) && totalSfx === 0,
-        // PR-5-3a: テロップ有無
-        has_telops: (body.telops?.enabled ?? true),
-        telops_enabled: (body.telops?.enabled ?? true),
+        // PR-5-3a: テロップ有無（字幕 OR テロップが ON なら true）
+        has_telops: (body.telops?.enabled ?? true) || (body.captions?.enabled ?? body.include_captions ?? true),
+        telops_enabled: (body.telops?.enabled ?? true) || (body.captions?.enabled ?? body.include_captions ?? true),
       },
     };
     

@@ -997,23 +997,22 @@ scenes.post('/:sceneId/duplicate', async (c) => {
     } catch (e) { console.warn('[Scenes:Dup] scene_style_settings copy failed:', e); }
 
     // ===== 5. scene_utterances コピー（音声生成に影響） =====
+    // FIX: スキーマ 0022 に合わせたカラム名に修正（order_no, audio_generation_id, duration_ms）
+    // NOTE: audio_generation_id は元シーンの音声参照をそのまま共有（R2実体は同一）
     try {
       const { results: utterances } = await c.env.DB.prepare(`
-        SELECT role, character_key, text, speaker_label, order_index, speech_type,
-               audio_url, audio_duration_ms, audio_provider, audio_voice_id
-        FROM scene_utterances WHERE scene_id = ? ORDER BY order_index ASC
+        SELECT order_no, role, character_key, text, audio_generation_id, duration_ms
+        FROM scene_utterances WHERE scene_id = ? ORDER BY order_no ASC
       `).bind(sceneId).all();
       if (utterances && utterances.length > 0) {
         for (const u of utterances) {
           await c.env.DB.prepare(`
-            INSERT INTO scene_utterances (scene_id, role, character_key, text, speaker_label,
-                                          order_index, speech_type, audio_url, audio_duration_ms,
-                                          audio_provider, audio_voice_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO scene_utterances (scene_id, order_no, role, character_key, text,
+                                          audio_generation_id, duration_ms)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
           `).bind(
-            newSceneId, u.role, u.character_key, u.text, u.speaker_label,
-            u.order_index, u.speech_type, u.audio_url, u.audio_duration_ms,
-            u.audio_provider, u.audio_voice_id
+            newSceneId, u.order_no, u.role, u.character_key, u.text,
+            u.audio_generation_id, u.duration_ms
           ).run();
         }
         copiedTables.push(`scene_utterances(${utterances.length})`);

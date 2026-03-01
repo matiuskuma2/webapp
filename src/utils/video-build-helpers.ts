@@ -2545,7 +2545,7 @@ export function buildProjectJsonLegacy(
     resolution,
     fps,
     enableKenBurns: settings.motion?.preset !== 'none',
-    enableTelop: settings.captions?.enabled ?? true,
+    enableTelop: (settings.captions?.enabled ?? true) || (settings.telops?.enabled ?? true),
   });
 
   // 旧形式に変換

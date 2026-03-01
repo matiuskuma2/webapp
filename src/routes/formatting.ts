@@ -1848,6 +1848,12 @@ async function generateMiniScenesWithSchemaAI(
 - 要約ではなく、元の文章を構造化してください
 - 情報を削除せず、適切なシーンに分配してください
 
+【最重要: dialogue と image_prompt の一致】
+- **各シーンの image_prompt は必ずそのシーンの dialogue の内容を映像で描写してください**
+- image_prompt がシーンN のものなら、dialogue もシーンN のものでなければなりません
+- 生成後、各シーンの dialogue と image_prompt が同じ場面を表しているか必ず確認してください
+- ズレが生じるのは最大の品質問題です。dialogue「Aの話題」なのに image_prompt が「Bの場面」はNGです
+
 【ルール】
 1. シーン数は **1〜10 個**（文章の長さに応じて調整、長い場合は多く）
 2. 各シーンの dialogue は **30〜500 文字**（元の文章を維持するため緩和）
@@ -1880,6 +1886,7 @@ async function generateMiniScenesWithSchemaAI(
 
     const userPrompt = `以下の文章断片からシーンを生成してください。
 **元の文章の内容を省略せず、できるだけ原文を活かしてください。**
+**各シーンの image_prompt は必ずそのシーンの dialogue と同じ場面・同じ話題を描写してください。dialogue と image_prompt が別の場面になるのは厳禁です。**
 
 【プロジェクトタイトル】
 ${projectTitle}
@@ -1888,7 +1895,8 @@ ${projectTitle}
 ${chunkText}
 
 上記の文章を元に、視聴者にとって魅力的で分かりやすいニュース風インフォグラフィック動画のシーンを作成してください。
-情報を省略せず、適切に複数シーンに分割してください。`
+情報を省略せず、適切に複数シーンに分割してください。
+生成後に全シーンの dialogue ↔ image_prompt ペアが一致しているか必ずセルフチェックしてください。`
 
     // JSON Schema for MiniScenes (1-10 scenes, 200シーン対応)
     const jsonSchema = {
