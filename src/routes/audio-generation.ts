@@ -1197,4 +1197,114 @@ audioGeneration.post('/audio/fix-durations', async (c) => {
   }
 });
 
+// ===== 音声試聴 (Voice Preview) =====
+// POST /api/voice-preview
+// 短いサンプルテキストで音声を生成し、base64で即返す（R2保存なし）
+audioGeneration.post('/voice-preview', async (c) => {
+  try {
+    const body = await c.req.json().catch(() => ({} as any));
+    const provider = (body.provider as string) || 'google';
+    const voiceId = (body.voice_id as string) || 'ja-JP-Neural2-B';
+    const sampleText = (body.text as string) || 'こんにちは。これはナレーション音声のサンプルです。お好みの声を選んでください。';
+
+    if (!voiceId) {
+      return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, 'voice_id is required'), 400);
+    }
+
+    let audioBytes: Uint8Array;
+
+    if (provider === 'elevenlabs') {
+      if (!c.env.ELEVENLABS_API_KEY) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'ElevenLabs API key not configured'), 500);
+      }
+      const elevenLabsVoiceId = resolveElevenLabsVoiceId(voiceId);
+      if (!elevenLabsVoiceId) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, `Unknown ElevenLabs voice: ${voiceId}`), 400);
+      }
+      const modelId = (c.env as any).ELEVENLABS_DEFAULT_MODEL || ELEVENLABS_MODELS.MULTILINGUAL_V2;
+      const result = await generateElevenLabsTTS(c.env.ELEVENLABS_API_KEY, {
+        text: sampleText,
+        voice_id: elevenLabsVoiceId,
+        model_id: modelId,
+        output_format: 'mp3_44100_128',
+      });
+      if (!result.success || !result.audio) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, result.error || 'ElevenLabs TTS failed'), 500);
+      }
+      audioBytes = new Uint8Array(result.audio);
+    } else if (provider === 'fish') {
+      if (!c.env.FISH_AUDIO_API_TOKEN) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Fish Audio API key not configured'), 500);
+      }
+      const referenceId = await getFishReferenceId(voiceId);
+      if (!referenceId) {
+        return c.json(createErrorResponse(ERROR_CODES.INVALID_REQUEST, `Unknown Fish Audio voice: ${voiceId}`), 400);
+      }
+      const fishResult = await generateFishTTS(c.env.FISH_AUDIO_API_TOKEN, {
+        text: sampleText,
+        reference_id: referenceId,
+        format: 'mp3',
+        sample_rate: 44100,
+        mp3_bitrate: 128,
+      });
+      audioBytes = new Uint8Array(fishResult.audio);
+    } else {
+      // Google TTS (default)
+      const googleTtsKey = c.env.GOOGLE_TTS_API_KEY || c.env.GEMINI_API_KEY;
+      if (!googleTtsKey) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Google TTS API key not configured'), 500);
+      }
+      const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Goog-Api-Key': googleTtsKey,
+        },
+        body: JSON.stringify({
+          input: { text: sampleText },
+          voice: { languageCode: 'ja-JP', name: voiceId },
+          audioConfig: { audioEncoding: 'MP3', sampleRateHertz: 24000 },
+        }),
+      });
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, `Google TTS error: ${res.status} ${errText}`), 500);
+      }
+      const data: any = await res.json();
+      if (!data?.audioContent) {
+        return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Google TTS returned empty audio'), 500);
+      }
+      audioBytes = base64ToUint8Array(data.audioContent);
+    }
+
+    // base64エンコードして返す（R2保存しない = コスト最小）
+    // ArrayBuffer → base64 (chunked)
+    const CHUNK_SIZE = 0x8000;
+    let binary = '';
+    for (let i = 0; i < audioBytes.length; i += CHUNK_SIZE) {
+      const chunk = audioBytes.subarray(i, i + CHUNK_SIZE);
+      let chunkStr = '';
+      for (let j = 0; j < chunk.length; j++) {
+        chunkStr += String.fromCharCode(chunk[j]);
+      }
+      binary += chunkStr;
+    }
+    const audioBase64 = btoa(binary);
+
+    console.log(`[VoicePreview] Generated: provider=${provider}, voice=${voiceId}, bytes=${audioBytes.length}`);
+
+    return c.json({
+      success: true,
+      audio_base64: audioBase64,
+      content_type: 'audio/mpeg',
+      provider,
+      voice_id: voiceId,
+      text: sampleText,
+    });
+  } catch (error) {
+    console.error('[VoicePreview] Error:', error);
+    return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Voice preview failed'), 500);
+  }
+});
+
 export default audioGeneration;

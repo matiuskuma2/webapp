@@ -9995,6 +9995,87 @@ function updateBgmVolumeLabel() {
 }
 
 /**
+ * Update BGM fade in/out labels
+ */
+function updateBgmFadeLabel(direction) {
+  const id = direction === 'in' ? 'vbBgmFadeIn' : 'vbBgmFadeOut';
+  const labelId = direction === 'in' ? 'vbBgmFadeInLabel' : 'vbBgmFadeOutLabel';
+  const slider = document.getElementById(id);
+  const label = document.getElementById(labelId);
+  if (slider && label) {
+    const ms = parseInt(slider.value);
+    label.textContent = ms === 0 ? '0秒' : (ms / 1000).toFixed(1) + '秒';
+  }
+}
+window.updateBgmFadeLabel = updateBgmFadeLabel;
+
+/**
+ * Narration voice preview - Generate and play a sample
+ */
+let _narrationPreviewAbort = null;
+async function previewNarrationVoice() {
+  const selectEl = document.getElementById('narrationVoiceSelect');
+  const btn = document.getElementById('narrationVoicePreviewBtn');
+  const container = document.getElementById('narrationVoicePreviewContainer');
+  const audio = document.getElementById('narrationVoicePreviewAudio');
+  const status = document.getElementById('narrationVoicePreviewStatus');
+
+  if (!selectEl || !selectEl.value) {
+    showToast('音声を選択してください', 'warning');
+    return;
+  }
+
+  const [provider, voiceId] = selectEl.value.split(':');
+  if (!voiceId) {
+    showToast('音声IDが不正です', 'warning');
+    return;
+  }
+
+  // UI: ローディング
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>'; }
+  if (container) container.classList.remove('hidden');
+  if (status) status.textContent = '音声を生成中...';
+
+  try {
+    const res = await axios.post(`${API_BASE}/voice-preview`, {
+      provider,
+      voice_id: voiceId,
+    });
+
+    if (res.data.success && res.data.audio_base64) {
+      const dataUrl = `data:${res.data.content_type};base64,${res.data.audio_base64}`;
+      if (audio) {
+        audio.src = dataUrl;
+        audio.play().catch(() => {});
+      }
+      if (status) {
+        const providerLabel = provider === 'elevenlabs' ? 'ElevenLabs' : provider === 'fish' ? 'Fish Audio' : 'Google TTS';
+        status.textContent = `${providerLabel} / ${voiceId}`;
+      }
+    } else {
+      if (status) status.textContent = '生成に失敗しました';
+      showToast('音声プレビューの生成に失敗しました', 'error');
+    }
+  } catch (err) {
+    console.error('[VoicePreview] Error:', err);
+    const msg = err.response?.data?.error?.message || err.message || '不明なエラー';
+    if (status) status.textContent = `エラー: ${msg}`;
+    showToast('音声プレビュー失敗: ' + msg, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-play"></i>'; }
+  }
+}
+window.previewNarrationVoice = previewNarrationVoice;
+
+function stopNarrationPreview() {
+  const audio = document.getElementById('narrationVoicePreviewAudio');
+  if (audio) { audio.pause(); audio.currentTime = 0; }
+  const container = document.getElementById('narrationVoicePreviewContainer');
+  if (container) container.classList.add('hidden');
+}
+window.stopNarrationPreview = stopNarrationPreview;
+
+/**
  * Start video build
  * PR-2: 新UI (videoBuildConfigCard) 対応
  * PR-4-4: 二重送信ガード追加
@@ -10053,6 +10134,14 @@ async function startVideoBuild() {
     ? getRange01('vbBgmVolume', 0.25)
     : 0.25;
   
+  // BGMフェードイン/アウト
+  const bgmFadeInMs = hasNewConfigUI
+    ? (parseInt(getVal('vbBgmFadeIn', '800') || '800', 10))
+    : 800;
+  const bgmFadeOutMs = hasNewConfigUI
+    ? (parseInt(getVal('vbBgmFadeOut', '800') || '800', 10))
+    : 800;
+  
   // Motion (Remotion語は内部のみ)
   const motionPreset = hasNewConfigUI
     ? (getVal('vbMotionPreset', 'kenburns_soft') || 'kenburns_soft')
@@ -10095,6 +10184,8 @@ async function startVideoBuild() {
     bgm: {
       enabled: bgmEnabled,
       volume: bgmVolume,
+      fade_in_ms: bgmFadeInMs,
+      fade_out_ms: bgmFadeOutMs,
     },
     motion: {
       preset: motionPreset,

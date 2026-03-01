@@ -1639,34 +1639,51 @@ app.get('/projects/:id', async (c) => {
                         <!-- P0-1: 設定パネル（非表示→トグル） -->
                         <div id="narrationVoicePanel" class="hidden mt-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
                             <label class="block text-xs font-semibold text-gray-700 mb-1">音声プリセット</label>
-                            <select id="narrationVoiceSelect" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
-                                <option value="">選択してください</option>
-                                <optgroup label="Google TTS (日本語)">
-                                    <option value="google:ja-JP-Neural2-B">ja-JP-Neural2-B (男性・落ち着き)</option>
-                                    <option value="google:ja-JP-Neural2-C">ja-JP-Neural2-C (女性・明るい)</option>
-                                    <option value="google:ja-JP-Neural2-D">ja-JP-Neural2-D (男性・若々しい)</option>
-                                    <option value="google:ja-JP-Wavenet-A">ja-JP-Wavenet-A (女性・ソフト)</option>
-                                    <option value="google:ja-JP-Wavenet-B">ja-JP-Wavenet-B (男性・自然)</option>
-                                    <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (女性・自然)</option>
-                                    <option value="google:ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・低音)</option>
-                                </optgroup>
-                                <optgroup label="ElevenLabs (高品質・多言語)">
-                                    <option value="elevenlabs:el-aria">Aria（女性・落ち着き）</option>
-                                    <option value="elevenlabs:el-sarah">Sarah（女性・優しい）</option>
-                                    <option value="elevenlabs:el-charlotte">Charlotte（女性・明るい）</option>
-                                    <option value="elevenlabs:el-lily">Lily（若い女性）</option>
-                                    <option value="elevenlabs:el-adam">Adam（男性・深い）</option>
-                                    <option value="elevenlabs:el-bill">Bill（男性・自然）</option>
-                                    <option value="elevenlabs:el-brian">Brian（男性・プロ）</option>
-                                    <option value="elevenlabs:el-george">George（男性・落ち着き）</option>
-                                    <option value="elevenlabs:el-hinata">Hinata（男性・日本語）</option>
-                                    <option value="elevenlabs:el-yumi">Yumi（女性・日本語・落ち着き）</option>
-                                </optgroup>
-                                <optgroup label="Fish Audio (日本語特化)">
-                                    <option value="fish:fish-nanamin">Nanamin（女性・アニメ）</option>
-                                </optgroup>
-                                <!-- プロジェクトキャラクターの音声はJSで動的に追加 -->
-                            </select>
+                            <div class="flex gap-2">
+                                <select id="narrationVoiceSelect" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                                    <option value="">選択してください</option>
+                                    <optgroup label="Google TTS (日本語)">
+                                        <option value="google:ja-JP-Neural2-B">ja-JP-Neural2-B (男性・落ち着き)</option>
+                                        <option value="google:ja-JP-Neural2-C">ja-JP-Neural2-C (女性・明るい)</option>
+                                        <option value="google:ja-JP-Neural2-D">ja-JP-Neural2-D (男性・若々しい)</option>
+                                        <option value="google:ja-JP-Wavenet-A">ja-JP-Wavenet-A (女性・ソフト)</option>
+                                        <option value="google:ja-JP-Wavenet-B">ja-JP-Wavenet-B (男性・自然)</option>
+                                        <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (女性・自然)</option>
+                                        <option value="google:ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・低音)</option>
+                                    </optgroup>
+                                    <optgroup label="ElevenLabs (高品質・多言語)">
+                                        <option value="elevenlabs:el-aria">Aria（女性・落ち着き）</option>
+                                        <option value="elevenlabs:el-sarah">Sarah（女性・優しい）</option>
+                                        <option value="elevenlabs:el-charlotte">Charlotte（女性・明るい）</option>
+                                        <option value="elevenlabs:el-lily">Lily（若い女性）</option>
+                                        <option value="elevenlabs:el-adam">Adam（男性・深い）</option>
+                                        <option value="elevenlabs:el-bill">Bill（男性・自然）</option>
+                                        <option value="elevenlabs:el-brian">Brian（男性・プロ）</option>
+                                        <option value="elevenlabs:el-george">George（男性・落ち着き）</option>
+                                        <option value="elevenlabs:el-hinata">Hinata（男性・日本語）</option>
+                                        <option value="elevenlabs:el-yumi">Yumi（女性・日本語・落ち着き）</option>
+                                    </optgroup>
+                                    <optgroup label="Fish Audio (日本語特化)">
+                                        <option value="fish:fish-nanamin">Nanamin（女性・アニメ）</option>
+                                    </optgroup>
+                                    <!-- プロジェクトキャラクターの音声はJSで動的に追加 -->
+                                </select>
+                                <button id="narrationVoicePreviewBtn" onclick="previewNarrationVoice()"
+                                    class="px-3 py-2 bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors text-sm"
+                                    title="選択した音声を試聴">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                            </div>
+                            <!-- 試聴オーディオプレーヤー -->
+                            <div id="narrationVoicePreviewContainer" class="hidden mt-2 p-2 bg-white rounded-lg border border-purple-200">
+                                <div class="flex items-center gap-2">
+                                    <audio id="narrationVoicePreviewAudio" controls class="flex-1 h-8"></audio>
+                                    <button onclick="stopNarrationPreview()" class="text-xs px-2 py-1 text-red-600 hover:bg-red-50 rounded" title="停止">
+                                        <i class="fas fa-stop"></i>
+                                    </button>
+                                </div>
+                                <p id="narrationVoicePreviewStatus" class="text-xs text-gray-500 mt-1"></p>
+                            </div>
                             <p class="text-xs text-gray-500 mt-1">
                                 <i class="fas fa-info-circle mr-1"></i>
                                 キャラクター音声を使いたい場合は、発話を「キャラセリフ」に設定してください。キャラの声は自動で適用されます。
@@ -1921,6 +1938,31 @@ app.get('/projects/:id', async (c) => {
                                         <input id="vbBgmVolume" type="range" min="0" max="100" value="25"
                                             class="flex-1 accent-indigo-600" oninput="updateBgmVolumeLabel()" />
                                         <span id="vbBgmVolumeLabel" class="text-xs text-gray-700 w-10">25%</span>
+                                    </div>
+                                    <!-- BGMフェードイン/アウト設定 -->
+                                    <div class="mt-3 pt-3 border-t border-gray-200">
+                                        <label class="block text-xs font-semibold text-gray-600 mb-2">
+                                            <i class="fas fa-wave-square mr-1 text-indigo-500"></i>フェード設定
+                                        </label>
+                                        <div class="grid grid-cols-2 gap-3">
+                                            <div>
+                                                <label class="text-xs text-gray-500">フェードイン</label>
+                                                <div class="flex items-center gap-2 mt-1">
+                                                    <input id="vbBgmFadeIn" type="range" min="0" max="5000" step="100" value="800"
+                                                        class="flex-1 accent-indigo-600" oninput="updateBgmFadeLabel('in')" />
+                                                    <span id="vbBgmFadeInLabel" class="text-xs text-gray-700 w-12 text-right">0.8秒</span>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label class="text-xs text-gray-500">フェードアウト</label>
+                                                <div class="flex items-center gap-2 mt-1">
+                                                    <input id="vbBgmFadeOut" type="range" min="0" max="5000" step="100" value="800"
+                                                        class="flex-1 accent-indigo-600" oninput="updateBgmFadeLabel('out')" />
+                                                    <span id="vbBgmFadeOutLabel" class="text-xs text-gray-700 w-12 text-right">0.8秒</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <p class="text-xs text-gray-400 mt-1">0秒=即開始/即停止、最大5秒</p>
                                     </div>
                                     <p class="text-xs text-gray-500 mt-1">※ BGMファイル自体の管理はBGM設定で行います</p>
                                 </div>
