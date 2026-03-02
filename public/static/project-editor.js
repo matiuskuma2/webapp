@@ -4234,7 +4234,7 @@ function renderComicAudioSection(scene) {
     { id: 'el-hinata', name: 'Hinata（男性・日本語）', provider: 'elevenlabs' },
     { id: 'el-yumi', name: 'Yumi（女性・日本語・落ち着き）', provider: 'elevenlabs' },
     // Fish Audio
-    { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', provider: 'fish' },
+    { id: 'fish-nanamin', name: 'Nanamin（男性・アニメ）', provider: 'fish' },
   ];
   
   const voiceOptions = voicePresets.map(preset => {
@@ -4892,7 +4892,7 @@ function renderSceneAudioSection(scene) {
     { id: 'el-hinata', name: 'Hinata（男性・日本語）', gender: 'male', provider: 'elevenlabs' },
     { id: 'el-yumi', name: 'Yumi（女性・日本語・落ち着き）', gender: 'female', provider: 'elevenlabs' },
     // Fish Audio
-    { id: 'fish-nanamin', name: 'Nanamin（女性・アニメ）', gender: 'female', provider: 'fish' },
+    { id: 'fish-nanamin', name: 'Nanamin（男性・アニメ）', gender: 'female', provider: 'fish' },
   ];
   
   const voiceOptions = voicePresets.map(preset => {

@@ -1664,7 +1664,7 @@ app.get('/projects/:id', async (c) => {
                                         <option value="elevenlabs:el-yumi">Yumi（女性・日本語・落ち着き）</option>
                                     </optgroup>
                                     <optgroup label="Fish Audio (日本語特化)">
-                                        <option value="fish:fish-nanamin">Nanamin（女性・アニメ）</option>
+                                        <option value="fish:fish-nanamin">Nanamin（男性・アニメ）</option>
                                     </optgroup>
                                     <!-- プロジェクトキャラクターの音声はJSで動的に追加 -->
                                 </select>
