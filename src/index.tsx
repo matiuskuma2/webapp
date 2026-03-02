@@ -1643,12 +1643,12 @@ app.get('/projects/:id', async (c) => {
                                 <select id="narrationVoiceSelect" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm">
                                     <option value="">選択してください</option>
                                     <optgroup label="Google TTS (日本語)">
-                                        <option value="google:ja-JP-Neural2-B">ja-JP-Neural2-B (男性・落ち着き)</option>
-                                        <option value="google:ja-JP-Neural2-C">ja-JP-Neural2-C (女性・明るい)</option>
+                                        <option value="google:ja-JP-Neural2-B">ja-JP-Neural2-B (女性・落ち着き)</option>
+                                        <option value="google:ja-JP-Neural2-C">ja-JP-Neural2-C (男性・明るい)</option>
                                         <option value="google:ja-JP-Neural2-D">ja-JP-Neural2-D (男性・若々しい)</option>
                                         <option value="google:ja-JP-Wavenet-A">ja-JP-Wavenet-A (女性・ソフト)</option>
-                                        <option value="google:ja-JP-Wavenet-B">ja-JP-Wavenet-B (男性・自然)</option>
-                                        <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (女性・自然)</option>
+                                        <option value="google:ja-JP-Wavenet-B">ja-JP-Wavenet-B (女性・自然)</option>
+                                        <option value="google:ja-JP-Wavenet-C">ja-JP-Wavenet-C (男性・自然)</option>
                                         <option value="google:ja-JP-Wavenet-D">ja-JP-Wavenet-D (男性・低音)</option>
                                     </optgroup>
                                     <optgroup label="ElevenLabs (高品質・多言語)">
