@@ -360,12 +360,27 @@ ${castList}
     }
 
     // ★ SSOT: target_scene_count の決定ロジック
-    // - リクエストボディの値が唯一の真実（scene_split_settings テーブルは参照しない）
-    // - preserve(raw)モードかつ未指定の場合: 段落数を自動採用（processPreserveModeで上書き）
-    // - ai モードかつ未指定の場合: デフォルト 5
+    // - リクエストボディの値が最優先
+    // - 未指定の場合（ポーリング再呼出し）: DBの保存値を使用
+    // - DB保存値もない場合: デフォルト 5
     const bodyTargetSceneCount = body.target_scene_count  // undefined = 未指定
     const targetExplicitlySet = typeof bodyTargetSceneCount === 'number' && bodyTargetSceneCount > 0
-    let targetSceneCount = targetExplicitlySet ? bodyTargetSceneCount : 5
+    
+    // ★ FIX: ポーリング再呼出し時にDBの保存値を復元（bodyなしで5にリセットされるのを防止）
+    let targetSceneCount: number
+    if (targetExplicitlySet) {
+      targetSceneCount = bodyTargetSceneCount
+    } else {
+      // DBから前回保存したtarget_scene_countを取得
+      const savedProject = await c.env.DB.prepare(
+        `SELECT target_scene_count FROM projects WHERE id = ?`
+      ).bind(projectId).first<{ target_scene_count: number | null }>()
+      const dbTarget = savedProject?.target_scene_count
+      targetSceneCount = (dbTarget && dbTarget > 0) ? dbTarget : 5
+      if (dbTarget && dbTarget > 0) {
+        console.log(`[Format] Restored target_scene_count=${dbTarget} from DB (polling re-call, body was empty)`)
+      }
+    }
     
     // ★ preserve モードで target 未明示指定 → 0 をセンチネル値にして processPreserveMode に渡す
     // processPreserveMode 内で段落数を検出した後に自動でその数を使う
@@ -378,15 +393,20 @@ ${castList}
 
     // ★ FIX: split_mode と target_scene_count をプロジェクトに保存
     // 次回ロード時に正しい初期値がフロントエンドに返る
-    try {
-      const saveSplitMode = splitMode  // preserve or ai
-      const saveTarget = targetExplicitlySet ? bodyTargetSceneCount : null  // null = 自動
-      await c.env.DB.prepare(`
-        UPDATE projects SET split_mode = ?, target_scene_count = ? WHERE id = ?
-      `).bind(saveSplitMode, saveTarget, projectId).run()
-      console.log(`[Format] Saved split_mode=${saveSplitMode}, target_scene_count=${saveTarget} to project ${projectId}`)
-    } catch (e) {
-      console.warn(`[Format] Failed to save split settings to project:`, e)
+    // ★ FIX: ポーリング再呼出し（bodyなし）で上書きされないよう、明示指定時のみ保存
+    if (targetExplicitlySet) {
+      try {
+        const saveSplitMode = splitMode  // preserve or ai
+        const saveTarget = bodyTargetSceneCount  // 明示指定値を保存
+        await c.env.DB.prepare(`
+          UPDATE projects SET split_mode = ?, target_scene_count = ? WHERE id = ?
+        `).bind(saveSplitMode, saveTarget, projectId).run()
+        console.log(`[Format] Saved split_mode=${saveSplitMode}, target_scene_count=${saveTarget} to project ${projectId}`)
+      } catch (e) {
+        console.warn(`[Format] Failed to save split settings to project:`, e)
+      }
+    } else {
+      console.log(`[Format] Skipping split settings save (not explicitly set, likely polling re-call)`)
     }
 
     // 1. プロジェクトの存在確認とステータスチェック
@@ -1839,8 +1859,10 @@ async function generateMiniScenesWithSchemaAI(
 }> {
   try {
     // AI整理モード: 省略を極力避ける指示を追加
+    // ★ FIX: targetSceneCountをプロンプトとSchemaに反映
+    const effectiveMaxScenes = Math.max(1, Math.min(targetSceneCount, 20))
     const systemPrompt = `あなたは動画シナリオ作成の専門家です。
-提供された文章断片から、1-10個のシーンを生成してください。
+提供された文章断片から、**${effectiveMaxScenes}個前後**のシーンを生成してください。目標シーン数は${effectiveMaxScenes}個です。
 
 【最重要: 省略禁止】
 - **元の文章の内容を省略しないでください**
@@ -1855,7 +1877,7 @@ async function generateMiniScenesWithSchemaAI(
 - ズレが生じるのは最大の品質問題です。dialogue「Aの話題」なのに image_prompt が「Bの場面」はNGです
 
 【ルール】
-1. シーン数は **1〜10 個**（文章の長さに応じて調整、長い場合は多く）
+1. シーン数は **目標${effectiveMaxScenes}個**（テキスト量に応じて±2個の幅は許容、ただしできるだけ目標に近づけてください）
 2. 各シーンの dialogue は **30〜500 文字**（元の文章を維持するため緩和）
 3. 各シーンの bullets は **2〜3 個**、各 5〜40 文字
 4. 各シーンの title は **5〜50 文字**
@@ -1898,14 +1920,15 @@ ${chunkText}
 情報を省略せず、適切に複数シーンに分割してください。
 生成後に全シーンの dialogue ↔ image_prompt ペアが一致しているか必ずセルフチェックしてください。`
 
-    // JSON Schema for MiniScenes (1-10 scenes, 200シーン対応)
+    // JSON Schema for MiniScenes (targetに応じて動的設定)
+    const schemaMaxItems = Math.max(effectiveMaxScenes + 2, 5)  // 目標+2の余裕、最低5
     const jsonSchema = {
       type: 'object',
       properties: {
         scenes: {
           type: 'array',
           minItems: 1,
-          maxItems: 20,  // NOTE: P-1で200シーン対応のため10→20に緩和
+          maxItems: schemaMaxItems,  // ★ FIX: targetSceneCountに連動
           items: {
             type: 'object',
             properties: {

@@ -1875,19 +1875,24 @@ function startFormatPolling() {
       } else if (data.status === 'formatting' || data.status === 'uploaded') {
         // Continue polling and trigger next batch if pending > 0
         // BUG FIX: 'uploaded' 状態でもバッチトリガーを許可（バックエンドで formatting に遷移する）
+        // ★ FIX: ポーリング再呼出し時にもsplit_mode/target_scene_countを送信（DB上書き防止）
+        const pollingPayload = {
+          split_mode: currentSplitMode === 'raw' ? 'preserve' : 'ai',
+          target_scene_count: currentTargetSceneCount || 0
+        };
         if (data.pending > 0 && data.processing === 0) {
           // Still have pending chunks, trigger next batch
           try {
-            console.log('Triggering next batch: pending =', data.pending, 'status =', data.status);
-            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
+            console.log('Triggering next batch: pending =', data.pending, 'status =', data.status, 'payload =', pollingPayload);
+            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`, pollingPayload);
           } catch (error) {
             console.error('Next batch format call error:', error);
           }
         } else if (data.pending === 0 && data.processing === 0) {
           // All chunks done, trigger one more format call to merge
           try {
-            console.log('All chunks done, triggering final merge');
-            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);
+            console.log('All chunks done, triggering final merge, payload =', pollingPayload);
+            await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`, pollingPayload);
           } catch (error) {
             console.error('Final format call error:', error);
           }
