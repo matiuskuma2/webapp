@@ -17,6 +17,7 @@
 import { Hono } from 'hono';
 import type { Bindings } from '../types/bindings';
 import { createAwsVideoClient, toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl, isPresignedUrlExpiringSoon, CLOUDFRONT_VIDEO_DOMAIN, CLOUDFRONT_RENDERS_DOMAIN, type VideoEngine, type BillingSource } from '../utils/aws-video-client';
+import { createLaozhangClient, estimateLaozhangCost, detectLaozhangProvider, type LaozhangModel, type LaozhangVideoClient } from '../utils/laozhang-client';
 import { decryptWithKeyRing } from '../utils/crypto';
 import { generateSignedImageUrl } from '../utils/signed-url';
 import { logApiError, createApiErrorLogger } from '../utils/error-logger';
@@ -132,10 +133,10 @@ const STUCK_JOB_THRESHOLD_MINUTES = 15;
 // ====================================================================
 
 interface GenerateVideoRequest {
-  provider?: 'google';
-  model?: string;           // veo-2.0-generate-001 or veo-3.0-generate-preview
+  provider?: 'google' | 'laozhang';
+  model?: string;           // veo-2.0-generate-001, veo-3.0-generate-preview, veo-3.1-fast, sora-2, etc.
   video_engine?: VideoEngine;
-  duration_sec?: 5 | 8 | 10;
+  duration_sec?: 5 | 8 | 10 | 15;
   prompt?: string;
 }
 
@@ -219,6 +220,20 @@ async function getUserApiKey(
 
 function estimateVideoCost(model: string, durationSec: number, hasAudio: boolean = false): number {
   const modelLower = model?.toLowerCase() || '';
+  
+  // LaoZhang.ai pricing (flat per-call, not per-second)
+  if (modelLower === 'veo-3.1-fast' || modelLower === 'veo-3.1') {
+    return 2.00;  // $2.00/call via laozhang.ai
+  }
+  if (modelLower === 'veo3-pro') {
+    return 10.00;  // $10.00/call via laozhang.ai
+  }
+  if (modelLower === 'sora-2') {
+    return 0.15;  // $0.15/call via laozhang.ai (free on failure)
+  }
+  if (modelLower === 'sora-2-pro') {
+    return 0.80;  // $0.80/call via laozhang.ai
+  }
   
   // Veo 3 pricing (Vertex AI) - 2025-02 rates
   if (modelLower.includes('veo-3') || modelLower.includes('veo3')) {
@@ -526,8 +541,11 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   }
   
   // 5. Video engine決定
+  // LaoZhang models: veo-3.1-fast, veo-3.1, veo3-pro, sora-2, sora-2-pro
+  const isLaozhangModel = ['veo-3.1-fast', 'veo-3.1', 'veo3-pro', 'sora-2', 'sora-2-pro'].includes(body.model || '');
   const videoEngine: VideoEngine = body.video_engine || 
-    (body.model?.includes('veo-3') ? 'veo3' : 'veo2');
+    (isLaozhangModel ? detectLaozhangProvider(body.model as LaozhangModel) :
+     body.model?.includes('veo-3') ? 'veo3' : 'veo2');
   
   // 5.5. Use already-obtained session info from access control (avoid duplicate DB query)
   const loggedInUserId = accessUserId;
@@ -738,17 +756,22 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   }
   
   // 7. D1にレコード作成（generating状態）
-  const model = body.model || (videoEngine === 'veo3' ? 'veo-3.0-generate-preview' : 'veo-2.0-generate-001');
-  const durationSec = body.duration_sec || (videoEngine === 'veo3' ? 8 : 5);
+  const isLaozhangEngine = videoEngine === 'laozhang_veo' || videoEngine === 'laozhang_sora';
+  const model = body.model || (isLaozhangEngine ? 'veo-3.1-fast' : videoEngine === 'veo3' ? 'veo-3.0-generate-preview' : 'veo-2.0-generate-001');
+  const durationSec = body.duration_sec || (videoEngine === 'laozhang_sora' ? 10 : isLaozhangEngine ? 8 : videoEngine === 'veo3' ? 8 : 5);
   const prompt = body.prompt || 'Camera slowly zooms in, maintaining the composition and style of the image.';
+  
+  // Provider name for DB record
+  const dbProvider = isLaozhangEngine ? videoEngine : 'google_veo';
   
   const insertResult = await c.env.DB.prepare(`
     INSERT INTO video_generations (
       scene_id, user_id, provider, model, status, duration_sec, prompt, source_image_r2_key
-    ) VALUES (?, ?, 'google_veo', ?, 'generating', ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, 'generating', ?, ?, ?)
   `).bind(
     sceneId,
     executorUserId,
+    dbProvider,
     model,
     durationSec,
     prompt,
@@ -757,7 +780,129 @@ videoGeneration.post('/:sceneId/generate-video', async (c) => {
   
   const videoGenerationId = insertResult.meta.last_row_id as number;
   
-  // 8. AWS Video Proxy 呼び出し
+  // ========================================================================
+  // 8. LaoZhang.ai エンジンの場合: 直接API呼び出し（AWS Proxy不要）
+  // ========================================================================
+  if (isLaozhangEngine) {
+    const lzClient = createLaozhangClient(c.env);
+    if (!lzClient) {
+      await c.env.DB.prepare(`
+        UPDATE video_generations SET status = 'failed', error_message = 'LAOZHANG_API_KEY not configured'
+        WHERE id = ?
+      `).bind(videoGenerationId).run();
+      
+      await logError({
+        sceneId: sceneId,
+        projectId: scene.project_id,
+        userId: executorUserId,
+        videoEngine: videoEngine,
+        errorCode: 'LAOZHANG_KEY_NOT_CONFIGURED',
+        errorMessage: 'LAOZHANG_API_KEY not configured in environment',
+        httpStatusCode: 500,
+        errorDetails: { videoGenerationId },
+      });
+      
+      return c.json({
+        error: { code: 'LAOZHANG_KEY_NOT_CONFIGURED', message: 'LaoZhang APIキーが設定されていません。管理者にお問い合わせください。' },
+      }, 500);
+    }
+    
+    // Build signed image URL for I2V (LaoZhang VEO supports image URLs directly)
+    let imageUrlForLaozhang: string | undefined;
+    if (videoEngine === 'laozhang_veo') {
+      const signingSecret = c.env.IMAGE_URL_SIGNING_SECRET;
+      if (signingSecret) {
+        const origin = new URL(c.req.url).origin;
+        imageUrlForLaozhang = await buildSignedImageUrl(activeImage.r2_key, origin, signingSecret);
+      }
+    }
+    
+    // Submit task to LaoZhang
+    const lzResult = await lzClient.submitTask({
+      model: model as LaozhangModel,
+      prompt,
+      imageUrls: imageUrlForLaozhang ? [imageUrlForLaozhang] : undefined,
+    });
+    
+    if (!lzResult.success || !lzResult.taskId) {
+      const errorMessage = lzResult.error?.message || 'LaoZhang API call failed';
+      await c.env.DB.prepare(`
+        UPDATE video_generations SET status = 'failed', error_message = ?
+        WHERE id = ?
+      `).bind(errorMessage, videoGenerationId).run();
+      
+      await logError({
+        sceneId: sceneId,
+        projectId: scene.project_id,
+        userId: executorUserId,
+        provider: videoEngine,
+        videoEngine: videoEngine,
+        errorCode: lzResult.error?.code || 'LAOZHANG_SUBMIT_FAILED',
+        errorMessage: errorMessage,
+        httpStatusCode: 500,
+        errorDetails: { videoGenerationId, billingSource, billingUserId },
+      });
+      
+      return c.json({
+        error: lzResult.error || { code: 'LAOZHANG_SUBMIT_FAILED', message: 'LaoZhang動画生成の開始に失敗しました' },
+      }, 500);
+    }
+    
+    // Save task ID (job_id) for status polling
+    await c.env.DB.prepare(`
+      UPDATE video_generations SET job_id = ? WHERE id = ?
+    `).bind(lzResult.taskId, videoGenerationId).run();
+    
+    // Log usage
+    const estimatedCostUsd = estimateVideoCost(model, durationSec, false);
+    await c.env.DB.prepare(`
+      INSERT INTO api_usage_logs (
+        user_id, project_id, api_type, provider, model, video_engine, 
+        estimated_cost_usd, duration_seconds,
+        sponsored_by_user_id, metadata_json
+      ) VALUES (?, ?, 'video_generation', ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      executorUserId,
+      scene.project_id,
+      videoEngine,
+      model,
+      videoEngine,
+      estimatedCostUsd,
+      durationSec,
+      billingSource === 'sponsor' ? billingUserId : null,
+      JSON.stringify({ 
+        scene_id: sceneId, 
+        duration_sec: durationSec, 
+        job_id: lzResult.taskId,
+        billing_source: billingSource,
+        billing_user_id: billingUserId,
+        executor_user_id: executorUserId,
+        owner_user_id: scene.owner_user_id,
+        estimated_cost_usd: estimatedCostUsd,
+        laozhang_provider: lzResult.provider,
+      })
+    ).run();
+    
+    console.log(`[VideoGen/LaoZhang] Scene ${sceneId}: task=${lzResult.taskId}, model=${model}, engine=${videoEngine}`);
+    
+    return c.json({
+      success: true,
+      video_id: videoGenerationId,
+      video_generation: {
+        id: videoGenerationId,
+        scene_id: sceneId,
+        status: 'generating',
+        job_id: lzResult.taskId,
+        model,
+        video_engine: videoEngine,
+        duration_sec: durationSec,
+      },
+    }, 202);
+  }
+  
+  // ========================================================================
+  // 8b. AWS Video Proxy 呼び出し（既存 Veo2/Veo3 エンジン）
+  // ========================================================================
   const awsClient = createAwsVideoClient(c.env);
   if (!awsClient) {
     // AWS credentials missing → rollback
@@ -972,7 +1117,7 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
   }
   
   const video = await c.env.DB.prepare(`
-    SELECT id, scene_id, status, job_id, r2_key, r2_url, error_message, updated_at
+    SELECT id, scene_id, status, job_id, r2_key, r2_url, error_message, updated_at, provider, model
     FROM video_generations WHERE id = ?
   `).bind(videoId).first<{
     id: number;
@@ -983,14 +1128,74 @@ videoGeneration.get('/:sceneId/videos/:videoId/status', async (c) => {
     r2_url: string | null;
     error_message: string | null;
     updated_at: string;
+    provider: string | null;
+    model: string | null;
   }>();
   
   if (!video) {
     return c.json({ error: { code: 'VIDEO_NOT_FOUND', message: 'Video generation not found' } }, 404);
   }
   
+  // ========================================================================
+  // LaoZhang.ai エンジンのステータス確認
+  // ========================================================================
+  const isLaozhangProvider = video.provider === 'laozhang_veo' || video.provider === 'laozhang_sora';
+  
+  if (isLaozhangProvider && video.status === 'generating' && video.job_id) {
+    const lzClient = createLaozhangClient(c.env);
+    if (lzClient) {
+      const lzModel = (video.model || 'veo-3.1-fast') as LaozhangModel;
+      const lzStatus = await lzClient.getStatus(video.job_id, lzModel);
+      
+      if (lzStatus.success) {
+        if (lzStatus.status === 'completed' && lzStatus.videoUrl) {
+          // Deactivate all videos for this scene, then activate this one
+          await c.env.DB.prepare(`
+            UPDATE video_generations SET is_active = 0 WHERE scene_id = ?
+          `).bind(video.scene_id).run();
+          
+          await c.env.DB.prepare(`
+            UPDATE video_generations 
+            SET status = 'completed', r2_url = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(lzStatus.videoUrl, videoId).run();
+          
+          console.log(`[VideoGen/LaoZhang] Video ${videoId} completed: url=${lzStatus.videoUrl.substring(0, 80)}`);
+          
+          return c.json({
+            status: 'completed',
+            r2_url: lzStatus.videoUrl,
+            progress_stage: 'completed',
+          });
+        } else if (lzStatus.status === 'failed') {
+          const errorMsg = lzStatus.error?.message || 'LaoZhang generation failed';
+          await c.env.DB.prepare(`
+            UPDATE video_generations 
+            SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+          `).bind(errorMsg, videoId).run();
+          
+          return c.json({ status: 'failed', error: { message: errorMsg } });
+        } else {
+          await c.env.DB.prepare(`
+            UPDATE video_generations SET updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(videoId).run();
+          
+          return c.json({
+            status: 'generating',
+            progress_stage: lzStatus.status || 'processing',
+            progress: lzStatus.progress || 0,
+          });
+        }
+      }
+    }
+  }
+  
+  // ========================================================================
+  // AWS (既存 Veo2/Veo3) のステータス確認
+  // ========================================================================
   // generating中 または completed（presigned URL refresh）でjob_idがある場合はAWSに問い合わせ
-  if ((video.status === 'generating' || video.status === 'completed') && video.job_id) {
+  if (!isLaozhangProvider && (video.status === 'generating' || video.status === 'completed') && video.job_id) {
     const awsClient = createAwsVideoClient(c.env);
     if (awsClient) {
       const awsStatus = await awsClient.getStatus(video.job_id);

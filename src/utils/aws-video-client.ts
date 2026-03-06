@@ -18,7 +18,7 @@ const DEFAULT_API_GATEWAY_ENDPOINT = 'https://sddd2nwesf.execute-api.ap-northeas
 // Types
 // ====================================================================
 
-export type VideoEngine = 'veo2' | 'veo3';
+export type VideoEngine = 'veo2' | 'veo3' | 'laozhang_veo' | 'laozhang_sora';
 export type BillingSource = 'user' | 'sponsor';
 
 export interface StartVideoRequest {

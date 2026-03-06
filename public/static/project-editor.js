@@ -4642,6 +4642,8 @@ function renderVideoPromptSection(scene, imageStatus, disableVideoGen) {
         >
           <option value="veo2" ${!isVeo3 ? 'selected' : ''}>🎬 Veo2 (5秒)</option>
           <option value="veo3" ${isVeo3 ? 'selected' : ''}>🚀 Veo3 (8秒)</option>
+          <option value="veo-3.1-fast">⚡ Veo3.1 Fast ($2)</option>
+          <option value="sora-2">🎯 Sora2 (10秒/$0.15)</option>
         </select>
         
         <!-- 生成/再生成ボタン -->
@@ -8197,12 +8199,18 @@ async function generateVideo(sceneId) {
     return;
   }
   
-  // Get selected engine (veo2 or veo3)
+  // Get selected engine (veo2, veo3, or laozhang models)
   const engineRadio = document.querySelector(`input[name="videoEngine-${sceneId}"]:checked`);
-  const videoEngine = engineRadio?.value || 'veo2';
+  const engineVal = engineRadio?.value || 'veo2';
+  
+  // Map engine to API params
+  const isLaozhangEngine = ['veo-3.1-fast', 'veo-3.1', 'veo3-pro', 'sora-2', 'sora-2-pro'].includes(engineVal);
+  const videoEngine = isLaozhangEngine ? (engineVal.startsWith('sora') ? 'laozhang_sora' : 'laozhang_veo') : engineVal;
   
   // Duration depends on engine
-  const duration = videoEngine === 'veo3' ? 8 : 5;
+  const duration = isLaozhangEngine 
+    ? (engineVal.startsWith('sora') ? 10 : 8)
+    : (engineVal === 'veo3' ? 8 : 5);
   
   // Get prompt
   const promptEl = document.getElementById(`videoPrompt-${sceneId}`);
@@ -8284,8 +8292,16 @@ async function generateVideoInline(sceneId) {
   const engineEl = document.getElementById(`videoEngineInline-${sceneId}`);
   
   const prompt = promptEl?.value?.trim() || '';
-  const videoEngine = engineEl?.value || 'veo2';
-  const duration = videoEngine === 'veo3' ? 8 : 5;
+  const engineVal = engineEl?.value || 'veo2';
+  
+  // Map engine selector value to API parameters
+  const isLaozhangEngine = ['veo-3.1-fast', 'veo-3.1', 'veo3-pro', 'sora-2', 'sora-2-pro'].includes(engineVal);
+  const videoEngine = isLaozhangEngine ? (engineVal.startsWith('sora') ? 'laozhang_sora' : 'laozhang_veo') : engineVal;
+  const apiModel = isLaozhangEngine ? engineVal : (engineVal === 'veo3' ? 'veo-3.0-generate-preview' : 'veo-2.0-generate-001');
+  const apiProvider = isLaozhangEngine ? 'laozhang' : 'google';
+  const duration = isLaozhangEngine 
+    ? (engineVal.startsWith('sora') ? 10 : 8)
+    : (engineVal === 'veo3' ? 8 : 5);
   
   // Prevent double click
   if (window.videoGenerating[sceneId] || (btn && btn.disabled)) {
@@ -8293,14 +8309,16 @@ async function generateVideoInline(sceneId) {
     return;
   }
   
-  // Check API key
-  const hasApiKey = await checkVideoApiKey();
-  if (!hasApiKey) {
-    showToast('動画生成には Google AI Studio のAPIキー設定が必要です', 'warning');
-    if (confirm('設定画面でAPIキーを登録しますか？\n\n※ Google AI Studio で無料取得できます')) {
-      window.location.href = '/settings';
+  // Check API key (skip for laozhang engines - they use system key)
+  if (!isLaozhangEngine) {
+    const hasApiKey = await checkVideoApiKey();
+    if (!hasApiKey) {
+      showToast('動画生成には Google AI Studio のAPIキー設定が必要です', 'warning');
+      if (confirm('設定画面でAPIキーを登録しますか？\n\n※ Google AI Studio で無料取得できます')) {
+        window.location.href = '/settings';
+      }
+      return;
     }
-    return;
   }
   
   // Check if image generation is in progress
@@ -8375,14 +8393,16 @@ async function generateVideoInline(sceneId) {
       response = await axios.post(`${API_BASE}/scenes/${sceneId}/video-regenerate`, {
         prompt: prompt || undefined,
         duration_sec: duration,
-        model: videoEngine === 'veo3' ? 'veo-3.0-generate-preview' : 'veo-2.0-generate-001',
+        model: apiModel,
+        video_engine: videoEngine,
       });
     } else {
       // First-time generation
       response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-video`, {
         duration_sec: duration,
         prompt: prompt,
-        provider: 'google',
+        provider: apiProvider,
+        model: apiModel,
         video_engine: videoEngine,
       });
     }
@@ -8415,6 +8435,8 @@ async function generateVideoInline(sceneId) {
       'USER_KEY_ERROR': 'APIキーに問題があります。設定画面で確認してください。',
       'SPONSOR_KEY_NOT_CONFIGURED': 'システムAPIキーが設定されていません。管理者にお問い合わせください。',
       'SPONSOR_VERTEX_NOT_CONFIGURED': 'Vertex AI APIキーが設定されていません。管理者にお問い合わせください。',
+      'LAOZHANG_KEY_NOT_CONFIGURED': 'LaoZhang APIキーが設定されていません。管理者にお問い合わせください。',
+      'LAOZHANG_SUBMIT_FAILED': 'LaoZhang動画生成の開始に失敗しました。しばらく後にお試しください。',
       'ACCESS_DENIED': 'このプロジェクトにアクセスする権限がありません。',
       'NO_PROMPT': '動画生成にはプロンプトが必要です。',
       'SCENE_NOT_FOUND': 'シーンが見つかりません。',

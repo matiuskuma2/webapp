@@ -27,6 +27,8 @@ export type Bindings = {
   SITE_URL?: string;  // e.g. https://app.marumuviai.com
   // Asset versioning (auto-set by deployment pipeline)
   ASSET_VERSION?: string;  // e.g. "20260125-1" or git commit hash
+  // LaoZhang.ai API (Veo 3.1 / Sora 2 proxy, ~1/10 cost of official)
+  LAOZHANG_API_KEY?: string;
   // Debug flags
   DEBUG_REFERENCE_IMAGES?: string;  // '1' で参照画像取得の詳細ログを出力
   // Cloudflare Analytics API
