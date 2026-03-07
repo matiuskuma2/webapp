@@ -399,7 +399,7 @@ async function marunageFormatStartup(
 //   - Delay between images: 5s → 3s (higher RPM tolerance)
 const GEMINI_MODEL = 'gemini-3.1-flash-image-preview'
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
-const IMAGE_GEN_RETRY = 2          // 個別画像のリトライ回数
+const IMAGE_GEN_RETRY = 3          // 個別画像のリトライ回数（2→3に増加: Workers実行コンテキストタイムアウト対策）
 const IMAGE_GEN_DELAY = 3000       // 画像間の待機 (ms) — Flash model is faster
 const MAX_R2_RETRIES = 3
 
@@ -575,9 +575,10 @@ async function generateSingleImage(
 
   for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
     try {
-      // 25s timeout per attempt — Flash model (Nano Banana 2) is much faster
+      // 35s timeout per attempt — Flash model (Nano Banana 2) is fast but reference images can slow it
+      // ★ FIX: 25s→35s に延長（参照画像ありの場合のレイテンシ対策）
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 25000)
+      const timeout = setTimeout(() => controller.abort(), 35000)
       
       const response = await fetch(GEMINI_ENDPOINT, {
         method: 'POST',
@@ -667,10 +668,15 @@ async function generateSingleImage(
 
     } catch (error) {
       const isAbort = error instanceof Error && error.name === 'AbortError'
-      lastError = isAbort ? 'TIMEOUT_25s: Gemini API (Nano Banana 2) did not respond within 25 seconds' : (error instanceof Error ? error.message : String(error))
+      const isMessagePort = error instanceof Error && error.message?.includes('message port closed')
+      lastError = isAbort ? 'TIMEOUT_35s: Gemini API (Nano Banana 2) did not respond within 35 seconds' 
+        : isMessagePort ? 'WORKER_CONTEXT_CLOSED: Cloudflare Workers execution context terminated'
+        : (error instanceof Error ? error.message : String(error))
       console.warn(`[Marunage:Image] Attempt ${attempt + 1}/${IMAGE_GEN_RETRY} failed: ${lastError}`)
       if (attempt < IMAGE_GEN_RETRY - 1) {
-        await sleep(isAbort ? 1000 : 2000 * (attempt + 1))
+        // ★ FIX: message port closed もリトライ対象に追加（Workers実行コンテキスト再試行）
+        const retryDelay = (isAbort || isMessagePort) ? 1000 : 2000 * (attempt + 1)
+        await sleep(retryDelay)
         continue
       }
     }
@@ -2763,19 +2769,20 @@ marunage.post('/:projectId/advance', async (c) => {
         }
 
         if (generating > 0) {
-          // Safety: if image_generations stuck in 'generating' for >60s, mark as failed
-          // Gemini + R2 should complete in <30s; 60s is generous
+          // Safety: if image_generations stuck in 'generating' for >90s, mark as failed
+          // ★ FIX: 60s→90s に延長（参照画像ありの場合のGemini応答が遅い + Workers実行コンテキスト問題対策）
+          // Gemini + R2 should complete in <35s; 90s is generous
           // Use COALESCE(started_at, created_at) for backward compat (old rows have no started_at)
           const staleFixed = await c.env.DB.prepare(`
             UPDATE image_generations
             SET status = 'failed',
-                error_message = 'Timed out (stuck in generating >60s)',
+                error_message = 'Timed out (stuck in generating >90s)',
                 ended_at = datetime('now'),
                 duration_ms = CAST((julianday('now') - julianday(COALESCE(started_at, created_at))) * 86400000 AS INTEGER)
             WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
               AND is_active = 1
               AND status = 'generating'
-              AND COALESCE(started_at, created_at) < datetime('now', '-60 seconds')
+              AND COALESCE(started_at, created_at) < datetime('now', '-90 seconds')
           `).bind(projectId).run()
           const fixedCount = staleFixed.meta.changes || 0
           if (fixedCount > 0) {

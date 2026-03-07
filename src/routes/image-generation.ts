@@ -1627,6 +1627,10 @@ async function generateImageWithRetry(
       })
 
       // Gemini API公式仕様: generateContent
+      // ★ FIX: 25秒タイムアウト追加（Workers実行コンテキスト超過防止）
+      const controller = new AbortController()
+      const timeout = setTimeout(() => controller.abort(), 25000)
+      
       const response = await fetch(
         'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
         {
@@ -1648,9 +1652,11 @@ async function generateImageWithRetry(
                 imageSize: imageSize
               }
             }
-          })
+          }),
+          signal: controller.signal
         }
       )
+      clearTimeout(timeout)
 
       // 429エラー時はリトライ
       if (response.status === 429) {
@@ -1759,9 +1765,14 @@ async function generateImageWithRetry(
       }
 
     } catch (error) {
+      const isAbort = error instanceof Error && error.name === 'AbortError'
+      const isMessagePort = error instanceof Error && error.message?.includes('message port closed')
+      
       const errorDetails = {
-        type: 'NETWORK_ERROR',
-        message: error instanceof Error ? error.message : 'Unknown error',
+        type: isAbort ? 'TIMEOUT' : isMessagePort ? 'WORKER_CONTEXT_CLOSED' : 'NETWORK_ERROR',
+        message: isAbort ? 'Gemini API did not respond within 25 seconds'
+          : isMessagePort ? 'Cloudflare Workers execution context terminated'
+          : (error instanceof Error ? error.message : 'Unknown error'),
         stack: error instanceof Error ? error.stack : null,
         attempt: attempt + 1,
         maxRetries
@@ -1776,9 +1787,10 @@ async function generateImageWithRetry(
         promptLength: prompt.length
       })
       
-      // 最後の試行でない場合はリトライ
+      // 最後の試行でない場合はリトライ（タイムアウト・Workers終了も含む）
       if (attempt < maxRetries - 1) {
-        await sleep(Math.pow(2, attempt) * 1000)
+        const retryDelay = (isAbort || isMessagePort) ? 1000 : Math.pow(2, attempt) * 1000
+        await sleep(retryDelay)
         continue
       }
     }

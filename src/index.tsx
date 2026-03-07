@@ -1061,8 +1061,10 @@ app.get('/projects/:id', async (c) => {
                                 type="number" 
                                 id="targetSceneCount" 
                                 min="1" 
-                                max="100" 
+                                max="200" 
                                 placeholder="自動"
+                                onchange="updateTargetSceneCount(this.value)"
+                                oninput="updateTargetSceneCount(this.value)"
                                 class="w-24 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
                             >
                             <span class="text-sm text-gray-600">シーン</span>
@@ -1082,7 +1084,7 @@ app.get('/projects/:id', async (c) => {
                         </div>
                         <button 
                             id="formatBtn"
-                            onclick="formatAndSplit()"
+                            onclick="confirmAndFormatSplit()"
                             class="px-6 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold whitespace-nowrap touch-manipulation"
                         >
                             <i class="fas fa-magic mr-2"></i>シーン分割を実行

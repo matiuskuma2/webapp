@@ -1499,6 +1499,17 @@ async function formatAndSplit() {
   // Get split mode and target scene count from global state (set by confirmAndFormatSplit)
   // SSOT: raw → preserve, optimized → ai に変換（バックエンド互換）
   const apiSplitMode = currentSplitMode === 'raw' ? 'preserve' : 'ai';
+  
+  // ★ SAFETY NET: DOM入力から最新値を再読み取り（confirmAndFormatSplitを経由しない直接呼び出し対策）
+  const targetInput = document.getElementById('targetSceneCount');
+  if (targetInput && targetInput.value) {
+    const domVal = parseInt(targetInput.value);
+    if (domVal > 0 && domVal !== currentTargetSceneCount) {
+      console.log('[Format] Safety net: DOM input value differs from currentTargetSceneCount:', domVal, 'vs', currentTargetSceneCount);
+      currentTargetSceneCount = domVal;
+    }
+  }
+  
   // ★ FIX: null/0 の場合はバックエンドに 0 を送信し、バックエンドの自動検出に任せる
   // preserve モード: 0 = 段落数に自動合わせ（バックエンドのセンチネル値）
   // ai モード: 0 の場合はバックエンドが 5 をデフォルト使用
@@ -4642,8 +4653,7 @@ function renderVideoPromptSection(scene, imageStatus, disableVideoGen) {
         >
           <option value="veo2" ${!isVeo3 ? 'selected' : ''}>🎬 Veo2 (5秒)</option>
           <option value="veo3" ${isVeo3 ? 'selected' : ''}>🚀 Veo3 (8秒)</option>
-          <option value="veo-3.1-fast">⚡ Veo3.1 Fast ($2)</option>
-          <option value="sora-2">🎯 Sora2 (10秒/$0.15)</option>
+          <option value="veo-3.1-fast">⚡ Veo3.1 Fast (8秒/$2)</option>
         </select>
         
         <!-- 生成/再生成ボタン -->
