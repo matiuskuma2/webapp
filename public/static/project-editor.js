@@ -6281,15 +6281,41 @@ async function generateBulkImages(mode) {
       }, 3000);
       
       try {
-        const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, { mode }, {
-          timeout: 600000 // 10分タイムアウト
-        });
-        const { total_scenes, success_count, failed_count } = response.data;
-        
-        if (failed_count > 0) {
-          showToast(`画像生成完了！ (成功: ${success_count}件, 失敗: ${failed_count}件)`, 'warning');
+        // ★ FIX: バッチ制限対応 — 残りがある場合は自動的に再呼び出し
+        let totalSuccess = 0;
+        let totalFailed = 0;
+        let remaining = true;
+        let batchCount = 0;
+        const MAX_BATCHES = 100; // 安全弁: 最大100バッチ (300シーン)
+
+        while (remaining && batchCount < MAX_BATCHES) {
+          batchCount++;
+          const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, { mode }, {
+            timeout: 300000 // 5分タイムアウト (1バッチ3シーン分)
+          });
+          const { total_scenes, success_count, failed_count, skipped_count } = response.data;
+          totalSuccess += success_count || 0;
+          totalFailed += failed_count || 0;
+
+          // 進捗表示更新
+          const btn = document.getElementById(buttonId);
+          if (btn) {
+            btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>画像生成中... (${totalSuccess}/${total_scenes})`;
+          }
+
+          if (!skipped_count || skipped_count === 0) {
+            remaining = false;
+          } else {
+            console.log(`[BULK] Batch ${batchCount}: +${success_count} success, +${failed_count} failed, ${skipped_count} remaining`);
+            // 次のバッチの前に短い待ち時間
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+
+        if (totalFailed > 0) {
+          showToast(`画像生成完了！ (成功: ${totalSuccess}件, 失敗: ${totalFailed}件)`, 'warning');
         } else {
-          showToast(`画像生成完了！ (${success_count}件)`, 'success');
+          showToast(`画像生成完了！ (${totalSuccess}件)`, 'success');
         }
         
         await initBuilderTab();
@@ -6297,6 +6323,8 @@ async function generateBulkImages(mode) {
         console.error('[BULK] generate-all-images error:', error);
         const errorMsg = error.response?.data?.error?.message || '画像生成に失敗しました';
         showToast(errorMsg, 'error');
+        // ★ FIX: エラー時もタブをリロードして部分的な結果を表示
+        try { await initBuilderTab(); } catch (_) {}
       } finally {
         clearInterval(progressInterval);
       }

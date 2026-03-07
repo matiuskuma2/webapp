@@ -641,8 +641,26 @@ async function processTextChunks(
     console.log(`[Format] Project ${projectId} status changed from ${project.status === 'formatting' ? 'parsed/uploaded' : project.status} to 'formatting'`)
   }
 
-  // 未処理の chunk を取得（最大3件まで）
-  const BATCH_SIZE = 3
+  // ★ FIX: BATCH_SIZE を 3→1 に削減（Cloudflare Workers実行時間制限対策）
+  // 各chunkのOpenAI呼び出しが60s×最大3回 = 180s かかる可能性があり、
+  // 3 chunks同時処理だと実行コンテキストがタイムアウトする
+  // 1 chunkずつ処理し、残りはフロントエンドのポーリングで再呼び出し
+  const BATCH_SIZE = 1
+
+  // ★ FIX: processing状態でスタックしたchunkを自動リセット（2分以上前のもの）
+  // Cloudflare Workers実行コンテキスト終了でprocessing→完了せずに残るケースを救済
+  try {
+    const stuckReset = await c.env.DB.prepare(`
+      UPDATE text_chunks 
+      SET status = 'pending', updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ? AND status = 'processing' 
+        AND updated_at < datetime('now', '-2 minutes')
+    `).bind(projectId).run()
+    if (stuckReset.meta.changes > 0) {
+      console.log(`[Format] Auto-reset ${stuckReset.meta.changes} stuck processing chunks for project ${projectId}`)
+    }
+  } catch (_) {}
+
   const { results: pendingChunks } = await c.env.DB.prepare(`
     SELECT id, idx, text
     FROM text_chunks
@@ -1389,28 +1407,37 @@ async function generateImagePromptFromText(
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: 'Generate a detailed English image prompt (100-300 chars) for an infographic video scene. Focus on visual elements, composition, lighting, and style that represent the text content. Output only the prompt, no explanation.'
-            },
-            {
-              role: 'user',
-              content: `Project: ${projectTitle}\nText: ${text}`
-            }
-          ],
-          max_tokens: 500,
-          temperature: 0.7
+      // ★ FIX: 30秒タイムアウト（image_prompt生成はgpt-4o-miniで軽量）
+      const ipController = new AbortController()
+      const ipTimeout = setTimeout(() => ipController.abort(), 30000)
+      let response: Response
+      try {
+        response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: 'Generate a detailed English image prompt (100-300 chars) for an infographic video scene. Focus on visual elements, composition, lighting, and style that represent the text content. Output only the prompt, no explanation.'
+              },
+              {
+                role: 'user',
+                content: `Project: ${projectTitle}\nText: ${text}`
+              }
+            ],
+            max_tokens: 500,
+            temperature: 0.7
+          }),
+          signal: ipController.signal,
         })
-      })
+      } finally {
+        clearTimeout(ipTimeout)
+      }
       
       if (!response.ok) {
         const status = response.status
@@ -1531,35 +1558,44 @@ async function generateMultiImagePrompts(
   
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const response = await fetch('https://api.openai.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages: [
-            {
-              role: 'system',
-              content: `You are an image prompt generator for infographic video scenes.
+      // ★ FIX: 30秒タイムアウト
+      const mipController = new AbortController()
+      const mipTimeout = setTimeout(() => mipController.abort(), 30000)
+      let response: Response
+      try {
+        response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `You are an image prompt generator for infographic video scenes.
 For each numbered scene text, generate a unique, detailed English image prompt (100-300 chars).
 Focus on visual elements, composition, lighting, and style specific to each scene's content.
 Each prompt must be different and scene-specific.
 
 Output format: Return a JSON object with a "prompts" array containing exactly ${texts.length} strings, one per scene, in order.
 Example: {"prompts": ["A warm sunset over...", "A bustling city..."]}`
-            },
-            {
-              role: 'user',
-              content: `Project: ${projectTitle}\n\n${numberedTexts}`
-            }
-          ],
-          response_format: { type: 'json_object' },
-          max_tokens: Math.min(texts.length * 200, 4000),
-          temperature: 0.7
+              },
+              {
+                role: 'user',
+                content: `Project: ${projectTitle}\n\n${numberedTexts}`
+              }
+            ],
+            response_format: { type: 'json_object' },
+            max_tokens: Math.min(texts.length * 200, 4000),
+            temperature: 0.7
+          }),
+          signal: mipController.signal,
         })
-      })
+      } finally {
+        clearTimeout(mipTimeout)
+      }
       
       if (!response.ok) {
         const status = response.status
@@ -1960,29 +1996,40 @@ ${chunkText}
       additionalProperties: false
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-2024-08-06',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'mini_scenes',
-            strict: true,
-            schema: jsonSchema
-          }
+    // ★ FIX: 60秒タイムアウト追加（Cloudflare Workers実行コンテキスト終了対策）
+    // OpenAIが遅い場合にmessage port closedエラーを防ぐ
+    const openaiController = new AbortController()
+    const openaiTimeout = setTimeout(() => openaiController.abort(), 60000)
+
+    let response: Response
+    try {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
         },
-        temperature
+        body: JSON.stringify({
+          model: 'gpt-4o-2024-08-06',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'mini_scenes',
+              strict: true,
+              schema: jsonSchema
+            }
+          },
+          temperature
+        }),
+        signal: openaiController.signal,
       })
-    })
+    } finally {
+      clearTimeout(openaiTimeout)
+    }
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
@@ -2026,10 +2073,14 @@ ${chunkText}
     }
 
   } catch (error) {
-    console.error('Error generating mini scenes:', error)
+    const isAbort = error instanceof Error && error.name === 'AbortError'
+    const errorMsg = isAbort 
+      ? 'TIMEOUT_60s: OpenAI API did not respond within 60 seconds'
+      : (error instanceof Error ? error.message : 'Unknown error')
+    console.error(`Error generating mini scenes${isAbort ? ' (timeout)' : ''}:`, errorMsg)
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: errorMsg
     }
   }
 }
@@ -2108,29 +2159,39 @@ ${brokenJson}`
       additionalProperties: false
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-2024-08-06',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'mini_scenes_repaired',
-            strict: true,
-            schema: jsonSchema
-          }
+    // ★ FIX: 30秒タイムアウト追加（修復はシンプルなので短め）
+    const repairController = new AbortController()
+    const repairTimeout = setTimeout(() => repairController.abort(), 30000)
+
+    let response: Response
+    try {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
         },
-        temperature: 0.1
+        body: JSON.stringify({
+          model: 'gpt-4o-2024-08-06',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'mini_scenes_repaired',
+              strict: true,
+              schema: jsonSchema
+            }
+          },
+          temperature: 0.1
+        }),
+        signal: repairController.signal,
       })
-    })
+    } finally {
+      clearTimeout(repairTimeout)
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))
@@ -2280,29 +2341,39 @@ ${rawText}
       additionalProperties: false
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-2024-08-06',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'rilarc_scenario_v1',
-            strict: true,
-            schema: jsonSchema
-          }
+    // ★ FIX: 60秒タイムアウト追加
+    const rilarcController = new AbortController()
+    const rilarcTimeout = setTimeout(() => rilarcController.abort(), 60000)
+
+    let response: Response
+    try {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
         },
-        temperature
+        body: JSON.stringify({
+          model: 'gpt-4o-2024-08-06',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'rilarc_scenario_v1',
+              strict: true,
+              schema: jsonSchema
+            }
+          },
+          temperature
+        }),
+        signal: rilarcController.signal,
       })
-    })
+    } finally {
+      clearTimeout(rilarcTimeout)
+    }
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => '')
@@ -2311,7 +2382,7 @@ ${rawText}
         const errorData = JSON.parse(errorText)
         errorMessage = errorData.error?.message || `OpenAI HTTP ${response.status}: ${errorData.error?.type || 'unknown'}`
       } catch { errorMessage += `: ${errorText.substring(0, 300)}` }
-      console.error(`[AIMode:OpenAI] chunk${chunkIdx} temp=${temperature} Error: ${errorMessage}`)
+      console.error(`[AIMode:OpenAI] RILARC temp=${temperature} Error: ${errorMessage}`)
       return {
         success: false,
         error: errorMessage
@@ -2441,29 +2512,39 @@ ${brokenJson}`
       additionalProperties: false
     }
 
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-2024-08-06',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ],
-        response_format: {
-          type: 'json_schema',
-          json_schema: {
-            name: 'rilarc_scenario_v1_repaired',
-            strict: true,
-            schema: jsonSchema
-          }
+    // ★ FIX: 30秒タイムアウト追加（修復は軽量）
+    const repairRilarcController = new AbortController()
+    const repairRilarcTimeout = setTimeout(() => repairRilarcController.abort(), 30000)
+
+    let response: Response
+    try {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
         },
-        temperature: 0.1
+        body: JSON.stringify({
+          model: 'gpt-4o-2024-08-06',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          response_format: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'rilarc_scenario_v1_repaired',
+              strict: true,
+              schema: jsonSchema
+            }
+          },
+          temperature: 0.1
+        }),
+        signal: repairRilarcController.signal,
       })
-    })
+    } finally {
+      clearTimeout(repairRilarcTimeout)
+    }
 
     if (!response.ok) {
       const errorData = await response.json().catch(() => ({}))

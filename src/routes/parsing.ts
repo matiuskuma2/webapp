@@ -246,4 +246,5 @@ function splitIntoSentences(text: string): string[] {
   return result
 }
 
+export { intelligentChunking }
 export default parsing

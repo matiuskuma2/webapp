@@ -325,12 +325,13 @@ async function generateImageWithFallback(
   }
   
   // Step 2: 最初の試行
-  // リトライ回数を5回に増加（Gemini無料枠のレート制限対策）
+  // ★ FIX: リトライ回数を3回に戻す（5回だと429バックオフで合計135秒→Workers制限超過）
+  // フォールバック機構（user key → system key）があるので3回で十分
   console.log(`[Image Gen] Attempting with ${keyResult.source} API key, aspectRatio: ${options.aspectRatio || '16:9'}`);
   const result = await generateImageWithRetry(
     prompt,
     keyResult.apiKey,
-    5,  // 3→5 に増加（429エラー対策）
+    3,  // 5→3 に削減（Cloudflare Workers実行時間制限対策）
     referenceImages,
     options
   );
@@ -740,20 +741,22 @@ imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
       }, 404)
     }
 
-    // ✅ IMPROVEMENT: Auto-cleanup stuck 'generating' records (5+ minutes old)
+    // ✅ IMPROVEMENT: Auto-cleanup stuck 'generating' records (2+ minutes old)
     // This prevents UI getting stuck at 95% indefinitely
+    // ★ FIX: started_at を使用（created_at フォールバック付き、ended_at も記録）
     try {
       const cleanupResult = await c.env.DB.prepare(`
         UPDATE image_generations
         SET status = 'failed', 
-            error_message = 'Generation timeout (auto-cleanup on status check)'
+            error_message = 'Generation timeout (auto-cleanup on status check, >2min stuck)',
+            ended_at = datetime('now')
         WHERE status = 'generating' 
           AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
-          AND created_at < datetime('now', '-5 minutes')
+          AND COALESCE(started_at, created_at) < datetime('now', '-2 minutes')
       `).bind(projectId).run()
       
       if (cleanupResult.meta.changes > 0) {
-        console.log(`[Image Status] Auto-cleaned ${cleanupResult.meta.changes} stuck generating records for project ${projectId}`)
+        console.log(`[Image Status] Auto-cleaned ${cleanupResult.meta.changes} stuck generating records (>2min) for project ${projectId}`)
       }
     } catch (cleanupErr) {
       // Cleanup failure should not block the request
@@ -1035,9 +1038,9 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
     const generationId = insertResult.meta.last_row_id as number
 
-    // 8. ステータスを 'generating' に更新
+    // 8. ステータスを 'generating' に更新（started_at追加でstuck detection対応）
     await c.env.DB.prepare(`
-      UPDATE image_generations SET status = 'generating' WHERE id = ?
+      UPDATE image_generations SET status = 'generating', started_at = datetime('now') WHERE id = ?
     `).bind(generationId).run()
 
     // 9. Gemini APIで画像生成（クォータ超過時のフォールバック付き）
@@ -1314,6 +1317,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     }
 
     // 5. 各シーンで画像生成（順次実行）
+    // ★ FIX: Cloudflare Workers の実行時間制限対策
+    // 1リクエストで全シーンを処理すると 30s CPU制限/実行コンテキスト問題が発生
+    // → バッチサイズを制限し、残りは status polling + 再実行で処理
+    const MAX_SCENES_PER_BATCH = 3  // 1リクエストで最大3シーン (各35s timeout → 合計 ~2分)
+    const scenesToProcess = targetScenes.slice(0, MAX_SCENES_PER_BATCH)
+    const skippedCount = Math.max(0, targetScenes.length - MAX_SCENES_PER_BATCH)
+
     let successCount = 0
     let failedCount = 0
     
@@ -1325,7 +1335,11 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer');
     const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
 
-    for (const scene of targetScenes) {
+    if (skippedCount > 0) {
+      console.log(`[Batch All Image Gen] Processing ${scenesToProcess.length} scenes this batch, ${skippedCount} remaining for next poll`)
+    }
+
+    for (const scene of scenesToProcess) {
       try {
         // Phase X-4: カスタムプロンプトフラグを確認（先に取得）
         const isPromptCustomized = scene.is_prompt_customized === 1;
@@ -1369,11 +1383,11 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
         const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId);
         const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset);
 
-        // image_generationsレコード作成
+        // image_generationsレコード作成（started_at追加でstuck detection対応）
         const insertResult = await c.env.DB.prepare(`
           INSERT INTO image_generations (
-            scene_id, prompt, status, provider, model, is_active
-          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 0)
+            scene_id, prompt, status, provider, model, is_active, started_at
+          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 0, datetime('now'))
         `).bind(scene.id, finalPrompt).run()
 
         const generationId = insertResult.meta.last_row_id as number
@@ -1491,7 +1505,9 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     }
 
     // 6. 全て成功した場合、プロジェクトステータスを 'completed' に更新
-    if (successCount === totalScenes && failedCount === 0) {
+    // ★ FIX: バッチ制限で残りがある場合は 'generating_images' のまま
+    const allProcessed = (successCount + failedCount === totalScenes) && skippedCount === 0
+    if (allProcessed && failedCount === 0) {
       await c.env.DB.prepare(`
         UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
@@ -1504,8 +1520,10 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
       total_scenes: totalScenes,
       success_count: successCount,
       failed_count: failedCount,
+      skipped_count: skippedCount,
+      batch_size: scenesToProcess.length,
       mode,
-      status: successCount === totalScenes ? 'completed' : 'generating_images'
+      status: allProcessed && failedCount === 0 ? 'completed' : 'generating_images'
     }, 200)
 
   } catch (error) {
@@ -1543,7 +1561,7 @@ interface ImageGenerationOptions {
 async function generateImageWithRetry(
   prompt: string,
   apiKey: string,
-  maxRetries: number = 3,
+  maxRetries: number = 3,  // ★ NOTE: 3回リトライ（429バックオフ含め合計最大~45秒）
   referenceImages: ReferenceImage[] = [],
   options: ImageGenerationOptions = {}
 ): Promise<{
@@ -1553,8 +1571,16 @@ async function generateImageWithRetry(
 }> {
   const { aspectRatio = '16:9', skipDefaultInstructions = false } = options;
   let lastError: string = ''
+  const startedAt = Date.now()
+  const MAX_TOTAL_ELAPSED_MS = 55000  // ★ 全リトライ合計55秒制限（Cloudflare Workers安全マージン）
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    // ★ FIX: 合計経過時間チェック（Workers実行コンテキスト保護）
+    if (Date.now() - startedAt > MAX_TOTAL_ELAPSED_MS) {
+      console.warn(`[Gemini Image Gen] Total elapsed ${Date.now() - startedAt}ms exceeds ${MAX_TOTAL_ELAPSED_MS}ms, aborting retries`)
+      lastError = lastError || 'TOTAL_TIMEOUT: Image generation exceeded 55s total time limit'
+      break
+    }
     try {
       // パーツを構築：参照画像 + テキストプロンプト
       const parts: any[] = []
@@ -1627,9 +1653,9 @@ async function generateImageWithRetry(
       })
 
       // Gemini API公式仕様: generateContent
-      // ★ FIX: 25秒タイムアウト追加（Workers実行コンテキスト超過防止）
+      // ★ FIX: 35秒タイムアウト（Gemini Flash + 参照画像ありの場合のレイテンシ対策）
       const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 25000)
+      const timeout = setTimeout(() => controller.abort(), 35000)
       
       const response = await fetch(
         'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
@@ -1646,7 +1672,7 @@ async function generateImageWithRetry(
               }
             ],
             generationConfig: {
-              responseModalities: ['Image'],
+              responseModalities: ['TEXT', 'IMAGE'],
               imageConfig: {
                 aspectRatio: aspectRatio,  // output_preset から動的に設定
                 imageSize: imageSize
@@ -1668,6 +1694,12 @@ async function generateImageWithRetry(
 
         console.warn(`Rate limited (429). Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
         
+        // ★ FIX: 合計待ち時間が45秒を超えたら即座にエラー返却
+        // Cloudflare Workers実行コンテキストのタイムアウト対策
+        if (waitTime > 45000) {
+          lastError = 'RATE_LIMIT_429: 画像生成のレート制限に達しました。Gemini APIの無料枠（1分間に15リクエスト）を超えています。'
+          break
+        }
         if (attempt < maxRetries - 1) {
           await sleep(waitTime)
           continue
@@ -1770,7 +1802,7 @@ async function generateImageWithRetry(
       
       const errorDetails = {
         type: isAbort ? 'TIMEOUT' : isMessagePort ? 'WORKER_CONTEXT_CLOSED' : 'NETWORK_ERROR',
-        message: isAbort ? 'Gemini API did not respond within 25 seconds'
+        message: isAbort ? 'Gemini API did not respond within 35 seconds'
           : isMessagePort ? 'Cloudflare Workers execution context terminated'
           : (error instanceof Error ? error.message : 'Unknown error'),
         stack: error instanceof Error ? error.stack : null,

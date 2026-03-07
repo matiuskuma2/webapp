@@ -411,6 +411,81 @@ const MAX_R2_RETRIES = 3
 //   Nano Banana Pro (gemini-3-pro-image-preview):     $0.134/image (deprecated)
 const COST_PER_IMAGE_USD = 0.067  // Nano Banana 2 rate (1K default)
 
+// ============================================================
+// Inline parse helper (avoid self-fetch for parse in advance endpoint)
+// ============================================================
+
+/**
+ * テキストを意味単位でチャンクに分割（parsing.ts の intelligentChunking と同等）
+ * advance endpoint から直接呼び出し、self-fetch を回避
+ */
+function inlineIntelligentChunking(text: string): string[] {
+  const chunks: string[] = []
+  const MIN_CHUNK_SIZE = 500
+  const MAX_CHUNK_SIZE = 1500
+  const IDEAL_CHUNK_SIZE = 1000
+
+  const paragraphs = text.split(/\n\n+/).filter(p => p.trim().length > 0)
+  let currentChunk = ''
+
+  for (const paragraph of paragraphs) {
+    const trimmedParagraph = paragraph.trim()
+
+    if (trimmedParagraph.length > MAX_CHUNK_SIZE) {
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk.trim())
+        currentChunk = ''
+      }
+      // 文単位で分割
+      const sentences = trimmedParagraph.split(/([。！？]+)/).filter(s => s.trim().length > 0)
+      const mergedSentences: string[] = []
+      for (let i = 0; i < sentences.length; i++) {
+        if (sentences[i].match(/^[。！？]+$/)) {
+          if (mergedSentences.length > 0) {
+            mergedSentences[mergedSentences.length - 1] += sentences[i]
+          }
+        } else {
+          mergedSentences.push(sentences[i])
+        }
+      }
+
+      let tempChunk = ''
+      for (const sentence of mergedSentences) {
+        if (tempChunk.length + sentence.length > MAX_CHUNK_SIZE && tempChunk.length > MIN_CHUNK_SIZE) {
+          chunks.push(tempChunk.trim())
+          tempChunk = sentence
+        } else {
+          tempChunk += (tempChunk.length > 0 ? ' ' : '') + sentence
+        }
+      }
+      if (tempChunk.length > 0) {
+        currentChunk = tempChunk
+      }
+      continue
+    }
+
+    if (currentChunk.length + trimmedParagraph.length + 2 <= MAX_CHUNK_SIZE) {
+      currentChunk += (currentChunk.length > 0 ? '\n\n' : '') + trimmedParagraph
+    } else {
+      if (currentChunk.length > 0) {
+        chunks.push(currentChunk.trim())
+      }
+      currentChunk = trimmedParagraph
+    }
+
+    if (currentChunk.length >= IDEAL_CHUNK_SIZE) {
+      chunks.push(currentChunk.trim())
+      currentChunk = ''
+    }
+  }
+
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk.trim())
+  }
+
+  return chunks.filter(chunk => chunk.length > 0)
+}
+
 async function logImageGenerationCost(
   db: D1Database,
   params: {
@@ -572,8 +647,16 @@ async function generateSingleImage(
   }
 
   let lastError = ''
+  const startedAt = Date.now()
+  const MAX_TOTAL_ELAPSED_MS = 55000  // ★ 全リトライ合計55秒制限
 
   for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
+    // ★ FIX: 合計経過時間チェック（Workers実行コンテキスト保護）
+    if (Date.now() - startedAt > MAX_TOTAL_ELAPSED_MS) {
+      console.warn(`[Marunage:Image] Total elapsed ${Date.now() - startedAt}ms exceeds ${MAX_TOTAL_ELAPSED_MS}ms, aborting retries`)
+      lastError = lastError || 'TOTAL_TIMEOUT: Image generation exceeded 55s total time limit'
+      break
+    }
     try {
       // 35s timeout per attempt — Flash model (Nano Banana 2) is fast but reference images can slow it
       // ★ FIX: 25s→35s に延長（参照画像ありの場合のレイテンシ対策）
@@ -603,10 +686,15 @@ async function generateSingleImage(
       })
       clearTimeout(timeout)
 
-      // Rate limit → retry with backoff
+      // Rate limit → retry with backoff (★ 上限20秒に制限)
       if (response.status === 429) {
-        const waitTime = Math.min(Math.pow(2, attempt + 1) * 2500, 60000)
+        const waitTime = Math.min(Math.pow(2, attempt + 1) * 2500, 20000)
         console.warn(`[Marunage:Image] 429 rate limit, waiting ${waitTime}ms (attempt ${attempt + 1}/${IMAGE_GEN_RETRY})`)
+        // 合計経過時間チェック
+        if (Date.now() - startedAt + waitTime > MAX_TOTAL_ELAPSED_MS) {
+          lastError = 'RATE_LIMIT_429: Gemini API rate limit exceeded (time budget exhausted)'
+          break
+        }
         if (attempt < IMAGE_GEN_RETRY - 1) {
           await sleep(waitTime)
           continue
@@ -2355,44 +2443,85 @@ marunage.post('/:projectId/advance', async (c) => {
         ).bind(projectId).first<{ status: string }>()
 
         if (!proj || proj.status !== 'formatted') {
-          // ★ Active formatting: advance endpoint drives parse + format instead of waitUntil self-fetch
-          // This avoids Cloudflare Workers self-fetch issues and timeouts
-          const origin = new URL(c.req.url).origin
-          const sessionCookie = getCookie(c, 'session') || ''
-          const cookieHeader = `session=${sessionCookie}`
-
-          // Step A: Parse if not yet parsed (idempotent — returns immediately if already parsed)
+          // ★ FIX: Inline parse logic directly (avoid self-fetch which causes Workers timeout/loop issues)
+          // Step A: Parse if not yet parsed — inline DB operations instead of HTTP self-fetch
           const projForParse = await c.env.DB.prepare(
-            `SELECT status FROM projects WHERE id = ?`
-          ).bind(projectId).first<{ status: string }>()
+            `SELECT status, source_text FROM projects WHERE id = ?`
+          ).bind(projectId).first<{ status: string; source_text: string | null }>()
 
-          if (projForParse && (projForParse.status === 'uploaded' || projForParse.status === 'text')) {
-            console.log(`[Marunage:Advance:Format] Calling parse API for project ${projectId}`)
+          if (projForParse && projForParse.status === 'uploaded') {
+            console.log(`[Marunage:Advance:Format] Inline parse for project ${projectId} (status=${projForParse.status})`)
             try {
-              const parseRes = await fetch(`${origin}/api/projects/${projectId}/parse`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Cookie': cookieHeader },
-              })
-              if (!parseRes.ok) {
-                const parseErr = await parseRes.text().catch(() => 'Unknown')
-                console.error(`[Marunage:Advance:Format] Parse failed HTTP ${parseRes.status}: ${parseErr.substring(0, 300)}`)
+              const sourceText = projForParse.source_text
+              if (!sourceText || sourceText.trim().length === 0) {
                 await transitionPhase(c.env.DB, run.id, currentPhase, 'failed', {
-                  error_code: 'PARSE_FAILED',
-                  error_message: `Parse API returned ${parseRes.status}: ${parseErr.substring(0, 500)}`,
+                  error_code: 'NO_SOURCE_TEXT',
+                  error_message: 'ソーステキストが空です',
                   error_phase: 'formatting',
                 })
                 return c.json({
                   run_id: run.id, previous_phase: currentPhase, new_phase: 'failed',
-                  action: 'failed_parse', message: `Parse API failed: ${parseRes.status}`,
+                  action: 'failed_parse', message: 'No source text',
                 })
               }
-              console.log(`[Marunage:Advance:Format] Parse completed for project ${projectId}`)
+
+              // Update status to 'parsing'
+              await c.env.DB.prepare(
+                `UPDATE projects SET status = 'parsing', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+              ).bind(projectId).run()
+
+              // Chunk the text (inline logic from parsing.ts)
+              const chunks = inlineIntelligentChunking(sourceText)
+              console.log(`[Marunage:Advance:Format] Chunked text into ${chunks.length} chunks`)
+
+              // Delete existing chunks (idempotent)
+              await c.env.DB.prepare(
+                `DELETE FROM text_chunks WHERE project_id = ?`
+              ).bind(projectId).run()
+
+              // Insert chunks
+              if (chunks.length > 0) {
+                const insertStatements = chunks.map((chunk, index) => {
+                  return c.env.DB.prepare(
+                    `INSERT INTO text_chunks (project_id, idx, text, status) VALUES (?, ?, ?, 'pending')`
+                  ).bind(projectId, index + 1, chunk)
+                })
+                await c.env.DB.batch(insertStatements)
+              }
+
+              // Update status to 'parsed'
+              await c.env.DB.prepare(
+                `UPDATE projects SET status = 'parsed', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+              ).bind(projectId).run()
+
+              console.log(`[Marunage:Advance:Format] Parse completed: ${chunks.length} chunks created`)
             } catch (parseError: any) {
-              console.error(`[Marunage:Advance:Format] Parse fetch error:`, parseError)
+              console.error(`[Marunage:Advance:Format] Inline parse error:`, parseError)
+              // ★ FIX: Parse失敗時は確実にfailed状態に遷移（以前はサイレント失敗だった）
+              try {
+                await c.env.DB.prepare(
+                  `UPDATE projects SET status = 'uploaded', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+                ).bind(projectId).run()
+              } catch (_) {}
+              await transitionPhase(c.env.DB, run.id, currentPhase, 'failed', {
+                error_code: 'PARSE_FAILED',
+                error_message: `Parse failed: ${parseError?.message || String(parseError)}`.substring(0, 500),
+                error_phase: 'formatting',
+              })
+              return c.json({
+                run_id: run.id, previous_phase: currentPhase, new_phase: 'failed',
+                action: 'failed_parse', message: `Parse failed: ${parseError?.message || 'Unknown error'}`,
+              })
             }
           }
 
-          // Step B: Call format API once to process pending chunks
+          // Step B: Call format API to process pending chunks
+          // ★ Still using HTTP fetch for format (it requires OpenAI API calls which need separate request context)
+          // But with proper error handling — parse errors no longer silently fall through
+          const origin = new URL(c.req.url).origin
+          const sessionCookie = getCookie(c, 'session') || ''
+          const cookieHeader = `session=${sessionCookie}`
+
           // Build character hints from project_character_models
           let characterHints: Array<{ key: string; name: string; description: string }> = []
           if (config.selected_character_ids && config.selected_character_ids.length > 0) {
@@ -2408,7 +2537,35 @@ marunage.post('/:projectId/advance', async (c) => {
             } catch (_) {}
           }
 
-          console.log(`[Marunage:Advance:Format] Calling format API for project ${projectId} (single pass)`)
+          // ★ FIX: Verify project is in a parseable state before calling format
+          const projBeforeFormat = await c.env.DB.prepare(
+            `SELECT status FROM projects WHERE id = ?`
+          ).bind(projectId).first<{ status: string }>()
+          
+          if (!projBeforeFormat || !['parsed', 'formatting', 'uploaded'].includes(projBeforeFormat.status)) {
+            console.error(`[Marunage:Advance:Format] Project ${projectId} in unexpected status '${projBeforeFormat?.status}' — cannot format`)
+            // If status is 'parsing', it might be stuck — reset to uploaded for retry
+            if (projBeforeFormat?.status === 'parsing') {
+              await c.env.DB.prepare(
+                `UPDATE projects SET status = 'uploaded', updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+              ).bind(projectId).run()
+              return c.json({
+                run_id: run.id, previous_phase: currentPhase, new_phase: currentPhase,
+                action: 'formatting_in_progress', message: 'Parse was stuck, reset for retry...',
+              })
+            }
+            await transitionPhase(c.env.DB, run.id, currentPhase, 'failed', {
+              error_code: 'INVALID_PROJECT_STATUS',
+              error_message: `Project status '${projBeforeFormat?.status}' is not valid for formatting`,
+              error_phase: 'formatting',
+            })
+            return c.json({
+              run_id: run.id, previous_phase: currentPhase, new_phase: 'failed',
+              action: 'failed_format', message: `Invalid project status: ${projBeforeFormat?.status}`,
+            })
+          }
+
+          console.log(`[Marunage:Advance:Format] Calling format API for project ${projectId} (status=${projBeforeFormat.status}, single pass)`)
           try {
             const formatRes = await fetch(`${origin}/api/projects/${projectId}/format`, {
               method: 'POST',
@@ -2468,6 +2625,10 @@ marunage.post('/:projectId/advance', async (c) => {
             }
           } catch (formatError: any) {
             console.error(`[Marunage:Advance:Format] Format fetch error:`, formatError)
+            // ★ FIX: Track consecutive fetch failures for better debugging
+            const errorMsg = formatError?.message || String(formatError)
+            const isWorkerError = errorMsg.includes('message port closed') || errorMsg.includes('abort') || errorMsg.includes('network')
+            console.warn(`[Marunage:Advance:Format] isWorkerError=${isWorkerError}, error=${errorMsg.substring(0, 200)}`)
             return c.json({
               run_id: run.id, previous_phase: currentPhase, new_phase: currentPhase,
               action: 'formatting_in_progress', message: 'Format processing, will retry...',
