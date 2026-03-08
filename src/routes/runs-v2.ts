@@ -303,6 +303,8 @@ runsV2.post('/:runId/format', async (c) => {
 
 // OpenAI APIでシーン生成（既存コードから移植）
 async function generateScenesFromChunk(text: string, apiKey: string): Promise<any[]> {
+  const _oaiAbort = new AbortController();
+  const _oaiTimeout = setTimeout(() => _oaiAbort.abort(), 60000); // 60s timeout
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -333,8 +335,10 @@ Return ONLY valid JSON array of scenes.`
       ],
       temperature: 0.7,
       response_format: { type: 'json_object' }
-    })
+    }),
+    signal: _oaiAbort.signal,
   })
+  clearTimeout(_oaiTimeout)
 
   if (!response.ok) {
     throw new Error(`OpenAI API error: ${response.status}`)

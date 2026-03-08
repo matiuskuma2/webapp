@@ -298,6 +298,8 @@ export async function fetchCloudflareCosts(
       }
     `;
     
+    const _cfAbort = new AbortController();
+    const _cfTimeout = setTimeout(() => _cfAbort.abort(), 30000); // 30s timeout
     const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
       method: 'POST',
       headers: {
@@ -311,8 +313,10 @@ export async function fetchCloudflareCosts(
           since: start,
           until: end
         }
-      })
+      }),
+      signal: _cfAbort.signal,
     });
+    clearTimeout(_cfTimeout);
     
     if (!response.ok) {
       const errorText = await response.text();

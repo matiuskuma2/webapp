@@ -2886,9 +2886,13 @@ admin.get('/elevenlabs/usage', async (c) => {
     apiError = 'ELEVENLABS_API_KEY が設定されていません';
   } else {
     try {
+      const _elSubAbort = new AbortController();
+      const _elSubTimeout = setTimeout(() => _elSubAbort.abort(), 15000); // 15s for subscription check
       const resp = await fetch('https://api.elevenlabs.io/v1/user/subscription', {
         headers: { 'xi-api-key': apiKey },
+        signal: _elSubAbort.signal,
       });
+      clearTimeout(_elSubTimeout);
       if (!resp.ok) {
         const errText = await resp.text().catch(() => '');
         apiError = `ElevenLabs API error ${resp.status}: ${errText.substring(0, 200)}`;

@@ -187,10 +187,14 @@ async function marunageFormatStartup(
   try {
     // Step 0: Parse API — テキストをチャンクに分割（format の前提条件）
     console.log(`[Marunage:Format] Calling parse API for project ${projectId}`)
+    const _parseAbort = new AbortController();
+    const _parseTimeout = setTimeout(() => _parseAbort.abort(), 60000); // 60s timeout for internal parse
     const parseRes = await fetch(parseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Cookie': cookieHeader },
+      signal: _parseAbort.signal,
     })
+    clearTimeout(_parseTimeout)
 
     if (!parseRes.ok) {
       const parseErr = await parseRes.text().catch(() => 'Unknown')
@@ -241,6 +245,8 @@ async function marunageFormatStartup(
       }
 
       // Call existing format API via HTTP
+      const _fmtAbort = new AbortController();
+      const _fmtTimeout = setTimeout(() => _fmtAbort.abort(), 120000); // 120s timeout for format
       const res = await fetch(formatUrl, {
         method: 'POST',
         headers: {
@@ -254,7 +260,9 @@ async function marunageFormatStartup(
           // Phase 3 (M-5): character hints for AI prompt injection
           ...(characterHints.length > 0 ? { character_hints: characterHints } : {}),
         }),
+        signal: _fmtAbort.signal,
       })
+      clearTimeout(_fmtTimeout)
 
       if (!res.ok) {
         const errBody = await res.text().catch(() => 'Unknown')
@@ -3157,6 +3165,12 @@ marunage.post('/:projectId/advance', async (c) => {
                 ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
             WHERE id = ?
           `).bind(r2Key, r2Url, totalMs, geminiMs, r2Ms, genId).run()
+
+          // Deactivate old active images for this scene (prevent duplicates)
+          await c.env.DB.prepare(`
+            UPDATE image_generations SET is_active = 0
+            WHERE scene_id = ? AND id != ? AND is_active = 1
+          `).bind(payload.sceneId, genId).run()
 
           await completeJob(c.env.DB, job.id, { genId, r2Key, totalMs, geminiMs, r2Ms })
           await recordProviderMetric(c.env.DB, 'gemini_image', 'success', geminiMs)

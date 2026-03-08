@@ -183,13 +183,17 @@ async function transcribeWithRetry(
       formData.append('response_format', 'verbose_json') // duration, languageを取得
 
       // OpenAI API呼び出し
+      const _whisperAbort = new AbortController();
+      const _whisperTimeout = setTimeout(() => _whisperAbort.abort(), 120000); // 120s timeout (audio files can be large)
       const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`
         },
-        body: formData
+        body: formData,
+        signal: _whisperAbort.signal,
       })
+      clearTimeout(_whisperTimeout)
 
       // 429エラー時はリトライ
       if (response.status === 429) {
