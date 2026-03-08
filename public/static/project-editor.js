@@ -1481,6 +1481,11 @@ let currentFormatRunNo = null; // サポート用: 現在のrun_no
 let currentFormatRunId = null; // SSOT: 監視中のrun_id（mismatch検出用）
 const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 
+// ★ Phase A: チャンク進捗のグローバル状態（ステッパーと共有）
+let formatChunkProgress = null; // { total, processed, failed, processing, pending }
+let formatChunkTimestamps = []; // [{ time, processed }] 残り時間推定用
+let formatFinalizingUntil = 0; // Phase B: formatted直後のutterance生成完了待ち
+
 // Format and split scenes with progress monitoring
 // Note: Called from confirmAndFormatSplit() which handles the confirmation dialog
 // SSOT: split_mode は raw/optimized → preserve/ai に変換してAPIへ送信
@@ -1784,6 +1789,10 @@ function startFormatPolling() {
   // Record start time for timeout
   formatPollingStartTime = Date.now();
   
+  // ★ Phase A: チャンク進捗の初期化
+  formatChunkProgress = null;
+  formatChunkTimestamps = [];
+  
   // Poll every 5 seconds
   formatPollingInterval = setInterval(async () => {
     try {
@@ -1810,7 +1819,27 @@ function startFormatPolling() {
       
       updateFormatProgress(data);
       
-      console.log('Format polling status:', data.status, 'processed:', data.processed, 'pending:', data.pending, 'run_id:', data.run_id, 'elapsed:', Math.round(elapsed/1000), 's');
+      // ★ Phase A: チャンク進捗をグローバルに保存してステッパーに反映
+      formatChunkProgress = {
+        total: data.total_chunks || 0,
+        processed: data.processed || 0,
+        failed: data.failed || 0,
+        processing: data.processing || 0,
+        pending: data.pending || 0
+      };
+      // 残り時間推定用のタイムスタンプ記録（processed が変化したときだけ）
+      const lastTs = formatChunkTimestamps[formatChunkTimestamps.length - 1];
+      if (!lastTs || lastTs.processed !== data.processed) {
+        formatChunkTimestamps.push({ time: Date.now(), processed: data.processed || 0 });
+        // 最大20件保持
+        if (formatChunkTimestamps.length > 20) formatChunkTimestamps.shift();
+      }
+      // ステッパーを更新（formatting中のみ動的表示）
+      if (data.status === 'formatting' || data.status === 'uploaded') {
+        updateProgressBar(data.status);
+      }
+      
+      console.log('Format polling status:', data.status, 'processed:', data.processed, '/', data.total_chunks, 'pending:', data.pending, 'run_id:', data.run_id, 'elapsed:', Math.round(elapsed/1000), 's');
       
       // ===== RUN_ID MISMATCH CHECK (SSOT) =====
       // 別のrunが開始された場合は即座に停止
@@ -1853,14 +1882,91 @@ function startFormatPolling() {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         formatPollingStartTime = null;
+        // ★ Phase A: チャンク進捗をクリア
+        formatChunkProgress = null;
+        formatChunkTimestamps = [];
         
-        // Get actual scene count from scenes API
+        // ★ Phase B: formatted直後はutterance生成が非同期で走っている可能性がある
+        // シーンを取得し、utterance_countが0のシーンがあれば「最終処理中」として待機
         try {
           const scenesResponse = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
-          const sceneCount = scenesResponse.data.scenes?.length || 0;
+          const scenesList = scenesResponse.data.scenes || [];
+          const sceneCount = scenesList.length;
+          const scenesWithoutUtterances = scenesList.filter(s => !s.utterance_count || s.utterance_count === 0).length;
           
-          console.log('Scene count:', sceneCount);
+          console.log(`[Format] Scene count: ${sceneCount}, without utterances: ${scenesWithoutUtterances}`);
           
+          if (sceneCount > 0 && scenesWithoutUtterances > 0) {
+            // utterance生成がまだ → ステッパーに「最終処理中」表示して短時間ポーリング
+            console.log('[Format] Phase B: Utterance generation in progress, waiting...');
+            updateProgressBar('formatting'); // ステッパーを「分割中」に維持
+            
+            // formatFinalizingUntil を設定（最大60秒待機）
+            formatFinalizingUntil = Date.now() + 60000;
+            
+            // 3秒間隔でutterance完了を監視
+            const finalizingInterval = setInterval(async () => {
+              try {
+                const checkRes = await axios.get(`${API_BASE}/projects/${PROJECT_ID}/scenes`);
+                const checkScenes = checkRes.data.scenes || [];
+                const stillMissing = checkScenes.filter(s => !s.utterance_count || s.utterance_count === 0).length;
+                const ready = checkScenes.length - stillMissing;
+                
+                console.log(`[Format] Finalizing check: ${ready}/${checkScenes.length} scenes have utterances`);
+                
+                // ステッパーに最終処理の進捗を表示
+                formatChunkProgress = {
+                  total: checkScenes.length,
+                  processed: ready,
+                  failed: 0,
+                  processing: stillMissing,
+                  pending: 0,
+                  _finalizing: true // 特殊フラグ
+                };
+                updateProgressBar('formatting');
+                
+                if (stillMissing === 0 || Date.now() > formatFinalizingUntil) {
+                  clearInterval(finalizingInterval);
+                  formatChunkProgress = null;
+                  formatFinalizingUntil = 0;
+                  
+                  if (stillMissing > 0) {
+                    console.warn(`[Format] Phase B: Timeout waiting for utterances (${stillMissing} scenes still missing)`);
+                  }
+                  
+                  await onFormatComplete({
+                    total_scenes: checkScenes.length,
+                    received_target_scene_count: data.received_target_scene_count || null,
+                    chunk_stats: {
+                      total: data.total_chunks,
+                      processed: data.processed,
+                      failed: data.failed
+                    }
+                  });
+                }
+              } catch (e) {
+                console.error('[Format] Finalizing check error:', e);
+                clearInterval(finalizingInterval);
+                formatChunkProgress = null;
+                formatFinalizingUntil = 0;
+                // エラー時はそのまま完了扱い
+                await onFormatComplete({
+                  total_scenes: sceneCount,
+                  received_target_scene_count: data.received_target_scene_count || null,
+                  chunk_stats: {
+                    total: data.total_chunks,
+                    processed: data.processed,
+                    failed: data.failed
+                  }
+                });
+              }
+            }, 3000);
+            
+            return; // ポーリングは停止済み、finalizingIntervalに移行
+          }
+          
+          // utteranceが既に存在する or シーン0件 → 即座に完了
+          console.log('[Format] Utterances ready, completing immediately');
           await onFormatComplete({
             total_scenes: sceneCount,
             received_target_scene_count: data.received_target_scene_count || null,
@@ -7545,9 +7651,9 @@ function updateProgressBar(status) {
       message: '✅ 解析完了 → 下の「フォーマット実行」ボタンをクリック'
     },
     'formatting': { 
-      percent: 45, 
+      percent: 45, // ★ Phase A: 動的に上書きされる（下の処理で35-50%に変換）
       step: 2, 
-      message: '⏳ シーン分割中... 完了まで約1分お待ちください'
+      message: '⏳ シーン分割中...' // ★ Phase A: 動的に上書きされる
     },
     'formatted': { 
       percent: 50, 
@@ -7569,6 +7675,65 @@ function updateProgressBar(status) {
   };
   
   let stage = stages[status] || { percent: 0, step: 0, message: '状態を確認中...', nextAction: null };
+  
+  // ★ Phase A: formatting中はチャンク進捗から動的にパーセンテージとメッセージを計算
+  if (status === 'formatting' && formatChunkProgress && formatChunkProgress.total > 0) {
+    const cp = formatChunkProgress;
+    
+    // ★ Phase B: 最終処理中（utterance生成待ち）の場合
+    if (cp._finalizing) {
+      const ready = cp.processed;
+      const total = cp.total;
+      const finalizePct = total > 0 ? Math.round(48 + (ready / total) * 2) : 49; // 48-50%
+      stage = {
+        percent: finalizePct,
+        step: 2,
+        message: `⏳ 最終処理中… シーンデータを準備しています (${ready}/${total}シーン完了)`
+      };
+    } else {
+      const chunkPct = cp.processed / cp.total; // 0.0 ~ 1.0
+      // 35% (parsing完了) ~ 48% (全チャンク完了) の範囲にマッピング
+      const dynamicPercent = Math.round(35 + chunkPct * 13);
+      
+      // 残り時間を推定
+      let etaText = '';
+      if (formatChunkTimestamps.length >= 2 && cp.processed > 0) {
+        const first = formatChunkTimestamps[0];
+        const last = formatChunkTimestamps[formatChunkTimestamps.length - 1];
+        const elapsedMs = last.time - first.time;
+        const processedDelta = last.processed - first.processed;
+        if (processedDelta > 0 && elapsedMs > 0) {
+          const msPerChunk = elapsedMs / processedDelta;
+          const remainingChunks = cp.total - cp.processed;
+          const etaMs = msPerChunk * remainingChunks;
+          if (etaMs < 60000) {
+            etaText = `残り約${Math.max(1, Math.ceil(etaMs / 1000))}秒`;
+          } else {
+            etaText = `残り約${Math.ceil(etaMs / 60000)}分`;
+          }
+        }
+      } else if (cp.processed === 0 && formatPollingStartTime) {
+        // まだ1チャンクも完了してない場合
+        etaText = '処理開始中...';
+      }
+      
+      const progressDetail = `(${cp.processed}/${cp.total}チャンク完了)`;
+      const etaSuffix = etaText ? `  ${etaText}` : '';
+      
+      stage = {
+        percent: dynamicPercent,
+        step: 2,
+        message: `⏳ シーン分割中… ${progressDetail}${etaSuffix}`
+      };
+    }
+  } else if (status === 'formatting') {
+    // チャンク情報がまだない場合
+    stage = {
+      percent: 36,
+      step: 2,
+      message: '⏳ シーン分割を開始しています...'
+    };
+  }
   
   // 改善: formatted状態でも実際のシーン準備状況に応じて表示を変更
   if (status === 'formatted' && totalCount > 0) {

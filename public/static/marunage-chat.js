@@ -98,10 +98,13 @@ function mcUpdateLiveProgress(data) {
   switch (phase) {
     case 'formatting': {
       const c = p.format.chunks;
-      if (c.total > 0) {
-        msg = '整形中: ' + c.done + '/' + c.total + ' チャンク完了';
+      if (c.total > 0 && c.done < c.total) {
+        const pct = Math.round((c.done / c.total) * 100);
+        msg = 'シーン分割中: ' + c.done + '/' + c.total + ' チャンク完了 (' + pct + '%)';
+      } else if (c.total > 0 && c.done >= c.total) {
+        msg = 'シーン分割: 最終処理中...';
       } else {
-        msg = '整形開始中...';
+        msg = 'シーン分割を開始しています...';
       }
       break;
     }
@@ -864,7 +867,7 @@ function mcUpdatePhaseBadge(phase, videoState) {
   
   const map = {
     'init':              { text: '初期化中', bg: 'bg-gray-200', fg: 'text-gray-700' },
-    'formatting':        { text: '整形中', bg: 'bg-blue-100', fg: 'text-blue-700' },
+    'formatting':        { text: 'シーン分割中', bg: 'bg-blue-100', fg: 'text-blue-700' },
     'awaiting_ready':    { text: '確認待ち', bg: 'bg-yellow-100', fg: 'text-yellow-700' },
     'generating_images': { text: '画像生成中', bg: 'bg-purple-100', fg: 'text-purple-700' },
     'generating_audio':  { text: '音声生成中', bg: 'bg-indigo-100', fg: 'text-indigo-700' },
@@ -890,11 +893,12 @@ function mcUpdateProgress(data) {
   switch (phase) {
     case 'init':
     case 'formatting':
-      // 0-15%: based on chunk progress
+      // ★ Phase C: 0-20% に拡大（元: 0-15%）し、初期値を引き上げ
       if (p.format.chunks.total > 0) {
-        percent = Math.round((p.format.chunks.done / p.format.chunks.total) * 15);
+        const chunkPct = p.format.chunks.done / p.format.chunks.total;
+        percent = Math.round(3 + chunkPct * 17); // 3-20%
       } else {
-        percent = 5;
+        percent = phase === 'init' ? 2 : 5;
       }
       break;
       
