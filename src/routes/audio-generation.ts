@@ -591,6 +591,8 @@ async function generateAndUploadAudio(args: {
     } else {
       // Google TTS (default) - can use either GOOGLE_TTS_API_KEY or GEMINI_API_KEY
       const googleTtsKey = env.GOOGLE_TTS_API_KEY || env.GEMINI_API_KEY;
+      const _ttsAbort = new AbortController();
+      const _ttsTimeout = setTimeout(() => _ttsAbort.abort(), 60000); // 60s timeout
       const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
         method: 'POST',
         headers: {
@@ -608,7 +610,9 @@ async function generateAndUploadAudio(args: {
             sampleRateHertz: sampleRate,
           },
         }),
+        signal: _ttsAbort.signal,
       });
+      clearTimeout(_ttsTimeout);
 
       if (!res.ok) {
         const errorText = await res.text().catch(() => '');
@@ -844,6 +848,8 @@ audioGeneration.post('/tts/preview', async (c) => {
       }
 
       const ttsUrl = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${googleTtsKey}`;
+      const _ttsPreviewAbort = new AbortController();
+      const _ttsPreviewTimeout = setTimeout(() => _ttsPreviewAbort.abort(), 30000); // 30s timeout for preview
       const ttsResponse = await fetch(ttsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -858,7 +864,9 @@ audioGeneration.post('/tts/preview', async (c) => {
             sampleRateHertz: 24000,
           },
         }),
+        signal: _ttsPreviewAbort.signal,
       });
+      clearTimeout(_ttsPreviewTimeout);
 
       if (!ttsResponse.ok) {
         const errorText = await ttsResponse.text();
@@ -1254,6 +1262,8 @@ audioGeneration.post('/voice-preview', async (c) => {
       if (!googleTtsKey) {
         return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, 'Google TTS API key not configured'), 500);
       }
+      const _ttsGenAbort = new AbortController();
+      const _ttsGenTimeout = setTimeout(() => _ttsGenAbort.abort(), 60000); // 60s timeout
       const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
         method: 'POST',
         headers: {
@@ -1265,7 +1275,9 @@ audioGeneration.post('/voice-preview', async (c) => {
           voice: { languageCode: 'ja-JP', name: voiceId },
           audioConfig: { audioEncoding: 'MP3', sampleRateHertz: 24000 },
         }),
+        signal: _ttsGenAbort.signal,
       });
+      clearTimeout(_ttsGenTimeout);
       if (!res.ok) {
         const errText = await res.text().catch(() => '');
         return c.json(createErrorResponse(ERROR_CODES.INTERNAL_ERROR, `Google TTS error: ${res.status} ${errText}`), 500);

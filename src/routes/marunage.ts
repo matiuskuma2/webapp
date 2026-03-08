@@ -50,6 +50,11 @@ import { logAudit } from '../utils/audit-logger'
 import { composeStyledPrompt, buildR2Key } from '../utils/image-prompt-builder'
 import { getSceneReferenceImages } from '../utils/character-reference-helper'
 import { toCloudFrontUrl, s3ToCloudFrontUrl, generateS3PresignedUrl, isPresignedUrlExpiringSoon } from '../utils/aws-video-client'
+import {
+  createJob, fetchAndLockJob, completeJob, failJob, handleRateLimit,
+  cancelProjectJobs, getJobProgress, areAllJobsDone, recordProviderMetric,
+  type JobRow,
+} from '../utils/job-queue'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -2753,8 +2758,46 @@ marunage.post('/:projectId/advance', async (c) => {
       }
 
       // ---- generating_images → generating_audio (or retry failed) ----
+      // ★ Rate-Limit-Aware: job_queue ベースの画像生成
+      // 1リクエスト = 1ジョブ実行、429 → 即 retry_wait、Provider 同時実行制御
       case 'generating_images': {
-        // Check image completion status (including scenes with no image record)
+        const aspectRatio = config.output_preset === 'short_vertical' ? '9:16' : '16:9'
+
+        // ── Step A: Ensure jobs exist in job_queue for scenes without images ──
+        const scenesWithoutImage = await c.env.DB.prepare(`
+          SELECT s.id, s.idx, s.image_prompt
+          FROM scenes s
+          LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
+          WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
+          ORDER BY s.idx ASC
+        `).bind(projectId).all<{ id: number; idx: number; image_prompt: string }>()
+
+        const pendingScenes = scenesWithoutImage.results || []
+        if (pendingScenes.length > 0) {
+          // Create jobs for scenes that don't have one yet
+          for (const scene of pendingScenes) {
+            await createJob(c.env.DB, {
+              userId: user.id,
+              projectId,
+              jobType: 'generate_image',
+              provider: 'gemini_image',
+              entityType: 'scene',
+              entityId: scene.id,
+              payload: {
+                sceneId: scene.id,
+                sceneIdx: scene.idx,
+                imagePrompt: scene.image_prompt || '',
+                aspectRatio,
+              },
+            })
+          }
+        }
+
+        // ── Step B: Check job_queue progress ──
+        const jobProgress = await getJobProgress(c.env.DB, projectId, 'generate_image')
+        const { allDone, hasFailures } = await areAllJobsDone(c.env.DB, projectId, 'generate_image')
+
+        // Also check image_generations for legacy records (backward compat)
         const imgStats = await c.env.DB.prepare(`
           SELECT
             COUNT(*) AS total_scenes,
@@ -2767,211 +2810,17 @@ marunage.post('/:projectId/advance', async (c) => {
           WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL)
         `).bind(projectId).first<{ total_scenes: number; completed: number; generating: number; failed: number; no_image: number }>()
 
-        const completed = imgStats?.completed || 0
-        const generating = imgStats?.generating || 0
-        const failed = imgStats?.failed || 0
-        const noImage = imgStats?.no_image || 0
+        const imgCompleted = imgStats?.completed || 0
+        const imgGenerating = imgStats?.generating || 0
+        const imgFailed = imgStats?.failed || 0
+        const imgNoImage = imgStats?.no_image || 0
 
-        console.log(`[Marunage:Advance:Images] project=${projectId} completed=${completed} generating=${generating} failed=${failed} noImage=${noImage}`)
+        console.log(`[Marunage:Advance:Images] project=${projectId} img(completed=${imgCompleted} generating=${imgGenerating} failed=${imgFailed} noImage=${imgNoImage}) jobs(total=${jobProgress.total} queued=${jobProgress.queued} processing=${jobProgress.processing} retryWait=${jobProgress.retryWait} completed=${jobProgress.completed} failed=${jobProgress.failed})`)
 
-        // If there are scenes with no image record, generate ONE image directly (not via waitUntil)
-        // This avoids Cloudflare Workers waitUntil timeout for multiple images.
-        // Frontend polls every 10s → advance → 1 image → repeat until all done.
-        if (noImage > 0 && generating === 0) {
-          console.log(`[Marunage:Advance:Images] Generating 1 image directly (${noImage} remaining)`)
-          
-          const aspectRatio = config.output_preset === 'short_vertical' ? '9:16' : '16:9'
-          
-          // Resolve API key
-          const billing = user.id
-            ? await resolveBillingContext(c.env.DB, user.id)
-            : { billingSource: 'system' as BillingSource, effectiveUserId: null, sponsorUserId: null }
-          const keyResult = await resolveProviderKey(c.env.DB, billing, 'gemini', c.env.GEMINI_API_KEY, c.env.ENCRYPTION_KEY)
-          if (!keyResult) {
-            console.error(`[Marunage:Advance:Images] No Gemini API key`)
-            await transitionPhase(c.env.DB, run.id, 'generating_images', 'failed', {
-              error_code: 'NO_API_KEY',
-              error_message: `No Gemini API key configured`,
-              error_phase: 'generating_images',
-            })
-            return c.json({
-              run_id: run.id,
-              previous_phase: currentPhase,
-              new_phase: 'failed',
-              action: 'failed',
-              message: 'APIキーが設定されていません',
-            })
-          }
-          
-          // Find first scene without image
-          const nextScene = await c.env.DB.prepare(`
-            SELECT s.id, s.idx, s.image_prompt
-            FROM scenes s
-            LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
-            WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
-            ORDER BY s.idx ASC LIMIT 1
-          `).bind(projectId).first<{ id: number; idx: number; image_prompt: string }>()
-          
-          if (!nextScene) {
-            return c.json({
-              run_id: run.id,
-              previous_phase: currentPhase,
-              new_phase: currentPhase,
-              action: 'waiting',
-              message: 'No scene without image found',
-            })
-          }
-          
-          // Build prompt
-          let prompt = nextScene.image_prompt || ''
-          try {
-            prompt = await composeStyledPrompt(c.env.DB, projectId, nextScene.id, prompt)
-          } catch (e) {
-            console.warn(`[Marunage:Advance:Images] Style composition failed:`, e)
-          }
-          if (!prompt) prompt = `A scene from a video presentation. Scene index: ${nextScene.idx}`
-          
-          // Phase 4 (M-7): Fetch reference images for character consistency
-          let refImages: Array<{ base64Data: string; mimeType: string; characterName?: string }> = []
-          try {
-            const refs = await getSceneReferenceImages(c.env.DB, c.env.R2, nextScene.id, 5)
-            refImages = refs.map(r => ({
-              base64Data: r.base64Data,
-              mimeType: r.mimeType,
-              characterName: r.characterName,
-            }))
-            if (refImages.length > 0) {
-              console.log(`[Marunage:Advance:Images] Loaded ${refImages.length} reference image(s) for scene ${nextScene.id}`)
-            }
-          } catch (e) {
-            console.warn(`[Marunage:Advance:Images] Reference image loading failed for scene ${nextScene.id}:`, e)
-            // Continue without reference images (graceful degradation)
-          }
-          
-          // ── Timing: overall start ──
-          const t0 = Date.now()
-          
-          // Create image_generations record with started_at
-          const insertResult = await c.env.DB.prepare(`
-            INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
-            VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1, datetime('now'))
-          `).bind(nextScene.id, prompt).run()
-          const genId = insertResult.meta.last_row_id as number
-          
-          // ── Timing: Gemini API call ──
-          const tGeminiStart = Date.now()
-          console.log(`[Marunage:Advance:Images] Calling Gemini for scene ${nextScene.id} (idx=${nextScene.idx})${refImages.length > 0 ? ` with ${refImages.length} ref images` : ''}`)
-          const imageResult = await generateSingleImage(keyResult.apiKey, prompt, aspectRatio as any, refImages.length > 0 ? refImages : undefined)
-          const geminiMs = Date.now() - tGeminiStart
-          
-          if (imageResult.success && imageResult.imageData) {
-            // ── Timing: R2 upload ──
-            const tR2Start = Date.now()
-            const r2Key = `projects/${projectId}/scenes/${nextScene.id}/image_${genId}.png`
-            await c.env.R2.put(r2Key, imageResult.imageData, {
-              httpMetadata: { contentType: 'image/png' },
-            })
-            const r2Ms = Date.now() - tR2Start
-            const totalMs = Date.now() - t0
-            
-            const r2Url = `/${r2Key}`  // ★ FIX: r2_url を設定（preflight が参照する）
-            await c.env.DB.prepare(`
-              UPDATE image_generations
-              SET status = 'completed', r2_key = ?, r2_url = ?,
-                  ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
-              WHERE id = ?
-            `).bind(r2Key, r2Url, totalMs, geminiMs, r2Ms, genId).run()
-            // Note: scenes table does NOT have image_status/image_r2_key columns.
-            // Image status is tracked exclusively via image_generations table.
-            console.log(`[Marunage:Advance:Images] Scene ${nextScene.idx} ✅ completed — total=${totalMs}ms gemini=${geminiMs}ms r2=${r2Ms}ms`)
-            
-            // ★ P0-1: コスト記録（advance経路）— 全画像生成経路で必ず1行残す SSOT
-            await logImageGenerationCost(c.env.DB, {
-              userId: user.id,
-              projectId: String(projectId),
-              sceneId: nextScene.id,
-              status: 'success',
-              apiKeySource: keyResult.keySource,
-              sponsorUserId: billing.sponsorUserId,
-              promptLength: prompt.length,
-              generationType: 'marunage_advance',
-            })
-          } else {
-            const totalMs = Date.now() - t0
-            await c.env.DB.prepare(`
-              UPDATE image_generations
-              SET status = 'failed', error_message = ?,
-                  ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
-              WHERE id = ?
-            `).bind((imageResult.error || 'Unknown error').substring(0, 500), totalMs, geminiMs, genId).run()
-            console.error(`[Marunage:Advance:Images] Scene ${nextScene.idx} ❌ failed — total=${totalMs}ms gemini=${geminiMs}ms error=${imageResult.error}`)
-            
-            // ★ P0-1: コスト記録（advance経路・失敗）— 失敗も必ず記録
-            await logImageGenerationCost(c.env.DB, {
-              userId: user.id,
-              projectId: String(projectId),
-              sceneId: nextScene.id,
-              status: 'failed',
-              apiKeySource: keyResult.keySource,
-              sponsorUserId: billing.sponsorUserId,
-              promptLength: prompt.length,
-              errorMessage: (imageResult.error || 'Unknown error').substring(0, 500),
-              generationType: 'marunage_advance',
-            })
-          }
-          
-          return c.json({
-            run_id: run.id,
-            previous_phase: currentPhase,
-            new_phase: currentPhase,
-            action: 'images_started',
-            message: `画像生成中 (シーン${nextScene.idx + 1})`,
-          })
-        }
-
-        if (generating > 0) {
-          // Safety: if image_generations stuck in 'generating' for >90s, mark as failed
-          // ★ FIX: 60s→90s に延長（参照画像ありの場合のGemini応答が遅い + Workers実行コンテキスト問題対策）
-          // Gemini + R2 should complete in <35s; 90s is generous
-          // Use COALESCE(started_at, created_at) for backward compat (old rows have no started_at)
-          const staleFixed = await c.env.DB.prepare(`
-            UPDATE image_generations
-            SET status = 'failed',
-                error_message = 'Timed out (stuck in generating >90s)',
-                ended_at = datetime('now'),
-                duration_ms = CAST((julianday('now') - julianday(COALESCE(started_at, created_at))) * 86400000 AS INTEGER)
-            WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
-              AND is_active = 1
-              AND status = 'generating'
-              AND COALESCE(started_at, created_at) < datetime('now', '-90 seconds')
-          `).bind(projectId).run()
-          const fixedCount = staleFixed.meta.changes || 0
-          if (fixedCount > 0) {
-            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records (>60s)`)
-            // Return immediately so next poll re-evaluates with fresh stats
-            return c.json({
-              run_id: run.id,
-              previous_phase: currentPhase,
-              new_phase: currentPhase,
-              action: 'stale_fixed',
-              message: `${fixedCount}枚の停滞画像を検出、再生成します`,
-            })
-          }
-          
-          return c.json({
-            run_id: run.id,
-            previous_phase: currentPhase,
-            new_phase: currentPhase,
-            action: 'waiting',
-            message: `Images still generating (${completed} completed, ${generating} in progress)`,
-          })
-        }
-
-        // All completed → transition to generating_audio
-        // Explicitly check noImage === 0 and generating === 0 for safety
-        if (completed > 0 && failed === 0 && noImage === 0 && generating === 0) {
-          // No lock needed: advance handler checks audio_job_id & job status on each poll.
-          // The 10-min lock was blocking subsequent advance calls (409 CONFLICT bug).
+        // ── Step C: All images done → transition to audio ──
+        // Legacy compat: if no jobs exist (total=0), rely only on image_generations stats
+        const jobsAllDone = jobProgress.total === 0 ? true : allDone
+        if (imgCompleted > 0 && imgFailed === 0 && imgNoImage === 0 && imgGenerating === 0 && jobsAllDone) {
           const ok = await transitionPhase(c.env.DB, run.id, 'generating_images', 'generating_audio')
           if (!ok) {
             return c.json({
@@ -2983,9 +2832,8 @@ marunage.post('/:projectId/advance', async (c) => {
             })
           }
 
-          // Issue-3: Start audio generation via waitUntil
           const sessionCookie = getCookie(c, 'session') || ''
-          const config: MarunageConfig = run.config_json ? JSON.parse(run.config_json) : DEFAULT_CONFIG
+          // Note: `config` is already declared in the outer scope (line ~2439)
 
           c.executionCtx.waitUntil(
             marunageStartAudioGeneration(
@@ -3003,20 +2851,51 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
-        // Failed images — Issue-2: Auto-retry (max 3 times)
-        // Reset failed images one at a time so they get picked up by the noImage > 0 branch.
-        if (failed > 0) {
+        // ── Step D: Handle stuck generating records (safety net) ──
+        if (imgGenerating > 0) {
+          const staleFixed = await c.env.DB.prepare(`
+            UPDATE image_generations
+            SET status = 'failed',
+                error_message = 'Timed out (stuck in generating >90s)',
+                ended_at = datetime('now'),
+                duration_ms = CAST((julianday('now') - julianday(COALESCE(started_at, created_at))) * 86400000 AS INTEGER)
+            WHERE scene_id IN (SELECT id FROM scenes WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL))
+              AND is_active = 1
+              AND status = 'generating'
+              AND COALESCE(started_at, created_at) < datetime('now', '-90 seconds')
+          `).bind(projectId).run()
+          const fixedCount = staleFixed.meta.changes || 0
+          if (fixedCount > 0) {
+            console.log(`[Marunage:Advance:Images] Fixed ${fixedCount} stale generating records (>90s)`)
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'stale_fixed',
+              message: `${fixedCount}枚の停滞画像を検出、再生成します`,
+            })
+          }
+
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: 'waiting',
+            message: `Images still generating (${imgCompleted} completed, ${imgGenerating} in progress)`,
+          })
+        }
+
+        // ── Step E: Handle failed images (retry via job_queue) ──
+        if (imgFailed > 0 && jobProgress.queued === 0 && jobProgress.processing === 0 && jobProgress.retryWait === 0) {
           const MAX_IMAGE_RETRIES = 3
           if (run.retry_count < MAX_IMAGE_RETRIES) {
-            // Increment retry count
             await c.env.DB.prepare(`
               UPDATE marunage_runs
-              SET retry_count = retry_count + 1,
-                  updated_at = CURRENT_TIMESTAMP
+              SET retry_count = retry_count + 1, updated_at = CURRENT_TIMESTAMP
               WHERE id = ?
             `).bind(run.id).run()
 
-            // Deactivate failed image records so the scenes appear as noImage in next advance
+            // Deactivate failed images so scenes appear as noImage
             await c.env.DB.prepare(`
               UPDATE image_generations
               SET is_active = 0
@@ -3025,21 +2904,26 @@ marunage.post('/:projectId/advance', async (c) => {
                 AND (status = 'failed' OR status = 'policy_violation')
             `).bind(projectId).run()
 
-            console.log(`[Marunage:Advance:Images] Deactivated ${failed} failed images for retry (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`)
+            // Also clean up failed jobs so new ones can be created
+            await c.env.DB.prepare(`
+              UPDATE job_queue SET status = 'canceled', updated_at = datetime('now')
+              WHERE project_id = ? AND job_type = 'generate_image' AND status = 'failed'
+            `).bind(projectId).run()
+
+            console.log(`[Marunage:Advance:Images] Retry ${run.retry_count + 1}/${MAX_IMAGE_RETRIES}: deactivated ${imgFailed} failed images`)
 
             return c.json({
               run_id: run.id,
               previous_phase: currentPhase,
               new_phase: currentPhase,
               action: 'retrying',
-              message: `${failed}枚の失敗画像をリトライ準備中 (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`,
+              message: `${imgFailed}枚の失敗画像をリトライ準備中 (${run.retry_count + 1}/${MAX_IMAGE_RETRIES})`,
             })
           }
 
-          // Retry exhausted → failed
           await transitionPhase(c.env.DB, run.id, 'generating_images', 'failed', {
             error_code: 'IMAGE_GENERATION_FAILED',
-            error_message: `${failed} image(s) failed after ${MAX_IMAGE_RETRIES} retries`,
+            error_message: `${imgFailed} image(s) failed after ${MAX_IMAGE_RETRIES} retries`,
             error_phase: 'generating_images',
           })
           return c.json({
@@ -3051,14 +2935,286 @@ marunage.post('/:projectId/advance', async (c) => {
           })
         }
 
-        // No images at all yet (edge case: generation just started or no records)
-        return c.json({
-          run_id: run.id,
-          previous_phase: currentPhase,
-          new_phase: currentPhase,
-          action: 'waiting',
-          message: 'No images generated yet',
-        })
+        // ── Step F: Execute ONE job from queue (rate-limit-aware) ──
+        const job = await fetchAndLockJob(c.env.DB, 'gemini_image', projectId)
+
+        if (!job) {
+          // Either provider at capacity or no jobs available
+          // If retryWait jobs exist, report to frontend
+          if (jobProgress.retryWait > 0) {
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'rate_limited',
+              message: `APIレート制限中 — ${jobProgress.retryWait}件のジョブが待機中`,
+              retry_after: 10,
+            })
+          }
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: 'waiting',
+            message: jobProgress.processing > 0
+              ? `画像生成中 (${imgCompleted}/${imgStats?.total_scenes || 0})`
+              : 'No images generated yet',
+          })
+        }
+
+        // Parse job payload
+        const payload = JSON.parse(job.payload_json) as {
+          sceneId: number; sceneIdx: number; imagePrompt: string; aspectRatio: string
+        }
+
+        // Resolve API key
+        const billing = user.id
+          ? await resolveBillingContext(c.env.DB, user.id)
+          : { billingSource: 'system' as BillingSource, effectiveUserId: null, sponsorUserId: null }
+        const keyResult = await resolveProviderKey(c.env.DB, billing, 'gemini', c.env.GEMINI_API_KEY, c.env.ENCRYPTION_KEY)
+        if (!keyResult) {
+          await failJob(c.env.DB, job.id, 'NO_API_KEY', 'No Gemini API key configured', job.retry_count, job.max_retries)
+          await transitionPhase(c.env.DB, run.id, 'generating_images', 'failed', {
+            error_code: 'NO_API_KEY',
+            error_message: 'No Gemini API key configured',
+            error_phase: 'generating_images',
+          })
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: 'failed',
+            action: 'failed',
+            message: 'APIキーが設定されていません',
+          })
+        }
+
+        // Build prompt
+        let prompt = payload.imagePrompt
+        try {
+          prompt = await composeStyledPrompt(c.env.DB, projectId, payload.sceneId, prompt)
+        } catch (e) {
+          console.warn(`[Marunage:Advance:Images] Style composition failed:`, e)
+        }
+        if (!prompt) prompt = `A scene from a video presentation. Scene index: ${payload.sceneIdx}`
+
+        // Fetch reference images
+        let refImages: Array<{ base64Data: string; mimeType: string; characterName?: string }> = []
+        try {
+          const refs = await getSceneReferenceImages(c.env.DB, c.env.R2, payload.sceneId, 5)
+          refImages = refs.map(r => ({ base64Data: r.base64Data, mimeType: r.mimeType, characterName: r.characterName }))
+          if (refImages.length > 0) {
+            console.log(`[Marunage:Advance:Images] Loaded ${refImages.length} ref image(s) for scene ${payload.sceneId}`)
+          }
+        } catch (e) {
+          console.warn(`[Marunage:Advance:Images] Reference image loading failed:`, e)
+        }
+
+        // ── Execute: Gemini API call (single attempt, NO in-request retry) ──
+        const t0 = Date.now()
+
+        // Create image_generations record
+        const insertResult = await c.env.DB.prepare(`
+          INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
+          VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1, datetime('now'))
+        `).bind(payload.sceneId, prompt).run()
+        const genId = insertResult.meta.last_row_id as number
+
+        const tGeminiStart = Date.now()
+        console.log(`[Marunage:Advance:Images] Job #${job.id} → Gemini for scene ${payload.sceneId} (idx=${payload.sceneIdx})${refImages.length > 0 ? ` with ${refImages.length} ref images` : ''}`)
+
+        // ★ Single-attempt call (no in-request retry loop)
+        try {
+          const controller = new AbortController()
+          const timeout = setTimeout(() => controller.abort(), 40000) // 40s timeout
+
+          const response = await fetch(GEMINI_ENDPOINT, {
+            method: 'POST',
+            headers: { 'x-goog-api-key': keyResult.apiKey, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [
+                ...(refImages || []).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64Data } })),
+                { text: `IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.\n\nNOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually. Do NOT render these descriptions as text in the image.\n\n${refImages.length > 0 ? `Using the provided reference images for character visual consistency, generate:\n\n` : ''}${prompt}` }
+              ] }],
+              generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: payload.aspectRatio } },
+            }),
+            signal: controller.signal,
+          })
+          clearTimeout(timeout)
+
+          // ★ 429 → immediately retry_wait (no in-request wait)
+          if (response.status === 429) {
+            const retryAfterHeader = response.headers.get('Retry-After')
+            const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined
+            const geminiMs = Date.now() - tGeminiStart
+
+            await c.env.DB.prepare(`
+              UPDATE image_generations SET status = 'failed', error_message = '429 Rate Limited (job will retry)',
+                ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
+              WHERE id = ?
+            `).bind(Date.now() - t0, geminiMs, genId).run()
+            // Deactivate so scene appears as noImage for the retried job
+            await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
+
+            const { retryAfterSec: delay } = await handleRateLimit(c.env.DB, job.id, 'gemini_image', retryAfterSec)
+
+            console.log(`[Marunage:Advance:Images] Job #${job.id} → 429, retry in ${delay}s`)
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'rate_limited',
+              message: `APIレート制限 — ${delay}秒後に自動再試行`,
+              retry_after: delay,
+            })
+          }
+
+          if (!response.ok) {
+            const errData = await response.json().catch(() => ({})) as any
+            const errMsg = errData?.error?.message || `API error: ${response.status}`
+            const geminiMs = Date.now() - tGeminiStart
+
+            await c.env.DB.prepare(`
+              UPDATE image_generations SET status = 'failed', error_message = ?,
+                ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
+              WHERE id = ?
+            `).bind(errMsg.substring(0, 500), Date.now() - t0, geminiMs, genId).run()
+
+            const { finalStatus } = await failJob(c.env.DB, job.id, `GEMINI_${response.status}`, errMsg.substring(0, 500), job.retry_count, job.max_retries)
+            await recordProviderMetric(c.env.DB, 'gemini_image', 'error', geminiMs)
+
+            await logImageGenerationCost(c.env.DB, {
+              userId: user.id, projectId: String(projectId), sceneId: payload.sceneId,
+              status: 'failed', apiKeySource: keyResult.keySource, sponsorUserId: billing.sponsorUserId,
+              promptLength: prompt.length, errorMessage: errMsg.substring(0, 500), generationType: 'marunage_advance',
+            })
+
+            // If the job will retry, deactivate this failed image so a new one can be created
+            if (finalStatus === 'retry_wait') {
+              await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
+            }
+
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: finalStatus === 'retry_wait' ? 'retrying' : 'images_started',
+              message: `シーン${payload.sceneIdx + 1}: 画像生成エラー${finalStatus === 'retry_wait' ? '（再試行予定）' : ''}`,
+            })
+          }
+
+          // ── Success: extract image data ──
+          const result = await response.json() as any
+          const geminiMs = Date.now() - tGeminiStart
+          let imageData: ArrayBuffer | null = null
+
+          if (result.candidates?.[0]?.content?.parts) {
+            for (const part of result.candidates[0].content.parts) {
+              if (part.inlineData?.data) {
+                const binaryString = atob(part.inlineData.data)
+                const bytes = new Uint8Array(binaryString.length)
+                for (let i = 0; i < binaryString.length; i++) {
+                  bytes[i] = binaryString.charCodeAt(i)
+                }
+                imageData = bytes.buffer
+                break
+              }
+            }
+          }
+
+          if (!imageData) {
+            const errMsg = 'No image data in Gemini response'
+            await c.env.DB.prepare(`
+              UPDATE image_generations SET status = 'failed', error_message = ?,
+                ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
+              WHERE id = ?
+            `).bind(errMsg, Date.now() - t0, geminiMs, genId).run()
+
+            const { finalStatus } = await failJob(c.env.DB, job.id, 'NO_IMAGE_DATA', errMsg, job.retry_count, job.max_retries)
+            if (finalStatus === 'retry_wait') {
+              await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
+            }
+
+            return c.json({
+              run_id: run.id,
+              previous_phase: currentPhase,
+              new_phase: currentPhase,
+              action: 'images_started',
+              message: `シーン${payload.sceneIdx + 1}: 画像データ未取得${finalStatus === 'retry_wait' ? '（再試行予定）' : ''}`,
+            })
+          }
+
+          // ── Upload to R2 ──
+          const tR2Start = Date.now()
+          const r2Key = `projects/${projectId}/scenes/${payload.sceneId}/image_${genId}.png`
+          await c.env.R2.put(r2Key, imageData, { httpMetadata: { contentType: 'image/png' } })
+          const r2Ms = Date.now() - tR2Start
+          const totalMs = Date.now() - t0
+
+          const r2Url = `/${r2Key}`
+          await c.env.DB.prepare(`
+            UPDATE image_generations
+            SET status = 'completed', r2_key = ?, r2_url = ?,
+                ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?, r2_duration_ms = ?
+            WHERE id = ?
+          `).bind(r2Key, r2Url, totalMs, geminiMs, r2Ms, genId).run()
+
+          await completeJob(c.env.DB, job.id, { genId, r2Key, totalMs, geminiMs, r2Ms })
+          await recordProviderMetric(c.env.DB, 'gemini_image', 'success', geminiMs)
+
+          await logImageGenerationCost(c.env.DB, {
+            userId: user.id, projectId: String(projectId), sceneId: payload.sceneId,
+            status: 'success', apiKeySource: keyResult.keySource, sponsorUserId: billing.sponsorUserId,
+            promptLength: prompt.length, generationType: 'marunage_advance',
+          })
+
+          console.log(`[Marunage:Advance:Images] Job #${job.id} scene ${payload.sceneIdx} ✅ total=${totalMs}ms gemini=${geminiMs}ms r2=${r2Ms}ms`)
+
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: 'images_started',
+            message: `画像生成中 (シーン${payload.sceneIdx + 1})`,
+          })
+
+        } catch (err) {
+          // Handle timeout / AbortError / network errors
+          const geminiMs = Date.now() - tGeminiStart
+          const isTimeout = err instanceof Error && err.name === 'AbortError'
+          const errMsg = isTimeout
+            ? 'TIMEOUT_40s: Gemini API did not respond within 40 seconds'
+            : `Network error: ${err instanceof Error ? err.message : String(err)}`
+
+          await c.env.DB.prepare(`
+            UPDATE image_generations SET status = 'failed', error_message = ?,
+              ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
+            WHERE id = ?
+          `).bind(errMsg.substring(0, 500), Date.now() - t0, geminiMs, genId).run()
+
+          const metricType = isTimeout ? 'timeout' as const : 'error' as const
+          await recordProviderMetric(c.env.DB, 'gemini_image', metricType, geminiMs)
+
+          const { finalStatus } = await failJob(c.env.DB, job.id, isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR', errMsg.substring(0, 500), job.retry_count, job.max_retries)
+          if (finalStatus === 'retry_wait') {
+            await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
+          }
+
+          await logImageGenerationCost(c.env.DB, {
+            userId: user.id, projectId: String(projectId), sceneId: payload.sceneId,
+            status: 'failed', apiKeySource: keyResult.keySource, sponsorUserId: billing.sponsorUserId,
+            promptLength: prompt.length, errorMessage: errMsg.substring(0, 500), generationType: 'marunage_advance',
+          })
+
+          console.error(`[Marunage:Advance:Images] Job #${job.id} scene ${payload.sceneIdx} ❌ ${errMsg}`)
+
+          return c.json({
+            run_id: run.id,
+            previous_phase: currentPhase,
+            new_phase: currentPhase,
+            action: finalStatus === 'retry_wait' ? 'retrying' : 'images_started',
+            message: `シーン${payload.sceneIdx + 1}: ${isTimeout ? 'タイムアウト' : 'エラー'}${finalStatus === 'retry_wait' ? '（再試行予定）' : ''}`,
+          })
+        }
       }
 
       // ---- generating_audio → ready ----

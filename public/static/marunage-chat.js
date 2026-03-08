@@ -700,6 +700,13 @@ async function mcAdvance() {
       case 'auto_retry':
         mcAddSystemMessage(data.message || '自動リトライ中...');
         break;
+      case 'rate_limited':
+        // ★ Rate-Limit-Aware: API制限受信時のUI表示
+        mcAddSystemMessage(data.message || 'APIレート制限中...しばらくお待ちください', 'warning');
+        break;
+      case 'stale_fixed':
+        mcAddSystemMessage(data.message || '停滞した処理を検出、再試行します...');
+        break;
     }
     
   } catch (err) {

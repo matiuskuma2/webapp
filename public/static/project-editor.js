@@ -6281,34 +6281,64 @@ async function generateBulkImages(mode) {
       }, 3000);
       
       try {
-        // ★ FIX: バッチ制限対応 — 残りがある場合は自動的に再呼び出し
+        // ★ Rate-Limit-Aware: job_queue ベースで 1リクエスト=1ジョブ
+        // フロントエンドがポーリングループで繰り返し呼び出し、1枚ずつ処理
         let totalSuccess = 0;
         let totalFailed = 0;
         let remaining = true;
         let batchCount = 0;
-        const MAX_BATCHES = 100; // 安全弁: 最大100バッチ (300シーン)
+        const MAX_BATCHES = 200; // 安全弁: 最大200ポール (余裕を持って)
+        let consecutiveNoProgress = 0;
 
         while (remaining && batchCount < MAX_BATCHES) {
           batchCount++;
           const response = await axios.post(`${API_BASE}/projects/${PROJECT_ID}/generate-all-images`, { mode }, {
-            timeout: 300000 // 5分タイムアウト (1バッチ3シーン分)
+            timeout: 120000 // 2分タイムアウト (1ジョブ分)
           });
-          const { total_scenes, success_count, failed_count, skipped_count } = response.data;
+          const { total_scenes, success_count, failed_count, status, job_progress } = response.data;
           totalSuccess += success_count || 0;
           totalFailed += failed_count || 0;
 
           // 進捗表示更新
           const btn = document.getElementById(buttonId);
-          if (btn) {
+          if (job_progress) {
+            const pct = total_scenes > 0 ? Math.round((job_progress.completed / total_scenes) * 100) : 0;
+            const progressText = `画像生成中... (${job_progress.completed}/${total_scenes}) ${pct}%`;
+            if (btn) btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>${progressText}`;
+
+            // Rate limit indicator
+            if (job_progress.retry_wait > 0) {
+              if (btn) btn.innerHTML = `<i class="fas fa-clock mr-2"></i>API制限待機中... (${job_progress.completed}/${total_scenes})`;
+            }
+
+            // Check if all done
+            const active = (job_progress.queued || 0) + (job_progress.processing || 0) + (job_progress.retry_wait || 0);
+            if (active === 0 && job_progress.total > 0) {
+              remaining = false;
+            }
+          } else if (btn) {
             btn.innerHTML = `<i class="fas fa-spinner fa-spin mr-2"></i>画像生成中... (${totalSuccess}/${total_scenes})`;
           }
 
-          if (!skipped_count || skipped_count === 0) {
+          if (status === 'completed') {
             remaining = false;
+          }
+
+          // Track no-progress to avoid infinite loop
+          if (success_count === 0 && failed_count === 0) {
+            consecutiveNoProgress++;
+            if (consecutiveNoProgress > 20) {
+              console.warn('[BULK] No progress for 20 consecutive polls, stopping');
+              remaining = false;
+            }
           } else {
-            console.log(`[BULK] Batch ${batchCount}: +${success_count} success, +${failed_count} failed, ${skipped_count} remaining`);
-            // 次のバッチの前に短い待ち時間
-            await new Promise(r => setTimeout(r, 1000));
+            consecutiveNoProgress = 0;
+          }
+
+          if (remaining) {
+            // Wait before next poll (longer if rate limited)
+            const hasRateLimited = job_progress?.retry_wait > 0;
+            await new Promise(r => setTimeout(r, hasRateLimited ? 5000 : 2000));
           }
         }
 

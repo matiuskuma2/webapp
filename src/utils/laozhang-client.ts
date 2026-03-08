@@ -121,6 +121,8 @@ async function submitVeoTask(
   }
 
   try {
+    const _lzAbort = new AbortController();
+    const _lzTimeout = setTimeout(() => _lzAbort.abort(), 30000); // 30s timeout
     const response = await fetch(VEO_SUBMIT_URL, {
       method: 'POST',
       headers: {
@@ -128,7 +130,9 @@ async function submitVeoTask(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: _lzAbort.signal,
     });
+    clearTimeout(_lzTimeout);
 
     const data = await response.json() as any;
 
@@ -178,12 +182,16 @@ async function getVeoStatus(
   taskId: string
 ): Promise<LaozhangStatusResponse> {
   try {
+    const _statusAbort = new AbortController();
+    const _statusTimeout = setTimeout(() => _statusAbort.abort(), 15000); // 15s timeout for status check
     const response = await fetch(`${VEO_STATUS_URL}/${encodeURIComponent(taskId)}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
       },
+      signal: _statusAbort.signal,
     });
+    clearTimeout(_statusTimeout);
 
     const data = await response.json() as any;
 
@@ -268,15 +276,21 @@ async function submitSoraTask(
       const blob = new Blob([request.imageData], { type: request.imageMimeType || 'image/png' });
       formData.append('input_reference', blob, 'image.png');
 
+      const _soraI2vAbort = new AbortController();
+      const _soraI2vTimeout = setTimeout(() => _soraI2vAbort.abort(), 30000);
       response = await fetch(SORA_VIDEOS_URL, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${apiKey}`,
         },
         body: formData,
+        signal: _soraI2vAbort.signal,
       });
+      clearTimeout(_soraI2vTimeout);
     } else {
       // Text-to-Video: JSON body
+      const _soraT2vAbort = new AbortController();
+      const _soraT2vTimeout = setTimeout(() => _soraT2vAbort.abort(), 30000);
       response = await fetch(SORA_VIDEOS_URL, {
         method: 'POST',
         headers: {
@@ -289,7 +303,9 @@ async function submitSoraTask(
           size,
           seconds,
         }),
+        signal: _soraT2vAbort.signal,
       });
+      clearTimeout(_soraT2vTimeout);
     }
 
     const data = await response.json() as any;
@@ -340,12 +356,16 @@ async function getSoraStatus(
   taskId: string
 ): Promise<LaozhangStatusResponse> {
   try {
+    const _soraStatusAbort = new AbortController();
+    const _soraStatusTimeout = setTimeout(() => _soraStatusAbort.abort(), 15000); // 15s for status
     const response = await fetch(`${SORA_VIDEOS_URL}/${encodeURIComponent(taskId)}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
       },
+      signal: _soraStatusAbort.signal,
     });
+    clearTimeout(_soraStatusTimeout);
 
     const data = await response.json() as any;
 

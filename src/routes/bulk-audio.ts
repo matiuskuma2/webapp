@@ -126,6 +126,8 @@ async function generateSingleUtteranceAudio(
         throw new Error('GOOGLE_TTS_API_KEY is not set');
       }
       
+      const _bulkTtsAbort = new AbortController();
+      const _bulkTtsTimeout = setTimeout(() => _bulkTtsAbort.abort(), 60000); // 60s timeout
       const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
         method: 'POST',
         headers: {
@@ -143,7 +145,9 @@ async function generateSingleUtteranceAudio(
             sampleRateHertz: sampleRate,
           },
         }),
+        signal: _bulkTtsAbort.signal,
       });
+      clearTimeout(_bulkTtsTimeout);
       
       if (!res.ok) {
         const errorText = await res.text().catch(() => '');

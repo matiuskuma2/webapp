@@ -152,6 +152,8 @@ export async function generateElevenLabsTTS(
   try {
     const url = `${ELEVENLABS_API_BASE}/text-to-speech/${voice_id}`;
     
+    const _elAbort = new AbortController();
+    const _elTimeout = setTimeout(() => _elAbort.abort(), 60000); // 60s timeout
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -170,7 +172,9 @@ export async function generateElevenLabsTTS(
         },
         output_format,
       }),
+      signal: _elAbort.signal,
     });
+    clearTimeout(_elTimeout);
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => 'Unknown error');

@@ -63,14 +63,18 @@ export async function generateFishTTS(
     format: payload.format
   });
 
+  const _fishAbort = new AbortController();
+  const _fishTimeout = setTimeout(() => _fishAbort.abort(), 30000); // 30s timeout
   const response = await fetch(url, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiToken}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: _fishAbort.signal,
   });
+  clearTimeout(_fishTimeout);
 
   if (!response.ok) {
     const errorText = await response.text();

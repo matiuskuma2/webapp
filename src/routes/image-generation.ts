@@ -1,6 +1,11 @@
 import { Hono } from 'hono'
 import type { Bindings } from '../types/bindings'
 import { buildImagePrompt, buildR2Key, composeStyledPrompt } from '../utils/image-prompt-builder'
+import {
+  createJob, fetchAndLockJob, completeJob, failJob, handleRateLimit,
+  getJobProgress, areAllJobsDone, recordProviderMetric,
+  type JobRow,
+} from '../utils/job-queue'
 
 // ===== Constants =====
 /**
@@ -1218,84 +1223,65 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
   }
 })
 
-// POST /api/projects/:id/generate-all-images - 一括画像生成
+// POST /api/projects/:id/generate-all-images - 一括画像生成 (job_queue ベース)
+// ★ Rate-Limit-Aware: ジョブキュー経由で1リクエスト=1ジョブ実行
 imageGeneration.post('/:id/generate-all-images', async (c) => {
   try {
     const projectId = c.req.param('id')
     const body = await c.req.json().catch(() => ({ mode: 'all' }))
     const mode = body.mode || 'all' // 'all' | 'pending' | 'failed'
 
-    // 1. プロジェクト情報取得（output_preset を含む）
+    // 1. プロジェクト情報取得
     const project = await c.env.DB.prepare(`
-      SELECT id, status, output_preset FROM projects WHERE id = ?
-    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null }>()
+      SELECT id, status, output_preset, user_id FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null; user_id: number }>()
 
     if (!project) {
-      return c.json({
-        error: {
-          code: 'NOT_FOUND',
-          message: 'Project not found'
-        }
-      }, 404)
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
     }
     
-    // output_preset からアスペクト比を取得
     const { getOutputPreset } = await import('../utils/output-presets')
     const outputPreset = getOutputPreset(project.output_preset)
     const aspectRatio = outputPreset.aspect_ratio
     console.log(`[Batch All Image Gen] Project ${projectId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
 
-    // 2. ステータスチェック（formatted以降のみ許可）
+    // 2. ステータスチェック
     const allowedStatuses = ['formatted', 'generating_images', 'completed']
     if (!allowedStatuses.includes(project.status as string)) {
       return c.json({
-        error: {
-          code: 'INVALID_STATUS',
-          message: `Cannot generate images for project with status: ${project.status}`
-        }
+        error: { code: 'INVALID_STATUS', message: `Cannot generate images for project with status: ${project.status}` }
       }, 400)
     }
 
     // 3. ステータスを 'generating_images' に更新
     if (project.status === 'formatted') {
       await c.env.DB.prepare(`
-        UPDATE projects SET status = 'generating_images', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        UPDATE projects SET status = 'generating_images', updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).bind(projectId).run()
     }
 
-    // 4. 対象シーン取得（is_prompt_customizedも取得）
+    // 4. 対象シーン取得
     let targetScenes: any[] = []
     
-    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
     if (mode === 'all') {
-      // 全シーン
       const { results } = await c.env.DB.prepare(`
         SELECT id, idx, image_prompt, is_prompt_customized FROM scenes
-        WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL)
-        ORDER BY idx ASC
+        WHERE project_id = ? AND (is_hidden = 0 OR is_hidden IS NULL) ORDER BY idx ASC
       `).bind(projectId).all()
       targetScenes = results
     } else if (mode === 'pending') {
-      // アクティブな画像がないシーン
       const { results } = await c.env.DB.prepare(`
         SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
         FROM scenes s
         LEFT JOIN image_generations ig ON s.id = ig.scene_id AND ig.is_active = 1
-        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
-        ORDER BY s.idx ASC
+        WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL ORDER BY s.idx ASC
       `).bind(projectId).all()
       targetScenes = results
     } else if (mode === 'failed') {
-      // 最後の生成が失敗したシーン
       const { results } = await c.env.DB.prepare(`
         SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
         FROM scenes s
-        INNER JOIN (
-          SELECT scene_id, MAX(id) as max_id
-          FROM image_generations
-          GROUP BY scene_id
-        ) latest ON s.id = latest.scene_id
+        INNER JOIN (SELECT scene_id, MAX(id) as max_id FROM image_generations GROUP BY scene_id) latest ON s.id = latest.scene_id
         INNER JOIN image_generations ig ON ig.id = latest.max_id
         WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.status = 'failed'
         ORDER BY s.idx ASC
@@ -1307,233 +1293,185 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
     if (totalScenes === 0) {
       return c.json({
-        project_id: parseInt(projectId),
-        total_scenes: 0,
-        target_scenes: 0,
-        mode,
-        status: project.status,
-        message: 'No scenes to generate'
+        project_id: parseInt(projectId), total_scenes: 0, target_scenes: 0,
+        mode, status: project.status, message: 'No scenes to generate'
       }, 200)
     }
 
-    // 5. 各シーンで画像生成（順次実行）
-    // ★ FIX: Cloudflare Workers の実行時間制限対策
-    // 1リクエストで全シーンを処理すると 30s CPU制限/実行コンテキスト問題が発生
-    // → バッチサイズを制限し、残りは status polling + 再実行で処理
-    const MAX_SCENES_PER_BATCH = 3  // 1リクエストで最大3シーン (各35s timeout → 合計 ~2分)
-    const scenesToProcess = targetScenes.slice(0, MAX_SCENES_PER_BATCH)
-    const skippedCount = Math.max(0, targetScenes.length - MAX_SCENES_PER_BATCH)
-
-    let successCount = 0
-    let failedCount = 0
-    
-    // ★ 一括生成用: ユーザーキーがレート制限に達したらシステムキーを優先
-    let useSystemKeyFirst = false;
-    
-    // ヘルパー関数をインポート
-    const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
-    const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer');
-    const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
-
-    if (skippedCount > 0) {
-      console.log(`[Batch All Image Gen] Processing ${scenesToProcess.length} scenes this batch, ${skippedCount} remaining for next poll`)
+    // 5. ★ Job Queue: Create jobs for all target scenes (dedup-checked)
+    let jobsCreated = 0
+    for (const scene of targetScenes) {
+      const { jobId, created } = await createJob(c.env.DB, {
+        userId: project.user_id || 1,
+        projectId: parseInt(projectId),
+        jobType: 'generate_image',
+        provider: 'gemini_image',
+        entityType: 'scene',
+        entityId: scene.id as number,
+        payload: {
+          sceneId: scene.id,
+          sceneIdx: scene.idx,
+          imagePrompt: scene.image_prompt || '',
+          aspectRatio,
+          isPromptCustomized: scene.is_prompt_customized === 1,
+          mode,
+        },
+      })
+      if (created) jobsCreated++
     }
 
-    for (const scene of scenesToProcess) {
+    console.log(`[Batch All Image Gen] Created ${jobsCreated} jobs for ${totalScenes} scenes (mode=${mode})`)
+
+    // 6. ★ Process ONE job immediately (1リクエスト = 1ジョブ)
+    const job = await fetchAndLockJob(c.env.DB, 'gemini_image', parseInt(projectId))
+    let successCount = 0
+    let failedCount = 0
+
+    if (job) {
+      const payload = JSON.parse(job.payload_json) as {
+        sceneId: number; sceneIdx: number; imagePrompt: string;
+        aspectRatio: string; isPromptCustomized: boolean
+      }
+
+      const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper')
+      const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer')
+      const { getSceneReferenceImages } = await import('../utils/character-reference-helper')
+
       try {
-        // Phase X-4: カスタムプロンプトフラグを確認（先に取得）
-        const isPromptCustomized = scene.is_prompt_customized === 1;
-        
-        // 基本プロンプト構築
-        let enhancedPrompt = buildImagePrompt(scene.image_prompt as string)
-        
-        // Phase X-3: キャラクター参照画像を取得 + テキスト強化
-        let referenceImages: ReferenceImage[] = [];
+        // Build prompt
+        let enhancedPrompt = buildImagePrompt(payload.imagePrompt)
+        let referenceImages: ReferenceImage[] = []
+
         try {
-          const characters = await fetchSceneCharacters(c.env.DB, scene.id as number);
-          
-          // テキスト強化（カスタムプロンプトでない場合のみ）
-          if (!isPromptCustomized) {
-            const world = await fetchWorldSettings(c.env.DB, parseInt(projectId));
-            enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
+          const characters = await fetchSceneCharacters(c.env.DB, payload.sceneId)
+          if (!payload.isPromptCustomized) {
+            const world = await fetchWorldSettings(c.env.DB, parseInt(projectId))
+            enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters)
           }
-          
-          // SSOT: キャラクター参照画像取得（character-reference-helper使用）
-          const debugRefImages = c.env.DEBUG_REFERENCE_IMAGES === '1';
-          const ssotReferenceImages = await getSceneReferenceImages(
-            c.env.DB,
-            c.env.R2,
-            scene.id as number,
-            5,
-            debugRefImages
-          );
-          
-          referenceImages = ssotReferenceImages.map(img => ({
-            base64Data: img.base64Data,
-            mimeType: img.mimeType,
-            characterName: img.characterName
-          }));
+          const refs = await getSceneReferenceImages(c.env.DB, c.env.R2, payload.sceneId, 5, c.env.DEBUG_REFERENCE_IMAGES === '1')
+          referenceImages = refs.map(img => ({ base64Data: img.base64Data, mimeType: img.mimeType, characterName: img.characterName }))
         } catch (charError) {
-          console.warn(`[Batch Image Gen] Failed to fetch characters for scene ${scene.id}:`, charError);
+          console.warn(`[Batch Image Gen] Failed to fetch characters for scene ${payload.sceneId}:`, charError)
         }
 
-        // スタイルプリセット適用
-        const styleSettings = await fetchSceneStyleSettings(c.env.DB, scene.id as number, parseInt(projectId));
-        const effectiveStyleId = getEffectiveStylePresetId(styleSettings);
-        const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId);
-        const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset);
+        const styleSettings = await fetchSceneStyleSettings(c.env.DB, payload.sceneId, parseInt(projectId))
+        const effectiveStyleId = getEffectiveStylePresetId(styleSettings)
+        const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
+        const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset)
 
-        // image_generationsレコード作成（started_at追加でstuck detection対応）
+        // Create image_generations record
         const insertResult = await c.env.DB.prepare(`
-          INSERT INTO image_generations (
-            scene_id, prompt, status, provider, model, is_active, started_at
-          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 0, datetime('now'))
-        `).bind(scene.id, finalPrompt).run()
-
+          INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
+          VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 0, datetime('now'))
+        `).bind(payload.sceneId, finalPrompt).run()
         const generationId = insertResult.meta.last_row_id as number
 
-        // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
-        // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
-        // ★ 一括生成: 前のシーンでレート制限が発生した場合、システムキーを優先
-        const imageResult = await generateImageWithFallback(
-          c,
-          finalPrompt,
-          referenceImages,
-          { 
-            aspectRatio, 
-            skipDefaultInstructions: isPromptCustomized,
-            preferSystemKey: useSystemKeyFirst  // ★ 前のシーンでレート制限なら true
-          }
-        )
+        // Generate image (with fallback)
+        const imageResult = await generateImageWithFallback(c, finalPrompt, referenceImages, {
+          aspectRatio: payload.aspectRatio as any,
+          skipDefaultInstructions: payload.isPromptCustomized,
+        })
 
         if (!imageResult.success) {
-          // 失敗
           await c.env.DB.prepare(`
-            UPDATE image_generations 
-            SET status = 'failed', error_message = ?
-            WHERE id = ?
+            UPDATE image_generations SET status = 'failed', error_message = ? WHERE id = ?
           `).bind(imageResult.error || 'Unknown error', generationId).run()
-          
-          // Log failed generation
-          const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota') ||
-                                  imageResult.error?.includes('429') ||
-                                  imageResult.error?.includes('RATE_LIMIT_429');
-          
-          // ★ レート制限エラーの場合、次のシーンからシステムキーを優先
-          if (isQuotaExceeded && imageResult.apiKeySource === 'user') {
-            console.log(`[Batch All Gen] User key rate limited at scene ${scene.id}, switching to system key for remaining scenes`);
-            useSystemKeyFirst = true;
+
+          const isRateLimited = imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT')
+          if (isRateLimited) {
+            // ★ 429 → retry_wait (not in-request retry)
+            await handleRateLimit(c.env.DB, job.id, 'gemini_image')
+            // Deactivate the failed record so retry can create a new one
+            await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(generationId).run()
+          } else {
+            await failJob(c.env.DB, job.id, 'GENERATION_FAILED', (imageResult.error || 'Unknown').substring(0, 500), job.retry_count, job.max_retries)
           }
-          
+
           await logImageGeneration({
-            env: c.env,
-            userId: imageResult.userId ?? 1,
-            projectId: parseInt(projectId),
-            sceneId: scene.id as number,
-            generationType: 'scene_image',
-            provider: 'gemini',
-            model: 'gemini-3.1-flash-image-preview',
-            apiKeySource: imageResult.apiKeySource,
-            promptLength: finalPrompt.length,
-            referenceImageCount: referenceImages.length,
-            status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
-            errorMessage: imageResult.error || 'Unknown error',
-            errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
-          });
-          
+            env: c.env, userId: imageResult.userId ?? 1, projectId: parseInt(projectId),
+            sceneId: payload.sceneId, generationType: 'scene_image', provider: 'gemini',
+            model: 'gemini-3.1-flash-image-preview', apiKeySource: imageResult.apiKeySource,
+            promptLength: finalPrompt.length, referenceImageCount: referenceImages.length,
+            status: isRateLimited ? 'quota_exceeded' : 'failed',
+            errorMessage: imageResult.error || 'Unknown', errorCode: isRateLimited ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+          })
+
           failedCount++
-          continue
+        } else {
+          // R2 upload
+          const r2Key = buildR2Key(parseInt(projectId), payload.sceneIdx, generationId)
+          const r2UploadResult = await uploadToR2WithRetry(c.env.R2, r2Key, imageResult.imageData!)
+
+          if (!r2UploadResult.success) {
+            await c.env.DB.prepare(`
+              UPDATE image_generations SET status = 'failed', error_message = ? WHERE id = ?
+            `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run()
+            await failJob(c.env.DB, job.id, 'R2_UPLOAD_FAILED', r2UploadResult.error || 'R2 upload failed', job.retry_count, job.max_retries)
+            failedCount++
+          } else {
+            // Deactivate old active images, activate new one
+            await c.env.DB.prepare(`
+              UPDATE image_generations SET is_active = 0 WHERE scene_id = ? AND id != ? AND is_active = 1
+            `).bind(payload.sceneId, generationId).run()
+
+            const r2Url = `/${r2Key}`
+            await c.env.DB.prepare(`
+              UPDATE image_generations SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1 WHERE id = ?
+            `).bind(r2Key, r2Url, generationId).run()
+
+            await completeJob(c.env.DB, job.id, { generationId, r2Key })
+            await recordProviderMetric(c.env.DB, 'gemini_image', 'success')
+
+            await logImageGeneration({
+              env: c.env, userId: imageResult.userId ?? 1, projectId: parseInt(projectId),
+              sceneId: payload.sceneId, generationType: 'scene_image', provider: 'gemini',
+              model: 'gemini-3.1-flash-image-preview', apiKeySource: imageResult.apiKeySource,
+              promptLength: finalPrompt.length, referenceImageCount: referenceImages.length, status: 'success'
+            })
+
+            successCount++
+          }
         }
-
-        // R2に保存（リトライ機構付き）
-        const r2Key = buildR2Key(parseInt(projectId), scene.idx as number, generationId)
-        const r2UploadResult = await uploadToR2WithRetry(
-          c.env.R2,
-          r2Key,
-          imageResult.imageData!
-        );
-        
-        if (!r2UploadResult.success) {
-          // R2アップロード失敗
-          await c.env.DB.prepare(`
-            UPDATE image_generations 
-            SET status = 'failed', error_message = ?
-            WHERE id = ?
-          `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run();
-          
-          console.error(`[All Gen] R2 upload failed for scene ${scene.id}: ${r2UploadResult.error}`);
-          failedCount++;
-          continue;
-        }
-
-        // 既存のアクティブ画像を無効化
-        await c.env.DB.prepare(`
-          UPDATE image_generations 
-          SET is_active = 0 
-          WHERE scene_id = ? AND id != ? AND is_active = 1
-        `).bind(scene.id, generationId).run()
-
-        // 新しい画像をアクティブ化（r2_url も保存）
-        const r2Url = `/${r2Key}`
-        await c.env.DB.prepare(`
-          UPDATE image_generations 
-          SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1
-          WHERE id = ?
-        `).bind(r2Key, r2Url, generationId).run()
-
-        // Log successful generation
-        await logImageGeneration({
-          env: c.env,
-          userId: imageResult.userId ?? 1,
-          projectId: parseInt(projectId),
-          sceneId: scene.id as number,
-          generationType: 'scene_image',
-          provider: 'gemini',
-          model: 'gemini-3.1-flash-image-preview',
-          apiKeySource: imageResult.apiKeySource,
-          promptLength: finalPrompt.length,
-          referenceImageCount: referenceImages.length,
-          status: 'success'
-        });
-
-        successCount++
-
       } catch (sceneError) {
-        console.error(`Failed to generate image for scene ${scene.id}:`, sceneError)
+        console.error(`[Batch Image Gen] Job #${job.id} scene ${payload.sceneId} error:`, sceneError)
+        await failJob(c.env.DB, job.id, 'UNEXPECTED_ERROR', String(sceneError).substring(0, 500), job.retry_count, job.max_retries)
         failedCount++
       }
     }
 
-    // 6. 全て成功した場合、プロジェクトステータスを 'completed' に更新
-    // ★ FIX: バッチ制限で残りがある場合は 'generating_images' のまま
-    const allProcessed = (successCount + failedCount === totalScenes) && skippedCount === 0
-    if (allProcessed && failedCount === 0) {
+    // 7. Check overall progress
+    const progress = await getJobProgress(c.env.DB, parseInt(projectId), 'generate_image')
+    const allDone = progress.total > 0 && (progress.queued + progress.processing + progress.retryWait) === 0
+
+    if (allDone && progress.failed === 0) {
       await c.env.DB.prepare(`
-        UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).bind(projectId).run()
     }
 
-    // 7. レスポンス返却
     return c.json({
       project_id: parseInt(projectId),
       total_scenes: totalScenes,
       success_count: successCount,
       failed_count: failedCount,
-      skipped_count: skippedCount,
-      batch_size: scenesToProcess.length,
+      skipped_count: 0,
+      batch_size: job ? 1 : 0,
       mode,
-      status: allProcessed && failedCount === 0 ? 'completed' : 'generating_images'
+      status: allDone && progress.failed === 0 ? 'completed' : 'generating_images',
+      // ★ New: job queue progress for frontend polling
+      job_progress: {
+        total: progress.total,
+        completed: progress.completed,
+        failed: progress.failed,
+        queued: progress.queued,
+        processing: progress.processing,
+        retry_wait: progress.retryWait,
+      },
     }, 200)
 
   } catch (error) {
     console.error('Error in generate-all-images endpoint:', error)
-    return c.json({
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Failed to generate images'
-      }
-    }, 500)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to generate images' } }, 500)
   }
 })
 
