@@ -6060,6 +6060,10 @@ async function generateSceneImage(sceneId) {
     const responseStatus = response.data.status;
     
     if (imageGenId) {
+      // ★ 成功時はリトライカウンターをリセット
+      if (window.sceneRetryCount && window.sceneRetryCount[sceneId]) {
+        delete window.sceneRetryCount[sceneId];
+      }
       // ✅ CASE 1: API returns 'completed' (synchronous generation)
       if (responseStatus === 'completed') {
         console.log(`✅ Image generation completed immediately for scene ${sceneId}`);
@@ -6133,14 +6137,45 @@ async function generateSceneImage(sceneId) {
       clearInterval(fakeTimer);
       stopGenerationWatch(sceneId);
       
+      // ★ タイムアウト(504)または retryable エラーの場合、自動リトライ
+      const errorData = error.response.data?.error;
+      const errorCode = errorData?.code;
+      const isRetryable = errorData?.retryable === true;
+      const isTimeout = error.response.status === 504 || errorCode === 'GENERATION_TIMEOUT';
+      
+      // 自動リトライ回数を追跡 (window.sceneRetryCount)
+      if (!window.sceneRetryCount) window.sceneRetryCount = {};
+      const retryCount = window.sceneRetryCount[sceneId] || 0;
+      const MAX_AUTO_RETRIES = 2;
+      
+      if ((isTimeout || isRetryable) && retryCount < MAX_AUTO_RETRIES) {
+        window.sceneRetryCount[sceneId] = retryCount + 1;
+        const retryNum = retryCount + 1;
+        console.warn(`⏰ Auto-retry ${retryNum}/${MAX_AUTO_RETRIES} for scene ${sceneId} (${errorCode || 'timeout'})`);
+        showToast(`タイムアウト発生 — 自動リトライ中 (${retryNum}/${MAX_AUTO_RETRIES})`, 'info');
+        
+        // 2秒後に自動リトライ
+        setTimeout(() => {
+          window.sceneProcessing[sceneId] = false;
+          generateSceneImage(sceneId);
+        }, 2000);
+        return;
+      }
+      
+      // リトライ上限に達したらカウンターをリセット
+      if (window.sceneRetryCount[sceneId]) {
+        delete window.sceneRetryCount[sceneId];
+      }
+      
       // Show detailed error message for other errors
-      const errorCode = error.response.data?.error?.code;
-      let errorMsg = error.response.data?.error?.message || error.message || '画像生成中にエラーが発生しました';
+      let errorMsg = errorData?.message || error.message || '画像生成中にエラーが発生しました';
       
       // Add helpful guidance for common errors
       if (errorCode === 'INVALID_STATUS') {
         errorMsg = '画像生成にはFormat（シーン分割）の完了が必要です。Scene Splitタブでフォーマットを実行してください。';
-      } else if (errorMsg.includes('RATE_LIMIT_429')) {
+      } else if (isTimeout) {
+        errorMsg = `画像生成がタイムアウトしました（${MAX_AUTO_RETRIES}回リトライ済み）。「失敗分リトライ」ボタンで再試行してください。`;
+      } else if (errorMsg.includes('RATE_LIMIT_429') || errorCode === 'RATE_LIMIT') {
         // レート制限時は残り時間とともに通知
         const waitSeconds = 120; // 2分待機を推奨
         errorMsg = `APIレート制限に達しました。約${Math.floor(waitSeconds / 60)}分後に再試行してください。\n（Gemini無料枠: 1分間に15リクエストまで）`;

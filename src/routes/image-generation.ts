@@ -1008,16 +1008,24 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
       });
 
+      // ★ タイムアウトエラーの判定 → retryable=true で返す
+      const isTimeout = imageResult.error?.includes('TIMEOUT') || imageResult.error?.includes('AbortError') || imageResult.error?.includes('did not respond');
+      const isRateLimit = imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT');
+      const httpStatus = isTimeout ? 504 : (isRateLimit ? 429 : 500);
+      const errorCode = isTimeout ? 'GENERATION_TIMEOUT' : (isRateLimit ? 'RATE_LIMIT' : 'GENERATION_FAILED');
+
       return c.json({
         error: {
-          code: 'GENERATION_FAILED',
+          code: errorCode,
           message: imageResult.error || 'Failed to generate image',
+          retryable: isTimeout || isRateLimit || isQuotaExceeded,
           details: {
             api_key_source: imageResult.apiKeySource,
-            system_key_configured: !!c.env.GEMINI_API_KEY
+            system_key_configured: !!c.env.GEMINI_API_KEY,
+            duration_ms: imageResult.durationMs,
           }
         }
-      }, 500)
+      }, httpStatus)
     }
 
     // 10. R2に画像保存（リトライ機構付き）

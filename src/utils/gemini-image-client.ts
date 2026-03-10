@@ -21,11 +21,19 @@ export const GEMINI_IMAGE_MODEL = 'gemini-3.1-flash-image-preview'
 export const GEMINI_IMAGE_ENDPOINT =
   `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`
 
-/** 1リクエストあたりのAPIタイムアウト (ms) */
-const API_TIMEOUT_MS = 35_000
+/** 
+ * 1リクエストあたりのAPIタイムアウト (ms)
+ * ★ 50秒に延長: Gemini画像生成は参照画像付きで30-45秒かかることがある
+ *   Cloudflare Workers のI/O待ちは30秒CPU上限にカウントされない
+ */
+const API_TIMEOUT_MS = 50_000
 
-/** 全リトライ合計の上限 (ms) — Cloudflare Workers 安全マージン */
-const MAX_TOTAL_ELAPSED_MS = 55_000
+/**
+ * 全リトライ合計の上限 (ms)
+ * ★ 120秒に延長: Workers実行コンテキストは数分間維持可能（I/O待ち中心のため）
+ *   これにより attempt=1が50秒タイムアウトしても、attempt=2で再試行できる
+ */
+const MAX_TOTAL_ELAPSED_MS = 120_000
 
 /** デフォルトリトライ回数 */
 const DEFAULT_MAX_RETRIES = 3
@@ -312,17 +320,25 @@ export async function generateImageWithRetry(
               : 'Unknown error',
         attempt: attempt + 1,
         maxRetries,
+        elapsedMs: Date.now() - startedAt,
       }
 
       lastError = JSON.stringify(errorDetails)
       console.error(
         `[GeminiImageClient] Attempt ${attempt + 1} failed:`,
         errorDetails.type,
-        errorDetails.message
+        errorDetails.message,
+        `elapsed=${errorDetails.elapsedMs}ms`
       )
 
       if (attempt < maxRetries - 1) {
-        const retryDelay = isAbort || isMessagePort ? 1000 : Math.pow(2, attempt) * 1000
+        // ★ タイムアウト後は即座にリトライ（500ms待ち）— 長時間待つ必要なし
+        const retryDelay = isAbort || isMessagePort ? 500 : Math.min(Math.pow(2, attempt) * 1000, 5000)
+        // ★ リトライ前に全体経過時間を再チェック
+        if (Date.now() - startedAt + retryDelay + API_TIMEOUT_MS > MAX_TOTAL_ELAPSED_MS + 5_000) {
+          console.warn(`[GeminiImageClient] Skipping retry: would exceed total time limit`)
+          break
+        }
         await sleep(retryDelay)
         continue
       }
