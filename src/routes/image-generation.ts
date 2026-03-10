@@ -1170,7 +1170,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
       success_count: successCount,
       failed_count: failedCount,
       skipped_count: 0,
-      batch_size: job ? 1 : 0,
+      batch_size: 1,
       mode,
       status: allDone && progress.failed === 0 ? 'completed' : 'generating_images',
       // ★ New: job queue progress for frontend polling
