@@ -1485,6 +1485,7 @@ const FORMAT_TIMEOUT_MS = 10 * 60 * 1000; // 10分タイムアウト
 let formatChunkProgress = null; // { total, processed, failed, processing, pending }
 let formatChunkTimestamps = []; // [{ time, processed }] 残り時間推定用
 let formatFinalizingUntil = 0; // Phase B: formatted直後のutterance生成完了待ち
+let formatAutoResumeInFlight = false; // F-0b: 自動再開リクエスト中フラグ（二重発火防止）
 
 // Format and split scenes with progress monitoring
 // Note: Called from confirmAndFormatSplit() which handles the confirmation dialog
@@ -1710,6 +1711,7 @@ async function formatAndSplit() {
       clearInterval(formatPollingInterval);
       formatPollingInterval = null;
     }
+    formatAutoResumeInFlight = false;
     
     // CRITICAL FIX: Reset formatSection innerHTML to original UI
     const formatSection = document.getElementById('formatSection');
@@ -1803,6 +1805,7 @@ function startFormatPolling() {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         formatPollingStartTime = null;
+        formatAutoResumeInFlight = false;
         
         // Generate log ID for support
         const logId = `format_timeout_${PROJECT_ID}_${currentFormatRunNo || 'unknown'}_${Date.now()}`;
@@ -1848,6 +1851,7 @@ function startFormatPolling() {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         formatPollingStartTime = null;
+        formatAutoResumeInFlight = false;
         currentFormatRunId = null;
         currentFormatRunNo = null;
         
@@ -1870,6 +1874,7 @@ function startFormatPolling() {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         formatPollingStartTime = null;
+        formatAutoResumeInFlight = false;
         
         showFormatFailedUI(data.error_message || 'シーン化に失敗しました', currentFormatRunNo);
         isProcessing = false;
@@ -1882,6 +1887,7 @@ function startFormatPolling() {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         formatPollingStartTime = null;
+        formatAutoResumeInFlight = false;
         // ★ Phase A: チャンク進捗をクリア
         formatChunkProgress = null;
         formatChunkTimestamps = [];
@@ -2027,6 +2033,7 @@ function startFormatPolling() {
         clearInterval(formatPollingInterval);
         formatPollingInterval = null;
         formatPollingStartTime = null;
+        formatAutoResumeInFlight = false;
         window.formatPollingFailCount = 0;
         
         const logId = `format_error_${PROJECT_ID}_${Date.now()}`;
@@ -2240,16 +2247,29 @@ async function updateFormatProgress(data) {
     } else if (pending === 0 && processing === 0) {
       progressDetails.textContent = '最終処理中...';
     } else if (pending > 0 && processing === 0) {
-      // ⚠️ 停止状態（再開が必要）
-      progressDetails.innerHTML = `
-        <span class="text-orange-600"><i class="fas fa-pause-circle mr-1"></i>処理が停止しています</span>
-        <button 
-          onclick="resumeFormatting()" 
-          class="ml-3 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition"
-        >
-          <i class="fas fa-play mr-1"></i>処理を再開
-        </button>
-      `;
+      // ★ F-0b: 停止状態を検出 → 自動で次のチャンク処理を発火
+      // 二重発火防止: formatAutoResumeInFlight フラグで制御
+      if (!formatAutoResumeInFlight) {
+        formatAutoResumeInFlight = true;
+        console.log(`[Format:F-0b] Auto-resuming: pending=${pending}, processing=${processing}`);
+        progressDetails.innerHTML = `
+          <span class="text-blue-600"><i class="fas fa-play-circle mr-1"></i>次のチャンクを自動処理中...</span>
+        `;
+        axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`)
+          .then(() => {
+            console.log('[Format:F-0b] Auto-resume POST succeeded');
+          })
+          .catch((err) => {
+            console.error('[Format:F-0b] Auto-resume POST failed:', err);
+          })
+          .finally(() => {
+            formatAutoResumeInFlight = false;
+          });
+      } else {
+        progressDetails.innerHTML = `
+          <span class="text-blue-600"><i class="fas fa-spinner fa-spin mr-1"></i>チャンク処理中（応答待ち）...</span>
+        `;
+      }
     } else {
       progressDetails.textContent = `処理済み: ${processed}, 処理中: ${processing}, 待機中: ${pending}, 失敗: ${failed}`;
     }
@@ -2350,10 +2370,13 @@ async function retryChunk(chunkId) {
   }
 }
 
-// フォーマット処理を再開
+// フォーマット処理を再開（手動フォールバック。通常はF-0bの自動再開で不要）
 async function resumeFormatting() {
   try {
     showToast('処理を再開します...', 'info');
+    
+    // F-0b: フラグをリセット（手動再開時はフラグを一旦落とす）
+    formatAutoResumeInFlight = false;
     
     // 次のバッチを呼び出し
     await axios.post(`${API_BASE}/projects/${PROJECT_ID}/format`);

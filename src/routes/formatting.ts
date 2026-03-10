@@ -435,6 +435,38 @@ ${castList}
       `).bind(projectId).run()
       // project オブジェクトを更新
       project.status = 'uploaded'
+
+      // ★ F-0a: reset=true && AIモードの場合、DB操作のみで即返却
+      // OpenAI呼び出しをスキップし、Cloudflare 524タイムアウトを回避
+      // フロントエンドのポーリングが自動で POST /format を再呼び出しして
+      // 1チャンクずつ処理する（F-0b）
+      // ※ preserveモードはAI不要で即完了するため従来通り
+      // ※ marunageは reset=true を送らないため影響なし
+      if (splitMode !== 'preserve') {
+        // status を 'formatting' に変更（ポーリングがこの状態を検出する）
+        await c.env.DB.prepare(`
+          UPDATE projects SET status = 'formatting', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(projectId).run()
+
+        const stats = await getChunkStats(c.env.DB, projectId)
+
+        // 最新のrun_id/run_noを取得
+        const latestRun = await c.env.DB.prepare(`
+          SELECT id, run_no FROM runs WHERE project_id = ? ORDER BY run_no DESC LIMIT 1
+        `).bind(projectId).first()
+
+        console.log(`[Format:F-0a] reset=true, AI mode → immediate return (no OpenAI call). project=${projectId}, chunks=${stats.total_chunks}, pending=${stats.pending}`)
+
+        return c.json({
+          project_id: parseInt(projectId),
+          status: 'formatting',
+          batch_processed: 0,
+          batch_failed: 0,
+          run_id: latestRun?.id || null,
+          run_no: latestRun?.run_no || null,
+          ...stats
+        }, 200)
+      }
     }
 
     // 3. source_type に応じた処理分岐
@@ -1804,29 +1836,46 @@ async function generateMiniScenesAI(
   scenes?: any[]
   error?: string
 }> {
+  // ★ F-0d': 1チャンク所要時間の観測ログ（repair削除はせず、まずは計測）
+  const chunkStartMs = Date.now()
+  const logPrefix = `[MiniScenesAI:chunk${chunkIdx}]`
+
   // 第1回目の生成試行
+  const t1 = Date.now()
   const firstAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.7, targetSceneCount, characterPromptSection)
+  const d1 = Date.now() - t1
+  console.log(`${logPrefix} attempt1 temp=0.7: ${firstAttempt.success ? 'OK' : 'FAIL'} ${d1}ms (textLen=${chunkText.length}, target=${targetSceneCount}, scenes=${firstAttempt.scenes?.length || 0})`)
   if (firstAttempt.success) {
+    console.log(`${logPrefix} total=${Date.now() - chunkStartMs}ms (1 attempt)`)
     return firstAttempt
   }
 
   console.warn('First attempt failed, retrying with lower temperature...', firstAttempt.error)
 
   // 第2回目の生成試行（temperature 下げ）
+  const t2 = Date.now()
   const secondAttempt = await generateMiniScenesWithSchemaAI(chunkText, projectTitle, chunkIdx, apiKey, 0.3, targetSceneCount, characterPromptSection)
+  const d2 = Date.now() - t2
+  console.log(`${logPrefix} attempt2 temp=0.3: ${secondAttempt.success ? 'OK' : 'FAIL'} ${d2}ms`)
   if (secondAttempt.success) {
+    console.log(`${logPrefix} total=${Date.now() - chunkStartMs}ms (2 attempts)`)
     return secondAttempt
   }
 
   console.warn('Second attempt failed, trying repair call...', secondAttempt.error)
 
   // 第3回目：Repair call（フォーマット修正のみ）
+  const t3 = Date.now()
   const repairAttempt = await repairMiniScenes(firstAttempt.rawContent || '', apiKey)
+  const d3 = Date.now() - t3
+  console.log(`${logPrefix} repair: ${repairAttempt.success ? 'OK' : 'FAIL'} ${d3}ms`)
   if (repairAttempt.success) {
+    console.log(`${logPrefix} total=${Date.now() - chunkStartMs}ms (3 attempts, repair succeeded)`)
     return repairAttempt
   }
 
   // すべて失敗
+  console.error(`${logPrefix} ALL FAILED total=${Date.now() - chunkStartMs}ms (attempt1=${d1}ms, attempt2=${d2}ms, repair=${d3}ms)`)
   return {
     success: false,
     error: `All generation attempts failed. Last error: ${repairAttempt.error}`
