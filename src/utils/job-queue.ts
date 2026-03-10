@@ -99,6 +99,8 @@ export const PROVIDER_CONCURRENCY: Record<string, number> = {
 
 /** How long (seconds) before a locked job is considered stuck */
 const LOCK_TIMEOUT_SEC = 120
+/** Pre-computed datetime modifier string for D1 bind params */
+const LOCK_TIMEOUT_MODIFIER = `-${LOCK_TIMEOUT_SEC} seconds`
 
 /** Generate a short random worker ID for this request */
 function generateWorkerId(): string {
@@ -199,8 +201,8 @@ export async function fetchAndLockJob(
   const activeResult = await db.prepare(`
     SELECT COUNT(*) as cnt FROM job_queue
     WHERE provider = ? AND status = 'processing'
-      AND locked_at > datetime('now', '-${LOCK_TIMEOUT_SEC} seconds')
-  `).bind(provider).first<{ cnt: number }>()
+      AND locked_at > datetime('now', ?)
+  `).bind(provider, LOCK_TIMEOUT_MODIFIER).first<{ cnt: number }>()
   const activeCount = activeResult?.cnt ?? 0
 
   if (activeCount >= maxConcurrent) {
@@ -215,9 +217,9 @@ export async function fetchAndLockJob(
         error_message = COALESCE(error_message, '') || ' [auto-recovered from stuck]',
         updated_at = datetime('now')
     WHERE status = 'processing'
-      AND locked_at < datetime('now', '-${LOCK_TIMEOUT_SEC} seconds')
+      AND locked_at < datetime('now', ?)
       AND provider = ?
-  `).bind(provider).run()
+  `).bind(LOCK_TIMEOUT_MODIFIER, provider).run()
   if ((recovered.meta.changes ?? 0) > 0) {
     console.log(`[JobQueue] Auto-recovered ${recovered.meta.changes} stuck ${provider} jobs`)
   }

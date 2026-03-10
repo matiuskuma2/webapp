@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { getCookie } from 'hono/cookie'
 import type { Bindings } from '../types/bindings'
 import { buildImagePrompt, buildR2Key, composeStyledPrompt } from '../utils/image-prompt-builder'
 import {
@@ -6,6 +7,24 @@ import {
   getJobProgress, areAllJobsDone, recordProviderMetric,
   type JobRow,
 } from '../utils/job-queue'
+import {
+  generateImageWithRetry as sharedGenerateImage,
+  GEMINI_IMAGE_MODEL,
+  type GeminiReferenceImage,
+  type GeminiImageOptions,
+  type GeminiImageResult,
+} from '../utils/gemini-image-client'
+import { decryptApiKey } from '../utils/crypto'
+import { getOutputPreset } from '../utils/output-presets'
+import { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } from '../utils/world-character-helper'
+import { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } from '../utils/style-prompt-composer'
+import { getSceneReferenceImages } from '../utils/character-reference-helper'
+
+/**
+ * P1-5: generating スタックのタイムアウト閾値（統一: 3分）
+ * status endpoint と batch の両方でこの値を使用する
+ */
+const STUCK_GENERATING_TIMEOUT_MINUTES = 3
 
 // ===== Constants =====
 /**
@@ -234,15 +253,12 @@ interface ApiKeyResult {
  * クォータ超過時のフォールバックもサポート
  */
 async function getApiKey(
-  c: { env: Bindings },
+  c: { env: Bindings; req?: any },
   options?: { skipUserKey?: boolean }
 ): Promise<ApiKeyResult | null> {
-  const { getCookie } = await import('hono/cookie');
-  
   // Step 1: ユーザーAPIキーを試行（skipUserKey でなければ）
   if (!options?.skipUserKey) {
     try {
-      // @ts-ignore - getCookie requires Context but we only have env
       const sessionId = typeof c.req !== 'undefined' ? getCookie(c as any, 'session') : null;
       
       if (sessionId) {
@@ -258,7 +274,6 @@ async function getApiKey(
           
           if (keyRecord?.encrypted_key) {
             try {
-              const { decryptApiKey } = await import('../utils/crypto');
               const apiKey = await decryptApiKey(keyRecord.encrypted_key, c.env.ENCRYPTION_KEY);
               console.log(`[Image Gen] Using USER API key for user_id=${session.user_id}`);
               return { apiKey, source: 'user', userId: session.user_id };
@@ -304,22 +319,20 @@ async function generateImageWithFallback(
   error?: string;
   apiKeySource: 'user' | 'system';
   userId?: number;
+  durationMs?: number;
 }> {
   // Step 1: APIキー取得
-  // preferSystemKey が true の場合、システムキーを優先（一括生成でユーザーキーがレート制限に達した後）
   const preferSystem = options.preferSystemKey && c.env.GEMINI_API_KEY;
   
   let keyResult: ApiKeyResult | null;
   if (preferSystem) {
-    // システムキーを優先
     keyResult = { apiKey: c.env.GEMINI_API_KEY!, source: 'system' };
-    console.log(`[Image Gen] Using SYSTEM key (preferSystemKey=true, user key rate limited previously)`);
+    console.log(`[Image Gen] Using SYSTEM key (preferSystemKey=true)`);
   } else {
     keyResult = await getApiKey(c);
   }
   
-  // デバッグ: 環境変数の状態を確認
-  console.log(`[Image Gen] API Key Status: source=${keyResult?.source}, systemKeyConfigured=${!!c.env.GEMINI_API_KEY}, preferSystemKey=${options.preferSystemKey}`);
+  console.log(`[Image Gen] API Key Status: source=${keyResult?.source}, systemKeyConfigured=${!!c.env.GEMINI_API_KEY}`);
   
   if (!keyResult) {
     return {
@@ -329,391 +342,159 @@ async function generateImageWithFallback(
     };
   }
   
-  // Step 2: 最初の試行
-  // ★ FIX: リトライ回数を3回に戻す（5回だと429バックオフで合計135秒→Workers制限超過）
-  // フォールバック機構（user key → system key）があるので3回で十分
-  console.log(`[Image Gen] Attempting with ${keyResult.source} API key, aspectRatio: ${options.aspectRatio || '16:9'}`);
-  const result = await generateImageWithRetry(
-    prompt,
-    keyResult.apiKey,
-    3,  // 5→3 に削減（Cloudflare Workers実行時間制限対策）
-    referenceImages,
-    options
-  );
+  // Convert ReferenceImage → GeminiReferenceImage
+  const geminiRefs: GeminiReferenceImage[] = referenceImages.map(r => ({
+    base64Data: r.base64Data,
+    mimeType: r.mimeType,
+    characterName: r.characterName,
+  }));
   
-  // Step 3: 成功または非クォータエラー → そのまま返却
+  const geminiOpts: GeminiImageOptions = {
+    aspectRatio: options.aspectRatio,
+    skipDefaultInstructions: options.skipDefaultInstructions,
+    maxRetries: 3,
+  };
+  
+  // Step 2: 最初の試行 (★ SSOT: sharedGenerateImage 使用)
+  console.log(`[Image Gen] Attempting with ${keyResult.source} API key, aspectRatio: ${options.aspectRatio || '16:9'}`);
+  const result = await sharedGenerateImage(prompt, keyResult.apiKey, geminiRefs, geminiOpts);
+  
+  // Step 3: 成功 → そのまま返却
   if (result.success) {
-    return {
-      ...result,
-      apiKeySource: keyResult.source,
-      userId: keyResult.userId
-    };
+    return { ...result, apiKeySource: keyResult.source, userId: keyResult.userId };
   }
   
-  // Step 4: クォータ超過時のフォールバック処理
+  // Step 4: クォータ超過時のフォールバック
   const isQuotaError = result.error?.toLowerCase().includes('quota') || 
                        result.error?.toLowerCase().includes('resource_exhausted') ||
                        result.error?.includes('429') ||
                        result.error?.includes('RATE_LIMIT_429');
   
-  // デバッグログ追加
-  console.log(`[Image Gen] Generation failed. source=${keyResult.source}, isQuotaError=${isQuotaError}, hasSystemKey=${!!c.env.GEMINI_API_KEY}, error=${result.error?.substring(0, 150)}`);
+  console.log(`[Image Gen] Failed. source=${keyResult.source}, isQuotaError=${isQuotaError}, error=${result.error?.substring(0, 150)}`);
   
-  // ユーザーキーでレート制限 → システムキーにフォールバック
+  // ユーザーキー → システムキーフォールバック
   if (keyResult.source === 'user' && isQuotaError && c.env.GEMINI_API_KEY) {
     console.log(`[Image Gen] User key quota exceeded, falling back to SYSTEM key`);
-    
-    const systemResult = await generateImageWithRetry(
-      prompt,
-      c.env.GEMINI_API_KEY,
-      5,
-      referenceImages,
-      options
+    const systemResult = await sharedGenerateImage(
+      prompt, c.env.GEMINI_API_KEY, geminiRefs, { ...geminiOpts, maxRetries: 3 }
     );
-    
-    if (systemResult.success) {
-      console.log(`[Image Gen] SUCCESS with SYSTEM key fallback`);
-    } else {
-      console.log(`[Image Gen] SYSTEM key also failed: ${systemResult.error?.substring(0, 100)}`);
-    }
-    
-    return {
-      ...systemResult,
-      apiKeySource: 'system',
-      userId: keyResult.userId
-    };
+    if (systemResult.success) console.log(`[Image Gen] SUCCESS with SYSTEM key fallback`);
+    return { ...systemResult, apiKeySource: 'system', userId: keyResult.userId };
   }
   
-  // システムキーでレート制限の場合も、ユーザーキーが別にあれば試行
-  // （ユーザーがキーを持っていない場合、最初からsystemになっている）
+  // システムキー → ユーザーキーフォールバック
   if (keyResult.source === 'system' && isQuotaError) {
-    // ユーザーキーを再取得してみる（skipUserKey=falseで）
     const userKeyResult = await getApiKey(c, { skipUserKey: false });
-    
-    // ユーザーキーが存在し、今のシステムキーと異なる場合
     if (userKeyResult && userKeyResult.source === 'user' && userKeyResult.apiKey !== keyResult.apiKey) {
-      console.log(`[Image Gen] System key quota exceeded, trying USER key as alternative`);
-      
-      const userResult = await generateImageWithRetry(
-        prompt,
-        userKeyResult.apiKey,
-        5,
-        referenceImages,
-        options
+      console.log(`[Image Gen] System key quota exceeded, trying USER key`);
+      const userResult = await sharedGenerateImage(
+        prompt, userKeyResult.apiKey, geminiRefs, { ...geminiOpts, maxRetries: 3 }
       );
-      
       if (userResult.success) {
-        console.log(`[Image Gen] SUCCESS with USER key alternative`);
-        return {
-          ...userResult,
-          apiKeySource: 'user',
-          userId: userKeyResult.userId
-        };
+        return { ...userResult, apiKeySource: 'user', userId: userKeyResult.userId };
       }
-      console.log(`[Image Gen] USER key alternative also failed: ${userResult.error?.substring(0, 100)}`);
     }
-    
-    // ユーザーキーがない場合 → レート制限エラーをそのまま返す
-    console.log(`[Image Gen] System key rate limited, no user key available for fallback`);
+    console.log(`[Image Gen] No alternative key available`);
   }
   
-  // Step 5: リトライ不可 → 元のエラーを返却
-  console.log(`[Image Gen] No fallback available or all keys exhausted`);
-  return {
-    ...result,
-    apiKeySource: keyResult.source,
-    userId: keyResult.userId
-  };
+  return { ...result, apiKeySource: keyResult.source, userId: keyResult.userId };
 }
 
 // POST /api/projects/:id/generate-images - バッチ画像生成
+// ★ DEPRECATED: Legacy endpoint — internally redirects to generate-all-images (job_queue)
+// フロントエンドの updateProgressBar がこのAPIをポーリングしているため、
+// 互換性のため残すが、内部的に generate-all-images と同じロジックを使用
 imageGeneration.post('/projects/:id/generate-images', async (c) => {
   try {
     const projectIdRaw = c.req.param('id')
-    
-    // 入力バリデーション
     const projectId = parseProjectId(projectIdRaw)
     if (!projectId) {
-      return c.json({
-        error: {
-          code: 'INVALID_REQUEST',
-          message: 'Invalid project ID'
-        }
-      }, 400)
+      return c.json({ error: { code: 'INVALID_REQUEST', message: 'Invalid project ID' } }, 400)
     }
 
-    // 1. プロジェクト情報取得（output_preset を含む）
+    // プロジェクト情報取得
     const project = await c.env.DB.prepare(`
-      SELECT id, status, output_preset FROM projects WHERE id = ?
-    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null }>()
+      SELECT id, status, output_preset, user_id FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null; user_id: number }>()
 
     if (!project) {
-      return c.json({
-        error: {
-          code: 'NOT_FOUND',
-          message: 'Project not found'
-        }
-      }, 404)
+      return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
     }
-    
-    // output_preset からアスペクト比を取得
-    const { getOutputPreset } = await import('../utils/output-presets')
+
     const outputPreset = getOutputPreset(project.output_preset)
     const aspectRatio = outputPreset.aspect_ratio
-    console.log(`[Batch Image Gen] Project ${projectId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
 
-    // 2. ステータスチェック（formatted, generating_images, completed を許可）
+    // ステータスチェック
     const allowedStatuses = ['formatted', 'generating_images', 'completed']
     if (!allowedStatuses.includes(project.status as string)) {
       return c.json({
         error: {
           code: 'INVALID_STATUS',
           message: `Cannot generate images for project with status: ${project.status}`,
-          details: {
-            current_status: project.status,
-            allowed_statuses: allowedStatuses
-          }
+          details: { current_status: project.status, allowed_statuses: allowedStatuses }
         }
       }, 400)
     }
 
-    // 3. プロジェクトステータスを 'generating_images' に（初回のみ）
+    // ★ DEPRECATED: Legacy endpoint — 内部的に generate-all-images と同じロジックに委譲
+    // フロントエンドの互換性のため残すが、mode='pending' で pending シーンのみ処理
+    console.log(`[Legacy→JQ] /generate-images called for project ${projectId}, delegating to generate-all-images logic (mode=pending)`);
+
+    // ステータスを 'generating_images' に
     if (project.status === 'formatted') {
       await c.env.DB.prepare(`
-        UPDATE projects 
-        SET status = 'generating_images', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        UPDATE projects SET status = 'generating_images', updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).bind(projectId).run()
     }
 
-    // 3.5. スタックした 'generating' レコードをタイムアウト処理（5分以上）
-    await c.env.DB.prepare(`
-      UPDATE image_generations
-      SET status = 'failed', 
-          error_message = 'Generation timeout (stuck for >5 minutes)'
-      WHERE status = 'generating' 
-        AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
-        AND datetime(created_at, '+5 minutes') < datetime('now')
-    `).bind(projectId).run()
+    // ★ P1-5: スタック generating レコードのタイムアウト処理 (統一定数使用)
+    await cleanupStuckGenerations(c.env.DB, projectId);
 
-    // 4. pending の scenes を取得（最大1件: Gemini APIが遅いため）
-    // ⚠️ is_hidden = 0 で非表示シーンを除外（ソフトデリート対応）
-    const BATCH_SIZE = 1
+    // ★ Job Queue: pending シーンのジョブを作成
     const { results: pendingScenes } = await c.env.DB.prepare(`
       SELECT s.id, s.idx, s.image_prompt, s.is_prompt_customized
       FROM scenes s
       LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1
       WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
       ORDER BY s.idx ASC
-      LIMIT ?
-    `).bind(projectId, BATCH_SIZE).all()
+    `).bind(projectId).all()
 
     if (pendingScenes.length === 0) {
       // 全scenes処理済み → status を 'completed' に
       await c.env.DB.prepare(`
-        UPDATE projects 
-        SET status = 'completed', updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE id = ?
       `).bind(projectId).run()
-
-      const stats = await getImageGenerationStats(c.env.DB, projectId)
-
-      return c.json({
-        project_id: parseInt(projectId),
-        status: 'completed',
-        ...stats,
-        message: 'All images generated'
-      }, 200)
+      const stats = await getImageGenerationStats(c.env.DB, String(projectId))
+      return c.json({ project_id: projectId, status: 'completed', ...stats, message: 'All images generated' }, 200)
     }
 
-    // 5. 各sceneの画像生成
-    // SSOT: ヘルパー関数をインポート（単体生成・一括生成と統一）
-    const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
-    const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
-    const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer');
-    
-    let successCount = 0
-    let failedCount = 0
-
+    // Create jobs for pending scenes
     for (const scene of pendingScenes) {
-      try {
-        // Phase X-4: カスタムプロンプトフラグを確認
-        const isPromptCustomized = scene.is_prompt_customized === 1;
-        
-        // 基本プロンプト構築
-        let enhancedPrompt = buildImagePrompt(scene.image_prompt as string);
-        
-        // SSOT: キャラクター参照画像を取得 + テキスト強化
-        let referenceImages: ReferenceImage[] = [];
-        try {
-          const characters = await fetchSceneCharacters(c.env.DB, scene.id as number);
-          
-          // テキスト強化（カスタムプロンプトでない場合のみ）
-          if (!isPromptCustomized) {
-            const world = await fetchWorldSettings(c.env.DB, parseInt(projectId));
-            enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters);
-          }
-          
-          // SSOT: キャラクター参照画像取得（character-reference-helper使用）
-          const debugRefImages = c.env.DEBUG_REFERENCE_IMAGES === '1';
-          const ssotReferenceImages = await getSceneReferenceImages(
-            c.env.DB,
-            c.env.R2,
-            scene.id as number,
-            5,
-            debugRefImages
-          );
-          
-          referenceImages = ssotReferenceImages.map(img => ({
-            base64Data: img.base64Data,
-            mimeType: img.mimeType,
-            characterName: img.characterName
-          }));
-        } catch (charError) {
-          console.warn(`[Legacy Batch] Failed to fetch characters for scene ${scene.id}:`, charError);
-        }
-
-        // スタイルプリセット適用
-        const styleSettings = await fetchSceneStyleSettings(c.env.DB, scene.id as number, parseInt(projectId));
-        const effectiveStyleId = getEffectiveStylePresetId(styleSettings);
-        const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId);
-        const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset);
-
-        // image_generationsレコード作成（generating状態）
-        const insertResult = await c.env.DB.prepare(`
-          INSERT INTO image_generations (
-            scene_id, prompt, status, provider, model, is_active
-          ) VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 1)
-        `).bind(scene.id, finalPrompt).run()
-
-        const generationId = insertResult.meta.last_row_id as number
-
-        // Gemini APIで画像生成（クォータ超過時のフォールバック付き）
-        // R4-fix: ユーザーキー → システムキーの優先順位 + クォータ超過時フォールバック
-        // output_preset のアスペクト比を使用
-        const imageResult = await generateImageWithFallback(
-          c,
-          finalPrompt,
-          referenceImages,
-          { aspectRatio, skipDefaultInstructions: isPromptCustomized }
-        )
-
-        if (!imageResult.success) {
-          // 生成失敗 → status = 'failed', error_message保存
-          await c.env.DB.prepare(`
-            UPDATE image_generations 
-            SET status = 'failed', error_message = ?
-            WHERE id = ?
-          `).bind(imageResult.error || 'Unknown error', generationId).run()
-
-          // Log failed generation
-          const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
-          await logImageGeneration({
-            env: c.env,
-            userId: imageResult.userId ?? 1,
-            projectId: parseInt(projectId),
-            sceneId: scene.id as number,
-            generationType: 'scene_image',
-            provider: 'gemini',
-            model: 'gemini-3.1-flash-image-preview',
-            apiKeySource: imageResult.apiKeySource,
-            promptLength: finalPrompt.length,
-            referenceImageCount: referenceImages.length,
-            status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
-            errorMessage: imageResult.error || 'Unknown error',
-            errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
-          });
-
-          failedCount++
-          continue
-        }
-
-        // R2に画像保存（リトライ機構付き）
-        const r2Key = buildR2Key(
-          parseInt(projectId),
-          scene.idx as number,
-          generationId
-        )
-
-        const r2UploadResult = await uploadToR2WithRetry(
-          c.env.R2,
-          r2Key,
-          imageResult.imageData!
-        );
-        
-        if (!r2UploadResult.success) {
-          // R2アップロード失敗 → status = 'failed', error_message保存
-          await c.env.DB.prepare(`
-            UPDATE image_generations 
-            SET status = 'failed', error_message = ?
-            WHERE id = ?
-          `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run();
-          
-          console.error(`[Batch Gen] R2 upload failed for scene ${scene.id}: ${r2UploadResult.error}`);
-          failedCount++;
-          continue;
-        }
-
-        // R2 URL: r2_key がすでに "images/" で始まっているので、"/" だけ追加
-        const r2Url = `/${r2Key}`
-
-        // 成功 → status = 'completed', r2_key, r2_url保存
-        const updateResult = await c.env.DB.prepare(`
-          UPDATE image_generations 
-          SET status = 'completed', r2_key = ?, r2_url = ?
-          WHERE id = ?
-        `).bind(r2Key, r2Url, generationId).run()
-
-        // ✅ DB更新失敗時の検証
-        if (!updateResult.success) {
-          console.error(`DB update failed for generation ${generationId}:`, updateResult)
-          throw new Error('Failed to update image generation record')
-        }
-
-        // ✅ r2_url が null でないことを確認（念のため）
-        const verifyResult = await c.env.DB.prepare(`
-          SELECT r2_url FROM image_generations WHERE id = ?
-        `).bind(generationId).first()
-
-        if (!verifyResult || !verifyResult.r2_url) {
-          console.error(`r2_url is null after update for generation ${generationId}`)
-          // r2_url が null の場合、failed に戻す
-          await c.env.DB.prepare(`
-            UPDATE image_generations 
-            SET status = 'failed', error_message = 'R2 URL update failed'
-            WHERE id = ?
-          `).bind(generationId).run()
-          throw new Error('r2_url is null after DB update')
-        }
-
-        // Log image generation to image_generation_logs
-        await logImageGeneration({
-          env: c.env,
-          userId: imageResult.userId ?? 1,
-          projectId: parseInt(projectId),
-          sceneId: scene.id as number,
-          generationType: 'scene_image',
-          provider: 'gemini',
-          model: 'gemini-3.1-flash-image-preview',
-          apiKeySource: imageResult.apiKeySource,
-          promptLength: finalPrompt.length,
-          referenceImageCount: referenceImages.length,
-          status: 'success'
-        });
-
-        successCount++
-
-      } catch (sceneError) {
-        console.error(`Failed to generate image for scene ${scene.id}:`, sceneError)
-        failedCount++
-      }
+      await createJob(c.env.DB, {
+        userId: project.user_id || 1,
+        projectId,
+        jobType: 'generate_image',
+        provider: 'gemini_image',
+        entityType: 'scene',
+        entityId: scene.id as number,
+        payload: {
+          sceneId: scene.id,
+          sceneIdx: scene.idx,
+          imagePrompt: scene.image_prompt || '',
+          aspectRatio,
+          isPromptCustomized: scene.is_prompt_customized === 1,
+          mode: 'pending',
+        },
+      })
     }
 
-    // 6. 統計を取得
-    const stats = await getImageGenerationStats(c.env.DB, projectId)
+    // ★ Process ONE job immediately via shared helper
+    const { successCount, failedCount } = await processOneImageJob(c, projectId, aspectRatio)
 
+    // Return stats compatible with legacy format
+    const stats = await getImageGenerationStats(c.env.DB, String(projectId))
     return c.json({
-      project_id: parseInt(projectId),
+      project_id: projectId,
       status: 'generating_images',
       batch_processed: successCount,
       batch_failed: failedCount,
@@ -722,12 +503,7 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 
   } catch (error) {
     console.error('Batch image generation error:', error)
-    return c.json({
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'Failed to generate images'
-      }
-    }, 500)
+    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to generate images' } }, 500)
   }
 })
 
@@ -746,25 +522,10 @@ imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
       }, 404)
     }
 
-    // ✅ IMPROVEMENT: Auto-cleanup stuck 'generating' records (2+ minutes old)
-    // This prevents UI getting stuck at 95% indefinitely
-    // ★ FIX: started_at を使用（created_at フォールバック付き、ended_at も記録）
+    // ★ P1-5: Auto-cleanup stuck 'generating' records (統一: STUCK_GENERATING_TIMEOUT_MINUTES)
     try {
-      const cleanupResult = await c.env.DB.prepare(`
-        UPDATE image_generations
-        SET status = 'failed', 
-            error_message = 'Generation timeout (auto-cleanup on status check, >2min stuck)',
-            ended_at = datetime('now')
-        WHERE status = 'generating' 
-          AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
-          AND COALESCE(started_at, created_at) < datetime('now', '-2 minutes')
-      `).bind(projectId).run()
-      
-      if (cleanupResult.meta.changes > 0) {
-        console.log(`[Image Status] Auto-cleaned ${cleanupResult.meta.changes} stuck generating records (>2min) for project ${projectId}`)
-      }
+      await cleanupStuckGenerations(c.env.DB, parseInt(projectId));
     } catch (cleanupErr) {
-      // Cleanup failure should not block the request
       console.warn('[Image Status] Auto-cleanup failed:', cleanupErr)
     }
 
@@ -817,6 +578,169 @@ async function getImageGenerationStats(db: any, projectId: string) {
   }
 }
 
+// ===== Shared Helpers (P0-2, P0-3, P1-4, P1-5 統一) =====
+
+/**
+ * P1-5: スタック generating レコードのクリーンアップ (統一定数使用)
+ * status endpoint と batch の両方から呼ばれる共通関数
+ */
+async function cleanupStuckGenerations(db: any, projectId: number): Promise<number> {
+  const timeoutMinutes = `-${STUCK_GENERATING_TIMEOUT_MINUTES} minutes`
+  const errorMsg = `Generation timeout (stuck for >${STUCK_GENERATING_TIMEOUT_MINUTES} minutes)`
+  const cleanupResult = await db.prepare(`
+    UPDATE image_generations
+    SET status = 'failed',
+        error_message = ?,
+        ended_at = datetime('now')
+    WHERE status = 'generating'
+      AND scene_id IN (SELECT id FROM scenes WHERE project_id = ?)
+      AND COALESCE(started_at, created_at) < datetime('now', ?)
+  `).bind(errorMsg, projectId, timeoutMinutes).run()
+
+  if (cleanupResult.meta.changes > 0) {
+    console.log(`[Image Gen] Auto-cleaned ${cleanupResult.meta.changes} stuck generating records (>${STUCK_GENERATING_TIMEOUT_MINUTES}min) for project ${projectId}`)
+  }
+  return cleanupResult.meta.changes || 0
+}
+
+/**
+ * P0-2/P0-3: 1つのジョブを取得・実行する共通ヘルパー
+ * Legacy batch と generate-all-images の両方から呼ばれる。
+ * 
+ * ★ P0-3: is_active=0 で INSERT → 成功時のみ is_active=1 に更新 (排他制御)
+ * ★ P1-2: recordProviderMetric にモデル名を渡す
+ * ★ P1-4: 全経路で ended_at を記録
+ */
+async function processOneImageJob(
+  c: { env: Bindings; req?: any },
+  projectId: number,
+  aspectRatio: string
+): Promise<{ successCount: number; failedCount: number }> {
+  const job = await fetchAndLockJob(c.env.DB, 'gemini_image', projectId)
+  let successCount = 0
+  let failedCount = 0
+
+  if (!job) {
+    return { successCount, failedCount }
+  }
+
+  const payload = JSON.parse(job.payload_json) as {
+    sceneId: number; sceneIdx: number; imagePrompt: string;
+    aspectRatio: string; isPromptCustomized: boolean
+  }
+
+  try {
+    // Build prompt
+    let enhancedPrompt = buildImagePrompt(payload.imagePrompt)
+    let referenceImages: ReferenceImage[] = []
+
+    try {
+      const characters = await fetchSceneCharacters(c.env.DB, payload.sceneId)
+      if (!payload.isPromptCustomized) {
+        const world = await fetchWorldSettings(c.env.DB, projectId)
+        enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters)
+      }
+      const refs = await getSceneReferenceImages(c.env.DB, c.env.R2, payload.sceneId, 5, c.env.DEBUG_REFERENCE_IMAGES === '1')
+      referenceImages = refs.map(img => ({ base64Data: img.base64Data, mimeType: img.mimeType, characterName: img.characterName }))
+    } catch (charError) {
+      console.warn(`[Image Job] Failed to fetch characters for scene ${payload.sceneId}:`, charError)
+    }
+
+    const styleSettings = await fetchSceneStyleSettings(c.env.DB, payload.sceneId, projectId)
+    const effectiveStyleId = getEffectiveStylePresetId(styleSettings)
+    const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
+    const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset)
+
+    // ★ P0-3: is_active=0 で INSERT (成功時のみ activate)
+    const insertResult = await c.env.DB.prepare(`
+      INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
+      VALUES (?, ?, 'generating', 'gemini', ?, 0, datetime('now'))
+    `).bind(payload.sceneId, finalPrompt, GEMINI_IMAGE_MODEL).run()
+    const generationId = insertResult.meta.last_row_id as number
+
+    // Generate image (with fallback)
+    const effectiveAspectRatio = payload.aspectRatio || aspectRatio
+    const imageResult = await generateImageWithFallback(c, finalPrompt, referenceImages, {
+      aspectRatio: effectiveAspectRatio as any,
+      skipDefaultInstructions: payload.isPromptCustomized,
+    })
+
+    if (!imageResult.success) {
+      // ★ P1-4: ended_at 記録
+      await c.env.DB.prepare(`
+        UPDATE image_generations SET status = 'failed', error_message = ?, ended_at = datetime('now') WHERE id = ?
+      `).bind(imageResult.error || 'Unknown error', generationId).run()
+
+      const isRateLimited = imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT')
+      if (isRateLimited) {
+        await handleRateLimit(c.env.DB, job.id, 'gemini_image')
+        await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(generationId).run()
+        // ★ P1-2: モデル名付きメトリクス記録
+        await recordProviderMetric(c.env.DB, 'gemini_image', 'error_429', undefined, GEMINI_IMAGE_MODEL)
+      } else {
+        await failJob(c.env.DB, job.id, 'GENERATION_FAILED', (imageResult.error || 'Unknown').substring(0, 500), job.retry_count, job.max_retries)
+        await recordProviderMetric(c.env.DB, 'gemini_image', 'error_other', undefined, GEMINI_IMAGE_MODEL)
+      }
+
+      await logImageGeneration({
+        env: c.env, userId: imageResult.userId ?? 1, projectId,
+        sceneId: payload.sceneId, generationType: 'scene_image', provider: 'gemini',
+        model: GEMINI_IMAGE_MODEL, apiKeySource: imageResult.apiKeySource,
+        promptLength: finalPrompt.length, referenceImageCount: referenceImages.length,
+        status: isRateLimited ? 'quota_exceeded' : 'failed',
+        errorMessage: imageResult.error || 'Unknown',
+        errorCode: isRateLimited ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+      })
+
+      failedCount++
+    } else {
+      // R2 upload
+      const r2Key = buildR2Key(projectId, payload.sceneIdx, generationId)
+      const r2UploadResult = await uploadToR2WithRetry(c.env.R2, r2Key, imageResult.imageData!)
+
+      if (!r2UploadResult.success) {
+        // ★ P1-4: ended_at 記録
+        await c.env.DB.prepare(`
+          UPDATE image_generations SET status = 'failed', error_message = ?, ended_at = datetime('now') WHERE id = ?
+        `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run()
+        await failJob(c.env.DB, job.id, 'R2_UPLOAD_FAILED', r2UploadResult.error || 'R2 upload failed', job.retry_count, job.max_retries)
+        await recordProviderMetric(c.env.DB, 'gemini_image', 'error_other', undefined, GEMINI_IMAGE_MODEL)
+        failedCount++
+      } else {
+        // ★ P0-3: Deactivate old → activate new (排他制御パターン)
+        await c.env.DB.prepare(`
+          UPDATE image_generations SET is_active = 0 WHERE scene_id = ? AND id != ? AND is_active = 1
+        `).bind(payload.sceneId, generationId).run()
+
+        const r2Url = `/${r2Key}`
+        // ★ P1-4: ended_at 記録
+        await c.env.DB.prepare(`
+          UPDATE image_generations SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, ended_at = datetime('now') WHERE id = ?
+        `).bind(r2Key, r2Url, generationId).run()
+
+        await completeJob(c.env.DB, job.id, { generationId, r2Key })
+        // ★ P1-2: モデル名付きメトリクス記録
+        await recordProviderMetric(c.env.DB, 'gemini_image', 'success', undefined, GEMINI_IMAGE_MODEL)
+
+        await logImageGeneration({
+          env: c.env, userId: imageResult.userId ?? 1, projectId,
+          sceneId: payload.sceneId, generationType: 'scene_image', provider: 'gemini',
+          model: GEMINI_IMAGE_MODEL, apiKeySource: imageResult.apiKeySource,
+          promptLength: finalPrompt.length, referenceImageCount: referenceImages.length, status: 'success'
+        })
+
+        successCount++
+      }
+    }
+  } catch (sceneError) {
+    console.error(`[Image Job] Job #${job.id} scene ${payload.sceneId} error:`, sceneError)
+    await failJob(c.env.DB, job.id, 'UNEXPECTED_ERROR', String(sceneError).substring(0, 500), job.retry_count, job.max_retries)
+    failedCount++
+  }
+
+  return { successCount, failedCount }
+}
+
 // POST /api/scenes/:id/generate-image - 単体画像生成
 imageGeneration.post('/scenes/:id/generate-image', async (c) => {
   try {
@@ -853,7 +777,6 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     }
     
     // output_preset からアスペクト比を取得
-    const { getOutputPreset } = await import('../utils/output-presets')
     const outputPreset = getOutputPreset(project.output_preset)
     const aspectRatio = outputPreset.aspect_ratio
     console.log(`[Single Image Gen] Scene ${sceneId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
@@ -892,7 +815,6 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     }
 
     // 5. スタイル設定取得（優先順位: シーン個別 > プロジェクトデフォルト > 未設定）
-    const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer')
     
     const styleSettings = await fetchSceneStyleSettings(
       c.env.DB,
@@ -934,8 +856,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     let referenceImages: ReferenceImage[] = [];
     
     try {
-      const { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper');
-      const { getSceneReferenceImages } = await import('../utils/character-reference-helper');
+      // P2-1: top-level import を使用（dynamic import 除去済み）
       
       const characters = await fetchSceneCharacters(c.env.DB, parseInt(sceneId));
       
@@ -1034,16 +955,17 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     // 7. 最終プロンプト生成（スタイル適用）
     const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset)
 
-    // 7. image_generationsレコード作成（pending状態）
+    // 7. image_generationsレコード作成（pending状態, is_active=0 ★P0-3）
     const insertResult = await c.env.DB.prepare(`
       INSERT INTO image_generations (
         scene_id, prompt, status, provider, model, is_active
-      ) VALUES (?, ?, 'pending', 'gemini', 'gemini-3.1-flash-image-preview', 0)
-    `).bind(sceneId, finalPrompt).run()
+      ) VALUES (?, ?, 'pending', 'gemini', ?, 0)
+    `).bind(sceneId, finalPrompt, GEMINI_IMAGE_MODEL).run()
 
     const generationId = insertResult.meta.last_row_id as number
 
     // 8. ステータスを 'generating' に更新（started_at追加でstuck detection対応）
+    // ★ P1-4: started_at 記録
     await c.env.DB.prepare(`
       UPDATE image_generations SET status = 'generating', started_at = datetime('now') WHERE id = ?
     `).bind(generationId).run()
@@ -1061,9 +983,10 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
     if (!imageResult.success) {
       // 生成失敗 → status = 'failed', error_message保存
+      // ★ P1-4: ended_at を全失敗経路で記録
       await c.env.DB.prepare(`
         UPDATE image_generations 
-        SET status = 'failed', error_message = ?
+        SET status = 'failed', error_message = ?, ended_at = datetime('now')
         WHERE id = ?
       `).bind(imageResult.error || 'Unknown error', generationId).run()
 
@@ -1076,7 +999,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         sceneId: parseInt(sceneId),
         generationType: 'scene_image',
         provider: 'gemini',
-        model: 'gemini-3.1-flash-image-preview',
+        model: GEMINI_IMAGE_MODEL,
         apiKeySource: imageResult.apiKeySource,
         promptLength: finalPrompt.length,
         referenceImageCount: referenceImages.length,
@@ -1113,9 +1036,10 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     if (!r2UploadResult.success) {
       console.error(`[Single Gen] R2 upload failed for scene ${sceneId}: ${r2UploadResult.error}`);
 
+      // ★ P1-4: ended_at を R2 失敗経路でも記録
       await c.env.DB.prepare(`
         UPDATE image_generations 
-        SET status = 'failed', error_message = ?
+        SET status = 'failed', error_message = ?, ended_at = datetime('now')
         WHERE id = ?
       `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run()
 
@@ -1138,9 +1062,10 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
     // r2_key がすでに "images/" で始まっているので、"/" だけ追加
     const r2Url = `/${r2Key}`
     
+    // ★ P1-4: ended_at を成功経路でも記録
     const updateResult = await c.env.DB.prepare(`
       UPDATE image_generations 
-      SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1
+      SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1, ended_at = datetime('now')
       WHERE id = ?
     `).bind(r2Key, r2Url, generationId).run()
 
@@ -1173,7 +1098,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       sceneId: parseInt(sceneId),
       generationType: 'scene_image',
       provider: 'gemini',
-      model: 'gemini-3.1-flash-image-preview',
+      model: GEMINI_IMAGE_MODEL,
       apiKeySource: imageResult.apiKeySource,
       promptLength: finalPrompt.length,
       referenceImageCount: referenceImages.length,
@@ -1240,7 +1165,6 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Project not found' } }, 404)
     }
     
-    const { getOutputPreset } = await import('../utils/output-presets')
     const outputPreset = getOutputPreset(project.output_preset)
     const aspectRatio = outputPreset.aspect_ratio
     console.log(`[Batch All Image Gen] Project ${projectId}: output_preset=${project.output_preset || 'default'}, aspectRatio=${aspectRatio}`)
@@ -1322,122 +1246,8 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
     console.log(`[Batch All Image Gen] Created ${jobsCreated} jobs for ${totalScenes} scenes (mode=${mode})`)
 
-    // 6. ★ Process ONE job immediately (1リクエスト = 1ジョブ)
-    const job = await fetchAndLockJob(c.env.DB, 'gemini_image', parseInt(projectId))
-    let successCount = 0
-    let failedCount = 0
-
-    if (job) {
-      const payload = JSON.parse(job.payload_json) as {
-        sceneId: number; sceneIdx: number; imagePrompt: string;
-        aspectRatio: string; isPromptCustomized: boolean
-      }
-
-      const { fetchSceneCharacters, fetchWorldSettings, enhancePromptWithWorldAndCharacters } = await import('../utils/world-character-helper')
-      const { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } = await import('../utils/style-prompt-composer')
-      const { getSceneReferenceImages } = await import('../utils/character-reference-helper')
-
-      try {
-        // Build prompt
-        let enhancedPrompt = buildImagePrompt(payload.imagePrompt)
-        let referenceImages: ReferenceImage[] = []
-
-        try {
-          const characters = await fetchSceneCharacters(c.env.DB, payload.sceneId)
-          if (!payload.isPromptCustomized) {
-            const world = await fetchWorldSettings(c.env.DB, parseInt(projectId))
-            enhancedPrompt = enhancePromptWithWorldAndCharacters(enhancedPrompt, world, characters)
-          }
-          const refs = await getSceneReferenceImages(c.env.DB, c.env.R2, payload.sceneId, 5, c.env.DEBUG_REFERENCE_IMAGES === '1')
-          referenceImages = refs.map(img => ({ base64Data: img.base64Data, mimeType: img.mimeType, characterName: img.characterName }))
-        } catch (charError) {
-          console.warn(`[Batch Image Gen] Failed to fetch characters for scene ${payload.sceneId}:`, charError)
-        }
-
-        const styleSettings = await fetchSceneStyleSettings(c.env.DB, payload.sceneId, parseInt(projectId))
-        const effectiveStyleId = getEffectiveStylePresetId(styleSettings)
-        const stylePreset = await fetchStylePreset(c.env.DB, effectiveStyleId)
-        const finalPrompt = composeFinalPrompt(enhancedPrompt, stylePreset)
-
-        // Create image_generations record
-        const insertResult = await c.env.DB.prepare(`
-          INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
-          VALUES (?, ?, 'generating', 'gemini', 'gemini-3.1-flash-image-preview', 0, datetime('now'))
-        `).bind(payload.sceneId, finalPrompt).run()
-        const generationId = insertResult.meta.last_row_id as number
-
-        // Generate image (with fallback)
-        const imageResult = await generateImageWithFallback(c, finalPrompt, referenceImages, {
-          aspectRatio: payload.aspectRatio as any,
-          skipDefaultInstructions: payload.isPromptCustomized,
-        })
-
-        if (!imageResult.success) {
-          await c.env.DB.prepare(`
-            UPDATE image_generations SET status = 'failed', error_message = ? WHERE id = ?
-          `).bind(imageResult.error || 'Unknown error', generationId).run()
-
-          const isRateLimited = imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT')
-          if (isRateLimited) {
-            // ★ 429 → retry_wait (not in-request retry)
-            await handleRateLimit(c.env.DB, job.id, 'gemini_image')
-            // Deactivate the failed record so retry can create a new one
-            await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(generationId).run()
-          } else {
-            await failJob(c.env.DB, job.id, 'GENERATION_FAILED', (imageResult.error || 'Unknown').substring(0, 500), job.retry_count, job.max_retries)
-          }
-
-          await logImageGeneration({
-            env: c.env, userId: imageResult.userId ?? 1, projectId: parseInt(projectId),
-            sceneId: payload.sceneId, generationType: 'scene_image', provider: 'gemini',
-            model: 'gemini-3.1-flash-image-preview', apiKeySource: imageResult.apiKeySource,
-            promptLength: finalPrompt.length, referenceImageCount: referenceImages.length,
-            status: isRateLimited ? 'quota_exceeded' : 'failed',
-            errorMessage: imageResult.error || 'Unknown', errorCode: isRateLimited ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
-          })
-
-          failedCount++
-        } else {
-          // R2 upload
-          const r2Key = buildR2Key(parseInt(projectId), payload.sceneIdx, generationId)
-          const r2UploadResult = await uploadToR2WithRetry(c.env.R2, r2Key, imageResult.imageData!)
-
-          if (!r2UploadResult.success) {
-            await c.env.DB.prepare(`
-              UPDATE image_generations SET status = 'failed', error_message = ? WHERE id = ?
-            `).bind(r2UploadResult.error || 'R2 upload failed', generationId).run()
-            await failJob(c.env.DB, job.id, 'R2_UPLOAD_FAILED', r2UploadResult.error || 'R2 upload failed', job.retry_count, job.max_retries)
-            failedCount++
-          } else {
-            // Deactivate old active images, activate new one
-            await c.env.DB.prepare(`
-              UPDATE image_generations SET is_active = 0 WHERE scene_id = ? AND id != ? AND is_active = 1
-            `).bind(payload.sceneId, generationId).run()
-
-            const r2Url = `/${r2Key}`
-            await c.env.DB.prepare(`
-              UPDATE image_generations SET status = 'completed', r2_key = ?, r2_url = ?, is_active = 1 WHERE id = ?
-            `).bind(r2Key, r2Url, generationId).run()
-
-            await completeJob(c.env.DB, job.id, { generationId, r2Key })
-            await recordProviderMetric(c.env.DB, 'gemini_image', 'success')
-
-            await logImageGeneration({
-              env: c.env, userId: imageResult.userId ?? 1, projectId: parseInt(projectId),
-              sceneId: payload.sceneId, generationType: 'scene_image', provider: 'gemini',
-              model: 'gemini-3.1-flash-image-preview', apiKeySource: imageResult.apiKeySource,
-              promptLength: finalPrompt.length, referenceImageCount: referenceImages.length, status: 'success'
-            })
-
-            successCount++
-          }
-        }
-      } catch (sceneError) {
-        console.error(`[Batch Image Gen] Job #${job.id} scene ${payload.sceneId} error:`, sceneError)
-        await failJob(c.env.DB, job.id, 'UNEXPECTED_ERROR', String(sceneError).substring(0, 500), job.retry_count, job.max_retries)
-        failedCount++
-      }
-    }
+    // 6. ★ Process ONE job immediately via shared helper
+    const { successCount, failedCount } = await processOneImageJob(c, parseInt(projectId), aspectRatio)
 
     // 7. Check overall progress
     const progress = await getJobProgress(c.env.DB, parseInt(projectId), 'generate_image')
@@ -1476,305 +1286,13 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 })
 
 /**
- * 画像生成オプション
+ * 画像生成オプション (ローカル拡張 — generateImageWithFallback 用)
  */
 interface ImageGenerationOptions {
   aspectRatio?: '16:9' | '9:16' | '1:1';
   skipDefaultInstructions?: boolean;
   /** 一括生成でユーザーキーがレート制限に達した場合、システムキーを優先 */
   preferSystemKey?: boolean;
-}
-
-/**
- * Gemini APIで画像生成（429リトライ付き）
- * 公式仕様: generateContent エンドポイント
- * キャラクター参照画像をサポート（最大5枚）
- * 
- * @param prompt - 画像生成プロンプト
- * @param apiKey - Gemini API キー
- * @param maxRetries - 最大リトライ回数
- * @param referenceImages - キャラクター参照画像
- * @param options - 生成オプション（アスペクト比、指示スキップ）
- */
-async function generateImageWithRetry(
-  prompt: string,
-  apiKey: string,
-  maxRetries: number = 3,  // ★ NOTE: 3回リトライ（429バックオフ含め合計最大~45秒）
-  referenceImages: ReferenceImage[] = [],
-  options: ImageGenerationOptions = {}
-): Promise<{
-  success: boolean
-  imageData?: ArrayBuffer
-  error?: string
-}> {
-  const { aspectRatio = '16:9', skipDefaultInstructions = false } = options;
-  let lastError: string = ''
-  const startedAt = Date.now()
-  const MAX_TOTAL_ELAPSED_MS = 55000  // ★ 全リトライ合計55秒制限（Cloudflare Workers安全マージン）
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    // ★ FIX: 合計経過時間チェック（Workers実行コンテキスト保護）
-    if (Date.now() - startedAt > MAX_TOTAL_ELAPSED_MS) {
-      console.warn(`[Gemini Image Gen] Total elapsed ${Date.now() - startedAt}ms exceeds ${MAX_TOTAL_ELAPSED_MS}ms, aborting retries`)
-      lastError = lastError || 'TOTAL_TIMEOUT: Image generation exceeded 55s total time limit'
-      break
-    }
-    try {
-      // パーツを構築：参照画像 + テキストプロンプト
-      const parts: any[] = []
-      
-      // キャラクター参照画像を追加（最大5枚）
-      // ※ 参照画像は常に使用（視覚的一貫性のため）
-      const limitedImages = referenceImages.slice(0, 5)
-      for (const refImg of limitedImages) {
-        parts.push({
-          inline_data: {
-            data: refImg.base64Data,
-            mime_type: refImg.mimeType
-          }
-        })
-      }
-      
-      // Phase X-4: カスタムプロンプトの場合はデフォルト指示をスキップ
-      let enhancedPrompt = prompt
-      
-      // アスペクト比に応じた解像度を決定
-      // Gemini API: 2K = 2048px on longest side
-      // 16:9 → 2048x1152, 9:16 → 1152x2048, 1:1 → 1440x1440
-      const imageSize = '2K'; // Gemini APIの2Kは自動で適切なサイズに調整
-      
-      console.log(`[Gemini Image Gen] Using aspectRatio: ${aspectRatio}, imageSize: ${imageSize}`);
-      
-      if (skipDefaultInstructions) {
-        // カスタムプロンプト: 参照画像の説明のみ追加（日本語指示なし）
-        if (limitedImages.length > 0) {
-          const charNames = limitedImages
-            .filter(img => img.characterName)
-            .map(img => img.characterName)
-            .join(', ')
-          if (charNames) {
-            enhancedPrompt = `Using the provided reference images for character visual consistency (${charNames}), generate: ${prompt}`
-          } else {
-            enhancedPrompt = `Using the provided reference images for character visual consistency, generate: ${prompt}`
-          }
-        }
-        console.log('[Gemini Image Gen] Custom prompt mode - skipping default instructions')
-      } else {
-        // 通常モード: 日本語指示 + 参照画像説明 + キャラ特徴のテキスト描画禁止
-        const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
-        // キャラクターの「visual appearance」説明はキャラの見た目を指定するものであり、
-        // 画像内にテキストとして描画してはいけない
-        const characterTraitInstruction = 'NOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually (clothing, features, expression, etc.). Do NOT render these descriptions as text in the image.'
-        
-        if (limitedImages.length > 0) {
-          const charNames = limitedImages
-            .filter(img => img.characterName)
-            .map(img => img.characterName)
-            .join(', ')
-          if (charNames) {
-            enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\nUsing the provided reference images for character consistency (${charNames}), generate: ${prompt}`
-          } else {
-            enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\nUsing the provided reference images for character consistency, generate: ${prompt}`
-          }
-        } else {
-          enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\n${prompt}`
-        }
-      }
-      
-      // テキストプロンプトを追加
-      parts.push({ text: enhancedPrompt })
-      
-      console.log('[Gemini Image Gen] Request:', {
-        referenceImageCount: limitedImages.length,
-        promptLength: enhancedPrompt.length,
-        hasCharacterRefs: limitedImages.some(img => img.characterName)
-      })
-
-      // Gemini API公式仕様: generateContent
-      // ★ FIX: 35秒タイムアウト（Gemini Flash + 参照画像ありの場合のレイテンシ対策）
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 35000)
-      
-      const response = await fetch(
-        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
-        {
-          method: 'POST',
-          headers: {
-            'x-goog-api-key': apiKey,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: parts
-              }
-            ],
-            generationConfig: {
-              responseModalities: ['TEXT', 'IMAGE'],
-              imageConfig: {
-                aspectRatio: aspectRatio,  // output_preset から動的に設定
-                imageSize: imageSize
-              }
-            }
-          }),
-          signal: controller.signal
-        }
-      )
-      clearTimeout(timeout)
-
-      // 429エラー時はリトライ
-      if (response.status === 429) {
-        const retryAfter = response.headers.get('Retry-After')
-        // 指数バックオフ: 5s, 10s, 20s, 40s, 60s (max 60s) - Gemini無料枠(15 RPM)対応
-        const waitTime = retryAfter 
-          ? parseInt(retryAfter) * 1000 
-          : Math.min(Math.pow(2, attempt + 1) * 2500, 60000)
-
-        console.warn(`Rate limited (429). Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
-        
-        // ★ FIX: 合計待ち時間が45秒を超えたら即座にエラー返却
-        // Cloudflare Workers実行コンテキストのタイムアウト対策
-        if (waitTime > 45000) {
-          lastError = 'RATE_LIMIT_429: 画像生成のレート制限に達しました。Gemini APIの無料枠（1分間に15リクエスト）を超えています。'
-          break
-        }
-        if (attempt < maxRetries - 1) {
-          await sleep(waitTime)
-          continue
-        } else {
-          // フォールバック判定用に 'RATE_LIMIT_429' を含める
-          lastError = 'RATE_LIMIT_429: 画像生成のレート制限に達しました。Gemini APIの無料枠（1分間に15リクエスト）を超えています。'
-          break
-        }
-      }
-
-      // サーバーサイド一時エラー (500, 502, 503, 524) → リトライ
-      const retryableStatuses = [500, 502, 503, 524]
-      if (retryableStatuses.includes(response.status)) {
-        const waitTime = Math.min(Math.pow(2, attempt + 1) * 2000, 30000)
-        console.warn(`[Gemini] Server error ${response.status}. Retrying after ${waitTime}ms... (attempt ${attempt + 1}/${maxRetries})`)
-        
-        if (attempt < maxRetries - 1) {
-          await sleep(waitTime)
-          continue
-        } else {
-          const errorData = await response.json().catch(() => ({}))
-          lastError = JSON.stringify({
-            status: response.status,
-            message: errorData.error?.message || `API error: ${response.status} (all retries exhausted)`,
-            code: errorData.error?.code || 'SERVER_ERROR',
-            details: errorData.error?.details || null
-          })
-          break
-        }
-      }
-
-      // その他のエラー（リトライ不可）
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        
-        // 詳細なエラー情報を構築
-        const errorDetails = {
-          status: response.status,
-          message: errorData.error?.message || `API error: ${response.status}`,
-          code: errorData.error?.code || 'UNKNOWN',
-          details: errorData.error?.details || null
-        }
-        
-        // JSON形式でエラーを保存（省略なし）
-        lastError = JSON.stringify(errorDetails)
-        console.error('Gemini API error (full details):', {
-          httpStatus: response.status,
-          errorCode: errorDetails.code,
-          errorMessage: errorDetails.message,
-          errorDetails: errorDetails.details,
-          prompt: prompt.substring(0, 100) + '...'
-        })
-        break
-      }
-
-      // 成功: レスポンスから画像データを取得
-      const result = await response.json()
-      
-      // candidates[0].content.parts から inlineData.data を取得
-      if (result.candidates && result.candidates.length > 0) {
-        const parts = result.candidates[0].content?.parts || []
-        
-        for (const part of parts) {
-          if (part.inlineData && part.inlineData.data) {
-            // base64デコード: atob (Web標準、Cloudflare Workers対応)
-            const base64Data = part.inlineData.data
-            const binaryString = atob(base64Data)
-            const bytes = new Uint8Array(binaryString.length)
-            
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i)
-            }
-            
-            console.log('Image generation success:', {
-              model: 'gemini-3.1-flash-image-preview',
-              endpoint: 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent',
-              promptLength: prompt.length,
-              imageSize: '2K',
-              aspectRatio: '16:9',
-              dataSizeBytes: bytes.buffer.byteLength
-            })
-            
-            return {
-              success: true,
-              imageData: bytes.buffer
-            }
-          }
-        }
-        
-        lastError = 'No inline data in response parts'
-        break
-      } else {
-        lastError = 'No candidates in response'
-        break
-      }
-
-    } catch (error) {
-      const isAbort = error instanceof Error && error.name === 'AbortError'
-      const isMessagePort = error instanceof Error && error.message?.includes('message port closed')
-      
-      const errorDetails = {
-        type: isAbort ? 'TIMEOUT' : isMessagePort ? 'WORKER_CONTEXT_CLOSED' : 'NETWORK_ERROR',
-        message: isAbort ? 'Gemini API did not respond within 35 seconds'
-          : isMessagePort ? 'Cloudflare Workers execution context terminated'
-          : (error instanceof Error ? error.message : 'Unknown error'),
-        stack: error instanceof Error ? error.stack : null,
-        attempt: attempt + 1,
-        maxRetries
-      }
-      
-      lastError = JSON.stringify(errorDetails)
-      console.error(`Image generation attempt ${attempt + 1} failed (full details):`, {
-        errorType: errorDetails.type,
-        errorMessage: errorDetails.message,
-        attempt: errorDetails.attempt,
-        maxRetries: errorDetails.maxRetries,
-        promptLength: prompt.length
-      })
-      
-      // 最後の試行でない場合はリトライ（タイムアウト・Workers終了も含む）
-      if (attempt < maxRetries - 1) {
-        const retryDelay = (isAbort || isMessagePort) ? 1000 : Math.pow(2, attempt) * 1000
-        await sleep(retryDelay)
-        continue
-      }
-    }
-  }
-
-  return {
-    success: false,
-    error: lastError
-  }
-}
-
-// Sleep utility
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms))
 }
 
 export default imageGeneration

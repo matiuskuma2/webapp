@@ -55,6 +55,12 @@ import {
   cancelProjectJobs, getJobProgress, areAllJobsDone, recordProviderMetric,
   type JobRow,
 } from '../utils/job-queue'
+import {
+  generateImageWithRetry as sharedGenerateImage,
+  GEMINI_IMAGE_MODEL,
+  IMAGE_GEN_DELAY_MS,
+  type GeminiReferenceImage,
+} from '../utils/gemini-image-client'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -410,10 +416,12 @@ async function marunageFormatStartup(
 //   - Same quality features: character consistency, 4K, text rendering
 //   - Timeout reduced: 45s → 25s (Flash speed)
 //   - Delay between images: 5s → 3s (higher RPM tolerance)
-const GEMINI_MODEL = 'gemini-3.1-flash-image-preview'
-const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
-const IMAGE_GEN_RETRY = 3          // 個別画像のリトライ回数（2→3に増加: Workers実行コンテキストタイムアウト対策）
-const IMAGE_GEN_DELAY = 3000       // 画像間の待機 (ms) — Flash model is faster
+// ============================================================
+// Image generation constants — using shared SSOT client
+// ============================================================
+// GEMINI_IMAGE_MODEL and IMAGE_GEN_DELAY_MS imported from gemini-image-client.ts
+const IMAGE_GEN_RETRY = 3          // 個別画像のリトライ回数
+const IMAGE_GEN_DELAY = IMAGE_GEN_DELAY_MS  // 画像間の待機 (ms)
 const MAX_R2_RETRIES = 3
 
 // ============================================================
@@ -530,7 +538,7 @@ async function logImageGenerationCost(
       params.projectId,
       params.sceneId,
       params.generationType || 'marunage_batch',
-      GEMINI_MODEL,
+      GEMINI_IMAGE_MODEL,
       params.apiKeySource,
       params.sponsorUserId,
       params.promptLength,
@@ -538,7 +546,7 @@ async function logImageGenerationCost(
       params.status,
       params.errorMessage ?? null,
     ).run()
-    console.log(`[Marunage:Cost] scene=${params.sceneId} status=${params.status} cost=$${cost.toFixed(4)} model=${GEMINI_MODEL}`)
+    console.log(`[Marunage:Cost] scene=${params.sceneId} status=${params.status} cost=$${cost.toFixed(4)} model=${GEMINI_IMAGE_MODEL}`)
   } catch (e) {
     // ログ記録の失敗は無視
     console.error('[Marunage:Cost] Failed to log:', e)
@@ -638,152 +646,27 @@ async function resolveProviderKey(
  * Gemini API で画像を1枚生成 (リトライ付き)
  * Phase 4 (M-7): referenceImages 追加 — キャラ参照画像を Gemini に渡す
  */
+/**
+ * Gemini 画像生成 — SSOT wrapper
+ * ★ 実装は gemini-image-client.ts に統一。ここは呼び出しのみ。
+ */
 async function generateSingleImage(
   apiKey: string,
   prompt: string,
   aspectRatio: '16:9' | '9:16' | '1:1',
   referenceImages?: Array<{ base64Data: string; mimeType: string; characterName?: string }>
 ): Promise<{ success: boolean; imageData?: ArrayBuffer; error?: string }> {
-  const japaneseTextInstruction = 'IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.'
-  const characterTraitInstruction = 'NOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually. Do NOT render these descriptions as text in the image.'
-  
-  // Phase 4 (M-7): Add character consistency instruction when reference images are provided
-  let enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\n${prompt}`
-  if (referenceImages && referenceImages.length > 0) {
-    const charNames = referenceImages
-      .filter(r => r.characterName)
-      .map(r => r.characterName)
-      .join(', ')
-    if (charNames) {
-      enhancedPrompt = `${japaneseTextInstruction}\n\n${characterTraitInstruction}\n\nUsing the provided reference images for character visual consistency (${charNames}), generate:\n\n${prompt}`
-    }
-  }
+  const geminiRefs: GeminiReferenceImage[] = (referenceImages || []).map(r => ({
+    base64Data: r.base64Data,
+    mimeType: r.mimeType,
+    characterName: r.characterName,
+  }))
 
-  let lastError = ''
-  const startedAt = Date.now()
-  const MAX_TOTAL_ELAPSED_MS = 55000  // ★ 全リトライ合計55秒制限
-
-  for (let attempt = 0; attempt < IMAGE_GEN_RETRY; attempt++) {
-    // ★ FIX: 合計経過時間チェック（Workers実行コンテキスト保護）
-    if (Date.now() - startedAt > MAX_TOTAL_ELAPSED_MS) {
-      console.warn(`[Marunage:Image] Total elapsed ${Date.now() - startedAt}ms exceeds ${MAX_TOTAL_ELAPSED_MS}ms, aborting retries`)
-      lastError = lastError || 'TOTAL_TIMEOUT: Image generation exceeded 55s total time limit'
-      break
-    }
-    try {
-      // 35s timeout per attempt — Flash model (Nano Banana 2) is fast but reference images can slow it
-      // ★ FIX: 25s→35s に延長（参照画像ありの場合のレイテンシ対策）
-      const controller = new AbortController()
-      const timeout = setTimeout(() => controller.abort(), 35000)
-      
-      const response = await fetch(GEMINI_ENDPOINT, {
-        method: 'POST',
-        headers: {
-          'x-goog-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [
-            // Phase 4 (M-7): Reference images first (if any) for character consistency
-            ...(referenceImages || []).map(img => ({
-              inlineData: { mimeType: img.mimeType, data: img.base64Data }
-            })),
-            { text: enhancedPrompt }
-          ] }],
-          generationConfig: {
-            responseModalities: ['TEXT', 'IMAGE'],
-            imageConfig: { aspectRatio },
-          },
-        }),
-        signal: controller.signal,
-      })
-      clearTimeout(timeout)
-
-      // Rate limit → retry with backoff (★ 上限20秒に制限)
-      if (response.status === 429) {
-        const waitTime = Math.min(Math.pow(2, attempt + 1) * 2500, 20000)
-        console.warn(`[Marunage:Image] 429 rate limit, waiting ${waitTime}ms (attempt ${attempt + 1}/${IMAGE_GEN_RETRY})`)
-        // 合計経過時間チェック
-        if (Date.now() - startedAt + waitTime > MAX_TOTAL_ELAPSED_MS) {
-          lastError = 'RATE_LIMIT_429: Gemini API rate limit exceeded (time budget exhausted)'
-          break
-        }
-        if (attempt < IMAGE_GEN_RETRY - 1) {
-          await sleep(waitTime)
-          continue
-        }
-        lastError = 'RATE_LIMIT_429: Gemini API rate limit exceeded'
-        break
-      }
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({})) as any
-        // Issue-2.7: Capture detailed error info for debugging
-        const errorInfo = {
-          status: response.status,
-          code: errData?.error?.code || 'UNKNOWN',
-          message: errData?.error?.message || `API error: ${response.status}`,
-        }
-        lastError = JSON.stringify(errorInfo).substring(0, 1000)
-        console.error(`[Marunage:Image] Gemini error:`, errorInfo)
-        break
-      }
-
-      const result = await response.json() as any
-
-      // Issue-2.7: Capture response structure for debugging on failure
-      const candidateCount = result.candidates?.length || 0
-      const finishReason = result.candidates?.[0]?.finishReason || 'N/A'
-      const partTypes = result.candidates?.[0]?.content?.parts?.map((p: any) =>
-        p.inlineData ? 'image' : p.text ? 'text' : 'unknown'
-      ) || []
-
-      if (result.candidates?.[0]?.content?.parts) {
-        for (const part of result.candidates[0].content.parts) {
-          if (part.inlineData?.data) {
-            const binaryString = atob(part.inlineData.data)
-            const bytes = new Uint8Array(binaryString.length)
-            for (let i = 0; i < binaryString.length; i++) {
-              bytes[i] = binaryString.charCodeAt(i)
-            }
-            return { success: true, imageData: bytes.buffer }
-          }
-        }
-        // Has candidates but no image data
-        lastError = JSON.stringify({
-          type: 'NO_IMAGE_DATA',
-          candidates: candidateCount,
-          finishReason,
-          partTypes,
-        }).substring(0, 1000)
-        break
-      }
-
-      lastError = JSON.stringify({
-        type: 'NO_CANDIDATES',
-        candidates: candidateCount,
-        finishReason,
-        partTypes,
-      }).substring(0, 1000)
-      break
-
-    } catch (error) {
-      const isAbort = error instanceof Error && error.name === 'AbortError'
-      const isMessagePort = error instanceof Error && error.message?.includes('message port closed')
-      lastError = isAbort ? 'TIMEOUT_35s: Gemini API (Nano Banana 2) did not respond within 35 seconds' 
-        : isMessagePort ? 'WORKER_CONTEXT_CLOSED: Cloudflare Workers execution context terminated'
-        : (error instanceof Error ? error.message : String(error))
-      console.warn(`[Marunage:Image] Attempt ${attempt + 1}/${IMAGE_GEN_RETRY} failed: ${lastError}`)
-      if (attempt < IMAGE_GEN_RETRY - 1) {
-        // ★ FIX: message port closed もリトライ対象に追加（Workers実行コンテキスト再試行）
-        const retryDelay = (isAbort || isMessagePort) ? 1000 : 2000 * (attempt + 1)
-        await sleep(retryDelay)
-        continue
-      }
-    }
-  }
-
-  return { success: false, error: lastError }
+  return sharedGenerateImage(prompt, apiKey, geminiRefs, {
+    aspectRatio,
+    skipDefaultInstructions: false,
+    maxRetries: IMAGE_GEN_RETRY,
+  })
 }
 
 /**
@@ -973,7 +856,7 @@ async function marunageGenerateImages(
       // Create new record
       const insertResult = await db.prepare(`
         INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
-        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1, datetime('now'))
+        VALUES (?, ?, 'generating', 'gemini', '${GEMINI_IMAGE_MODEL}', 1, datetime('now'))
       `).bind(scene.id, prompt).run()
       genId = insertResult.meta.last_row_id as number
     }
@@ -3023,47 +2906,42 @@ marunage.post('/:projectId/advance', async (c) => {
         // Create image_generations record
         const insertResult = await c.env.DB.prepare(`
           INSERT INTO image_generations (scene_id, prompt, status, provider, model, is_active, started_at)
-          VALUES (?, ?, 'generating', 'gemini', '${GEMINI_MODEL}', 1, datetime('now'))
+          VALUES (?, ?, 'generating', 'gemini', '${GEMINI_IMAGE_MODEL}', 1, datetime('now'))
         `).bind(payload.sceneId, prompt).run()
         const genId = insertResult.meta.last_row_id as number
 
         const tGeminiStart = Date.now()
         console.log(`[Marunage:Advance:Images] Job #${job.id} → Gemini for scene ${payload.sceneId} (idx=${payload.sceneIdx})${refImages.length > 0 ? ` with ${refImages.length} ref images` : ''}`)
 
-        // ★ Single-attempt call (no in-request retry loop)
+        // ★ Single-attempt call using SSOT client (no in-request retry — job_queue handles retries)
         try {
-          const controller = new AbortController()
-          const timeout = setTimeout(() => controller.abort(), 40000) // 40s timeout
+          const geminiRefs: GeminiReferenceImage[] = (refImages || []).map(img => ({
+            base64Data: img.base64Data,
+            mimeType: img.mimeType,
+            characterName: img.characterName,
+          }))
 
-          const response = await fetch(GEMINI_ENDPOINT, {
-            method: 'POST',
-            headers: { 'x-goog-api-key': keyResult.apiKey, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [
-                ...(refImages || []).map(img => ({ inlineData: { mimeType: img.mimeType, data: img.base64Data } })),
-                { text: `IMPORTANT: Any text, signs, or labels in the image MUST be written in Japanese (日本語). Do NOT use English text.\n\nNOTE: Character descriptions marked as "(visual appearance: ...)" describe how the character should LOOK visually. Do NOT render these descriptions as text in the image.\n\n${refImages.length > 0 ? `Using the provided reference images for character visual consistency, generate:\n\n` : ''}${prompt}` }
-              ] }],
-              generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: payload.aspectRatio } },
-            }),
-            signal: controller.signal,
+          const imageResult = await sharedGenerateImage(prompt, keyResult.apiKey, geminiRefs, {
+            aspectRatio: payload.aspectRatio as any,
+            skipDefaultInstructions: false,
+            maxRetries: 1,  // 1回のみ — job_queue が retry_wait で管理
           })
-          clearTimeout(timeout)
+          const geminiMs = Date.now() - tGeminiStart
 
-          // ★ 429 → immediately retry_wait (no in-request wait)
-          if (response.status === 429) {
-            const retryAfterHeader = response.headers.get('Retry-After')
-            const retryAfterSec = retryAfterHeader ? parseInt(retryAfterHeader, 10) : undefined
-            const geminiMs = Date.now() - tGeminiStart
+          // ★ 429 判定 (sharedGenerateImage はリトライせずエラー返却)
+          const isRateLimited = !imageResult.success && (
+            imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT')
+          )
 
+          if (isRateLimited) {
             await c.env.DB.prepare(`
               UPDATE image_generations SET status = 'failed', error_message = '429 Rate Limited (job will retry)',
                 ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
               WHERE id = ?
             `).bind(Date.now() - t0, geminiMs, genId).run()
-            // Deactivate so scene appears as noImage for the retried job
             await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
 
-            const { retryAfterSec: delay } = await handleRateLimit(c.env.DB, job.id, 'gemini_image', retryAfterSec)
+            const { retryAfterSec: delay } = await handleRateLimit(c.env.DB, job.id, 'gemini_image')
 
             console.log(`[Marunage:Advance:Images] Job #${job.id} → 429, retry in ${delay}s`)
             return c.json({
@@ -3076,27 +2954,26 @@ marunage.post('/:projectId/advance', async (c) => {
             })
           }
 
-          if (!response.ok) {
-            const errData = await response.json().catch(() => ({})) as any
-            const errMsg = errData?.error?.message || `API error: ${response.status}`
-            const geminiMs = Date.now() - tGeminiStart
+          if (!imageResult.success || !imageResult.imageData) {
+            const errMsg = (imageResult.error || 'Unknown error').substring(0, 500)
 
             await c.env.DB.prepare(`
               UPDATE image_generations SET status = 'failed', error_message = ?,
                 ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
               WHERE id = ?
-            `).bind(errMsg.substring(0, 500), Date.now() - t0, geminiMs, genId).run()
+            `).bind(errMsg, Date.now() - t0, geminiMs, genId).run()
 
-            const { finalStatus } = await failJob(c.env.DB, job.id, `GEMINI_${response.status}`, errMsg.substring(0, 500), job.retry_count, job.max_retries)
-            await recordProviderMetric(c.env.DB, 'gemini_image', 'error', geminiMs)
+            const errCode = imageResult.error?.includes('TIMEOUT') ? 'TIMEOUT' : 'GENERATION_FAILED'
+            const { finalStatus } = await failJob(c.env.DB, job.id, errCode, errMsg, job.retry_count, job.max_retries)
+            const metricType = imageResult.error?.includes('TIMEOUT') ? 'timeout' as const : 'error' as const
+            await recordProviderMetric(c.env.DB, 'gemini_image', metricType, geminiMs, GEMINI_IMAGE_MODEL)
 
             await logImageGenerationCost(c.env.DB, {
               userId: user.id, projectId: String(projectId), sceneId: payload.sceneId,
               status: 'failed', apiKeySource: keyResult.keySource, sponsorUserId: billing.sponsorUserId,
-              promptLength: prompt.length, errorMessage: errMsg.substring(0, 500), generationType: 'marunage_advance',
+              promptLength: prompt.length, errorMessage: errMsg, generationType: 'marunage_advance',
             })
 
-            // If the job will retry, deactivate this failed image so a new one can be created
             if (finalStatus === 'retry_wait') {
               await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
             }
@@ -3110,51 +2987,10 @@ marunage.post('/:projectId/advance', async (c) => {
             })
           }
 
-          // ── Success: extract image data ──
-          const result = await response.json() as any
-          const geminiMs = Date.now() - tGeminiStart
-          let imageData: ArrayBuffer | null = null
-
-          if (result.candidates?.[0]?.content?.parts) {
-            for (const part of result.candidates[0].content.parts) {
-              if (part.inlineData?.data) {
-                const binaryString = atob(part.inlineData.data)
-                const bytes = new Uint8Array(binaryString.length)
-                for (let i = 0; i < binaryString.length; i++) {
-                  bytes[i] = binaryString.charCodeAt(i)
-                }
-                imageData = bytes.buffer
-                break
-              }
-            }
-          }
-
-          if (!imageData) {
-            const errMsg = 'No image data in Gemini response'
-            await c.env.DB.prepare(`
-              UPDATE image_generations SET status = 'failed', error_message = ?,
-                ended_at = datetime('now'), duration_ms = ?, gemini_duration_ms = ?
-              WHERE id = ?
-            `).bind(errMsg, Date.now() - t0, geminiMs, genId).run()
-
-            const { finalStatus } = await failJob(c.env.DB, job.id, 'NO_IMAGE_DATA', errMsg, job.retry_count, job.max_retries)
-            if (finalStatus === 'retry_wait') {
-              await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(genId).run()
-            }
-
-            return c.json({
-              run_id: run.id,
-              previous_phase: currentPhase,
-              new_phase: currentPhase,
-              action: 'images_started',
-              message: `シーン${payload.sceneIdx + 1}: 画像データ未取得${finalStatus === 'retry_wait' ? '（再試行予定）' : ''}`,
-            })
-          }
-
-          // ── Upload to R2 ──
+          // ── Success: upload to R2 ──
           const tR2Start = Date.now()
           const r2Key = `projects/${projectId}/scenes/${payload.sceneId}/image_${genId}.png`
-          await c.env.R2.put(r2Key, imageData, { httpMetadata: { contentType: 'image/png' } })
+          await c.env.R2.put(r2Key, imageResult.imageData, { httpMetadata: { contentType: 'image/png' } })
           const r2Ms = Date.now() - tR2Start
           const totalMs = Date.now() - t0
 
@@ -3173,7 +3009,7 @@ marunage.post('/:projectId/advance', async (c) => {
           `).bind(payload.sceneId, genId).run()
 
           await completeJob(c.env.DB, job.id, { genId, r2Key, totalMs, geminiMs, r2Ms })
-          await recordProviderMetric(c.env.DB, 'gemini_image', 'success', geminiMs)
+          await recordProviderMetric(c.env.DB, 'gemini_image', 'success', geminiMs, GEMINI_IMAGE_MODEL)
 
           await logImageGenerationCost(c.env.DB, {
             userId: user.id, projectId: String(projectId), sceneId: payload.sceneId,
@@ -3206,7 +3042,7 @@ marunage.post('/:projectId/advance', async (c) => {
           `).bind(errMsg.substring(0, 500), Date.now() - t0, geminiMs, genId).run()
 
           const metricType = isTimeout ? 'timeout' as const : 'error' as const
-          await recordProviderMetric(c.env.DB, 'gemini_image', metricType, geminiMs)
+          await recordProviderMetric(c.env.DB, 'gemini_image', metricType, geminiMs, GEMINI_IMAGE_MODEL)
 
           const { finalStatus } = await failJob(c.env.DB, job.id, isTimeout ? 'TIMEOUT' : 'NETWORK_ERROR', errMsg.substring(0, 500), job.retry_count, job.max_retries)
           if (finalStatus === 'retry_wait') {
