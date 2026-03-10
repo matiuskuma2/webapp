@@ -5980,6 +5980,8 @@ function getSceneStats(scenes) {
 }
 
 // Generate single scene image
+// ★ Phase 1-D: 同期完了型 → 202 Accepted + ポーリング
+// リトライはサーバーサイドのみ。フロントエンドはポーリングして表示するだけ。
 async function generateSceneImage(sceneId) {
   // ⚠️ Check project status FIRST - image generation requires 'formatted' or later
   const allowedStatuses = ['formatted', 'generating_images', 'completed'];
@@ -6022,104 +6024,25 @@ async function generateSceneImage(sceneId) {
     }
   }
   
-  // ✅ Start fake progress timer BEFORE API call (for synchronous API)
+  // ✅ Start generation watch and show initial progress
   startGenerationWatch(sceneId);
-  
-  // Wait for next tick to ensure DOM is ready
   await new Promise(resolve => setTimeout(resolve, 0));
-  
-  updateGeneratingButtonUI(sceneId, 0); // Show 0% immediately
-  
-  let fakePercent = 0;
-  const fakeStart = Date.now();
-  const fakeTimer = setInterval(() => {
-    const elapsed = (Date.now() - fakeStart) / 1000;
-    if (elapsed < 45) {
-      fakePercent = Math.round((elapsed / 45) * 80); // 0-45s → 0-80%
-    } else if (elapsed < 90) {
-      fakePercent = 80 + Math.round(((elapsed - 45) / 45) * 15); // 45-90s → 80-95%
-    } else {
-      fakePercent = 95; // 90s+ → stuck at 95%
-    }
-    updateGeneratingButtonUI(sceneId, fakePercent);
-  }, 1000); // Update every 1 second
+  updateGeneratingButtonUI(sceneId, 0);
   
   try {
+    // ★ Phase 1-D: POST → 202 Accepted + generation ID
     const response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-image`);
     
-    // Stop fake timer
-    clearInterval(fakeTimer);
+    console.log('🔍 Generate image API response:', response.status, response.data);
     
-    // Show 100% briefly before updating
-    updateGeneratingButtonUI(sceneId, 100);
-    
-    console.log('🔍 Generate image API response:', response.data);
-    
-    // Check for image_generation_id (new API) or id (old API)
     const imageGenId = response.data.image_generation_id || response.data.id;
-    const responseStatus = response.data.status;
     
-    if (imageGenId) {
-      // ★ 成功時はリトライカウンターをリセット
-      if (window.sceneRetryCount && window.sceneRetryCount[sceneId]) {
-        delete window.sceneRetryCount[sceneId];
-      }
-      // ✅ CASE 1: API returns 'completed' (synchronous generation)
-      if (responseStatus === 'completed') {
-        console.log(`✅ Image generation completed immediately for scene ${sceneId}`);
-        showToast('画像生成が完了しました', 'success');
+    if (response.status === 202 || response.status === 200) {
+      if (imageGenId) {
+        // ★ Phase 1-D: サーバーがジョブをキューに入れた → ポーリング開始
+        showToast('画像生成を開始しました', 'success');
         
-        // Small delay to show 100% before updating card
-        setTimeout(async () => {
-          stopGenerationWatch(sceneId);
-          window.sceneProcessing[sceneId] = false;
-          
-          // Update card immediately (no polling needed)
-          await updateSingleSceneCard(sceneId);
-          await checkAndUpdateProjectStatus();
-        }, 500);
-        return;
-      }
-      
-      // ✅ CASE 2: API returns 'generating' or 'pending' (asynchronous generation)
-      showToast('画像生成を開始しました', 'success');
-      
-      // Update only this scene's status badge to "generating" (no full reload)
-      const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
-      if (sceneCard) {
-        const statusBadge = sceneCard.querySelector('.bg-gradient-to-r > div:last-child');
-        if (statusBadge) {
-          statusBadge.innerHTML = getSceneStatusBadge('generating');
-        }
-      }
-      
-      // ✅ Start polling for completion (fake timer already running)
-      console.log(`✅ Starting generation watch for scene ${sceneId}, image_gen_id: ${imageGenId}, status: ${responseStatus}`);
-      pollSceneImageGeneration(sceneId);
-    } else {
-      console.error('❌ API response does not contain image_generation_id or id:', response.data);
-      showToast('画像生成に失敗しました', 'error');
-      stopGenerationWatch(sceneId);
-      window.sceneProcessing[sceneId] = false;
-      await updateSingleSceneCard(sceneId);
-    }
-  } catch (error) {
-    console.error('Generate image error:', error);
-    
-    // Log detailed error information
-    if (error.response) {
-      console.error('Error response data:', error.response.data);
-      console.error('Error response status:', error.response.status);
-      
-      // ✅ SPECIAL CASE: 524 timeout - DON'T stop timer, switch to polling
-      if (error.response.status === 524) {
-        console.warn(`⏰ 524 timeout detected for scene ${sceneId}. Switching to polling (fake timer continues at 95%)...`);
-        showToast('生成に時間がかかっています（処理は継続中）', 'info');
-        
-        // DON'T clear fakeTimer - let it continue to 95%
-        // DON'T stop generation watch - already started
-        
-        // Update status badge
+        // Update status badge to "generating"
         const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
         if (sceneCard) {
           const statusBadge = sceneCard.querySelector('.bg-gradient-to-r > div:last-child');
@@ -6128,65 +6051,73 @@ async function generateSceneImage(sceneId) {
           }
         }
         
-        // Start polling to check if generation completes server-side
-        pollSceneImageGeneration(sceneId);
-        return; // Don't show error toast or update card
-      }
-      
-      // For other errors, stop timer and show error
-      clearInterval(fakeTimer);
-      stopGenerationWatch(sceneId);
-      
-      // ★ タイムアウト(504)または retryable エラーの場合、自動リトライ
-      const errorData = error.response.data?.error;
-      const errorCode = errorData?.code;
-      const isRetryable = errorData?.retryable === true;
-      const isTimeout = error.response.status === 504 || errorCode === 'GENERATION_TIMEOUT';
-      
-      // 自動リトライ回数を追跡 (window.sceneRetryCount)
-      if (!window.sceneRetryCount) window.sceneRetryCount = {};
-      const retryCount = window.sceneRetryCount[sceneId] || 0;
-      const MAX_AUTO_RETRIES = 2;
-      
-      if ((isTimeout || isRetryable) && retryCount < MAX_AUTO_RETRIES) {
-        window.sceneRetryCount[sceneId] = retryCount + 1;
-        const retryNum = retryCount + 1;
-        console.warn(`⏰ Auto-retry ${retryNum}/${MAX_AUTO_RETRIES} for scene ${sceneId} (${errorCode || 'timeout'})`);
-        showToast(`タイムアウト発生 — 自動リトライ中 (${retryNum}/${MAX_AUTO_RETRIES})`, 'info');
-        
-        // 2秒後に自動リトライ
-        setTimeout(() => {
-          window.sceneProcessing[sceneId] = false;
-          generateSceneImage(sceneId);
-        }, 2000);
+        // ★ 新ポーリング: generation ID ベースで直接ステータスを監視
+        pollImageGenerationById(sceneId, imageGenId);
         return;
       }
       
-      // リトライ上限に達したらカウンターをリセット
-      if (window.sceneRetryCount[sceneId]) {
-        delete window.sceneRetryCount[sceneId];
+      // Legacy: 200 + completed (同期完了 — 後方互換)
+      if (response.data.status === 'completed') {
+        console.log(`✅ Image generation completed immediately for scene ${sceneId}`);
+        showToast('画像生成が完了しました', 'success');
+        updateGeneratingButtonUI(sceneId, 100);
+        setTimeout(async () => {
+          stopGenerationWatch(sceneId);
+          window.sceneProcessing[sceneId] = false;
+          await updateSingleSceneCard(sceneId);
+          await checkAndUpdateProjectStatus();
+        }, 500);
+        return;
+      }
+    }
+    
+    // Unexpected response
+    console.error('❌ Unexpected API response:', response.status, response.data);
+    showToast('画像生成に失敗しました', 'error');
+    stopGenerationWatch(sceneId);
+    window.sceneProcessing[sceneId] = false;
+    await updateSingleSceneCard(sceneId);
+    
+  } catch (error) {
+    console.error('Generate image error:', error);
+    
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error response status:', error.response.status);
+      
+      // ✅ 524 timeout - サーバーはまだ処理中の可能性
+      if (error.response.status === 524) {
+        console.warn(`⏰ 524 timeout for scene ${sceneId}. Switching to scene-based polling...`);
+        showToast('生成に時間がかかっています（処理は継続中）', 'info');
+        pollSceneImageGeneration(sceneId);
+        return;
       }
       
-      // Show detailed error message for other errors
+      // ★ Phase 1-D: フロントエンドでのリトライは廃止
+      // サーバーサイドのジョブキューがリトライを管理する
+      stopGenerationWatch(sceneId);
+      
+      const errorData = error.response.data?.error;
+      const errorCode = errorData?.code;
       let errorMsg = errorData?.message || error.message || '画像生成中にエラーが発生しました';
       
-      // Add helpful guidance for common errors
       if (errorCode === 'INVALID_STATUS') {
         errorMsg = '画像生成にはFormat（シーン分割）の完了が必要です。Scene Splitタブでフォーマットを実行してください。';
-      } else if (isTimeout) {
-        errorMsg = `画像生成がタイムアウトしました（${MAX_AUTO_RETRIES}回リトライ済み）。「失敗分リトライ」ボタンで再試行してください。`;
+      } else if (errorCode === 'ALREADY_GENERATING') {
+        errorMsg = 'このシーンは既に生成中です。しばらくお待ちください。';
+        // 既に生成中の場合はポーリングを開始
+        const existingGenId = errorData?.details?.generation_id;
+        if (existingGenId) {
+          pollImageGenerationById(sceneId, existingGenId);
+          showToast('生成中のジョブを監視しています', 'info');
+          return;
+        }
       } else if (errorMsg.includes('RATE_LIMIT_429') || errorCode === 'RATE_LIMIT') {
-        // レート制限時は残り時間とともに通知
-        const waitSeconds = 120; // 2分待機を推奨
-        errorMsg = `APIレート制限に達しました。約${Math.floor(waitSeconds / 60)}分後に再試行してください。\n（Gemini無料枠: 1分間に15リクエストまで）`;
-        
-        // 自動再試行カウントダウンの開始（オプション）
-        showRateLimitCountdown(sceneId, waitSeconds);
+        errorMsg = 'APIレート制限に達しました。しばらく待ってから再試行してください。';
       }
       
       showToast(errorMsg, 'error');
     } else {
-      clearInterval(fakeTimer);
       stopGenerationWatch(sceneId);
       showToast('画像生成中にエラーが発生しました', 'error');
     }
@@ -6274,36 +6205,24 @@ async function generateSceneImageWithBackgroundRef(sceneId, referenceSceneId) {
     return;
   }
   window.sceneProcessing[sceneId] = true;
+  startGenerationWatch(sceneId);
   updateGeneratingButtonUI(sceneId, 0);
 
-  let fakePercent = 0;
-  const fakeStart = Date.now();
-  const fakeTimer = setInterval(() => {
-    const elapsed = (Date.now() - fakeStart) / 1000;
-    if (elapsed < 45) {
-      fakePercent = Math.round((elapsed / 45) * 80);
-    } else if (elapsed < 90) {
-      fakePercent = 80 + Math.round(((elapsed - 45) / 45) * 15);
-    } else {
-      fakePercent = 95;
-    }
-    updateGeneratingButtonUI(sceneId, fakePercent);
-  }, 1000);
-
   try {
+    // ★ Phase 1-D: 202 Accepted + ポーリング
     const response = await axios.post(`${API_BASE}/scenes/${sceneId}/generate-image`, {
       reference_scene_id: referenceSceneId
     });
 
-    clearInterval(fakeTimer);
-    updateGeneratingButtonUI(sceneId, 100);
+    console.log('🔍 Background ref image API response:', response.status, response.data);
 
     const imageGenId = response.data.image_generation_id || response.data.id;
-    const responseStatus = response.data.status;
 
-    if (imageGenId) {
-      if (responseStatus === 'completed') {
+    if ((response.status === 202 || response.status === 200) && imageGenId) {
+      if (response.data.status === 'completed') {
+        // Legacy: 同期完了
         showToast('背景参照画像の生成が完了しました', 'success');
+        updateGeneratingButtonUI(sceneId, 100);
         setTimeout(async () => {
           stopGenerationWatch(sceneId);
           window.sceneProcessing[sceneId] = false;
@@ -6313,7 +6232,7 @@ async function generateSceneImageWithBackgroundRef(sceneId, referenceSceneId) {
         return;
       }
       showToast('背景参照画像の生成を開始しました', 'success');
-      pollSceneImageGeneration(sceneId);
+      pollImageGenerationById(sceneId, imageGenId);
     } else {
       showToast('画像生成に失敗しました', 'error');
       stopGenerationWatch(sceneId);
@@ -6321,7 +6240,6 @@ async function generateSceneImageWithBackgroundRef(sceneId, referenceSceneId) {
       await updateSingleSceneCard(sceneId);
     }
   } catch (error) {
-    clearInterval(fakeTimer);
     console.error('Background reference image generation failed:', error);
     showToast('背景参照画像の生成に失敗しました: ' + (error.response?.data?.error?.message || error.message), 'error');
     stopGenerationWatch(sceneId);
@@ -8109,6 +8027,118 @@ function pollSceneImageGeneration(sceneId) {
       // Continue to next tick (do NOT clear interval, do NOT stop watch)
     }
   }, intervalMs);
+  
+  // Store timer ID for cleanup
+  const watch = window.generatingSceneWatch[sceneId];
+  if (watch) {
+    watch.timerId = timerId;
+  }
+}
+
+// ★ Phase 1-D: Generation ID ベースのポーリング
+// 202 レスポンス後、/api/image-generations/:id/status を直接ポーリング
+// サーバーサイドでリトライが行われるため、フロントエンドはステータスを表示するのみ
+function pollImageGenerationById(sceneId, generationId) {
+  const POLL_INTERVAL_MS = 3000; // 3秒間隔
+  const MAX_POLL_DURATION_MS = 300000; // 最大5分
+  
+  // Start watching if not already
+  startGenerationWatch(sceneId);
+  
+  const pollStartTime = Date.now();
+  
+  const timerId = setInterval(async () => {
+    try {
+      // ★ 経過時間ベースのプログレス表示
+      const elapsedSec = (Date.now() - pollStartTime) / 1000;
+      let percent;
+      if (elapsedSec < 45) {
+        percent = Math.round((elapsedSec / 45) * 80);
+      } else if (elapsedSec < 90) {
+        percent = 80 + Math.round(((elapsedSec - 45) / 45) * 15);
+      } else {
+        percent = 95;
+      }
+      updateGeneratingButtonUI(sceneId, percent);
+      
+      // ★ Generation ID ベースで直接ステータスを取得
+      const response = await axios.get(`${API_BASE}/image-generations/${generationId}/status`);
+      const data = response.data;
+      
+      console.log(`[Poll-ById] Gen #${generationId} scene ${sceneId}: status=${data.status}, progress=${data.progress_pct}%, elapsed=${Math.round(elapsedSec)}s`);
+      
+      // サーバーからの progress_pct がある場合はそちらを使用
+      if (data.progress_pct != null && data.progress_pct > percent) {
+        updateGeneratingButtonUI(sceneId, data.progress_pct);
+      }
+      
+      // ===== STATUS: COMPLETED =====
+      if (data.status === 'completed') {
+        clearInterval(timerId);
+        updateGeneratingButtonUI(sceneId, 100);
+        
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        
+        showToast('画像生成が完了しました', 'success');
+        
+        await updateSingleSceneCard(sceneId);
+        await checkAndUpdateProjectStatus();
+        return;
+      }
+      
+      // ===== STATUS: FAILED =====
+      if (data.status === 'failed') {
+        // ★ Phase 1-D: サーバーサイドリトライも全て失敗した場合のみここに来る
+        // retryable=true の場合、サーバーはまだリトライ中の可能性がある
+        // → ジョブキューの retry_wait ステータスを確認
+        if (data.retryable) {
+          // サーバーサイドでリトライ予定 — もう少し待つ
+          console.log(`[Poll-ById] Gen #${generationId} failed but retryable. Continuing poll...`);
+          
+          // ただし5分以上経過していたら諦める
+          if (Date.now() - pollStartTime > MAX_POLL_DURATION_MS) {
+            clearInterval(timerId);
+            stopGenerationWatch(sceneId);
+            if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+            showToast('画像生成がタイムアウトしました。再生成してください', 'warning');
+            await updateSingleSceneCard(sceneId);
+            return;
+          }
+          
+          // retryable failed の場合はポーリングを続行（サーバーが再試行する）
+          return;
+        }
+        
+        clearInterval(timerId);
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        
+        const errorMsg = data.error_message || '画像生成に失敗しました';
+        showToast(`画像生成失敗: ${errorMsg}`, 'error');
+        
+        await updateSingleSceneCard(sceneId);
+        return;
+      }
+      
+      // ===== TIMEOUT: ポーリング最大時間超過 =====
+      if (Date.now() - pollStartTime > MAX_POLL_DURATION_MS) {
+        clearInterval(timerId);
+        console.warn(`[Poll-ById] Gen #${generationId} polling timeout after ${MAX_POLL_DURATION_MS}ms`);
+        
+        // Scene-based polling にフォールバック
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        showToast('画像生成に時間がかかっています。ページをリロードしてください', 'warning');
+        await updateSingleSceneCard(sceneId);
+        return;
+      }
+      
+    } catch (error) {
+      // ★ ネットワークエラーではポーリングを停止しない
+      console.warn(`[Poll-ById] Transient error for gen #${generationId}:`, error?.message || error);
+    }
+  }, POLL_INTERVAL_MS);
   
   // Store timer ID for cleanup
   const watch = window.generatingSceneWatch[sceneId];
