@@ -19,6 +19,7 @@ import { getOutputPreset } from '../utils/output-presets'
 import { fetchWorldSettings, fetchSceneCharacters, enhancePromptWithWorldAndCharacters } from '../utils/world-character-helper'
 import { fetchSceneStyleSettings, fetchStylePreset, composeFinalPrompt, getEffectiveStylePresetId } from '../utils/style-prompt-composer'
 import { getSceneReferenceImages } from '../utils/character-reference-helper'
+import { IMAGE_GEN_ERROR, isQuotaError, isTimeoutError, isRateLimitError, classifyError } from '../utils/error-codes'
 
 /**
  * P1-5: generating スタックのタイムアウト閾値（統一: 3分）
@@ -364,16 +365,13 @@ async function generateImageWithFallback(
     return { ...result, apiKeySource: keyResult.source, userId: keyResult.userId };
   }
   
-  // Step 4: クォータ超過時のフォールバック
-  const isQuotaError = result.error?.toLowerCase().includes('quota') || 
-                       result.error?.toLowerCase().includes('resource_exhausted') ||
-                       result.error?.includes('429') ||
-                       result.error?.includes('RATE_LIMIT_429');
+  // Step 4: クォータ超過時のフォールバック (★ Phase 0-B: 構造化された判定)
+  const quotaError = isQuotaError(result.error);
   
-  console.log(`[Image Gen] Failed. source=${keyResult.source}, isQuotaError=${isQuotaError}, error=${result.error?.substring(0, 150)}`);
+  console.log(`[Image Gen] Failed. source=${keyResult.source}, isQuotaError=${quotaError}, errorClass=${classifyError(result.error)}, error=${result.error?.substring(0, 150)}`);
   
-  // ユーザーキー → システムキーフォールバック
-  if (keyResult.source === 'user' && isQuotaError && c.env.GEMINI_API_KEY) {
+  // ユーザーキー → システムキーフォールバック (quota error のみ)
+  if (keyResult.source === 'user' && quotaError && c.env.GEMINI_API_KEY) {
     console.log(`[Image Gen] User key quota exceeded, falling back to SYSTEM key`);
     const systemResult = await sharedGenerateImage(
       prompt, c.env.GEMINI_API_KEY, geminiRefs, { ...geminiOpts, maxRetries: 3 }
@@ -382,19 +380,12 @@ async function generateImageWithFallback(
     return { ...systemResult, apiKeySource: 'system', userId: keyResult.userId };
   }
   
-  // システムキー → ユーザーキーフォールバック
-  if (keyResult.source === 'system' && isQuotaError) {
-    const userKeyResult = await getApiKey(c, { skipUserKey: false });
-    if (userKeyResult && userKeyResult.source === 'user' && userKeyResult.apiKey !== keyResult.apiKey) {
-      console.log(`[Image Gen] System key quota exceeded, trying USER key`);
-      const userResult = await sharedGenerateImage(
-        prompt, userKeyResult.apiKey, geminiRefs, { ...geminiOpts, maxRetries: 3 }
-      );
-      if (userResult.success) {
-        return { ...userResult, apiKeySource: 'user', userId: userKeyResult.userId };
-      }
-    }
-    console.log(`[Image Gen] No alternative key available`);
+  // ★ Phase 0-A: system→user 逆フォールバック廃止
+  // 以前はシステムキーのquota超過時にユーザーキーに切り替えていたが、
+  // ユーザーへの意図しない課金リスクがあるため削除。
+  // システムキーで失敗した場合は同じキーでリトライするか、失敗として返す。
+  if (keyResult.source === 'system' && quotaError) {
+    console.log(`[Image Gen] System key quota exceeded. NOT falling back to user key (Phase 0-A: reverse fallback removed)`);
   }
   
   return { ...result, apiKeySource: keyResult.source, userId: keyResult.userId };
@@ -671,14 +662,15 @@ async function processOneImageJob(
         UPDATE image_generations SET status = 'failed', error_message = ?, ended_at = datetime('now') WHERE id = ?
       `).bind(imageResult.error || 'Unknown error', generationId).run()
 
-      const isRateLimited = imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT')
+      const isRateLimited = isRateLimitError(imageResult.error)
       if (isRateLimited) {
         await handleRateLimit(c.env.DB, job.id, 'gemini_image')
         await c.env.DB.prepare(`UPDATE image_generations SET is_active = 0 WHERE id = ?`).bind(generationId).run()
         // ★ P1-2: モデル名付きメトリクス記録
         await recordProviderMetric(c.env.DB, 'gemini_image', 'error_429', undefined, GEMINI_IMAGE_MODEL)
       } else {
-        await failJob(c.env.DB, job.id, 'GENERATION_FAILED', (imageResult.error || 'Unknown').substring(0, 500), job.retry_count, job.max_retries)
+        const errCode = classifyError(imageResult.error)
+        await failJob(c.env.DB, job.id, errCode, (imageResult.error || 'Unknown').substring(0, 500), job.retry_count, job.max_retries)
         await recordProviderMetric(c.env.DB, 'gemini_image', 'error_other', undefined, GEMINI_IMAGE_MODEL)
       }
 
@@ -689,7 +681,7 @@ async function processOneImageJob(
         promptLength: finalPrompt.length, referenceImageCount: referenceImages.length,
         status: isRateLimited ? 'quota_exceeded' : 'failed',
         errorMessage: imageResult.error || 'Unknown',
-        errorCode: isRateLimited ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+        errorCode: isRateLimited ? IMAGE_GEN_ERROR.QUOTA_EXCEEDED : classifyError(imageResult.error)
       })
 
       failedCount++
@@ -991,7 +983,7 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
       `).bind(imageResult.error || 'Unknown error', generationId).run()
 
       // Log failed generation
-      const isQuotaExceeded = imageResult.error?.toLowerCase().includes('quota');
+      const isQuotaExceeded = isQuotaError(imageResult.error);
       await logImageGeneration({
         env: c.env,
         userId: imageResult.userId ?? 1,
@@ -1005,14 +997,14 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
         referenceImageCount: referenceImages.length,
         status: isQuotaExceeded ? 'quota_exceeded' : 'failed',
         errorMessage: imageResult.error || 'Unknown error',
-        errorCode: isQuotaExceeded ? 'QUOTA_EXCEEDED' : 'GENERATION_FAILED'
+        errorCode: classifyError(imageResult.error)
       });
 
-      // ★ タイムアウトエラーの判定 → retryable=true で返す
-      const isTimeout = imageResult.error?.includes('TIMEOUT') || imageResult.error?.includes('AbortError') || imageResult.error?.includes('did not respond');
-      const isRateLimit = imageResult.error?.includes('429') || imageResult.error?.includes('RATE_LIMIT');
+      // ★ Phase 0-C: 構造化されたエラー分類
+      const errorCode = classifyError(imageResult.error);
+      const isTimeout = errorCode === IMAGE_GEN_ERROR.TIMEOUT;
+      const isRateLimit = errorCode === IMAGE_GEN_ERROR.RATE_LIMIT || errorCode === IMAGE_GEN_ERROR.QUOTA_EXCEEDED;
       const httpStatus = isTimeout ? 504 : (isRateLimit ? 429 : 500);
-      const errorCode = isTimeout ? 'GENERATION_TIMEOUT' : (isRateLimit ? 'RATE_LIMIT' : 'GENERATION_FAILED');
 
       return c.json({
         error: {

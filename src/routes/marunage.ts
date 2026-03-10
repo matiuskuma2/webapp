@@ -61,6 +61,7 @@ import {
   IMAGE_GEN_DELAY_MS,
   type GeminiReferenceImage,
 } from '../utils/gemini-image-client'
+import { classifyError, IMAGE_GEN_ERROR } from '../utils/error-codes'
 
 const marunage = new Hono<{ Bindings: Bindings }>()
 
@@ -2963,9 +2964,9 @@ marunage.post('/:projectId/advance', async (c) => {
               WHERE id = ?
             `).bind(errMsg, Date.now() - t0, geminiMs, genId).run()
 
-            const errCode = imageResult.error?.includes('TIMEOUT') ? 'TIMEOUT' : 'GENERATION_FAILED'
+            const errCode = classifyError(imageResult.error)
             const { finalStatus } = await failJob(c.env.DB, job.id, errCode, errMsg, job.retry_count, job.max_retries)
-            const metricType = imageResult.error?.includes('TIMEOUT') ? 'timeout' as const : 'error' as const
+            const metricType = errCode === IMAGE_GEN_ERROR.TIMEOUT ? 'timeout' as const : 'error' as const
             await recordProviderMetric(c.env.DB, 'gemini_image', metricType, geminiMs, GEMINI_IMAGE_MODEL)
 
             await logImageGenerationCost(c.env.DB, {
