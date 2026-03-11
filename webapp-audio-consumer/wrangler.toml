@@ -1,0 +1,45 @@
+name = "webapp-audio-consumer"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ============================================================
+# Queue Consumer configuration
+# ============================================================
+# This Worker receives messages from the AUDIO_QUEUE
+# and processes TTS generation → R2 upload → D1 update.
+#
+# Queue consumer has 15 minute wall time (vs waitUntil's 30s).
+# Ideal for bulk audio generation with 100+ utterances.
+# ============================================================
+
+[[queues.consumers]]
+queue = "webapp-audio-queue"
+max_batch_size = 5          # 5 messages per batch (each msg = 1 utterance)
+max_batch_timeout = 10      # Wait up to 10s to fill batch
+max_retries = 3             # Retry failed messages up to 3 times
+dead_letter_queue = "webapp-audio-dlq"  # Failed messages go here
+retry_delay = 30            # 30s between retries
+
+# Dead letter queue consumer (for monitoring/alerting)
+# [[queues.consumers]]
+# queue = "webapp-audio-dlq"
+# max_batch_size = 10
+# max_batch_timeout = 60
+
+# D1 Database - webapp と同じ DB を共有
+[[d1_databases]]
+binding = "DB"
+database_name = "webapp-production"
+database_id = "51860cd3-bfa8-4eab-8a11-aa230adee686"
+
+# R2 Bucket - webapp と同じバケットを共有
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "webapp-bucket"
+
+# Environment variables (set via wrangler secret):
+# - GOOGLE_TTS_API_KEY: Google Cloud TTS API key
+# - FISH_AUDIO_API_TOKEN: Fish Audio API token
+# - ELEVENLABS_API_KEY: ElevenLabs API key
+# - R2_PUBLIC_URL: Public URL prefix for R2 objects

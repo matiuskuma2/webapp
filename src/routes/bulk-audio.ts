@@ -1,30 +1,42 @@
 // src/routes/bulk-audio.ts
-// Step3-PR2: Bulk Audio Generation API
+// Step3-PR2 → Phase Q1: Bulk Audio Generation API (Queue Producer)
+//
 // SSOT: project_audio_jobs table tracks job state
 // 
+// Architecture change (Phase Q1):
+//   BEFORE: waitUntil() で全utteranceを逐次処理 → 30秒制限で途中終了
+//   AFTER:  Pages = producer (enqueue) → Cloudflare Queue → 別Worker = consumer (TTS実行)
+//
 // Design decisions (per user confirmation 2025-02-05):
 // - Unit: utterance-level generation (not scene-level)
 // - Failure handling: continue to end, collect all failures for final report
 // - Default mode: 'missing' (only generate for utterances without completed audio)
 // - Force regenerate: explicit opt-in only
+//
+// Queue message format (1 message = 1 utterance):
+//   { job_id, project_id, utterance_id, scene_id, scene_idx, text,
+//     role, character_key, provider, voice_id, voice_source, enqueued_at }
 
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import type { Bindings } from '../types/bindings';
 import { createErrorResponse } from '../utils/error-response';
-import { generateFishTTS } from '../utils/fish-audio';
-import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
-import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration'; // MP3 duration parser
 import {
   resolveVoiceForUtterance,
   parseProjectSettings,
   detectProvider,
-  getSampleRate,
   type VoiceResolution,
   type ProjectSettings,
 } from '../utils/voice-resolution';
 
-const bulkAudio = new Hono<{ Bindings: Bindings }>();
+// =============================================================================
+// Extend Bindings to include Queue producer
+// =============================================================================
+interface BulkAudioBindings extends Bindings {
+  AUDIO_QUEUE?: Queue;
+}
+
+const bulkAudio = new Hono<{ Bindings: BulkAudioBindings }>();
 
 // =============================================================================
 // Types
@@ -50,27 +62,35 @@ interface UtteranceForGeneration {
   audio_status: string | null;
 }
 
-interface ErrorDetail {
+interface AudioQueueMessage {
+  job_id: number;
+  project_id: number;
   utterance_id: number;
   scene_id: number;
-  error_message: string;
+  scene_idx: number;
+  text: string;
+  role: 'narration' | 'dialogue';
+  character_key: string | null;
+  provider: string;
+  voice_id: string;
+  voice_source: string;
+  enqueued_at: string;
 }
 
 // =============================================================================
 // ★ AUDIO-STALE: Stale job 自動回収（応急処置）
 // running/queued が一定時間以上更新されていない場合 → failed に遷移
 // 閾値はステータスで分離:
-//   - running: 5分（処理中断 = waitUntil 切断等の可能性が高い）
-//   - queued: 15分（処理待ちで長くなるケースを許容）
-// 本質対策（heartbeat / last_progress_at / worker-side finalize）は別途必要
+//   - running: 20分（Queue consumer は15分wall time → +5分バッファ）
+//   - queued: 30分（enqueue待ちで長くなるケースを許容）
 // =============================================================================
 
-const STALE_RUNNING_MINUTES = 5;
-const STALE_QUEUED_MINUTES = 15;
+const STALE_RUNNING_MINUTES = 20;  // Increased from 5 for Queue consumer (15min wall time)
+const STALE_QUEUED_MINUTES = 30;   // Increased from 15 for Queue batching delays
 
 async function recoverStaleJobs(db: D1Database, projectId: number): Promise<number> {
   try {
-    // running ジョブ: 5分超で回収
+    // running ジョブ: 20分超で回収
     const runningResult = await db.prepare(`
       UPDATE project_audio_jobs
       SET status = 'failed',
@@ -85,7 +105,7 @@ async function recoverStaleJobs(db: D1Database, projectId: number): Promise<numb
         AND updated_at < datetime('now', '-' || ? || ' minutes')
     `).bind(STALE_RUNNING_MINUTES, projectId, STALE_RUNNING_MINUTES).run();
 
-    // queued ジョブ: 15分超で回収（処理待ちの余裕を持たせる）
+    // queued ジョブ: 30分超で回収
     const queuedResult = await db.prepare(`
       UPDATE project_audio_jobs
       SET status = 'failed',
@@ -131,437 +151,17 @@ async function getSessionUser(db: D1Database, sessionCookie: string | undefined)
 }
 
 // =============================================================================
-// Voice resolution: imported from src/utils/voice-resolution.ts (SSOT)
-// Do NOT add local resolveVoice logic here.
-// =============================================================================
-
-// =============================================================================
-// Helper: Generate audio for single utterance (isolated, async)
-// =============================================================================
-
-async function generateSingleUtteranceAudio(
-  env: Bindings,
-  utterance: UtteranceForGeneration,
-  voice: VoiceResolution,
-  jobId: number
-): Promise<{ success: boolean; audioId?: number; error?: string }> {
-  const { provider, voiceId } = voice;
-  const format = 'mp3';
-  const sampleRate = provider === 'fish' ? 44100 : 24000;
-  
-  try {
-    // Create audio_generation record
-    const insert = await env.DB.prepare(`
-      INSERT INTO audio_generations
-        (scene_id, provider, voice_id, model, format, sample_rate, text, status, is_active)
-      VALUES
-        (?, ?, ?, NULL, ?, ?, ?, 'generating', 0)
-    `).bind(
-      utterance.scene_id,
-      provider,
-      voiceId,
-      format,
-      sampleRate,
-      utterance.text
-    ).run();
-    
-    const audioId = insert.meta.last_row_id as number;
-    
-    // Link utterance to audio_generation
-    await env.DB.prepare(`
-      UPDATE scene_utterances
-      SET audio_generation_id = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(audioId, utterance.id).run();
-    
-    // Generate audio
-    let bytes: Uint8Array;
-    
-    if (provider === 'google') {
-      const googleTtsKey = env.GOOGLE_TTS_API_KEY || env.GEMINI_API_KEY;
-      if (!googleTtsKey) {
-        throw new Error('GOOGLE_TTS_API_KEY is not set');
-      }
-      
-      const _bulkTtsAbort = new AbortController();
-      const _bulkTtsTimeout = setTimeout(() => _bulkTtsAbort.abort(), 60000); // 60s timeout
-      const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Goog-Api-Key': googleTtsKey,
-        },
-        body: JSON.stringify({
-          input: { text: utterance.text },
-          voice: {
-            languageCode: 'ja-JP',
-            name: voiceId,
-          },
-          audioConfig: {
-            audioEncoding: 'MP3',
-            sampleRateHertz: sampleRate,
-          },
-        }),
-        signal: _bulkTtsAbort.signal,
-      });
-      clearTimeout(_bulkTtsTimeout);
-      
-      if (!res.ok) {
-        const errorText = await res.text().catch(() => '');
-        throw new Error(`TTS API error: ${res.status} ${errorText}`);
-      }
-      
-      const data: any = await res.json();
-      const audioContent = data?.audioContent;
-      if (!audioContent) {
-        throw new Error('TTS API returned empty audioContent');
-      }
-      
-      const binaryString = atob(audioContent);
-      bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-    } else if (provider === 'fish') {
-      const fishApiToken = (env as any).FISH_AUDIO_API_TOKEN;
-      if (!fishApiToken) {
-        throw new Error('FISH_AUDIO_API_TOKEN is not configured');
-      }
-      
-      const referenceId = voiceId.replace(/^fish[-:]/, '');
-      const fishResult = await generateFishTTS(fishApiToken, {
-        text: utterance.text,
-        reference_id: referenceId,
-        format: 'mp3',
-        sample_rate: sampleRate,
-        mp3_bitrate: 128,
-      });
-      
-      bytes = new Uint8Array(fishResult.audio);
-    } else if (provider === 'elevenlabs') {
-      const elevenLabsApiKey = (env as any).ELEVENLABS_API_KEY;
-      if (!elevenLabsApiKey) {
-        throw new Error('ELEVENLABS_API_KEY is not configured');
-      }
-      
-      const resolvedVoiceId = resolveElevenLabsVoiceId(voiceId);
-      const model = (env as any).ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
-      
-      const elevenLabsResult = await generateElevenLabsTTS(elevenLabsApiKey, {
-        text: utterance.text,
-        voice_id: resolvedVoiceId,
-        model_id: model,
-        output_format: 'mp3_44100_128',
-      });
-      
-      if (!elevenLabsResult.success || !elevenLabsResult.audio) {
-        throw new Error(elevenLabsResult.error || 'ElevenLabs TTS failed');
-      }
-      
-      bytes = new Uint8Array(elevenLabsResult.audio);
-    } else {
-      throw new Error(`Unknown provider: ${provider}`);
-    }
-    
-    // Upload to R2
-    const timestamp = Date.now();
-    const r2Key = `audio/${utterance.project_id}/scene_${utterance.scene_idx}/utt_${utterance.id}_${audioId}_${timestamp}.mp3`;
-    
-    await env.R2.put(r2Key, bytes, {
-      httpMetadata: { contentType: 'audio/mpeg' },
-    });
-    
-    const r2Url = (env as any).R2_PUBLIC_URL 
-      ? `${(env as any).R2_PUBLIC_URL}/${r2Key}`
-      : `/${r2Key}`;
-    
-    // Calculate duration: MP3ヘッダーを解析して正確なdurationを取得
-    const bytesLength = bytes.length;
-    let estimatedDurationMs: number;
-    
-    const parsedDurationMs = getMp3Duration(bytes.buffer);
-    if (parsedDurationMs && parsedDurationMs > 0) {
-      estimatedDurationMs = parsedDurationMs;
-      console.log(`[BulkAudio Job ${jobId}] MP3 parsed duration: ${parsedDurationMs}ms (${(parsedDurationMs/1000).toFixed(2)}s)`);
-    } else {
-      // フォールバック: 64kbpsを仮定
-      const calculatedDurationMs = estimateMp3Duration(bytesLength, 64);
-      estimatedDurationMs = Math.max(2000, calculatedDurationMs);
-      console.log(`[BulkAudio Job ${jobId}] MP3 fallback duration: ${bytesLength} bytes @ 64kbps = ${calculatedDurationMs}ms`);
-    }
-    
-    // Update audio_generation to completed
-    await env.DB.prepare(`
-      UPDATE audio_generations
-      SET status = 'completed', r2_key = ?, r2_url = ?, duration_ms = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(r2Key, r2Url, estimatedDurationMs, audioId).run();
-    
-    // Update utterance with duration
-    await env.DB.prepare(`
-      UPDATE scene_utterances
-      SET duration_ms = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(estimatedDurationMs, utterance.id).run();
-    
-    console.log(`[BulkAudio Job ${jobId}] Utterance ${utterance.id} completed: ${r2Url}`);
-    
-    return { success: true, audioId };
-    
-  } catch (error) {
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    console.error(`[BulkAudio Job ${jobId}] Utterance ${utterance.id} failed:`, error);
-    
-    // Mark any created audio_generation as failed
-    await env.DB.prepare(`
-      UPDATE audio_generations
-      SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE scene_id = ? AND status = 'generating'
-    `).bind(errorMsg, utterance.scene_id).run();
-    
-    return { success: false, error: errorMsg };
-  }
-}
-
-// =============================================================================
-// Helper: Run bulk generation job (in waitUntil)
-// =============================================================================
-
-async function runBulkGenerationJob(
-  env: Bindings,
-  jobId: number,
-  projectId: number,
-  mode: JobMode,
-  forceRegenerate: boolean,
-  narrationProvider: string,
-  narrationVoiceId: string
-): Promise<void> {
-  console.log(`[BulkAudio] Starting job ${jobId} for project ${projectId}, mode=${mode}, force=${forceRegenerate}`);
-  
-  const errorDetails: ErrorDetail[] = [];
-  let processedCount = 0;
-  let successCount = 0;
-  let failedCount = 0;
-  let skippedCount = 0;
-  
-  try {
-    // Update job status to running
-    await env.DB.prepare(`
-      UPDATE project_audio_jobs
-      SET status = 'running', started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(jobId).run();
-    
-    // Get project settings for voice resolution
-    const project = await env.DB.prepare(`
-      SELECT settings_json FROM projects WHERE id = ?
-    `).bind(projectId).first<{ settings_json: string | null }>();
-    
-    const projectSettings: ProjectSettings | null = parseProjectSettings(project?.settings_json);
-    if (!projectSettings && project?.settings_json) {
-      console.warn(`[BulkAudio Job ${jobId}] Failed to parse project settings`);
-    }
-    
-    // Build query based on mode
-    let filterClause = '';
-    if (mode === 'missing') {
-      filterClause = 'AND (u.audio_generation_id IS NULL OR ag.status IS NULL OR ag.status != \'completed\')';
-    } else if (mode === 'pending') {
-      filterClause = 'AND (ag.status IS NULL OR ag.status IN (\'failed\', \'generating\'))';
-    }
-    // mode === 'all' has no filter
-    
-    if (forceRegenerate) {
-      filterClause = ''; // Regenerate all regardless of status
-    }
-    
-    // Get utterances to generate
-    const { results: utterances } = await env.DB.prepare(`
-      SELECT 
-        u.id,
-        u.scene_id,
-        s.idx as scene_idx,
-        s.project_id,
-        u.role,
-        u.character_key,
-        u.text,
-        u.audio_generation_id,
-        ag.status as audio_status
-      FROM scene_utterances u
-      JOIN scenes s ON u.scene_id = s.id
-      LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
-      WHERE s.project_id = ?
-        AND s.is_hidden = 0
-        AND u.text IS NOT NULL 
-        AND u.text != ''
-        ${filterClause}
-      ORDER BY s.idx ASC, u.order_no ASC
-    `).bind(projectId).all<UtteranceForGeneration>();
-    
-    const totalUtterances = utterances?.length || 0;
-    console.log(`[BulkAudio Job ${jobId}] Found ${totalUtterances} utterances to process`);
-    
-    // Update total count
-    await env.DB.prepare(`
-      UPDATE project_audio_jobs
-      SET total_utterances = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(totalUtterances, jobId).run();
-    
-    if (totalUtterances === 0) {
-      // No work to do
-      await env.DB.prepare(`
-        UPDATE project_audio_jobs
-        SET status = 'completed', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(jobId).run();
-      
-      console.log(`[BulkAudio Job ${jobId}] No utterances to generate, marking completed`);
-      return;
-    }
-    
-    // Process utterances with controlled concurrency (2 parallel)
-    const CONCURRENCY = 2;
-    
-    for (let i = 0; i < totalUtterances; i += CONCURRENCY) {
-      // Check if job was canceled
-      const jobCheck = await env.DB.prepare(`
-        SELECT status FROM project_audio_jobs WHERE id = ?
-      `).bind(jobId).first<{ status: JobStatus }>();
-      
-      if (jobCheck?.status === 'canceled') {
-        console.log(`[BulkAudio Job ${jobId}] Job canceled, stopping`);
-        break;
-      }
-      
-      // Get batch of utterances
-      const batch = utterances.slice(i, i + CONCURRENCY);
-      
-      // Process batch in parallel
-      const results = await Promise.all(
-        batch.map(async (utterance) => {
-          // Skip if already completed (for 'missing' mode safety)
-          if (!forceRegenerate && utterance.audio_status === 'completed') {
-            return { utteranceId: utterance.id, skipped: true };
-          }
-          
-          // Resolve voice
-          const voice = await resolveVoiceForUtterance(env.DB, utterance, projectSettings);
-          
-          // Generate audio
-          const result = await generateSingleUtteranceAudio(env, utterance, voice, jobId);
-          
-          return {
-            utteranceId: utterance.id,
-            sceneId: utterance.scene_id,
-            success: result.success,
-            error: result.error,
-            skipped: false
-          };
-        })
-      );
-      
-      // Tally results
-      for (const result of results) {
-        processedCount++;
-        
-        if (result.skipped) {
-          skippedCount++;
-        } else if (result.success) {
-          successCount++;
-        } else {
-          failedCount++;
-          if (result.error) {
-            errorDetails.push({
-              utterance_id: result.utteranceId,
-              scene_id: result.sceneId!,
-              error_message: result.error
-            });
-          }
-        }
-      }
-      
-      // Update progress
-      await env.DB.prepare(`
-        UPDATE project_audio_jobs
-        SET processed_utterances = ?, success_count = ?, failed_count = ?, skipped_count = ?,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-      `).bind(processedCount, successCount, failedCount, skippedCount, jobId).run();
-    }
-    
-    // Determine final status
-    const finalStatus: JobStatus = failedCount === totalUtterances && totalUtterances > 0 
-      ? 'failed' 
-      : 'completed';
-    
-    // Save final state
-    await env.DB.prepare(`
-      UPDATE project_audio_jobs
-      SET status = ?, 
-          processed_utterances = ?, 
-          success_count = ?, 
-          failed_count = ?, 
-          skipped_count = ?,
-          error_details_json = ?,
-          completed_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(
-      finalStatus,
-      processedCount,
-      successCount,
-      failedCount,
-      skippedCount,
-      errorDetails.length > 0 ? JSON.stringify(errorDetails.slice(0, 50)) : null, // Limit stored errors
-      jobId
-    ).run();
-    
-    console.log(`[BulkAudio Job ${jobId}] Completed: status=${finalStatus}, success=${successCount}, failed=${failedCount}, skipped=${skippedCount}`);
-    
-    // Step3-PR4: Audit log for bulk audio job completion
-    try {
-      await env.DB.prepare(`
-        INSERT INTO api_usage_logs (user_id, project_id, api_type, provider, model, estimated_cost_usd, metadata_json, created_at)
-        VALUES (NULL, ?, 'bulk_audio_generation', 'internal', ?, 0, ?, CURRENT_TIMESTAMP)
-      `).bind(
-        projectId,
-        finalStatus,
-        JSON.stringify({
-          job_id: jobId,
-          mode: mode,
-          force_regenerate: forceRegenerate,
-          total_utterances: processedCount,
-          success_count: successCount,
-          failed_count: failedCount,
-          skipped_count: skippedCount,
-          narration_provider: narrationProvider,
-          narration_voice_id: narrationVoiceId,
-        })
-      ).run();
-    } catch (logError) {
-      console.warn(`[BulkAudio Job ${jobId}] Failed to log audit:`, logError);
-    }
-    
-  } catch (error) {
-    console.error(`[BulkAudio Job ${jobId}] Critical error:`, error);
-    
-    const errorMsg = error instanceof Error ? error.message : String(error);
-    
-    await env.DB.prepare(`
-      UPDATE project_audio_jobs
-      SET status = 'failed', 
-          last_error = ?,
-          completed_at = CURRENT_TIMESTAMP,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(errorMsg, jobId).run();
-  }
-}
-
-// =============================================================================
 // POST /api/projects/:projectId/audio/bulk-generate
-// Start a new bulk audio generation job
+// Phase Q1: Queue-based bulk audio generation
+//
+// Flow:
+//   1. Create project_audio_jobs record (status=queued)
+//   2. Resolve voice for each utterance
+//   3. Enqueue messages to AUDIO_QUEUE (1 message = 1 utterance)
+//   4. Set job status to 'running'
+//   5. Return 202 immediately
+//
+// The consumer Worker processes messages and updates progress.
 // =============================================================================
 
 bulkAudio.post('/projects/:projectId/audio/bulk-generate', async (c) => {
@@ -632,38 +232,167 @@ bulkAudio.post('/projects/:projectId/audio/bulk-generate', async (c) => {
       }
     }
     
+    // Get project settings for voice resolution
+    const projectSettings: ProjectSettings | null = parseProjectSettings(project.settings_json);
+    
+    // Build query based on mode
+    let filterClause = '';
+    if (mode === 'missing') {
+      filterClause = 'AND (u.audio_generation_id IS NULL OR ag.status IS NULL OR ag.status != \'completed\')';
+    } else if (mode === 'pending') {
+      filterClause = 'AND (ag.status IS NULL OR ag.status IN (\'failed\', \'generating\'))';
+    }
+    
+    if (forceRegenerate) {
+      filterClause = '';
+    }
+    
+    // Get utterances to generate
+    const { results: utterances } = await c.env.DB.prepare(`
+      SELECT 
+        u.id,
+        u.scene_id,
+        s.idx as scene_idx,
+        s.project_id,
+        u.role,
+        u.character_key,
+        u.text,
+        u.audio_generation_id,
+        ag.status as audio_status
+      FROM scene_utterances u
+      JOIN scenes s ON u.scene_id = s.id
+      LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+      WHERE s.project_id = ?
+        AND s.is_hidden = 0
+        AND u.text IS NOT NULL 
+        AND u.text != ''
+        ${filterClause}
+      ORDER BY s.idx ASC, u.order_no ASC
+    `).bind(projectId).all<UtteranceForGeneration>();
+    
+    const totalUtterances = utterances?.length || 0;
+    
+    if (totalUtterances === 0) {
+      return c.json({
+        success: true,
+        job_id: null,
+        project_id: projectId,
+        mode,
+        force_regenerate: forceRegenerate,
+        status: 'completed',
+        total_utterances: 0,
+        message: 'No utterances to generate audio for'
+      }, 200);
+    }
+    
     // Create job record
     const insert = await c.env.DB.prepare(`
       INSERT INTO project_audio_jobs (
         project_id, mode, force_regenerate,
         narration_provider, narration_voice_id,
-        status, started_by_user_id
-      ) VALUES (?, ?, ?, ?, ?, 'queued', ?)
+        status, total_utterances, started_by_user_id
+      ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)
     `).bind(
       projectId,
       mode,
       forceRegenerate ? 1 : 0,
       narrationProvider,
       narrationVoiceId,
+      totalUtterances,
       user?.id || null
     ).run();
     
     const jobId = insert.meta.last_row_id as number;
     
-    console.log(`[BulkAudio] Created job ${jobId} for project ${projectId}: mode=${mode}, force=${forceRegenerate}`);
+    console.log(`[BulkAudio:Producer] Created job ${jobId} for project ${projectId}: mode=${mode}, force=${forceRegenerate}, utterances=${totalUtterances}`);
     
-    // Start job execution in background
-    c.executionCtx.waitUntil(
-      runBulkGenerationJob(
-        c.env,
-        jobId,
-        projectId,
+    // ================================================================
+    // Phase Q1: Enqueue to Cloudflare Queue
+    // ================================================================
+    
+    // Check if Queue binding is available
+    if (!c.env.AUDIO_QUEUE) {
+      // Fallback: use legacy waitUntil approach
+      // This allows the code to work before Queue is deployed
+      console.warn(`[BulkAudio:Producer] AUDIO_QUEUE binding not available, falling back to waitUntil`);
+      
+      // Import and use legacy approach
+      await c.env.DB.prepare(`
+        UPDATE project_audio_jobs SET status = 'running', started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+      `).bind(jobId).run();
+      
+      c.executionCtx.waitUntil(
+        runLegacyBulkGenerationJob(c.env, jobId, projectId, mode, forceRegenerate, utterances, projectSettings)
+      );
+      
+      return c.json({
+        success: true,
+        job_id: jobId,
+        project_id: projectId,
         mode,
-        forceRegenerate,
-        narrationProvider,
-        narrationVoiceId
-      )
-    );
+        force_regenerate: forceRegenerate,
+        status: 'running',
+        total_utterances: totalUtterances,
+        processor: 'waitUntil_fallback',
+        message: 'Bulk audio generation started (legacy mode — Queue not yet deployed)'
+      }, 202);
+    }
+    
+    // Resolve voices for all utterances and build queue messages
+    const messages: { body: AudioQueueMessage }[] = [];
+    const enqueueTime = new Date().toISOString();
+    
+    for (const utt of utterances) {
+      // Skip already completed (safety check for 'missing' mode)
+      if (!forceRegenerate && utt.audio_status === 'completed') {
+        continue;
+      }
+      
+      // Resolve voice
+      const voice: VoiceResolution = await resolveVoiceForUtterance(c.env.DB, utt, projectSettings);
+      
+      messages.push({
+        body: {
+          job_id: jobId,
+          project_id: projectId,
+          utterance_id: utt.id,
+          scene_id: utt.scene_id,
+          scene_idx: utt.scene_idx,
+          text: utt.text,
+          role: utt.role,
+          character_key: utt.character_key,
+          provider: voice.provider,
+          voice_id: voice.voiceId,
+          voice_source: voice.source,
+          enqueued_at: enqueueTime,
+        }
+      });
+    }
+    
+    console.log(`[BulkAudio:Producer] Resolved ${messages.length} utterance messages for queue`);
+    
+    // Enqueue in batches of 100 (Cloudflare Queue sendBatch limit)
+    const QUEUE_BATCH_SIZE = 100;
+    let enqueuedCount = 0;
+    
+    for (let i = 0; i < messages.length; i += QUEUE_BATCH_SIZE) {
+      const batch = messages.slice(i, i + QUEUE_BATCH_SIZE);
+      await c.env.AUDIO_QUEUE.sendBatch(batch);
+      enqueuedCount += batch.length;
+      console.log(`[BulkAudio:Producer] Enqueued batch ${Math.floor(i / QUEUE_BATCH_SIZE) + 1}: ${batch.length} messages (total: ${enqueuedCount})`);
+    }
+    
+    // Update job status to running (consumer will process)
+    await c.env.DB.prepare(`
+      UPDATE project_audio_jobs
+      SET status = 'running',
+          total_utterances = ?,
+          started_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(enqueuedCount, jobId).run();
+    
+    console.log(`[BulkAudio:Producer] Job ${jobId} → running (${enqueuedCount} messages enqueued to AUDIO_QUEUE)`);
     
     return c.json({
       success: true,
@@ -671,8 +400,10 @@ bulkAudio.post('/projects/:projectId/audio/bulk-generate', async (c) => {
       project_id: projectId,
       mode,
       force_regenerate: forceRegenerate,
-      status: 'queued',
-      message: 'Bulk audio generation job started'
+      status: 'running',
+      total_utterances: enqueuedCount,
+      processor: 'queue_consumer',
+      message: `Bulk audio generation started: ${enqueuedCount} utterances enqueued`
     }, 202);
     
   } catch (error) {
@@ -684,11 +415,264 @@ bulkAudio.post('/projects/:projectId/audio/bulk-generate', async (c) => {
         code: 'INTERNAL_ERROR',
         message: 'Failed to start bulk audio generation',
         details: errorMessage,
-        stack: process.env.NODE_ENV === 'development' ? errorStack : undefined
       }
     }, 500);
   }
 });
+
+// =============================================================================
+// Legacy waitUntil fallback (used when AUDIO_QUEUE binding is not available)
+// Will be removed after Queue is fully deployed and verified.
+// =============================================================================
+
+import { generateFishTTS } from '../utils/fish-audio';
+import { generateElevenLabsTTS, resolveElevenLabsVoiceId } from '../utils/elevenlabs';
+import { getMp3Duration, estimateMp3Duration } from '../utils/mp3-duration';
+
+async function runLegacyBulkGenerationJob(
+  env: Bindings,
+  jobId: number,
+  projectId: number,
+  mode: JobMode,
+  forceRegenerate: boolean,
+  utterances: UtteranceForGeneration[],
+  projectSettings: ProjectSettings | null
+): Promise<void> {
+  console.log(`[BulkAudio:Legacy] Starting legacy job ${jobId} for project ${projectId}`);
+  
+  let processedCount = 0;
+  let successCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
+  const errorDetails: { utterance_id: number; scene_id: number; error_message: string }[] = [];
+  
+  try {
+    const totalUtterances = utterances.length;
+    const CONCURRENCY = 2;
+    
+    for (let i = 0; i < totalUtterances; i += CONCURRENCY) {
+      // Check if job was canceled
+      const jobCheck = await env.DB.prepare(
+        `SELECT status FROM project_audio_jobs WHERE id = ?`
+      ).bind(jobId).first<{ status: JobStatus }>();
+      
+      if (jobCheck?.status === 'canceled') {
+        console.log(`[BulkAudio:Legacy] Job ${jobId} canceled, stopping`);
+        break;
+      }
+      
+      const batch = utterances.slice(i, i + CONCURRENCY);
+      
+      const results = await Promise.all(
+        batch.map(async (utterance) => {
+          if (!forceRegenerate && utterance.audio_status === 'completed') {
+            return { utteranceId: utterance.id, skipped: true, success: false, error: undefined, sceneId: utterance.scene_id };
+          }
+          
+          const voice = await resolveVoiceForUtterance(env.DB, utterance, projectSettings);
+          const result = await generateSingleUtteranceAudioLegacy(env, utterance, voice, jobId);
+          
+          return {
+            utteranceId: utterance.id,
+            sceneId: utterance.scene_id,
+            success: result.success,
+            error: result.error,
+            skipped: false
+          };
+        })
+      );
+      
+      for (const result of results) {
+        processedCount++;
+        if (result.skipped) {
+          skippedCount++;
+        } else if (result.success) {
+          successCount++;
+        } else {
+          failedCount++;
+          if (result.error) {
+            errorDetails.push({
+              utterance_id: result.utteranceId,
+              scene_id: result.sceneId!,
+              error_message: result.error
+            });
+          }
+        }
+      }
+      
+      // Update progress
+      await env.DB.prepare(`
+        UPDATE project_audio_jobs
+        SET processed_utterances = ?, success_count = ?, failed_count = ?, skipped_count = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(processedCount, successCount, failedCount, skippedCount, jobId).run();
+    }
+    
+    const finalStatus: JobStatus = failedCount === utterances.length && utterances.length > 0 
+      ? 'failed' 
+      : 'completed';
+    
+    await env.DB.prepare(`
+      UPDATE project_audio_jobs
+      SET status = ?, processed_utterances = ?, success_count = ?, failed_count = ?, skipped_count = ?,
+          error_details_json = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(
+      finalStatus, processedCount, successCount, failedCount, skippedCount,
+      errorDetails.length > 0 ? JSON.stringify(errorDetails.slice(0, 50)) : null,
+      jobId
+    ).run();
+    
+    console.log(`[BulkAudio:Legacy] Job ${jobId} completed: status=${finalStatus}, success=${successCount}, failed=${failedCount}`);
+    
+  } catch (error) {
+    console.error(`[BulkAudio:Legacy] Job ${jobId} critical error:`, error);
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    await env.DB.prepare(`
+      UPDATE project_audio_jobs
+      SET status = 'failed', last_error = ?, completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(errorMsg, jobId).run();
+  }
+}
+
+async function generateSingleUtteranceAudioLegacy(
+  env: Bindings,
+  utterance: UtteranceForGeneration,
+  voice: VoiceResolution,
+  jobId: number
+): Promise<{ success: boolean; audioId?: number; error?: string }> {
+  const { provider, voiceId } = voice;
+  const format = 'mp3';
+  const sampleRate = provider === 'fish' ? 44100 : 24000;
+  
+  try {
+    const insert = await env.DB.prepare(`
+      INSERT INTO audio_generations
+        (scene_id, provider, voice_id, model, format, sample_rate, text, status, is_active)
+      VALUES (?, ?, ?, NULL, ?, ?, ?, 'generating', 0)
+    `).bind(utterance.scene_id, provider, voiceId, format, sampleRate, utterance.text).run();
+    
+    const audioId = insert.meta.last_row_id as number;
+    
+    await env.DB.prepare(`
+      UPDATE scene_utterances SET audio_generation_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(audioId, utterance.id).run();
+    
+    let bytes: Uint8Array;
+    
+    if (provider === 'google') {
+      const googleTtsKey = env.GOOGLE_TTS_API_KEY || env.GEMINI_API_KEY;
+      if (!googleTtsKey) throw new Error('GOOGLE_TTS_API_KEY is not set');
+      
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 60000);
+      const res = await fetch('https://texttospeech.googleapis.com/v1/text:synthesize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': googleTtsKey },
+        body: JSON.stringify({
+          input: { text: utterance.text },
+          voice: { languageCode: 'ja-JP', name: voiceId },
+          audioConfig: { audioEncoding: 'MP3', sampleRateHertz: sampleRate },
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      
+      if (!res.ok) {
+        const errorText = await res.text().catch(() => '');
+        throw new Error(`TTS API error: ${res.status} ${errorText}`);
+      }
+      
+      const data: any = await res.json();
+      const audioContent = data?.audioContent;
+      if (!audioContent) throw new Error('TTS API returned empty audioContent');
+      
+      const binaryString = atob(audioContent);
+      bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+    } else if (provider === 'fish') {
+      const fishApiToken = (env as any).FISH_AUDIO_API_TOKEN;
+      if (!fishApiToken) throw new Error('FISH_AUDIO_API_TOKEN is not configured');
+      
+      const referenceId = voiceId.replace(/^fish[-:]/, '');
+      const fishResult = await generateFishTTS(fishApiToken, {
+        text: utterance.text,
+        reference_id: referenceId,
+        format: 'mp3',
+        sample_rate: sampleRate,
+        mp3_bitrate: 128,
+      });
+      bytes = new Uint8Array(fishResult.audio);
+    } else if (provider === 'elevenlabs') {
+      const elevenLabsApiKey = (env as any).ELEVENLABS_API_KEY;
+      if (!elevenLabsApiKey) throw new Error('ELEVENLABS_API_KEY is not configured');
+      
+      const resolvedVoiceId = resolveElevenLabsVoiceId(voiceId);
+      const model = (env as any).ELEVENLABS_MODEL_ID || 'eleven_multilingual_v2';
+      
+      const elevenLabsResult = await generateElevenLabsTTS(elevenLabsApiKey, {
+        text: utterance.text,
+        voice_id: resolvedVoiceId,
+        model_id: model,
+        output_format: 'mp3_44100_128',
+      });
+      
+      if (!elevenLabsResult.success || !elevenLabsResult.audio) {
+        throw new Error(elevenLabsResult.error || 'ElevenLabs TTS failed');
+      }
+      bytes = new Uint8Array(elevenLabsResult.audio);
+    } else {
+      throw new Error(`Unknown provider: ${provider}`);
+    }
+    
+    const timestamp = Date.now();
+    const r2Key = `audio/${utterance.project_id}/scene_${utterance.scene_idx}/utt_${utterance.id}_${audioId}_${timestamp}.mp3`;
+    
+    await env.R2.put(r2Key, bytes, { httpMetadata: { contentType: 'audio/mpeg' } });
+    
+    const r2Url = (env as any).R2_PUBLIC_URL 
+      ? `${(env as any).R2_PUBLIC_URL}/${r2Key}`
+      : `/${r2Key}`;
+    
+    const bytesLength = bytes.length;
+    let estimatedDurationMs: number;
+    
+    const parsedDurationMs = getMp3Duration(bytes.buffer);
+    if (parsedDurationMs && parsedDurationMs > 0) {
+      estimatedDurationMs = parsedDurationMs;
+    } else {
+      estimatedDurationMs = Math.max(2000, estimateMp3Duration(bytesLength, 64));
+    }
+    
+    await env.DB.prepare(`
+      UPDATE audio_generations
+      SET status = 'completed', r2_key = ?, r2_url = ?, duration_ms = ?, is_active = 1, updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).bind(r2Key, r2Url, estimatedDurationMs, audioId).run();
+    
+    await env.DB.prepare(`
+      UPDATE scene_utterances SET duration_ms = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+    `).bind(estimatedDurationMs, utterance.id).run();
+    
+    return { success: true, audioId };
+    
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[BulkAudio:Legacy] Utterance ${utterance.id} failed:`, error);
+    
+    await env.DB.prepare(`
+      UPDATE audio_generations
+      SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE scene_id = ? AND status = 'generating'
+    `).bind(errorMsg, utterance.scene_id).run();
+    
+    return { success: false, error: errorMsg };
+  }
+}
 
 // =============================================================================
 // GET /api/projects/:projectId/audio/bulk-status
@@ -727,7 +711,7 @@ bulkAudio.get('/projects/:projectId/audio/bulk-status', async (c) => {
     }
     
     // Parse error details if present
-    let errorDetails: ErrorDetail[] = [];
+    let errorDetails: { utterance_id: number; scene_id: number; error_message: string }[] = [];
     if (job.error_details_json) {
       try {
         errorDetails = JSON.parse(job.error_details_json);
@@ -812,6 +796,7 @@ bulkAudio.post('/projects/:projectId/audio/bulk-cancel', async (c) => {
     }
     
     // Mark as canceled
+    // Note: Queue messages already in-flight will check job status before processing
     await c.env.DB.prepare(`
       UPDATE project_audio_jobs
       SET status = 'canceled', completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
@@ -823,7 +808,7 @@ bulkAudio.post('/projects/:projectId/audio/bulk-cancel', async (c) => {
     return c.json({
       success: true,
       job_id: activeJob.id,
-      message: 'Bulk audio job canceled'
+      message: 'Bulk audio job canceled. In-flight messages will be skipped by the consumer.'
     });
     
   } catch (error) {
@@ -895,5 +880,4 @@ bulkAudio.get('/projects/:projectId/audio/bulk-history', async (c) => {
   }
 });
 
-export { runBulkGenerationJob };
 export default bulkAudio;

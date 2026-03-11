@@ -1,6 +1,9 @@
 export type Bindings = {
   DB: D1Database;
   R2: R2Bucket;
+  // Queue Producer (Phase Q1: Bulk Audio Queue)
+  // Optional — falls back to waitUntil when not configured
+  AUDIO_QUEUE?: Queue;
   OPENAI_API_KEY: string;
   GEMINI_API_KEY: string;
   GOOGLE_TTS_API_KEY: string;
