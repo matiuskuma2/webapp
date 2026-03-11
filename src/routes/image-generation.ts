@@ -1063,8 +1063,15 @@ imageGeneration.get('/image-generations/:id/status', async (c) => {
     })
 
   } catch (error) {
-    console.error('Error in image-generation status endpoint:', error)
-    return c.json({ error: { code: IMAGE_GEN_ERROR.INTERNAL_ERROR, message: 'Failed to get generation status' } }, 500)
+    // ★ IMG-LOG / POLL-FIX: 500原因の詳細をサーバーログに記録
+    const errMsg = error instanceof Error ? error.message : String(error)
+    const errName = error instanceof Error ? error.name : 'Unknown'
+    const errStack = error instanceof Error ? (error.stack || '').substring(0, 500) : ''
+    const genId = c.req.param('id')
+    console.error(`[Image Gen Status 500] gen=${genId} type=${errName} msg=${errMsg}`)
+    console.error(`[Image Gen Status 500] stack=${errStack}`)
+    // レスポンスには error_type のみ（スタック情報は返さない — IMG-LOG方針準拠）
+    return c.json({ error: { code: IMAGE_GEN_ERROR.INTERNAL_ERROR, message: 'Failed to get generation status', error_type: errName } }, 500)
   }
 })
 

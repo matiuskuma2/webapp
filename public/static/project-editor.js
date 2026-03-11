@@ -8072,11 +8072,14 @@ function pollSceneImageGeneration(sceneId) {
 function pollImageGenerationById(sceneId, generationId) {
   const POLL_INTERVAL_MS = 3000; // 3秒間隔
   const MAX_POLL_DURATION_MS = 300000; // 最大5分
+  // ★ POLL-FIX: 連続エラー上限 — 500が連続で返る場合のポーリング停止閾値
+  const MAX_CONSECUTIVE_ERRORS = 5;
   
   // Start watching if not already
   startGenerationWatch(sceneId);
   
   const pollStartTime = Date.now();
+  let consecutiveErrors = 0; // ★ POLL-FIX: 連続エラーカウンター
   
   const timerId = setInterval(async () => {
     try {
@@ -8095,6 +8098,9 @@ function pollImageGenerationById(sceneId, generationId) {
       // ★ Generation ID ベースで直接ステータスを取得
       const response = await axios.get(`${API_BASE}/image-generations/${generationId}/status`);
       const data = response.data;
+      
+      // ★ POLL-FIX: 成功応答でカウンターリセット
+      consecutiveErrors = 0;
       
       console.log(`[Poll-ById] Gen #${generationId} scene ${sceneId}: status=${data.status}, progress=${data.progress_pct}%, elapsed=${Math.round(elapsedSec)}s`);
       
@@ -8166,8 +8172,36 @@ function pollImageGenerationById(sceneId, generationId) {
       }
       
     } catch (error) {
-      // ★ ネットワークエラーではポーリングを停止しない
-      console.warn(`[Poll-ById] Transient error for gen #${generationId}:`, error?.message || error);
+      consecutiveErrors++;
+      const httpStatus = error?.response?.status;
+      const elapsedMs = Date.now() - pollStartTime;
+      
+      console.warn(`[Poll-ById] Error for gen #${generationId}: HTTP ${httpStatus || 'N/A'}, consecutive=${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}, elapsed=${Math.round(elapsedMs/1000)}s`, error?.message || error);
+      
+      // ★ POLL-FIX: 連続500エラーが上限を超えたらポーリング停止
+      if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+        clearInterval(timerId);
+        console.error(`[Poll-ById] Gen #${generationId} scene ${sceneId}: ${MAX_CONSECUTIVE_ERRORS} consecutive errors — stopping poll`);
+        
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        
+        showToast(`画像生成でサーバーエラーが発生しました (Gen #${generationId})。ページをリロードして再生成してください`, 'error');
+        await updateSingleSceneCard(sceneId);
+        return;
+      }
+      
+      // ★ POLL-FIX: catch内でもタイムアウトを評価（以前はスキップされていた）
+      if (elapsedMs > MAX_POLL_DURATION_MS) {
+        clearInterval(timerId);
+        console.warn(`[Poll-ById] Gen #${generationId} timeout (in error handler) after ${Math.round(elapsedMs/1000)}s`);
+        
+        stopGenerationWatch(sceneId);
+        if (window.sceneProcessing) window.sceneProcessing[sceneId] = false;
+        showToast('画像生成に時間がかかっています。ページをリロードしてください', 'warning');
+        await updateSingleSceneCard(sceneId);
+        return;
+      }
     }
   }, POLL_INTERVAL_MS);
   
