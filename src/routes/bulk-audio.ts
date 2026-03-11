@@ -57,34 +57,56 @@ interface ErrorDetail {
 }
 
 // =============================================================================
-// ★ AUDIO-STALE: Stale job 自動回収
-// running/queued が STALE_JOB_MINUTES 分以上更新されていない場合 → failed に遷移
-// video_builds の cleanup-stuck-builds.ts と同等の機構
+// ★ AUDIO-STALE: Stale job 自動回収（応急処置）
+// running/queued が一定時間以上更新されていない場合 → failed に遷移
+// 閾値はステータスで分離:
+//   - running: 5分（処理中断 = waitUntil 切断等の可能性が高い）
+//   - queued: 15分（処理待ちで長くなるケースを許容）
+// 本質対策（heartbeat / last_progress_at / worker-side finalize）は別途必要
 // =============================================================================
 
-const STALE_JOB_MINUTES = 5;
+const STALE_RUNNING_MINUTES = 5;
+const STALE_QUEUED_MINUTES = 15;
 
 async function recoverStaleJobs(db: D1Database, projectId: number): Promise<number> {
   try {
-    const result = await db.prepare(`
+    // running ジョブ: 5分超で回収
+    const runningResult = await db.prepare(`
       UPDATE project_audio_jobs
       SET status = 'failed',
           error_details_json = json_object(
             'reason', 'STALE_JOB_RECOVERY',
-            'message', 'Job was stuck in running/queued state for over ' || ? || ' minutes and was automatically marked as failed'
+            'message', 'Job was stuck in running state for over ' || ? || ' minutes and was automatically marked as failed'
           ),
           completed_at = CURRENT_TIMESTAMP,
           updated_at = CURRENT_TIMESTAMP
       WHERE project_id = ?
-        AND status IN ('queued', 'running')
+        AND status = 'running'
         AND updated_at < datetime('now', '-' || ? || ' minutes')
-    `).bind(STALE_JOB_MINUTES, projectId, STALE_JOB_MINUTES).run();
+    `).bind(STALE_RUNNING_MINUTES, projectId, STALE_RUNNING_MINUTES).run();
 
-    const recovered = result.meta.changes ?? 0;
-    if (recovered > 0) {
-      console.log(`[BulkAudio:STALE] Recovered ${recovered} stale job(s) for project ${projectId} (threshold: ${STALE_JOB_MINUTES}min)`);
+    // queued ジョブ: 15分超で回収（処理待ちの余裕を持たせる）
+    const queuedResult = await db.prepare(`
+      UPDATE project_audio_jobs
+      SET status = 'failed',
+          error_details_json = json_object(
+            'reason', 'STALE_JOB_RECOVERY',
+            'message', 'Job was stuck in queued state for over ' || ? || ' minutes and was automatically marked as failed'
+          ),
+          completed_at = CURRENT_TIMESTAMP,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE project_id = ?
+        AND status = 'queued'
+        AND updated_at < datetime('now', '-' || ? || ' minutes')
+    `).bind(STALE_QUEUED_MINUTES, projectId, STALE_QUEUED_MINUTES).run();
+
+    const recoveredRunning = runningResult.meta.changes ?? 0;
+    const recoveredQueued = queuedResult.meta.changes ?? 0;
+    const totalRecovered = recoveredRunning + recoveredQueued;
+    if (totalRecovered > 0) {
+      console.log(`[BulkAudio:STALE] Recovered ${totalRecovered} stale job(s) for project ${projectId} (running: ${recoveredRunning} @${STALE_RUNNING_MINUTES}min, queued: ${recoveredQueued} @${STALE_QUEUED_MINUTES}min)`);
     }
-    return recovered;
+    return totalRecovered;
   } catch (e) {
     console.warn('[BulkAudio:STALE] Recovery failed:', e);
     return 0;

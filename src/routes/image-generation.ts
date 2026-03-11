@@ -1200,21 +1200,23 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     }, 200)
 
   } catch (error) {
-    // ★ IMG-LOG: エラー詳細を可視化（500 の原因特定用）
+    // ★ IMG-LOG: エラー詳細を可視化（原因観測強化 — 解消ではなく次の再現時に原因を取るための計測）
     const errMsg = error instanceof Error ? error.message : String(error)
     const errStack = error instanceof Error ? error.stack : undefined
     const errName = error instanceof Error ? error.name : typeof error
+    // サーバーログ: stack 含む完全な情報
     console.error('[generate-all-images] Unhandled error:', {
       message: errMsg,
       name: errName,
       stack: errStack?.substring(0, 500),
       projectId: c.req.param('id'),
     })
+    // レスポンス: stack は含めない（本番セキュリティ）、error_type と短縮メッセージのみ
     return c.json({
       error: {
         code: 'INTERNAL_ERROR',
         message: `Failed to generate images: ${errMsg.substring(0, 200)}`,
-        debug: { error_type: errName, error_message: errMsg.substring(0, 300) }
+        debug: { error_type: errName }
       }
     }, 500)
   }
