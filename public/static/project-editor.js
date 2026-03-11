@@ -1087,15 +1087,15 @@ function renderFormatSectionUI() {
   // 段落数を計算
   const paragraphCount = countParagraphs();
   
-  // ★ SSOT: target_scene_count の初期値
-  // 段落数 > 0 の場合は常に段落数を初期値にする（テキストの実態が最も正確）
-  // DB保存値は format再実行時のヒントとして「前回の分割モード」表示に使う
-  // 段落数が0（テキスト未入力）の場合のみ DB保存値を使用
+  // ★ FMT-UI-1 fix: DB保存値を優先し、段落数による自動上書きを停止
+  // 優先順位: 1) DB保存値(target_scene_count), 2) 段落数(fallback), 3) 空(未設定)
+  // ユーザーが指定した target は DB に保存されるため、再表示時もその値を尊重する
   const dbTarget = currentProject && currentProject.target_scene_count;
-  const initialTarget = (paragraphCount > 0)
-    ? paragraphCount
-    : ((dbTarget && dbTarget > 0) ? dbTarget : '');
+  const initialTarget = (dbTarget && dbTarget > 0)
+    ? dbTarget
+    : ((paragraphCount > 0) ? paragraphCount : '');
   currentTargetSceneCount = initialTarget || null;
+  console.log('[renderFormatSectionUI] target priority: dbTarget=', dbTarget, 'paragraphCount=', paragraphCount, '→ initialTarget=', initialTarget);
   
   return `
     <div class="p-6 bg-purple-50 border-l-4 border-purple-600 rounded-lg">
@@ -1284,16 +1284,24 @@ window.onSplitModeChange = function(mode) {
   const normalizedMode = normalizeSplitMode(mode);
   currentSplitMode = normalizedMode;
   
-  // ★ SSOT: raw (preserve) モード選択時 → target_scene_count を段落数に自動設定
-  // ユーザーが「原文そのまま」を選んだ = 段落数 = シーン数 を期待している
+  // ★ FMT-UI-1 fix: raw (preserve) モード選択時
+  // DB保存値がある場合はそれを維持、ない場合のみ段落数をデフォルトとして設定
+  // ユーザーが以前 target=50 を設定していた場合、rawに切り替えても50を保持
   if (normalizedMode === 'raw') {
     const paragraphCount = countParagraphs();
-    if (paragraphCount > 0) {
-      const targetInput = document.getElementById('targetSceneCount');
-      if (targetInput) {
+    const dbTarget = currentProject && currentProject.target_scene_count;
+    const targetInput = document.getElementById('targetSceneCount');
+    if (targetInput) {
+      if (dbTarget && dbTarget > 0) {
+        // DB保存値を優先（ユーザーが以前設定した値）
+        targetInput.value = dbTarget;
+        currentTargetSceneCount = dbTarget;
+        console.log('[SplitMode] Raw mode selected → using DB-saved target:', dbTarget, '(paragraphCount:', paragraphCount, ')');
+      } else if (paragraphCount > 0) {
+        // DB保存値なし → 段落数をデフォルトとして使用
         targetInput.value = paragraphCount;
         currentTargetSceneCount = paragraphCount;
-        console.log('[SplitMode] Raw mode selected → auto-set target_scene_count to paragraph count:', paragraphCount);
+        console.log('[SplitMode] Raw mode selected → no DB target, fallback to paragraph count:', paragraphCount);
       }
     }
   }
@@ -9554,9 +9562,22 @@ async function updateVideoBuildRequirements() {
       </p>
     `;
     
-    // ブロック理由を表示
+    // ブロック理由を表示（★ VB-VISIBILITY: 具体的なアクション付き）
     if (blockReasonEl) {
-      blockReasonEl.innerHTML = '<i class="fas fa-exclamation-circle mr-2"></i>' + blockReasons.join('、');
+      let reasonHtml = '<div class="font-bold mb-1"><i class="fas fa-exclamation-circle mr-2"></i>生成できない理由:</div>';
+      reasonHtml += '<ul class="list-disc ml-6 space-y-1">';
+      blockReasons.forEach(reason => {
+        reasonHtml += '<li>' + reason + '</li>';
+      });
+      reasonHtml += '</ul>';
+      // アクションガイダンスを追加
+      if (blockReasons.some(r => r.includes('素材'))) {
+        reasonHtml += '<div class="mt-2 text-xs text-red-500"><i class="fas fa-arrow-right mr-1"></i>Builder タブで各シーンに画像/漫画/動画を設定してください</div>';
+      }
+      if (blockReasons.some(r => r.includes('シーンが作成'))) {
+        reasonHtml += '<div class="mt-2 text-xs text-red-500"><i class="fas fa-arrow-right mr-1"></i>Scene Split タブでシーン分割を実行してください</div>';
+      }
+      blockReasonEl.innerHTML = reasonHtml;
       blockReasonEl.classList.remove('hidden');
     }
   } else if (summaryStatus === 'warning') {
@@ -9633,6 +9654,33 @@ function updateVideoBuildButtonState() {
   } else {
     // 通常状態
     btn.innerHTML = '<i class="fas fa-film mr-2"></i>🎬 動画を生成';
+  }
+  
+  // ★ VB-VISIBILITY: ボタン無効時にその理由を明示表示
+  const disabledReasonEl = document.getElementById('videoBuildDisabledReason');
+  if (disabledReasonEl) {
+    if (!canStart) {
+      const reasons = [];
+      if (!canGenerate) {
+        if (!hasScenes) {
+          reasons.push('シーンが未作成です');
+        } else if (!preflight.is_ready) {
+          const readyCount = preflight.ready_count || 0;
+          const totalCount = preflight.total_count || 0;
+          reasons.push(`素材不足: ${readyCount}/${totalCount}シーン準備済み`);
+        } else {
+          reasons.push('素材検証に失敗（preflightを確認してください）');
+        }
+      }
+      if (isAtLimit) reasons.push('月間上限(60本)に到達');
+      if (exceedsSceneLimit) reasons.push(`シーン数が上限(${SCENE_LIMIT_THRESHOLD})超過`);
+      if (isGeneratingAudio) reasons.push('音声一括生成の完了を待っています');
+      
+      disabledReasonEl.innerHTML = '<i class="fas fa-lock mr-1"></i>' + (reasons.join(' / ') || '生成条件を満たしていません');
+      disabledReasonEl.classList.remove('hidden');
+    } else {
+      disabledReasonEl.classList.add('hidden');
+    }
   }
   
   console.log('[VideoBuild] Button state:', { 

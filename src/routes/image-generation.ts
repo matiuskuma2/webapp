@@ -493,8 +493,23 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
     }, 200)
 
   } catch (error) {
-    console.error('Batch image generation error:', error)
-    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to generate images' } }, 500)
+    // ★ IMG-LOG: deprecated endpoint のエラー詳細も可視化
+    const errMsg = error instanceof Error ? error.message : String(error)
+    const errStack = error instanceof Error ? error.stack : undefined
+    const errName = error instanceof Error ? error.name : typeof error
+    console.error('[generate-images/legacy] Unhandled error:', {
+      message: errMsg,
+      name: errName,
+      stack: errStack?.substring(0, 500),
+      projectId: c.req.param('id'),
+    })
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: `Failed to generate images: ${errMsg.substring(0, 200)}`,
+        debug: { error_type: errName, error_message: errMsg.substring(0, 300) }
+      }
+    }, 500)
   }
 })
 
@@ -1185,8 +1200,23 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     }, 200)
 
   } catch (error) {
-    console.error('Error in generate-all-images endpoint:', error)
-    return c.json({ error: { code: 'INTERNAL_ERROR', message: 'Failed to generate images' } }, 500)
+    // ★ IMG-LOG: エラー詳細を可視化（500 の原因特定用）
+    const errMsg = error instanceof Error ? error.message : String(error)
+    const errStack = error instanceof Error ? error.stack : undefined
+    const errName = error instanceof Error ? error.name : typeof error
+    console.error('[generate-all-images] Unhandled error:', {
+      message: errMsg,
+      name: errName,
+      stack: errStack?.substring(0, 500),
+      projectId: c.req.param('id'),
+    })
+    return c.json({
+      error: {
+        code: 'INTERNAL_ERROR',
+        message: `Failed to generate images: ${errMsg.substring(0, 200)}`,
+        debug: { error_type: errName, error_message: errMsg.substring(0, 300) }
+      }
+    }, 500)
   }
 })
 

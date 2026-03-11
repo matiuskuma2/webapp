@@ -2410,8 +2410,12 @@ app.get('/projects/:id', async (c) => {
                             🎬 動画を生成
                         </button>
                     </div>
-                    <!-- ブロック理由の表示 -->
-                    <div id="preflightBlockReason" class="hidden mt-3 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+                    <!-- ★ VB-VISIBILITY: ブロック理由の明示表示 -->
+                    <div id="preflightBlockReason" class="hidden mt-3 p-3 bg-red-50 border-2 border-red-300 rounded-lg text-sm text-red-700 shadow-sm">
+                        <!-- JS で埋める: 具体的なブロック理由 + 解決アクション -->
+                    </div>
+                    <!-- ★ VB-VISIBILITY: ボタン無効時の理由表示（ボタン直下） -->
+                    <div id="videoBuildDisabledReason" class="hidden mt-2 text-center text-xs text-red-500">
                         <!-- JS で埋める -->
                     </div>
                 </div>
