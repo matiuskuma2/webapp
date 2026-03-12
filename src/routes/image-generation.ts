@@ -486,7 +486,7 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
     try {
       c.executionCtx.waitUntil(
         (async () => {
-          const EXTRA_JOBS = 4
+          const EXTRA_JOBS = 9  // 合計: 1同期 + 9非同期 = 10
           for (let i = 0; i < EXTRA_JOBS; i++) {
             try {
               const result = await processOneImageJob(c, projectId, aspectRatio)
@@ -532,13 +532,15 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
 })
 
 // GET /api/projects/:id/generate-images/status - 画像生成進捗取得
+// ★ Fix-1: ステータスポーリング時にも pending ジョブを waitUntil で処理
 imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
   try {
     const projectId = c.req.param('id')
+    const parsedProjectId = parseInt(projectId)
 
     const project = await c.env.DB.prepare(`
-      SELECT id, status FROM projects WHERE id = ?
-    `).bind(projectId).first()
+      SELECT id, status, output_preset FROM projects WHERE id = ?
+    `).bind(projectId).first<{ id: number; status: string; output_preset: string | null }>()
 
     if (!project) {
       return c.json({
@@ -548,15 +550,61 @@ imageGeneration.get('/projects/:id/generate-images/status', async (c) => {
 
     // ★ P1-5: Auto-cleanup stuck 'generating' records (統一: STUCK_GENERATING_TIMEOUT_MINUTES)
     try {
-      await cleanupStuckGenerations(c.env.DB, parseInt(projectId));
+      await cleanupStuckGenerations(c.env.DB, parsedProjectId);
     } catch (cleanupErr) {
       console.warn('[Image Status] Auto-cleanup failed:', cleanupErr)
     }
 
     const stats = await getImageGenerationStats(c.env.DB, projectId)
 
+    // ★ Fix-1: ポーリング時にも pending ジョブを waitUntil でバックグラウンド処理
+    // フロントエンドが 3-5 秒間隔でポーリングするため、各ポーリング時に追加ジョブを処理
+    if (stats.pending > 0 && ['generating_images', 'formatted'].includes(project.status as string)) {
+      const outputPreset = getOutputPreset(project.output_preset)
+      const aspectRatio = outputPreset.aspect_ratio
+      try {
+        c.executionCtx.waitUntil(
+          (async () => {
+            const POLL_ADVANCE_JOBS = 3  // ポーリング1回あたり処理するジョブ数
+            let advanced = 0
+            for (let i = 0; i < POLL_ADVANCE_JOBS; i++) {
+              try {
+                const result = await processOneImageJob(c, parsedProjectId, aspectRatio)
+                if (result.successCount === 0 && result.failedCount === 0) break
+                advanced += result.successCount + result.failedCount
+              } catch (err) {
+                console.error(`[Status Poll Advance] Job ${i + 1} error:`, err)
+                break
+              }
+            }
+            if (advanced > 0) {
+              console.log(`[Status Poll Advance] Advanced ${advanced} jobs for project ${parsedProjectId}`)
+              // 全完了チェック
+              try {
+                const missingCount = await c.env.DB.prepare(`
+                  SELECT COUNT(*) as cnt FROM scenes s
+                  LEFT JOIN image_generations ig ON ig.scene_id = s.id AND ig.is_active = 1 AND ig.status = 'completed'
+                  WHERE s.project_id = ? AND (s.is_hidden = 0 OR s.is_hidden IS NULL) AND ig.id IS NULL
+                `).bind(parsedProjectId).first<{ cnt: number }>()
+                if (missingCount && missingCount.cnt === 0) {
+                  await c.env.DB.prepare(`
+                    UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND status IN ('formatted', 'generating_images')
+                  `).bind(parsedProjectId).run()
+                  console.log(`[Status Poll Advance] All scenes done, project ${parsedProjectId} → completed`)
+                }
+              } catch {}
+            }
+          })()
+        )
+      } catch (waitUntilErr) {
+        // waitUntil が利用不可の環境（テスト等）
+        console.warn('[Status Poll Advance] waitUntil unavailable:', waitUntilErr)
+      }
+    }
+
     return c.json({
-      project_id: parseInt(projectId),
+      project_id: parsedProjectId,
       status: project.status,
       ...stats
     })
@@ -1213,12 +1261,12 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     const { successCount, failedCount } = await processOneImageJob(c, parseInt(projectId), aspectRatio)
 
     // 6b. ★ Fix-1: waitUntil で追加ジョブをバックグラウンド実行
-    // 1リクエスト1ジョブでは進行が遅いので、waitUntil 内で追加処理（最大4ジョブ）
+    // 1リクエスト1ジョブでは進行が遅いので、waitUntil 内で追加処理（最大9ジョブ = 合計10）
     const parsedProjectId = parseInt(projectId)
     try {
       c.executionCtx.waitUntil(
         (async () => {
-          const EXTRA_JOBS = 4  // waitUntil で追加実行するジョブ数
+          const EXTRA_JOBS = 9  // waitUntil で追加実行するジョブ数（合計: 1同期 + 9非同期 = 10）
           let extraSuccess = 0, extraFailed = 0
           for (let i = 0; i < EXTRA_JOBS; i++) {
             try {
