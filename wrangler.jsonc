@@ -22,18 +22,15 @@
   // ================================================================
   // Queue Producer binding (Phase Q1: Bulk Audio Queue)
   // Pages Functions can produce messages; consumer is a separate Worker.
-  // Queue must be created first: npx wrangler queues create webapp-audio-queue
-  // ⚠️ TEMPORARILY DISABLED: Queue 'webapp-audio-queue' not found on account.
-  //    Re-enable after creating the queue via Cloudflare Dashboard or API.
   // ================================================================
-  // "queues": {
-  //   "producers": [
-  //     {
-  //       "binding": "AUDIO_QUEUE",
-  //       "queue": "webapp-audio-queue"
-  //     }
-  //   ]
-  // }
+  "queues": {
+    "producers": [
+      {
+        "binding": "AUDIO_QUEUE",
+        "queue": "webapp-audio-queue"
+      }
+    ]
+  }
   // Environment Variables (set via Cloudflare Dashboard or wrangler secret):
   // - CRON_SECRET: Secret for authenticating cron job requests
   //   Usage: curl -X POST -H "X-Cron-Secret: your-secret" https://webapp-c7n.pages.dev/api/admin/cron/collect-render-logs
