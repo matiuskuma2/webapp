@@ -482,6 +482,24 @@ imageGeneration.post('/projects/:id/generate-images', async (c) => {
     // ★ Process ONE job immediately via shared helper
     const { successCount, failedCount } = await processOneImageJob(c, projectId, aspectRatio)
 
+    // ★ Fix-1: waitUntil で追加ジョブをバックグラウンド実行 (Legacy endpoint)
+    try {
+      c.executionCtx.waitUntil(
+        (async () => {
+          const EXTRA_JOBS = 4
+          for (let i = 0; i < EXTRA_JOBS; i++) {
+            try {
+              const result = await processOneImageJob(c, projectId, aspectRatio)
+              if (result.successCount === 0 && result.failedCount === 0) break
+            } catch (err) {
+              console.error(`[Legacy waitUntil] Extra job ${i + 1} error:`, err)
+              break
+            }
+          }
+        })()
+      )
+    } catch {}
+
     // Return stats compatible with legacy format
     const stats = await getImageGenerationStats(c.env.DB, String(projectId))
     return c.json({
@@ -978,7 +996,25 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
     console.log(`[Single Image Gen] Phase 1-A: Created job #${jobId} for scene ${sceneId}, generation #${generationId} → 202 Accepted`)
 
-    // 8. ★ 202 Accepted で即座に返却 (フロントエンドはポーリングで完了を検知)
+    // 8. ★ Fix-1: waitUntil でバックグラウンドでジョブを実行
+    // 202 レスポンス返却後、Cloudflare Workers のライフタイム内で processOneImageJob を非同期実行
+    // これにより、ジョブが job_queue に滞留せず即座に処理される
+    try {
+      c.executionCtx.waitUntil(
+        processOneImageJob(c, project.id, aspectRatio)
+          .then(({ successCount, failedCount }) => {
+            console.log(`[Single Image Gen] Fix-1: waitUntil completed for job #${jobId}, gen #${generationId}: success=${successCount}, failed=${failedCount}`)
+          })
+          .catch((err) => {
+            console.error(`[Single Image Gen] Fix-1: waitUntil error for job #${jobId}, gen #${generationId}:`, err)
+          })
+      )
+    } catch (waitUntilErr) {
+      // waitUntil が使えない環境（テスト等）のフォールバック: ログのみ
+      console.warn(`[Single Image Gen] Fix-1: waitUntil unavailable, job #${jobId} will be processed by next batch/poll`, waitUntilErr)
+    }
+
+    // 9. 202 Accepted で即座に返却 (フロントエンドはポーリングで完了を検知)
     return c.json({
       image_generation_id: generationId,
       status: 'pending',
@@ -1173,11 +1209,49 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
 
     console.log(`[Batch All Image Gen] Created ${jobsCreated} jobs for ${totalScenes} scenes (mode=${mode})`)
 
-    // 6. ★ Process ONE job immediately via shared helper
+    // 6. ★ Process ONE job immediately (synchronous — counted in response)
     const { successCount, failedCount } = await processOneImageJob(c, parseInt(projectId), aspectRatio)
 
-    // 7. Check overall progress
-    const progress = await getJobProgress(c.env.DB, parseInt(projectId), 'generate_image')
+    // 6b. ★ Fix-1: waitUntil で追加ジョブをバックグラウンド実行
+    // 1リクエスト1ジョブでは進行が遅いので、waitUntil 内で追加処理（最大4ジョブ）
+    const parsedProjectId = parseInt(projectId)
+    try {
+      c.executionCtx.waitUntil(
+        (async () => {
+          const EXTRA_JOBS = 4  // waitUntil で追加実行するジョブ数
+          let extraSuccess = 0, extraFailed = 0
+          for (let i = 0; i < EXTRA_JOBS; i++) {
+            try {
+              const result = await processOneImageJob(c, parsedProjectId, aspectRatio)
+              extraSuccess += result.successCount
+              extraFailed += result.failedCount
+              if (result.successCount === 0 && result.failedCount === 0) break  // キューが空
+            } catch (err) {
+              console.error(`[Batch waitUntil] Extra job ${i + 1} error:`, err)
+              break
+            }
+          }
+          console.log(`[Batch waitUntil] Fix-1: Extra ${extraSuccess} succeeded, ${extraFailed} failed for project ${parsedProjectId}`)
+          
+          // 全完了チェック（waitUntil 終了時）
+          try {
+            const finalProgress = await getJobProgress(c.env.DB, parsedProjectId, 'generate_image')
+            if (finalProgress.total > 0 && (finalProgress.queued + finalProgress.processing + finalProgress.retryWait) === 0 && finalProgress.failed === 0) {
+              await c.env.DB.prepare(`
+                UPDATE projects SET status = 'completed', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND status IN ('formatted', 'generating_images')
+              `).bind(parsedProjectId).run()
+              console.log(`[Batch waitUntil] All jobs done, project ${parsedProjectId} → completed`)
+            }
+          } catch {}
+        })()
+      )
+    } catch (waitUntilErr) {
+      console.warn(`[Batch All Image Gen] Fix-1: waitUntil unavailable`, waitUntilErr)
+    }
+
+    // 7. Check overall progress (at time of synchronous response)
+    const progress = await getJobProgress(c.env.DB, parsedProjectId, 'generate_image')
     const allDone = progress.total > 0 && (progress.queued + progress.processing + progress.retryWait) === 0
 
     if (allDone && progress.failed === 0) {
@@ -1187,7 +1261,7 @@ imageGeneration.post('/:id/generate-all-images', async (c) => {
     }
 
     return c.json({
-      project_id: parseInt(projectId),
+      project_id: parsedProjectId,
       total_scenes: totalScenes,
       success_count: successCount,
       failed_count: failedCount,
