@@ -1082,6 +1082,8 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
 // GET /api/image-generations/:id/status - 画像生成ステータスポーリング
 // ★ Phase 1-B: フロントエンドは 202 レスポンス後、このエンドポイントをポーリングする
+// ★ Fix-1c: pending/generating 状態のとき waitUntil でジョブを前進させる
+//   project.status に依存しないので、completed プロジェクト上での単体再生成もカバー
 imageGeneration.get('/image-generations/:id/status', async (c) => {
   try {
     const generationId = parseInt(c.req.param('id'), 10)
@@ -1105,6 +1107,37 @@ imageGeneration.get('/image-generations/:id/status', async (c) => {
 
     if (!gen) {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Generation not found' } }, 404)
+    }
+
+    // ★ Fix-1c: pending のとき waitUntil でジョブを前進させる
+    // project.status に依存せず、generation レコード単位で判断
+    // 単体画像生成・completed プロジェクト上の再生成 両方をカバー
+    if (gen.status === 'pending') {
+      try {
+        // project の output_preset を取得してアスペクト比を決定
+        const project = await c.env.DB.prepare(`
+          SELECT id, output_preset FROM projects WHERE id = ?
+        `).bind(gen.project_id).first<{ id: number; output_preset: string | null }>()
+        
+        if (project) {
+          const outputPreset = getOutputPreset(project.output_preset)
+          const aspectRatio = outputPreset.aspect_ratio
+          
+          c.executionCtx.waitUntil(
+            processOneImageJob(c, gen.project_id, aspectRatio)
+              .then(({ successCount, failedCount }) => {
+                console.log(`[SinglePoll Advance] Gen #${generationId}: waitUntil processed job, success=${successCount}, failed=${failedCount}`)
+              })
+              .catch((err) => {
+                console.error(`[SinglePoll Advance] Gen #${generationId}: waitUntil error:`, err)
+              })
+          )
+          console.log(`[SinglePoll Advance] Gen #${generationId} is pending → triggered waitUntil job advance`)
+        }
+      } catch (advanceErr) {
+        // waitUntil が利用不可の環境（テスト等） or その他エラー
+        console.warn(`[SinglePoll Advance] Gen #${generationId}: advance failed:`, advanceErr)
+      }
     }
 
     // ★ progress_pct 推定: 経過時間ベース
