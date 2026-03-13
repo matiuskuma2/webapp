@@ -9465,7 +9465,7 @@ async function updateVideoBuildRequirements() {
   summaryEl.innerHTML = '';
   if (blockReasonEl) blockReasonEl.classList.add('hidden');
   
-  const SCENE_LIMIT_THRESHOLD = 100;
+  const SCENE_LIMIT_THRESHOLD = 200;
   let blockReasons = [];
   let requiredHtml = '';
   let recommendedHtml = '';
@@ -9518,6 +9518,42 @@ async function updateVideoBuildRequirements() {
       requiredHtml += '<i class="fas fa-check-circle mr-2"></i>';
       requiredHtml += '素材OK（' + preflight.total_count + 'シーン準備完了）';
       requiredHtml += '</div>';
+    }
+    
+    // === Fix-4: Build Limits (duration / frames) ===
+    const buildLimits = preflight.build_limits;
+    if (buildLimits) {
+      // ハード上限超過（赤エラー・生成停止）
+      if (buildLimits.severity === 'error') {
+        buildLimits.messages.filter(m => m.level === 'error').forEach(m => {
+          requiredHtml += '<div class="flex items-start text-red-600 mt-1">';
+          requiredHtml += '<i class="fas fa-times-circle mr-2 mt-0.5"></i>';
+          requiredHtml += '<span>' + m.message + '</span>';
+          requiredHtml += '</div>';
+          blockReasons.push(m.message);
+        });
+        summaryStatus = 'error';
+      }
+      // ソフト上限超過（黄色警告・生成は可能）
+      if (buildLimits.messages.some(m => m.level === 'warning')) {
+        buildLimits.messages.filter(m => m.level === 'warning').forEach(m => {
+          recommendedHtml += '<div class="flex items-start text-amber-600 mt-1">';
+          recommendedHtml += '<i class="fas fa-exclamation-triangle mr-2 mt-0.5"></i>';
+          recommendedHtml += '<span>' + m.message + '</span>';
+          recommendedHtml += '</div>';
+        });
+        if (summaryStatus === 'ok') summaryStatus = 'warning';
+      }
+      // 推定尺を表示
+      if (buildLimits.duration && buildLimits.duration.estimated_ms > 0) {
+        const estMin = Math.floor(buildLimits.duration.estimated_ms / 60000);
+        const estSec = Math.round((buildLimits.duration.estimated_ms % 60000) / 1000);
+        const estFrames = buildLimits.frames?.estimated || 0;
+        recommendedHtml += '<div class="flex items-center text-gray-500 mt-1 text-xs">';
+        recommendedHtml += '<i class="fas fa-clock mr-2"></i>';
+        recommendedHtml += '推定動画尺: ' + estMin + '分' + estSec + '秒 / ' + estFrames.toLocaleString() + 'フレーム';
+        recommendedHtml += '</div>';
+      }
     }
     
     // === 推奨チェック（音声・その他） ===
@@ -9731,13 +9767,16 @@ function updateVideoBuildButtonState() {
   // 修正: hasConcurrentはボタン表示のみに使用、ブロックには使わない
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
-  // Phase 1: Limit to 100 scenes until segment rendering is implemented
-  const SCENE_LIMIT_THRESHOLD = 100;
+  // Fix-4: Use backend build_limits for limit decisions (SSOT)
+  const SCENE_LIMIT_THRESHOLD = 200;
+  const buildLimits = preflight.build_limits || {};
   const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
+  const buildLimitsBlocked = buildLimits.severity === 'error';
   
   // R1.6: canStart は can_generate を使用（+ 上限チェック）
+  // Fix-4: buildLimitsBlocked を追加（duration/frames ハード上限）
   // 修正: hasConcurrentはブロック条件から削除（Video Buildは並列実行可能）
-  const canStart = canGenerate && !isAtLimit && !exceedsSceneLimit && !isGeneratingAudio;
+  const canStart = canGenerate && !isAtLimit && !exceedsSceneLimit && !buildLimitsBlocked && !isGeneratingAudio;
   btn.disabled = !canStart;
   
   // ボタン表示を状態に応じて変更
@@ -9770,6 +9809,11 @@ function updateVideoBuildButtonState() {
       }
       if (isAtLimit) reasons.push('月間上限(60本)に到達');
       if (exceedsSceneLimit) reasons.push(`シーン数が上限(${SCENE_LIMIT_THRESHOLD})超過`);
+      if (buildLimitsBlocked && buildLimits.messages) {
+        buildLimits.messages.filter(m => m.level === 'error').forEach(m => {
+          reasons.push(m.message);
+        });
+      }
       if (isGeneratingAudio) reasons.push('音声一括生成の完了を待っています');
       
       disabledReasonEl.innerHTML = '<i class="fas fa-lock mr-1"></i>' + (reasons.join(' / ') || '生成条件を満たしていません');

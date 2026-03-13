@@ -32,8 +32,13 @@ import {
   hashProjectJson,
   validateProjectJson,
   validateRenderInputs,
+  validateBuildLimits,
+  computeSceneDurationMs,
+  VIDEO_BUILD_MAX_SCENES,
+  VIDEO_BUILD_DURATION_HARD_LIMIT_MS,
   type RenderInputScene,
   type VisualAssetError,
+  type SceneData,
 } from '../utils/video-build-helpers';
 
 /**
@@ -2088,14 +2093,33 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
     const projectJsonValidation = validateRenderInputs(renderInputs);
     
     // ============================================================
+    // Fix-4: Build Limits Check (duration + scene count + frames)
+    // Based on production data analysis:
+    // - 300-600s duration: 22% success rate
+    // - 600s+ duration: 0% success rate
+    // - Remotion Lambda: max 12,000 frames
+    // ============================================================
+    const estimatedTotalDurationMs = scenesWithAssets.reduce((sum: number, s: any) => {
+      return sum + computeSceneDurationMs(s as SceneData);
+    }, 0);
+    
+    const buildLimits = validateBuildLimits(
+      scenesWithAssets.length,
+      estimatedTotalDurationMs,
+      30 // default fps
+    );
+    
+    // ============================================================
     // canGenerate 判定 (SSOT)
     // C仕様: 視覚素材エラーが1件でもあればボタン無効化
+    // Fix-4: ハード上限超過もブロック
     // ============================================================
     const canGenerate = 
       assetValidation.is_ready && 
       visualValidation.is_valid &&  // C仕様: Silent Fallback禁止
       awsConfigured && 
-      projectJsonValidation.is_valid;
+      projectJsonValidation.is_valid &&
+      buildLimits.severity !== 'error';  // Fix-4: ハード上限超過でブロック
     
     // ============================================================
     // 警告を「必須」と「推奨」に分類
@@ -2144,10 +2168,28 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
         scene_idx: e.scene_idx,
         message: e.reason,
       })),
+      // Fix-4: Build Limits エラー（ハード上限超過）
+      ...buildLimits.messages.filter(m => m.level === 'error').map(m => ({
+        type: 'BUILD_LIMIT_ERROR' as const,
+        code: m.code,
+        level: 'error' as const,
+        scene_id: null as number | null,
+        scene_idx: 0,
+        message: m.message,
+      })),
     ];
     
     // 推奨警告（黄・生成は止めない）: 音声パーツ関連 + project.json警告
     const recommendedWarnings = [
+      // Fix-4: Build Limits 警告（ソフト上限超過）
+      ...buildLimits.messages.filter(m => m.level === 'warning').map(m => ({
+        type: 'BUILD_LIMIT_WARNING' as const,
+        code: m.code,
+        level: 'warning' as const,
+        scene_id: null as number | null,
+        scene_idx: 0,
+        message: m.message,
+      })),
       // utterance 関連の警告
       ...utteranceValidation.errors.map(e => ({
         ...e,
@@ -2244,6 +2286,10 @@ videoGeneration.get('/projects/:projectId/video-builds/preflight', async (c) => 
         // デバッグ用: 各シーンの素材状態
         debug_info: visualValidation.debug_info,
       },
+      // ============================================================
+      // Fix-4: Build Limits (duration + scene count + frames)
+      // ============================================================
+      build_limits: buildLimits,
     });
     
   } catch (error) {
@@ -3412,6 +3458,31 @@ videoGeneration.post('/projects/:projectId/video-builds', async (c) => {
     // 警告があればログに出力（レンダーは続行）
     if (projectJsonValidation.warnings.length > 0) {
       console.log(`[VideoBuild] project.json warnings (project_id=${projectId}):`, projectJsonValidation.warnings);
+    }
+    
+    // 6.6. Fix-4: Build Limits 最終ゲート（duration + scene count + frames）
+    // SSOT: validateBuildLimits が唯一の判定ロジック
+    const postBuildLimits = validateBuildLimits(
+      scenesWithAssets.length,
+      projectJson.summary?.total_duration_ms ?? 0,
+      30 // fps
+    );
+    
+    if (postBuildLimits.severity === 'error') {
+      console.error(`[VideoBuild] Build limits exceeded (project_id=${projectId}):`, postBuildLimits.messages);
+      return c.json({
+        error: {
+          code: 'BUILD_LIMITS_EXCEEDED',
+          message: postBuildLimits.messages.map(m => m.message).join('; '),
+          details: {
+            build_limits: postBuildLimits,
+          }
+        }
+      }, 400);
+    }
+    
+    if (postBuildLimits.severity === 'warning') {
+      console.warn(`[VideoBuild] Build limits warning (project_id=${projectId}):`, postBuildLimits.messages);
     }
     
     const projectJsonHash = await hashProjectJson(projectJson);

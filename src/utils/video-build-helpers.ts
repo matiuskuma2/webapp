@@ -836,6 +836,158 @@ const TEXT_DURATION_MS_PER_CHAR = 300;   // 日本語テキストの推定: 300m
 const MIN_DURATION_MS = 2000;            // 最小尺
 const MAX_DURATION_MS = 600000;          // 最大尺（10分）
 
+// ====================================================================
+// Video Build Limits (SSOT)
+// ====================================================================
+// Based on production data analysis (328 builds):
+// - 300-600s duration: 22% success rate
+// - 600s+ duration: 0% success rate (all failed)
+// - Remotion Lambda: max 200 functions, framesPerLambda=60
+//   → max ~12,000 frames → ~400s at 30fps
+// - 56-scene builds succeed at ≤242s but fail at 425s+
+// ====================================================================
+
+/** Maximum allowed scenes (frontend + backend) */
+export const VIDEO_BUILD_MAX_SCENES = 200;
+
+/** Duration soft limit: warning issued (≈5 min) */
+export const VIDEO_BUILD_DURATION_SOFT_LIMIT_MS = 300_000;
+
+/** Duration hard limit: build blocked (≈10 min) */
+export const VIDEO_BUILD_DURATION_HARD_LIMIT_MS = 600_000;
+
+/** Remotion Lambda maximum frame count (200 functions × 60 frames) */
+export const REMOTION_MAX_FRAME_COUNT = 12_000;
+
+/** Default FPS for frame calculation */
+export const DEFAULT_FPS = 30;
+
+// ====================================================================
+// Build Limits Validation (SSOT)
+// ====================================================================
+
+export type BuildLimitSeverity = 'ok' | 'warning' | 'error';
+
+export interface BuildLimitsResult {
+  /** Overall severity: ok / warning (soft limit) / error (hard limit) */
+  severity: BuildLimitSeverity;
+  /** Scene count check */
+  scene_count: {
+    current: number;
+    max: number;
+    exceeded: boolean;
+  };
+  /** Duration check */
+  duration: {
+    estimated_ms: number;
+    soft_limit_ms: number;
+    hard_limit_ms: number;
+    exceeds_soft: boolean;
+    exceeds_hard: boolean;
+  };
+  /** Remotion Lambda frame check */
+  frames: {
+    estimated: number;
+    max: number;
+    exceeded: boolean;
+  };
+  /** Human-readable messages */
+  messages: Array<{
+    level: 'warning' | 'error';
+    code: string;
+    message: string;
+  }>;
+}
+
+/**
+ * Validate build limits based on scene count and estimated duration
+ * 
+ * SSOT: This is the single function that determines if a build
+ * is within safe limits. Used by both preflight and POST.
+ * 
+ * @param sceneCount Number of scenes
+ * @param estimatedDurationMs Total estimated duration in milliseconds
+ * @param fps Frames per second (default 30)
+ */
+export function validateBuildLimits(
+  sceneCount: number,
+  estimatedDurationMs: number,
+  fps: number = DEFAULT_FPS
+): BuildLimitsResult {
+  const messages: BuildLimitsResult['messages'] = [];
+  let severity: BuildLimitSeverity = 'ok';
+
+  // 1. Scene count check
+  const sceneExceeded = sceneCount > VIDEO_BUILD_MAX_SCENES;
+  if (sceneExceeded) {
+    severity = 'error';
+    messages.push({
+      level: 'error',
+      code: 'SCENE_LIMIT_EXCEEDED',
+      message: `シーン数が上限（${VIDEO_BUILD_MAX_SCENES}）を超えています（${sceneCount}シーン）`,
+    });
+  }
+
+  // 2. Duration check
+  const exceedsSoft = estimatedDurationMs > VIDEO_BUILD_DURATION_SOFT_LIMIT_MS;
+  const exceedsHard = estimatedDurationMs > VIDEO_BUILD_DURATION_HARD_LIMIT_MS;
+  
+  if (exceedsHard) {
+    severity = 'error';
+    const durationMin = Math.round(estimatedDurationMs / 60000 * 10) / 10;
+    const limitMin = Math.round(VIDEO_BUILD_DURATION_HARD_LIMIT_MS / 60000);
+    messages.push({
+      level: 'error',
+      code: 'DURATION_HARD_LIMIT_EXCEEDED',
+      message: `動画の推定尺（${durationMin}分）がハード上限（${limitMin}分）を超えています。シーンを減らすか、シーンの尺を短くしてください。`,
+    });
+  } else if (exceedsSoft) {
+    if (severity === 'ok') severity = 'warning';
+    const durationMin = Math.round(estimatedDurationMs / 60000 * 10) / 10;
+    const softMin = Math.round(VIDEO_BUILD_DURATION_SOFT_LIMIT_MS / 60000);
+    messages.push({
+      level: 'warning',
+      code: 'DURATION_SOFT_LIMIT_WARNING',
+      message: `動画の推定尺（${durationMin}分）がソフト上限（${softMin}分）を超えています。レンダリング失敗率が高くなる可能性があります。`,
+    });
+  }
+
+  // 3. Remotion Lambda frame count check
+  const estimatedFrames = Math.ceil(estimatedDurationMs / 1000 * fps);
+  const frameExceeded = estimatedFrames > REMOTION_MAX_FRAME_COUNT;
+  
+  if (frameExceeded) {
+    severity = 'error';
+    messages.push({
+      level: 'error',
+      code: 'FRAME_COUNT_EXCEEDED',
+      message: `推定フレーム数（${estimatedFrames.toLocaleString()}）がRemotionの上限（${REMOTION_MAX_FRAME_COUNT.toLocaleString()}）を超えています。動画尺を約${Math.floor(REMOTION_MAX_FRAME_COUNT / fps)}秒以下に短縮してください。`,
+    });
+  }
+
+  return {
+    severity,
+    scene_count: {
+      current: sceneCount,
+      max: VIDEO_BUILD_MAX_SCENES,
+      exceeded: sceneExceeded,
+    },
+    duration: {
+      estimated_ms: estimatedDurationMs,
+      soft_limit_ms: VIDEO_BUILD_DURATION_SOFT_LIMIT_MS,
+      hard_limit_ms: VIDEO_BUILD_DURATION_HARD_LIMIT_MS,
+      exceeds_soft: exceedsSoft,
+      exceeds_hard: exceedsHard,
+    },
+    frames: {
+      estimated: estimatedFrames,
+      max: REMOTION_MAX_FRAME_COUNT,
+      exceeded: frameExceeded,
+    },
+    messages,
+  };
+}
+
 // 解像度マッピング
 const RESOLUTION_MAP = {
   '1080p': { '9:16': { width: 1080, height: 1920 }, '16:9': { width: 1920, height: 1080 }, '1:1': { width: 1080, height: 1080 } },
