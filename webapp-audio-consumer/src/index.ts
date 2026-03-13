@@ -276,22 +276,38 @@ async function idempotencyCheck(
   env: Env,
   jobId: number,
   utteranceId: number
-): Promise<'skip' | 'proceed'> {
-  // Check if this utterance already has a generating/completed audio_generation
+): Promise<'skip' | 'retry' | 'proceed'> {
+  // Check if this utterance already has an audio_generation
   // linked via scene_utterances.audio_generation_id.
   const existing = await env.DB.prepare(`
     SELECT ag.id, ag.status
     FROM scene_utterances su
     JOIN audio_generations ag ON ag.id = su.audio_generation_id
-    WHERE su.id = ? AND ag.status IN ('generating', 'completed')
+    WHERE su.id = ?
   `).bind(utteranceId).first<{ id: number; status: string }>()
 
-  if (existing) {
+  if (!existing) {
+    return 'proceed'
+  }
+
+  // If generating or completed → true duplicate, skip entirely
+  if (existing.status === 'generating' || existing.status === 'completed') {
     console.log(
       `[AudioConsumer] Idempotency: utt=${utteranceId} already has audio_generation ${existing.id} (${existing.status}), skipping`
     )
     return 'skip'
   }
+
+  // If failed → this is a retry after a previous failure.
+  // The utterance was already counted in processed/failed, so we mark it as 'retry'
+  // so the caller knows to adjust counts (decrement failed, don't re-increment processed on success).
+  if (existing.status === 'failed') {
+    console.log(
+      `[AudioConsumer] Idempotency: utt=${utteranceId} has failed audio_generation ${existing.id}, treating as retry`
+    )
+    return 'retry'
+  }
+
   return 'proceed'
 }
 
@@ -314,9 +330,13 @@ async function processUtteranceMessage(
   }
 
   // 1b. Idempotency: skip if already processed (Queue re-delivery)
-  if ((await idempotencyCheck(env, job_id, utterance_id)) === 'skip') {
+  const idempotencyResult = await idempotencyCheck(env, job_id, utterance_id)
+  if (idempotencyResult === 'skip') {
     return
   }
+  // 'retry' means a previous attempt failed and was already counted;
+  // we'll adjust counts after success instead of double-counting.
+  const isRetry = idempotencyResult === 'retry'
 
   // 2. Create audio_generation record
   const format = 'mp3'
@@ -387,10 +407,20 @@ async function processUtteranceMessage(
   `).bind(durationMs, utterance_id).run()
 
   // 8. Update job progress (atomic increment)
+  // Guard: only increment when processed < total to prevent re-delivery inflation
+  // Note: isRetry flag doesn't affect counting here because when willRetry=true
+  // in handleMessageFailure, counts were NOT incremented for the initial failure.
+  // So on retry success, we treat it the same as first-time success.
   await env.DB.prepare(`
     UPDATE project_audio_jobs
-    SET processed_utterances = processed_utterances + 1,
-        success_count = success_count + 1,
+    SET processed_utterances = CASE
+          WHEN processed_utterances < total_utterances THEN processed_utterances + 1
+          ELSE processed_utterances
+        END,
+        success_count = CASE
+          WHEN processed_utterances < total_utterances THEN success_count + 1
+          ELSE success_count
+        END,
         updated_at = CURRENT_TIMESTAMP
     WHERE id = ?
   `).bind(job_id).run()
@@ -405,10 +435,11 @@ async function processUtteranceMessage(
 async function handleMessageFailure(
   env: Env,
   msg: AudioQueueMessage,
-  error: unknown
+  error: unknown,
+  willRetry: boolean = false
 ): Promise<void> {
   const errorMsg = error instanceof Error ? error.message : String(error)
-  console.error(`[AudioConsumer] utt=${msg.utterance_id} FAILED:`, errorMsg)
+  console.error(`[AudioConsumer] utt=${msg.utterance_id} FAILED (willRetry=${willRetry}):`, errorMsg)
 
   try {
     // Mark any generating audio_generations as failed
@@ -418,24 +449,32 @@ async function handleMessageFailure(
       WHERE scene_id = ? AND status = 'generating'
     `).bind(errorMsg, msg.scene_id).run()
 
-    // Update job progress (atomic increment failed count)
-    // Guard: only increment if this utterance has NOT been counted yet.
-    // Use a CAS-like check: only increment when processed < total
-    // to prevent re-delivery from inflating counts beyond total.
-    await env.DB.prepare(`
-      UPDATE project_audio_jobs
-      SET processed_utterances = CASE
-            WHEN processed_utterances < total_utterances THEN processed_utterances + 1
-            ELSE processed_utterances
-          END,
-          failed_count = CASE
-            WHEN processed_utterances < total_utterances THEN failed_count + 1
-            ELSE failed_count
-          END,
-          last_error = ?,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `).bind(errorMsg, msg.job_id).run()
+    if (!willRetry) {
+      // Only update job counts when this is the FINAL failure (no more retries).
+      // If the message will be retried, don't count yet — the retry will handle counting.
+      await env.DB.prepare(`
+        UPDATE project_audio_jobs
+        SET processed_utterances = CASE
+              WHEN processed_utterances < total_utterances THEN processed_utterances + 1
+              ELSE processed_utterances
+            END,
+            failed_count = CASE
+              WHEN processed_utterances < total_utterances THEN failed_count + 1
+              ELSE failed_count
+            END,
+            last_error = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(errorMsg, msg.job_id).run()
+    } else {
+      // Will retry: only record last_error for visibility, don't touch counts
+      await env.DB.prepare(`
+        UPDATE project_audio_jobs
+        SET last_error = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).bind(errorMsg, msg.job_id).run()
+    }
   } catch (dbError) {
     console.error(`[AudioConsumer] Failed to update DB on error:`, dbError)
   }
@@ -534,18 +573,19 @@ export default {
         message.ack()  // Success → acknowledge
         jobIds.add(msg.job_id)
       } catch (error) {
-        // Record failure in DB but let Queue handle retry
-        await handleMessageFailure(env, msg, error)
-
-        // If retriable (e.g. network error, 429), retry via Queue
+        // Determine if this error will be retried
         const errorMsg = error instanceof Error ? error.message : ''
         const isRetriable = errorMsg.includes('429') ||
           errorMsg.includes('timeout') ||
           errorMsg.includes('abort') ||
           errorMsg.includes('network') ||
           errorMsg.includes('ECONNRESET')
+        const willRetry = isRetriable && message.attempts < 3
 
-        if (isRetriable && message.attempts < 3) {
+        // Record failure in DB; pass willRetry so counts aren't incremented prematurely
+        await handleMessageFailure(env, msg, error, willRetry)
+
+        if (willRetry) {
           console.log(`[AudioConsumer] utt=${msg.utterance_id} → retry (attempt ${message.attempts})`)
           message.retry({ delaySeconds: 30 * message.attempts }) // Backoff: 30s, 60s, 90s
         } else {
