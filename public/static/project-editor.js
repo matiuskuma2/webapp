@@ -9465,7 +9465,7 @@ async function updateVideoBuildRequirements() {
   summaryEl.innerHTML = '';
   if (blockReasonEl) blockReasonEl.classList.add('hidden');
   
-  const SCENE_LIMIT_THRESHOLD = 200;
+  const SCENE_LIMIT_THRESHOLD = 100;
   let blockReasons = [];
   let requiredHtml = '';
   let recommendedHtml = '';
@@ -9732,7 +9732,7 @@ function updateVideoBuildButtonState() {
   const hasConcurrent = (usage.concurrent_builds || 0) >= 1;
   
   // Phase 1: Limit to 100 scenes until segment rendering is implemented
-  const SCENE_LIMIT_THRESHOLD = 200;
+  const SCENE_LIMIT_THRESHOLD = 100;
   const exceedsSceneLimit = (preflight.total_count || 0) > SCENE_LIMIT_THRESHOLD;
   
   // R1.6: canStart は can_generate を使用（+ 上限チェック）
