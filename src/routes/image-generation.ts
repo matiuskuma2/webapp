@@ -1082,7 +1082,9 @@ imageGeneration.post('/scenes/:id/generate-image', async (c) => {
 
 // GET /api/image-generations/:id/status - 画像生成ステータスポーリング
 // ★ Phase 1-B: フロントエンドは 202 レスポンス後、このエンドポイントをポーリングする
-// ★ Fix-1c: pending/generating 状態のとき waitUntil でジョブを前進させる
+// ★ Fix-1c: pending 状態のとき waitUntil でジョブを前進させる
+// ★ Fix-1d: generating 状態で 90秒超 → stuck 判定、failed+re-queue+リトライ
+//   generating 状態で 60秒超 → 念のため追加ジョブ起動
 //   project.status に依存しないので、completed プロジェクト上での単体再生成もカバー
 imageGeneration.get('/image-generations/:id/status', async (c) => {
   try {
@@ -1093,7 +1095,7 @@ imageGeneration.get('/image-generations/:id/status', async (c) => {
 
     const gen = await c.env.DB.prepare(`
       SELECT ig.id, ig.scene_id, ig.status, ig.r2_url, ig.error_message, ig.error_code,
-             ig.started_at, ig.ended_at, ig.is_active,
+             ig.started_at, ig.ended_at, ig.is_active, ig.prompt,
              s.project_id
       FROM image_generations ig
       JOIN scenes s ON s.id = ig.scene_id
@@ -1102,6 +1104,7 @@ imageGeneration.get('/image-generations/:id/status', async (c) => {
       id: number; scene_id: number; status: string; r2_url: string | null;
       error_message: string | null; error_code: string | null;
       started_at: string | null; ended_at: string | null; is_active: number;
+      prompt: string | null;
       project_id: number;
     }>()
 
@@ -1109,33 +1112,97 @@ imageGeneration.get('/image-generations/:id/status', async (c) => {
       return c.json({ error: { code: 'NOT_FOUND', message: 'Generation not found' } }, 404)
     }
 
-    // ★ Fix-1c: pending のとき waitUntil でジョブを前進させる
-    // project.status に依存せず、generation レコード単位で判断
-    // 単体画像生成・completed プロジェクト上の再生成 両方をカバー
-    if (gen.status === 'pending') {
+    // ★ Fix-1d: pending / stuck-generating の両方でジョブを前進させる
+    //   pending: waitUntil が未実行 → processOneImageJob を起動
+    //   generating + 90秒超: waitUntil がタイムアウトで中断 → generating → pending に戻し、
+    //     job_queue を processing → queued に戻してリトライ
+    //   generating + 60秒超: まだ実行中かもしれないが、念のため追加ジョブ起動
+    const STUCK_GENERATING_POLL_SEC = 90   // ポーリング時のスタック判定 (90秒)
+    const MAYBE_STUCK_SEC = 60             // 「たぶんスタック」判定 (60秒)
+
+    if (gen.status === 'pending' || gen.status === 'generating') {
       try {
-        // project の output_preset を取得してアスペクト比を決定
         const project = await c.env.DB.prepare(`
           SELECT id, output_preset FROM projects WHERE id = ?
         `).bind(gen.project_id).first<{ id: number; output_preset: string | null }>()
-        
+
         if (project) {
           const outputPreset = getOutputPreset(project.output_preset)
           const aspectRatio = outputPreset.aspect_ratio
-          
-          c.executionCtx.waitUntil(
-            processOneImageJob(c, gen.project_id, aspectRatio)
-              .then(({ successCount, failedCount }) => {
-                console.log(`[SinglePoll Advance] Gen #${generationId}: waitUntil processed job, success=${successCount}, failed=${failedCount}`)
-              })
-              .catch((err) => {
-                console.error(`[SinglePoll Advance] Gen #${generationId}: waitUntil error:`, err)
-              })
-          )
-          console.log(`[SinglePoll Advance] Gen #${generationId} is pending → triggered waitUntil job advance`)
+
+          if (gen.status === 'pending') {
+            // pending → waitUntil でジョブを前進
+            c.executionCtx.waitUntil(
+              processOneImageJob(c, gen.project_id, aspectRatio)
+                .then(({ successCount, failedCount }) => {
+                  console.log(`[SinglePoll Advance] Gen #${generationId}: pending → processed, success=${successCount}, failed=${failedCount}`)
+                })
+                .catch((err) => {
+                  console.error(`[SinglePoll Advance] Gen #${generationId}: pending advance error:`, err)
+                })
+            )
+            console.log(`[SinglePoll Advance] Gen #${generationId} is pending → triggered waitUntil`)
+          } else if (gen.status === 'generating' && gen.started_at) {
+            const startedMs = new Date(gen.started_at + 'Z').getTime()
+            const elapsedSec = (Date.now() - startedMs) / 1000
+
+            if (elapsedSec > STUCK_GENERATING_POLL_SEC) {
+              // 90秒超: 確実にスタック → pending に戻して job_queue を queued に戻す
+              console.log(`[SinglePoll Stuck] Gen #${generationId}: generating for ${Math.round(elapsedSec)}s > ${STUCK_GENERATING_POLL_SEC}s → reset to pending + re-queue`)
+
+              // image_generations → pending に戻す (processOneImageJob が再度 generating にする)
+              const resetGen = await c.env.DB.prepare(`
+                UPDATE image_generations 
+                SET status = 'pending', 
+                    started_at = NULL,
+                    error_message = NULL,
+                    error_code = NULL
+                WHERE id = ? AND status = 'generating'
+              `).bind(generationId).run()
+
+              // job_queue: processing → queued に戻す (fetchAndLockJob が再ロック)
+              const resetJob = await c.env.DB.prepare(`
+                UPDATE job_queue 
+                SET status = 'queued', 
+                    locked_at = NULL, locked_by = NULL,
+                    error_message = 'Auto re-queued: generating stuck >' || ? || 's',
+                    updated_at = datetime('now')
+                WHERE entity_id = ? AND job_type = 'generate_image' AND status = 'processing'
+              `).bind(String(STUCK_GENERATING_POLL_SEC), gen.scene_id).run()
+
+              console.log(`[SinglePoll Stuck] Gen reset: ${resetGen.meta.changes} rows, Job reset: ${resetJob.meta.changes} rows`)
+
+              // waitUntil でリトライ実行 (pending に戻したのでprocessOneImageJobが処理可能)
+              c.executionCtx.waitUntil(
+                processOneImageJob(c, gen.project_id, aspectRatio)
+                  .then(({ successCount, failedCount }) => {
+                    console.log(`[SinglePoll Retry] Gen #${generationId}: retry success=${successCount}, failed=${failedCount}`)
+                  })
+                  .catch((err) => {
+                    console.error(`[SinglePoll Retry] Gen #${generationId} retry error:`, err)
+                  })
+              )
+
+              // レスポンスは pending (5%) として返す → フロントは再度ポーリング
+              // gen.status を上書きしてレスポンス生成
+              gen.status = 'pending' as any
+              gen.started_at = null
+            } else if (elapsedSec > MAYBE_STUCK_SEC) {
+              // 60秒超: まだ完了する可能性があるが、念のため追加ジョブ起動
+              console.log(`[SinglePoll MaybeStuck] Gen #${generationId}: generating for ${Math.round(elapsedSec)}s → try advance`)
+              c.executionCtx.waitUntil(
+                processOneImageJob(c, gen.project_id, aspectRatio)
+                  .then(({ successCount, failedCount }) => {
+                    console.log(`[SinglePoll MaybeStuck] Gen #${generationId}: advance result success=${successCount}, failed=${failedCount}`)
+                  })
+                  .catch((err) => {
+                    console.error(`[SinglePoll MaybeStuck] Gen #${generationId}: advance error:`, err)
+                  })
+              )
+            }
+          }
         }
       } catch (advanceErr) {
-        // waitUntil が利用不可の環境（テスト等） or その他エラー
         console.warn(`[SinglePoll Advance] Gen #${generationId}: advance failed:`, advanceErr)
       }
     }
