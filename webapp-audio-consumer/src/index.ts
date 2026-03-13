@@ -268,6 +268,33 @@ function estimateMp3Duration(bytes: Uint8Array): number {
 // Core: Process a single utterance message
 // ============================================================
 
+/**
+ * Returns 'skip' if this utterance was already processed for this job,
+ * meaning the message is a Queue re-delivery.  Returns 'proceed' otherwise.
+ */
+async function idempotencyCheck(
+  env: Env,
+  jobId: number,
+  utteranceId: number
+): Promise<'skip' | 'proceed'> {
+  // Check if this utterance already has a generating/completed audio_generation
+  // linked via scene_utterances.audio_generation_id.
+  const existing = await env.DB.prepare(`
+    SELECT ag.id, ag.status
+    FROM scene_utterances su
+    JOIN audio_generations ag ON ag.id = su.audio_generation_id
+    WHERE su.id = ? AND ag.status IN ('generating', 'completed')
+  `).bind(utteranceId).first<{ id: number; status: string }>()
+
+  if (existing) {
+    console.log(
+      `[AudioConsumer] Idempotency: utt=${utteranceId} already has audio_generation ${existing.id} (${existing.status}), skipping`
+    )
+    return 'skip'
+  }
+  return 'proceed'
+}
+
 async function processUtteranceMessage(
   env: Env,
   msg: AudioQueueMessage
@@ -284,6 +311,11 @@ async function processUtteranceMessage(
   if (!jobCheck || jobCheck.status === 'canceled') {
     console.log(`[AudioConsumer] Job ${job_id} is ${jobCheck?.status ?? 'missing'}, skipping utt=${utterance_id}`)
     return // Ack message, don't retry
+  }
+
+  // 1b. Idempotency: skip if already processed (Queue re-delivery)
+  if ((await idempotencyCheck(env, job_id, utterance_id)) === 'skip') {
+    return
   }
 
   // 2. Create audio_generation record
@@ -387,10 +419,19 @@ async function handleMessageFailure(
     `).bind(errorMsg, msg.scene_id).run()
 
     // Update job progress (atomic increment failed count)
+    // Guard: only increment if this utterance has NOT been counted yet.
+    // Use a CAS-like check: only increment when processed < total
+    // to prevent re-delivery from inflating counts beyond total.
     await env.DB.prepare(`
       UPDATE project_audio_jobs
-      SET processed_utterances = processed_utterances + 1,
-          failed_count = failed_count + 1,
+      SET processed_utterances = CASE
+            WHEN processed_utterances < total_utterances THEN processed_utterances + 1
+            ELSE processed_utterances
+          END,
+          failed_count = CASE
+            WHEN processed_utterances < total_utterances THEN failed_count + 1
+            ELSE failed_count
+          END,
           last_error = ?,
           updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
@@ -426,7 +467,11 @@ async function checkAndFinalizeJob(
 
   // Check if all utterances have been processed
   if (job.processed_utterances >= job.total_utterances) {
-    const finalStatus = (job.failed_count === job.total_utterances && job.total_utterances > 0)
+    // Determine final status:
+    //   - success_count === 0 AND failed_count > 0 → 'failed'  (all failed)
+    //   - success_count > 0 AND failed_count > 0  → 'completed' (partial success)
+    //   - success_count > 0 AND failed_count === 0 → 'completed' (all success)
+    const finalStatus = (job.success_count === 0 && job.failed_count > 0)
       ? 'failed'
       : 'completed'
 
