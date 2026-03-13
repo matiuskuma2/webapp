@@ -62,15 +62,15 @@ export interface AudioQueueMessage {
 // ============================================================
 
 const ELEVENLABS_VOICES: Record<string, string> = {
-  'el-aria': '9BWtsMINqrJLrRacOk9x',
+  'el-aria': 'pFZP5JQG7iQjIQuC4Bku',       // Lily - Velvety Actress (replaces unavailable aria)
   'el-river': 'SAz9YHcvj6GT2YYXdXww',
   'el-shimmer': 'cgSgspJ2msm6clMCkdW9',
   'el-alloy': 'nPczCjzI2devNBz1zQrb',
   'el-echo': 'CwhRBWXzGAHq8TQ4Fs17',
-  'el-onyx': '7p2er1VIBGrSMNBEqZVn',
+  'el-onyx': 'pNInz6obpgDQGcFmaJgB',       // Adam - Dominant, Firm (replaces unavailable onyx)
   'el-nova': 'EXAVITQu4vr4xnSDxMaL',
-  'el-fable': 'CYw49ThSjY15MhEiIEhE',
-  'el-hinata': 'Lz7V6FlE34PmJFMqCmFO',
+  'el-fable': 'JBFqnCBsd6RMkjVDRZzb',      // George - Warm Storyteller (replaces unavailable fable)
+  'el-hinata': 'j210dv0vWm7fCknyQpbA',
   'el-yumi': 'T5zZhOYp2nr6YMG0xepT',
 }
 

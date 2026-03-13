@@ -23,7 +23,7 @@ export const DEFAULT_OUTPUT_FORMAT = 'mp3_44100_128';
 export const ELEVENLABS_VOICES = {
   // Female voices
   'el-aria': {
-    voice_id: '9BWtsMINqrJLrRacOk9x', // Aria
+    voice_id: 'FGY2WhTYpPnrIDTdsKH5', // Laura (replaces unavailable Aria)
     name: 'Aria（女性・落ち着き）',
     gender: 'female',
     description: '落ち着いた女性の声、ナレーション向き',
