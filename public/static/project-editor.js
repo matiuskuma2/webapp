@@ -7439,6 +7439,7 @@ async function updateSingleSceneCard(sceneId) {
     
     // ===== 4. エラーメッセージ表示/非表示 =====
     // ✅ 修正: active_imageがある場合は古いエラーを表示しない（再生成成功後のエラー残り対策）
+    // ★ Fix-1e: imageStatus が completed の場合も常にエラーをクリア
     let errorContainer = sceneCard.querySelector('.scene-error-message');
     const shouldShowError = imageStatus === 'failed' && errorMessage && !activeImage;
     
@@ -7470,8 +7471,20 @@ async function updateSingleSceneCard(sceneId) {
           </div>
         </div>
       `;
-    } else if (errorContainer) {
-      errorContainer.remove();
+    } else {
+      // ★ Fix-1e: エラーを表示しない場合は全てのエラー関連要素を強制削除
+      if (errorContainer) {
+        errorContainer.remove();
+      }
+      // 初期レンダリング時のインラインエラーも削除
+      const inlineErrors = sceneCard.querySelectorAll('.bg-red-50.border-2.border-red-200');
+      inlineErrors.forEach(el => {
+        // エラー表示のみ削除（他の赤い要素は残す）
+        if (el.querySelector('.fa-exclamation-circle') || el.textContent.includes('失敗')) {
+          el.remove();
+          console.log(`[Fix-1e] Removed inline error from scene card ${sceneId}`);
+        }
+      });
     }
     
     // ===== 5. data-status 属性を更新 =====
@@ -7826,6 +7839,30 @@ function stopGenerationWatch(sceneId) {
   }
 }
 
+/**
+ * ★ Fix-1e: シーンカード上の古いエラーバナーを強制的に削除
+ * 画像生成が完了した後に、以前の失敗エラー表示が残っている場合にクリアする。
+ * updateSingleSceneCard 内の shouldShowError ロジックと重複するが、
+ * タイミング問題（race condition）でエラーが残る場合のセーフティネット。
+ */
+function clearSceneErrorBanner(sceneId) {
+  const sceneCard = document.getElementById(`builder-scene-${sceneId}`);
+  if (!sceneCard) return;
+  
+  const errorContainer = sceneCard.querySelector('.scene-error-message');
+  if (errorContainer) {
+    errorContainer.remove();
+    console.log(`[Fix-1e] Cleared stale error banner for scene ${sceneId}`);
+  }
+  
+  // 初期レンダリング時のインラインエラーも削除（bg-red-50 border-red-200）
+  const inlineErrors = sceneCard.querySelectorAll('.bg-red-50.border-red-200, .bg-red-50.border-2.border-red-200');
+  inlineErrors.forEach(el => {
+    el.remove();
+    console.log(`[Fix-1e] Cleared inline error for scene ${sceneId}`);
+  });
+}
+
 // Rate limit countdown state
 window.rateLimitCountdowns = window.rateLimitCountdowns || {};
 
@@ -8078,7 +8115,7 @@ function pollImageGenerationById(sceneId, generationId) {
   // Start watching if not already
   startGenerationWatch(sceneId);
   
-  const pollStartTime = Date.now();
+  let pollStartTime = Date.now(); // ★ Fix-1e: let に変更（pending リセット時に更新するため）
   let consecutiveErrors = 0; // ★ POLL-FIX: 連続エラーカウンター
   
   const timerId = setInterval(async () => {
@@ -8104,9 +8141,19 @@ function pollImageGenerationById(sceneId, generationId) {
       
       console.log(`[Poll-ById] Gen #${generationId} scene ${sceneId}: status=${data.status}, progress=${data.progress_pct}%, elapsed=${Math.round(elapsedSec)}s`);
       
-      // サーバーからの progress_pct がある場合はそちらを使用
-      if (data.progress_pct != null && data.progress_pct > percent) {
-        updateGeneratingButtonUI(sceneId, data.progress_pct);
+      // サーバーからの progress_pct がある場合
+      if (data.progress_pct != null) {
+        if (data.progress_pct > percent) {
+          // サーバーの方が進んでいる → サーバー値を使用
+          updateGeneratingButtonUI(sceneId, data.progress_pct);
+        } else if (data.status === 'pending' && percent > 50) {
+          // ★ Fix-1e: サーバーが pending に戻した（Fix-1d stuck recovery）
+          // → クライアントの進捗をリセットして「再試行中」を表示
+          console.log(`[Poll-ById] Gen #${generationId}: server reset to pending (was ${percent}%) → showing retry`);
+          pollStartTime = Date.now(); // 経過時間をリセット
+          updateGeneratingButtonUI(sceneId, data.progress_pct);
+          showToast('画像生成を再試行中...', 'info');
+        }
       }
       
       // ===== STATUS: COMPLETED =====
@@ -8120,6 +8167,10 @@ function pollImageGenerationById(sceneId, generationId) {
         showToast('画像生成が完了しました', 'success');
         
         await updateSingleSceneCard(sceneId);
+        
+        // ★ Fix-1e: 完了後に残っている古いエラー表示を強制クリア
+        clearSceneErrorBanner(sceneId);
+        
         await checkAndUpdateProjectStatus();
         return;
       }
