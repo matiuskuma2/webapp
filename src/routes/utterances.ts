@@ -1014,4 +1014,116 @@ async function generateUtteranceAudio(args: {
   }
 }
 
+// =============================================================================
+// GET /api/projects/:projectId/utterances
+// Fix-3: Project-level utterance list (all scenes) for audio management page
+// =============================================================================
+
+utterances.get('/projects/:projectId/utterances', async (c) => {
+  try {
+    const projectId = Number(c.req.param('projectId'));
+    if (!Number.isFinite(projectId)) {
+      return c.json(createErrorResponse('INVALID_REQUEST', 'Invalid project id'), 400);
+    }
+
+    // Verify project exists
+    const project = await c.env.DB.prepare(`
+      SELECT id, title, status FROM projects WHERE id = ?
+    `).bind(projectId).first<any>();
+    if (!project) {
+      return c.json(createErrorResponse('NOT_FOUND', 'Project not found'), 404);
+    }
+
+    // Get all utterances across all scenes with audio status
+    const { results: utteranceRows } = await c.env.DB.prepare(`
+      SELECT 
+        u.id,
+        u.scene_id,
+        s.idx as scene_idx,
+        u.order_no,
+        u.role,
+        u.character_key,
+        u.text,
+        u.audio_generation_id,
+        u.duration_ms,
+        ag.status as audio_status,
+        ag.r2_url as audio_url,
+        ag.error_message as audio_error,
+        ag.provider as audio_provider,
+        ag.voice_id as audio_voice_id,
+        pcm.name as character_name,
+        pcm.voice_preset_id as character_voice_preset_id
+      FROM scene_utterances u
+      JOIN scenes s ON u.scene_id = s.id
+      LEFT JOIN audio_generations ag ON u.audio_generation_id = ag.id
+      LEFT JOIN project_character_models pcm 
+        ON pcm.project_id = s.project_id AND pcm.character_key = u.character_key
+      WHERE s.project_id = ?
+        AND s.is_hidden = 0
+      ORDER BY s.idx ASC, u.order_no ASC
+    `).bind(projectId).all<any>();
+
+    // Group by scene
+    const sceneMap = new Map<number, { scene_id: number; scene_idx: number; utterances: any[] }>();
+    for (const row of (utteranceRows || [])) {
+      if (!sceneMap.has(row.scene_id)) {
+        sceneMap.set(row.scene_id, {
+          scene_id: row.scene_id,
+          scene_idx: row.scene_idx,
+          utterances: []
+        });
+      }
+      sceneMap.get(row.scene_id)!.utterances.push({
+        id: row.id,
+        scene_id: row.scene_id,
+        scene_idx: row.scene_idx,
+        order_no: row.order_no,
+        role: row.role,
+        character_key: row.character_key,
+        character_name: row.character_name || row.character_key,
+        character_voice_preset_id: row.character_voice_preset_id,
+        text: row.text,
+        audio_generation_id: row.audio_generation_id,
+        audio_status: row.audio_status,
+        audio_url: row.audio_url,
+        audio_error: row.audio_error,
+        audio_provider: row.audio_provider,
+        audio_voice_id: row.audio_voice_id,
+        duration_ms: row.duration_ms,
+      });
+    }
+
+    const scenes = Array.from(sceneMap.values());
+
+    // Summary stats
+    const allUtterances = scenes.flatMap(s => s.utterances);
+    const totalUtterances = allUtterances.length;
+    const completedAudio = allUtterances.filter(u => u.audio_status === 'completed').length;
+    const failedAudio = allUtterances.filter(u => u.audio_status === 'failed').length;
+    const generatingAudio = allUtterances.filter(u => u.audio_status === 'generating').length;
+    const pendingAudio = totalUtterances - completedAudio - failedAudio - generatingAudio;
+    const totalDurationMs = allUtterances.reduce((sum: number, u: any) => sum + (u.duration_ms || 0), 0);
+
+    return c.json({
+      project_id: projectId,
+      project_title: project.title,
+      project_status: project.status,
+      scenes,
+      summary: {
+        total_scenes: scenes.length,
+        total_utterances: totalUtterances,
+        completed: completedAudio,
+        failed: failedAudio,
+        generating: generatingAudio,
+        pending: pendingAudio,
+        total_duration_ms: totalDurationMs,
+      }
+    });
+
+  } catch (error) {
+    console.error('[GET /api/projects/:projectId/utterances] Error:', error);
+    return c.json(createErrorResponse('INTERNAL_ERROR', 'Failed to load project utterances'), 500);
+  }
+});
+
 export default utterances;

@@ -3854,6 +3854,17 @@ function updateBuilderStatusBar(scenes) {
       </button>
     </div>
     ` : ''}
+    
+    <!-- Fix-3: Audio List button -->
+    <div class="mt-3 pt-3 border-t border-gray-200 flex items-center gap-3">
+      <button 
+        onclick="window.AudioListPage && window.AudioListPage.open(PROJECT_ID)"
+        class="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors font-semibold text-sm"
+      >
+        <i class="fas fa-headphones mr-2"></i>音声一覧・編集
+      </button>
+      <span class="text-xs text-gray-500">全シーンの発話テキスト・音声を一覧で管理</span>
+    </div>
   `;
   
   // Phase X-4: 画像生成ボタンの状態更新

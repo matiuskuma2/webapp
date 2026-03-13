@@ -3643,6 +3643,7 @@ app.get('/projects/:id', async (c) => {
     <script src="/static/audio-client.js?v=${ASSET_VERSION}"></script>
     <script src="/static/audio-state.js?v=${ASSET_VERSION}"></script>
     <script src="/static/audio-ui.js?v=${ASSET_VERSION}"></script>
+    <script src="/static/audio-list.js?v=${ASSET_VERSION}"></script>
     <script src="/static/world-character-client.js?v=${ASSET_VERSION}"></script>
     <script src="/static/world-character-modal.js?v=${ASSET_VERSION}"></script>
     <script src="/static/world-character-ui.js?v=${ASSET_VERSION}"></script>
