@@ -215,14 +215,32 @@ audioGeneration.post('/scenes/:id/generate-audio', async (c) => {
     }
 
     // 2) 競合チェック（同一sceneで generating が残っている）
+    // Fix-5: Also detect stuck generating records (>90s) and auto-cleanup
     const existing = await c.env.DB.prepare(`
-      SELECT id FROM audio_generations
+      SELECT id, created_at FROM audio_generations
       WHERE scene_id = ? AND status = ?
       LIMIT 1
-    `).bind(sceneId, GENERATION_STATUS.GENERATING).first();
+    `).bind(sceneId, GENERATION_STATUS.GENERATING).first<{ id: number; created_at: string }>();
 
     if (existing) {
-      return c.json(createErrorResponse(ERROR_CODES.AUDIO_GENERATING, 'Audio generation already in progress'), 409);
+      const createdAt = new Date(existing.created_at + 'Z').getTime();
+      const elapsed = Date.now() - createdAt;
+      const STUCK_AUDIO_TIMEOUT_MS = 90_000; // 90 seconds
+      
+      if (elapsed > STUCK_AUDIO_TIMEOUT_MS) {
+        // Stuck generating - mark as failed and allow new generation
+        console.log(`[Audio] Scene ${sceneId}: Audio generation ${existing.id} stuck for ${Math.round(elapsed/1000)}s, marking as failed`);
+        await c.env.DB.prepare(`
+          UPDATE audio_generations SET status = 'failed', error_message = 'Auto-cleanup: stuck generating for over 90s', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(existing.id).run();
+        // Also clear any utterance links to this stuck generation
+        await c.env.DB.prepare(`
+          UPDATE scene_utterances SET audio_generation_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE audio_generation_id = ?
+        `).bind(existing.id).run();
+        // Fall through to create new generation
+      } else {
+        return c.json(createErrorResponse(ERROR_CODES.AUDIO_GENERATING, 'Audio generation already in progress'), 409);
+      }
     }
 
     // 3) generating レコード作成

@@ -685,7 +685,7 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
     // Check if this utterance already has a completed audio
     if (utterance.audio_generation_id && !forceRegenerate) {
       const existingAudio = await c.env.DB.prepare(`
-        SELECT id, status, r2_url FROM audio_generations WHERE id = ?
+        SELECT id, status, r2_url, created_at FROM audio_generations WHERE id = ?
       `).bind(utterance.audio_generation_id).first<any>();
       
       // If audio is completed, skip generation (reuse existing)
@@ -701,10 +701,36 @@ utterances.post('/utterances/:utteranceId/generate-audio', async (c) => {
         }, 200);
       }
       
-      // If audio is still generating, return 409
+      // Fix-5: If audio is still generating, check if it's stuck (>90 seconds)
       if (existingAudio && existingAudio.status === 'generating') {
-        console.log(`[Utterance ${utteranceId}] Audio still generating (id=${existingAudio.id})`);
-        return c.json(createErrorResponse('AUDIO_GENERATING', 'Audio generation already in progress for this utterance'), 409);
+        const createdAt = new Date(existingAudio.created_at + 'Z').getTime();
+        const elapsed = Date.now() - createdAt;
+        const STUCK_AUDIO_TIMEOUT_MS = 90_000; // 90 seconds
+        
+        if (elapsed > STUCK_AUDIO_TIMEOUT_MS) {
+          // Stuck generating - mark as failed and allow retry
+          console.log(`[Utterance ${utteranceId}] Audio generation ${existingAudio.id} stuck for ${Math.round(elapsed/1000)}s, marking as failed`);
+          await c.env.DB.prepare(`
+            UPDATE audio_generations SET status = 'failed', error_message = 'Auto-cleanup: stuck generating for over 90s', updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(existingAudio.id).run();
+          // Clear the link so a new generation can proceed
+          await c.env.DB.prepare(`
+            UPDATE scene_utterances SET audio_generation_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+          `).bind(utteranceId).run();
+          // Fall through to create new generation
+        } else {
+          console.log(`[Utterance ${utteranceId}] Audio still generating (id=${existingAudio.id}, elapsed=${Math.round(elapsed/1000)}s)`);
+          return c.json(createErrorResponse('AUDIO_GENERATING', 'Audio generation already in progress for this utterance'), 409);
+        }
+      }
+      
+      // Fix-5: If audio is failed, clear the link so we can retry
+      if (existingAudio && existingAudio.status === 'failed') {
+        console.log(`[Utterance ${utteranceId}] Previous audio generation ${existingAudio.id} failed, clearing link for retry`);
+        await c.env.DB.prepare(`
+          UPDATE scene_utterances SET audio_generation_id = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?
+        `).bind(utteranceId).run();
+        // Fall through to create new generation
       }
     } else if (forceRegenerate && utterance.audio_generation_id) {
       console.log(`[Utterance ${utteranceId}] Force regenerate requested, clearing existing audio_generation_id`);
