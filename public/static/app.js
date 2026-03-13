@@ -141,6 +141,7 @@ async function loadProjects() {
             />
             <div class="flex-1">
               <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-400 font-mono">#${project.id}</span>
                 <h3 class="font-semibold text-gray-800">${escapeHtml(project.title)}</h3>
                 ${project.is_template ? '<span class="px-2 py-0.5 bg-green-600 text-white text-xs rounded-full"><i class="fas fa-copy mr-1"></i>テンプレート</span>' : ''}
               </div>

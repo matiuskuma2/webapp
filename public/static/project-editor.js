@@ -3100,6 +3100,7 @@ function renderScenes(scenes) {
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-4">
           <span class="text-2xl font-bold text-gray-400">#${scene.idx}</span>
+          <span class="text-[10px] text-gray-300 font-mono" title="Scene ID: ${scene.id}">id:${scene.id}</span>
           <select 
             id="role-${scene.id}"
             class="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"

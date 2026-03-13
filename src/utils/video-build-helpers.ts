@@ -853,10 +853,12 @@ export const VIDEO_BUILD_MAX_SCENES = 200;
 /** Duration soft limit: warning issued (≈5 min) */
 export const VIDEO_BUILD_DURATION_SOFT_LIMIT_MS = 300_000;
 
-/** Duration hard limit: build blocked (≈10 min) */
+/** Duration hard limit: build blocked (≈10 min, safety net behind frame limit) */
 export const VIDEO_BUILD_DURATION_HARD_LIMIT_MS = 600_000;
 
-/** Remotion Lambda maximum frame count (200 functions × 60 frames) */
+/** Remotion Lambda maximum frame count (200 functions × 60 frames)
+ *  At 30fps this equals ≈400s (6m40s) — the effective hard limit.
+ *  The 600s duration limit above is a fallback in case fps changes. */
 export const REMOTION_MAX_FRAME_COUNT = 12_000;
 
 /** Default FPS for frame calculation */
@@ -958,10 +960,13 @@ export function validateBuildLimits(
   
   if (frameExceeded) {
     severity = 'error';
+    const maxDurationSec = Math.floor(REMOTION_MAX_FRAME_COUNT / fps);
+    const maxDurationMin = Math.floor(maxDurationSec / 60);
+    const maxDurationRemSec = maxDurationSec % 60;
     messages.push({
       level: 'error',
       code: 'FRAME_COUNT_EXCEEDED',
-      message: `推定フレーム数（${estimatedFrames.toLocaleString()}）がRemotionの上限（${REMOTION_MAX_FRAME_COUNT.toLocaleString()}）を超えています。動画尺を約${Math.floor(REMOTION_MAX_FRAME_COUNT / fps)}秒以下に短縮してください。`,
+      message: `推定フレーム数（${estimatedFrames.toLocaleString()}）がRemotionの上限（${REMOTION_MAX_FRAME_COUNT.toLocaleString()}）を超えています。実質的なハード上限は約${maxDurationMin}分${maxDurationRemSec}秒（${maxDurationSec}秒 @ ${fps}fps）です。シーンを減らすか、シーンの尺を短くしてください。`,
     });
   }
 
