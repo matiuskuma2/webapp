@@ -58,6 +58,48 @@ export interface AudioQueueMessage {
 }
 
 // ============================================================
+// ElevenLabs Voice Presets (must match main app's ELEVENLABS_VOICES)
+// ============================================================
+
+const ELEVENLABS_VOICES: Record<string, string> = {
+  'el-aria': '9BWtsMINqrJLrRacOk9x',
+  'el-river': 'SAz9YHcvj6GT2YYXdXww',
+  'el-shimmer': 'cgSgspJ2msm6clMCkdW9',
+  'el-alloy': 'nPczCjzI2devNBz1zQrb',
+  'el-echo': 'CwhRBWXzGAHq8TQ4Fs17',
+  'el-onyx': '7p2er1VIBGrSMNBEqZVn',
+  'el-nova': 'EXAVITQu4vr4xnSDxMaL',
+  'el-fable': 'CYw49ThSjY15MhEiIEhE',
+  'el-hinata': 'Lz7V6FlE34PmJFMqCmFO',
+  'el-yumi': 'T5zZhOYp2nr6YMG0xepT',
+}
+
+/**
+ * Resolve ElevenLabs voice key to actual API voice_id
+ * Supports:
+ * - Preset key: 'el-yumi' → 'T5zZhOYp2nr6YMG0xepT'
+ * - Direct ID: 'elevenlabs:T5zZhOYp2nr6YMG0xepT' → 'T5zZhOYp2nr6YMG0xepT'
+ * - Raw UUID: 'T5zZhOYp2nr6YMG0xepT' → 'T5zZhOYp2nr6YMG0xepT'
+ */
+function resolveElevenLabsVoiceId(voiceKey: string): string {
+  // Check for elevenlabs: prefix
+  if (voiceKey.startsWith('elevenlabs:')) {
+    return voiceKey.substring(11)
+  }
+  // Check for preset key (el-xxx)
+  if (ELEVENLABS_VOICES[voiceKey]) {
+    return ELEVENLABS_VOICES[voiceKey]
+  }
+  // Check for raw voice ID (20+ alphanumeric chars)
+  if (voiceKey.length >= 20 && /^[a-zA-Z0-9]+$/.test(voiceKey)) {
+    return voiceKey
+  }
+  // Fallback: strip prefix and return (may fail at API level)
+  console.warn(`[AudioConsumer] Unknown ElevenLabs voice key: ${voiceKey}, using as-is`)
+  return voiceKey
+}
+
+// ============================================================
 // TTS Providers
 // ============================================================
 
@@ -149,10 +191,9 @@ async function generateElevenLabsTTS(
   voiceId: string,
   modelId: string
 ): Promise<Uint8Array> {
-  // Resolve voice ID: strip prefix
-  const resolvedVoiceId = voiceId
-    .replace(/^elevenlabs:/, '')
-    .replace(/^el-/, '')
+  // Fix-5: Use proper voice resolution instead of simple prefix stripping
+  const resolvedVoiceId = resolveElevenLabsVoiceId(voiceId)
+  console.log(`[AudioConsumer] ElevenLabs voice resolved: ${voiceId} → ${resolvedVoiceId}`)
 
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 60_000)
